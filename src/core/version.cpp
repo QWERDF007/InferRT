@@ -32,4 +32,9 @@ std::string GetFullVersionString()
     return s;
 }
 
+std::string GetBuildTimeString()
+{
+    return INFERRT_BUILD_TIME;
+}
+
 } // namespace inferrt::core

@@ -56,10 +56,34 @@ function(configure_version target LIBPREFIX incpath VERSION_FULL)
     # 构建版本字符串：<版本号>-<构建后缀>
     set(VERSION_BUILD "${tmp}-${CVCUDA_BUILD_SUFFIX}")
 
+    set(VERSIONDEF_TEMPLATE "${config_version_script_path}/VersionDef.h.in")
+    set(VERSIONDEF_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/include/${incpath}/VersionDef.h")
+
     # 由模板生成版本头文件（写入 build 目录），供编译与安装使用
     # - VersionDef.h：导出各版本数值/字符串常量
     # - VersionUtils.h：版本相关的辅助工具（如有）
-    configure_file(${config_version_script_path}/VersionDef.h.in include/${incpath}/VersionDef.h @ONLY ESCAPE_QUOTES)
+    # 注意：为了让 BUILD_TIME 在每次 build 时都刷新，VersionDef.h 不在 configure 阶段生成。
+    #       这里通过一个 ALL 的自定义 target，在构建阶段运行 cmake -P 脚本生成 VersionDef.h。
+    #       该脚本内部会 string(TIMESTAMP ...) 获取当前时间，并 configure_file() 写出头文件。
+    add_custom_target(generate_${target}_versiondef ALL
+        COMMAND ${CMAKE_COMMAND}
+            # 使用 :PATH/:STRING 显式指定类型，并避免把路径用引号包进变量值（Windows/MSBuild 下容易出错）
+            -DINPUT:PATH=${VERSIONDEF_TEMPLATE}
+            -DOUTPUT:PATH=${VERSIONDEF_OUTPUT}
+            -DLIBPREFIX:STRING=${LIBPREFIX}
+            -DVERSION_MAJOR:STRING=${VERSION_MAJOR}
+            -DVERSION_MINOR:STRING=${VERSION_MINOR}
+            -DVERSION_PATCH:STRING=${VERSION_PATCH}
+            -DVERSION_TWEAK:STRING=${VERSION_TWEAK}
+            -DVERSION_SUFFIX:STRING=${VERSION_SUFFIX}
+            -DVERSION_FULL:STRING=${VERSION_FULL}
+            -P "${config_version_script_path}/GenerateVersionDef.cmake"
+        # 声明副产物，便于生成器（如 Ninja）追踪该步骤会产出哪个文件
+        BYPRODUCTS "${VERSIONDEF_OUTPUT}"
+        VERBATIM
+    )
+    # 确保在编译/链接 ${target} 前先生成 VersionDef.h
+    add_dependencies(${target} generate_${target}_versiondef)
     configure_file(${config_version_script_path}/VersionUtils.h.in include/${incpath}/detail/VersionUtils.h @ONLY ESCAPE_QUOTES)
 
     # 将版本信息缓存为 INTERNAL，便于工程其他位置引用（不会显示在常规 cache GUI 中）

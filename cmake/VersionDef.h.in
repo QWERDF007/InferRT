@@ -123,6 +123,9 @@ extern "C" {
 /** 以字符串表示的 @LIBPREFIX@ 库版本号。 */
 #define @LIBPREFIX@_VERSION_STRING "@VERSION_FULL@"
 
+/** 以字符串表示的 @LIBPREFIX@ 构建时间。 */
+#define @LIBPREFIX@_BUILD_TIME "@BUILD_TIME@"
+
 /** 选择要使用的 API 版本。
  * 该宏用于选择代码将使用的受支持 API 版本。
  *
