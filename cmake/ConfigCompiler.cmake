@@ -69,7 +69,7 @@ else()
 endif()
 
 # 定义 ENABLE_SANITIZER 且编译器是 GCC, 开启 sanitizer 来检测代码问题
-if(ENABLE_SANITIZER AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+if(${PROJECT_NAME_UPPER}_ENABLE_SANITIZER AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 # -fsanitize=address：检测内存泄漏和越界访问。
 # -fsanitize-address-use-after-scope：检测使用已经超出作用域的栈内存。
 # -fsanitize=leak：检测内存泄漏。
