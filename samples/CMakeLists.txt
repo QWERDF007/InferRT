@@ -1,1 +1,2 @@
 add_subdirectory(version)
+add_subdirectory(cuda_resize)

@@ -1,6 +1,6 @@
 #include <inferrt/core/VersionDef.h>
 #include <inferrt/core/detail/VersionUtils.h>
-#include <inferrt/core/version.h>
+#include <inferrt/core/Version.h>
 
 #include <string>
 

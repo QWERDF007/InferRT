@@ -1,11 +1,11 @@
-set(PLUGIN_NAME "core")
+set(PLUGIN_NAME "cvcuda")
 set(TARGET_NAME "${PROJECT_NAME_LOWER}_${PLUGIN_NAME}")
 
 # 获取所有源文件的相对路径
-file(GLOB_RECURSE SOURCES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.cpp)
+file(GLOB_RECURSE SOURCES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.cpp *.cu)
 
 # 获取所有头文件的相对路径
-file(GLOB_RECURSE HEADERS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.h *.hpp)
+file(GLOB_RECURSE HEADERS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.h *.hpp *.cuh)
 
 add_library(${TARGET_NAME} SHARED ${SOURCES} ${HEADERS})
 
@@ -13,6 +13,8 @@ target_link_libraries(${TARGET_NAME}
     PRIVATE
         
     PUBLIC
+        cudart
+        opencv_core
 )
 
 target_include_directories(${TARGET_NAME} 
