@@ -1,33 +1,51 @@
 #include "priv/OpResize.cuh"
 
+#include <inferrt/core/Exception.hpp>
 #include <inferrt/cvcuda/OpResize.h>
 
 namespace irt::cvcuda {
+
+using core::ProtectCall;
 
 template<typename T>
 void resize(const T *d_src, T *d_dst, cv::Size ssize, cv::Size dsize, const int CH, const int interpolation,
             cudaStream_t stream)
 {
-    int2 _ssize;
-    _ssize.x = ssize.width;
-    _ssize.y = ssize.height;
-    int2 _dsize;
-    _dsize.x = dsize.width;
-    _dsize.y = dsize.height;
-    int sstride;
-    sstride = ssize.width * CH;
-    int dstride;
-    dstride = dsize.width * CH;
+    core::IRTStatus status = ProtectCall(
+        [&]
+        {
+            int2 _ssize;
+            _ssize.x = ssize.width;
+            _ssize.y = ssize.height;
+            int2 _dsize;
+            _dsize.x = dsize.width;
+            _dsize.y = dsize.height;
+            int sstride;
+            sstride = ssize.width * CH;
+            int dstride;
+            dstride = dsize.width * CH;
 
-    switch (interpolation)
+            switch (interpolation)
+            {
+            case cv::INTER_LINEAR:
+            {
+                resize_bilinear<T, float>(d_src, d_dst, _ssize, sstride, _dsize, dstride, CH, stream);
+                break;
+            }
+            default:
+            {
+                throw core::Exception(core::Status::ERROR_NOT_IMPLEMENTED, "Interpolation method not implemented");
+                break;
+            }
+            }
+        });
+
+    // ProtectCall already set the thread status, no need to throw again
+    // Just check if there was an error for debugging purposes
+    if (status != core::IRT_SUCCESS)
     {
-    case cv::INTER_LINEAR:
-    {
-        resize_bilinear<T, float>(d_src, d_dst, _ssize, sstride, _dsize, dstride, CH, stream);
-        break;
-    }
-    default:
-        break;
+        // Error already recorded in thread-local storage
+        // Caller can check with GetLastError()
     }
 }
 

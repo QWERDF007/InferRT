@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstring>
 #include <exception>
+#include <iostream>
 #include <stdexcept>
 
 namespace irt::core {
@@ -99,14 +100,24 @@ private:
     void doSetMessage(const char *fmt, va_list va)
     {
         int buflen   = sizeof(msg_buffer_);
-        int nwritten = snprintf(msg_buffer_, buflen, "%s: ", StatusGetName(code_));
+        int nwritten = snprintf(msg_buffer_, buflen, "%s", StatusGetName(code_));
 
         // 检查是否有足够的空间写入消息
-        if (nwritten < buflen)
+        if (fmt != nullptr && nwritten < buflen)
         {
-            buflen -= nwritten;
+            // 添加分隔符
+            nwritten += snprintf(msg_buffer_ + nwritten, buflen - nwritten, ": ");
+
+            if (nwritten < buflen)
+            {
+                buflen -= nwritten;
+                msg_ = msg_buffer_ + nwritten;
+                vsnprintf(msg_buffer_ + nwritten, buflen, fmt, va);
+            }
+        }
+        else
+        {
             msg_ = msg_buffer_ + nwritten;
-            vsnprintf(msg_buffer_ + nwritten, buflen, fmt, va);
         }
 
         // 确保字符串以 null 结尾
@@ -136,6 +147,8 @@ inline void SetThreadError(std::exception_ptr e)
     }
     catch (const Exception &e) // InferRT 自定义异常，使用其状态码和消息
     {
+        std::cout << __FUNCTION__ << " " << __LINE__ << " code: " << static_cast<IRTStatus>(e.code())
+                  << " msg: " << e.msg() << std::endl;
         SetThreadStatus(static_cast<IRTStatus>(e.code()), "%s", e.msg());
     }
     catch (const std::invalid_argument &e) // 无效参数异常
@@ -176,6 +189,14 @@ IRTStatus ProtectCall(F &&fn)
     {
         fn();
         return IRT_SUCCESS;
+    }
+    catch (Exception &e)
+    {
+        std::cout << __FUNCTION__ << " " << __LINE__ << " code: " << static_cast<IRTStatus>(e.code())
+                  << " msg: " << e.msg() << std::endl;
+        // 捕获所有异常并设置线程错误状态
+        SetThreadError(std::current_exception());
+        return PeekAtLastError();
     }
     catch (...)
     {

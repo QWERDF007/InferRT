@@ -25,7 +25,9 @@ endif()
 # Match warning setup with GVS
 if (MSVC)
     # set(C_WARNING_FLAGS "-Wall")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /utf-8")
+    # /EHa: Enable C++ exception handling with SEH exceptions (required for cross-DLL exception propagation)
+    # /utf-8: Set source and execution character sets to UTF-8
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHa /utf-8")
     set(C_WARNING_FLAGS "-W4")
     # set(CXX_WARNING_FLAGS "/permissive-")
 else ()

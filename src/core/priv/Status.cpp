@@ -1,8 +1,9 @@
 #include "Status.hpp"
 
+#include "Exception.hpp"
 #include "TLS.hpp"
 
-#include <inferrt/core/Exception.hpp>
+#include <iostream>
 
 namespace irt::core::priv {
 
@@ -26,6 +27,8 @@ void SetThreadError(std::exception_ptr e)
     }
     catch (const Exception &e)
     {
+        std::cout << __FUNCTION__ << " " << __LINE__ << " code: " << static_cast<IRTStatus>(e.code())
+                  << " msg: " << e.msg() << std::endl;
         tls.last_error_status = static_cast<IRTStatus>(e.code());
         snprintf(tls.last_error_message, error_msg_len, "%s", e.msg());
     }
@@ -41,6 +44,7 @@ void SetThreadError(std::exception_ptr e)
     }
     catch (const std::exception &e)
     {
+        std::cout << __FUNCTION__ << " " << __LINE__ << std::endl;
         tls.last_error_status = IRT_ERROR_INTERNAL;
         snprintf(tls.last_error_message, error_msg_len, "%s", e.what());
     }

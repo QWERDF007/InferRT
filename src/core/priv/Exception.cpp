@@ -13,10 +13,16 @@ Exception::Exception(IRTStatus code, const char *fmt, va_list va)
     : code_(code)
     , strbuf_{buffer_, sizeof(buffer_), buffer_}
 {
-    snprintf(buffer_, sizeof(buffer_) - 1, "%s: ", GetName(code));
+    snprintf(buffer_, sizeof(buffer_) - 1, "%s", GetName(code));
 
-    size_t len = std::char_traits<char>::length(buffer_);
-    vsnprintf(buffer_ + len, sizeof(buffer_) - len - 1, fmt, va);
+    if (fmt != nullptr)
+    {
+        size_t len = std::char_traits<char>::length(buffer_);
+        snprintf(buffer_ + len, sizeof(buffer_) - len - 1, ": ");
+
+        len = std::char_traits<char>::length(buffer_);
+        vsnprintf(buffer_ + len, sizeof(buffer_) - len - 1, fmt, va);
+    }
 
     // Next character written will be appended to buffer_
     strbuf_.seekpos(std::char_traits<char>::length(buffer_), std::ios_base::out);
@@ -29,10 +35,16 @@ Exception::Exception(IRTStatus code, const char *fmt, ...)
     va_list va;
     va_start(va, fmt);
 
-    snprintf(buffer_, sizeof(buffer_) - 1, "%s: ", GetName(code));
+    snprintf(buffer_, sizeof(buffer_) - 1, "%s", GetName(code));
 
-    size_t len = std::char_traits<char>::length(buffer_);
-    vsnprintf(buffer_ + len, sizeof(buffer_) - len - 1, fmt, va);
+    if (fmt != nullptr)
+    {
+        size_t len = std::char_traits<char>::length(buffer_);
+        snprintf(buffer_ + len, sizeof(buffer_) - len - 1, ": ");
+
+        len = std::char_traits<char>::length(buffer_);
+        vsnprintf(buffer_ + len, sizeof(buffer_) - len - 1, fmt, va);
+    }
 
     va_end(va);
 

@@ -15,6 +15,7 @@ target_link_libraries(${TARGET_NAME}
     PUBLIC
         cudart
         opencv_core
+        ${PROJECT_NAME_LOWER}_core ${PROJECT_NAME_LOWER}_core_header
 )
 
 target_include_directories(${TARGET_NAME} 
