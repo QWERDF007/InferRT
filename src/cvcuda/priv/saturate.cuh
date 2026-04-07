@@ -1,6 +1,6 @@
 #pragma once
 
-namespace inferrt { namespace cvcuda {
+namespace irt::cvcuda {
 
 // OpenCV saturate_cast
 template<typename _Tp, typename _Tp2>
@@ -88,4 +88,4 @@ __device__ __forceinline__ int saturate_cast(double v)
     return __double2int_rn(v);
 }
 
-}} // namespace inferrt::cvcuda
+} // namespace irt::cvcuda

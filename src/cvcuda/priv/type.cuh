@@ -1,6 +1,6 @@
 #pragma once
 
-namespace inferrt { namespace cvcuda {
+namespace irt::cvcuda {
 
 // 使用 type trait 映射
 template<typename CT>
@@ -57,4 +57,4 @@ struct make_vector4<double>
 template<typename CT>
 using make_vector4_t = typename make_vector4<CT>::type;
 
-}} // namespace inferrt::cvcuda
+} // namespace irt::cvcuda

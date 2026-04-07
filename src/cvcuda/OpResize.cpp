@@ -2,7 +2,7 @@
 
 #include <inferrt/cvcuda/OpResize.h>
 
-namespace inferrt::cvcuda {
+namespace irt::cvcuda {
 
 template<typename T>
 void resize(const T *d_src, T *d_dst, cv::Size ssize, cv::Size dsize, const int CH, const int interpolation,
@@ -38,4 +38,4 @@ template INFERRT_CVCUDA_API void resize<uint8_t>(const uint8_t *, uint8_t *, cv:
 template INFERRT_CVCUDA_API void resize<float>(const float *, float *, cv::Size, cv::Size, const int, const int,
                                                cudaStream_t);
 
-} // namespace inferrt::cvcuda
+} // namespace irt::cvcuda

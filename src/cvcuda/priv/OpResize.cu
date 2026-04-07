@@ -4,7 +4,7 @@
 
 #include <inferrt/cvcuda/OpResize.h>
 
-namespace inferrt { namespace cvcuda {
+namespace irt::cvcuda {
 
 /**
  * @brief Resize 区域坐标和插值系数计算 (bilinear/bicubic/lanczos)
@@ -183,4 +183,4 @@ template INFERRT_CVCUDA_API void resize_bilinear<float, float>(const float *, fl
 template INFERRT_CVCUDA_API void resize_bilinear<float, double>(const float *, float *, const int2, const int,
                                                                 const int2, const int, const int, cudaStream_t);
 
-}} // namespace inferrt::cvcuda
+} // namespace irt::cvcuda

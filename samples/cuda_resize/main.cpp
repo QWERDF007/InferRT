@@ -25,7 +25,7 @@ int main(int argc, char *argv[])
     cudaMalloc((void **)&d_dst, d_nbytes);
     cudaMemcpy(d_src, img.data, s_nbytes, cudaMemcpyHostToDevice);
 
-    inferrt::cvcuda::resize<uint8_t>(d_src, d_dst, img.size(), dsize, img.channels(), cv::INTER_LINEAR, nullptr);
+    irt::cvcuda::resize<uint8_t>(d_src, d_dst, img.size(), dsize, img.channels(), cv::INTER_LINEAR, nullptr);
     cudaMemcpy(img_resize.data, d_dst, d_nbytes, cudaMemcpyDeviceToHost);
     cudaFree(d_src);
     cudaFree(d_dst);

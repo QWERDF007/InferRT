@@ -1,10 +1,11 @@
+#include <inferrt/core/Version.h>
 #include <inferrt/core/VersionDef.h>
 #include <inferrt/core/detail/VersionUtils.h>
-#include <inferrt/core/Version.h>
 
 #include <string>
 
-namespace inferrt::core {
+
+namespace irt::core {
 
 std::string GetVersionString()
 {
@@ -37,4 +38,4 @@ std::string GetBuildTimeString()
     return INFERRT_BUILD_TIME;
 }
 
-} // namespace inferrt::core
+} // namespace irt::core
