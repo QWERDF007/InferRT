@@ -153,7 +153,7 @@ __global__ void resize_bilinear_kernel(const T *src, T *dst, const double2 scale
 }
 
 /**
- * @brief 双线性插值图像缩放
+ * @brief 双线性插值图像缩放, 定点计算版本, 对齐 OpenCV
  * 
  * @tparam CT 插值小数部分计算类型 (如 float, double)
  * @tparam CH 通道数 (1,3,4)
@@ -165,7 +165,6 @@ __global__ void resize_bilinear_kernel(const T *src, T *dst, const double2 scale
  * @param[in] dsize 目标图像尺寸
  * @param[in] dstride 目标图像行宽度
  * @param[in] dst_N 目标图像总像素数 (dst_h * dst_w)
- * @note 定点计算版本, 对齐 OpenCV
  */
 template<typename CT, int CH>
 __global__ void u8_resize_bilinear_kernel(const uint8_t *src, uint8_t *dst, const double2 scale, const int2 ssize,
