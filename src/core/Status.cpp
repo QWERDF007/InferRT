@@ -46,7 +46,6 @@ IRTStatus PeekAtLastErrorMessage(char *msg, int32_t len)
  */
 void SetThreadStatus(IRTStatus status, const char *fmt, ...)
 {
-    std::cout << __FUNCTION__ << " " << __LINE__ << " " << status << std::endl;
     va_list va;
     va_start(va, fmt);
 
@@ -68,7 +67,6 @@ void SetThreadStatus(IRTStatus status, const char *fmt, ...)
 
 void SetThreadStatusVarArgList(IRTStatus status, const char *fmt, va_list va)
 {
-    std::cout << __FUNCTION__ << " " << __LINE__ << " " << status << std::endl;
     IRTStatus ret = priv::ProtectCall(
         [&]
         {

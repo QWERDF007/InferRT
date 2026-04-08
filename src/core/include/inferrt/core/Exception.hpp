@@ -36,9 +36,9 @@ public:
         : code_(code)
     {
         va_list va;
-        va_start(va, fmt);
-        SetThreadStatusVarArgList(static_cast<IRTStatus>(code), fmt, va);
-        va_end(va);
+        // va_start(va, fmt);
+        // SetThreadStatusVarArgList(static_cast<IRTStatus>(code), fmt, va);
+        // va_end(va);
 
         va_start(va, fmt);
         doSetMessage(fmt, va);
@@ -147,8 +147,6 @@ inline void SetThreadError(std::exception_ptr e)
     }
     catch (const Exception &e) // InferRT 自定义异常，使用其状态码和消息
     {
-        std::cout << __FUNCTION__ << " " << __LINE__ << " code: " << static_cast<IRTStatus>(e.code())
-                  << " msg: " << e.msg() << std::endl;
         SetThreadStatus(static_cast<IRTStatus>(e.code()), "%s", e.msg());
     }
     catch (const std::invalid_argument &e) // 无效参数异常
@@ -189,14 +187,6 @@ IRTStatus ProtectCall(F &&fn)
     {
         fn();
         return IRT_SUCCESS;
-    }
-    catch (Exception &e)
-    {
-        std::cout << __FUNCTION__ << " " << __LINE__ << " code: " << static_cast<IRTStatus>(e.code())
-                  << " msg: " << e.msg() << std::endl;
-        // 捕获所有异常并设置线程错误状态
-        SetThreadError(std::current_exception());
-        return PeekAtLastError();
     }
     catch (...)
     {

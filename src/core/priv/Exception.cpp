@@ -2,6 +2,9 @@
 
 #include "Status.hpp"
 
+#include <cstdio>
+#include <string>
+
 namespace irt::core::priv {
 
 Exception::Exception(IRTStatus code)
@@ -11,7 +14,6 @@ Exception::Exception(IRTStatus code)
 
 Exception::Exception(IRTStatus code, const char *fmt, va_list va)
     : code_(code)
-    , strbuf_{buffer_, sizeof(buffer_), buffer_}
 {
     snprintf(buffer_, sizeof(buffer_) - 1, "%s", GetName(code));
 
@@ -23,14 +25,10 @@ Exception::Exception(IRTStatus code, const char *fmt, va_list va)
         len = std::char_traits<char>::length(buffer_);
         vsnprintf(buffer_ + len, sizeof(buffer_) - len - 1, fmt, va);
     }
-
-    // Next character written will be appended to buffer_
-    strbuf_.seekpos(std::char_traits<char>::length(buffer_), std::ios_base::out);
 }
 
 Exception::Exception(IRTStatus code, const char *fmt, ...)
     : code_(code)
-    , strbuf_{buffer_, sizeof(buffer_), buffer_}
 {
     va_list va;
     va_start(va, fmt);
@@ -47,9 +45,6 @@ Exception::Exception(IRTStatus code, const char *fmt, ...)
     }
 
     va_end(va);
-
-    // Next character written will be appended to buffer_
-    strbuf_.seekpos(std::char_traits<char>::length(buffer_), std::ios_base::out);
 }
 
 IRTStatus Exception::code() const

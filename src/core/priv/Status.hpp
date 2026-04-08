@@ -1,6 +1,6 @@
 #pragma once
 
-#include <inferrt/core/Status.hpp>
+#include <inferrt/core/Status.h>
 
 #include <exception>
 

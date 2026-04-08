@@ -2,7 +2,7 @@
 
 #include <inferrt/core/Status.h>
 
-#include <strstream>
+#include <exception>
 
 namespace irt::core::priv {
 
@@ -26,27 +26,9 @@ public:
 
     const char *what() const noexcept override;
 
-    template<class T>
-    Exception &&operator<<(const T &v) &&
-    {
-        // TODO: must avoid allocating memory from heap, can't use ostringstream
-        std::ostream ss(&strbuf_);
-        ss << v << std::flush;
-        return std::move(*this);
-    }
-
 private:
     IRTStatus code_ = IRT_ERROR_INTERNAL;
     char      buffer_[MAX_STATUS_MESSAGE_LENGTH + 64 + 2]{};
-
-    class StrBuffer : public std::strstreambuf
-    {
-    public:
-        using std::strstreambuf::seekpos;
-        using std::strstreambuf::strstreambuf;
-    };
-
-    StrBuffer strbuf_;
 };
 
 } // namespace irt::core::priv
