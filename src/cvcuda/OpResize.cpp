@@ -29,7 +29,7 @@ void resize(const T *d_src, T *d_dst, cv::Size ssize, cv::Size dsize, const int 
             {
             case cv::INTER_LINEAR:
             {
-                resize_bilinear<T, float>(d_src, d_dst, _ssize, sstride, _dsize, dstride, CH, stream);
+                priv::resize_bilinear<T, float>(d_src, d_dst, _ssize, sstride, _dsize, dstride, CH, stream);
                 break;
             }
             default:

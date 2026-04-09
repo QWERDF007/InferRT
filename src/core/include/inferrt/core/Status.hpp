@@ -25,6 +25,9 @@ enum class Status : int8_t
     ERROR_UNKNOWN           = IRT_ERROR_UNKNOWN
 };
 
+/**
+ * @brief 返回状态码的字符串表示
+ */
 inline const char *StatusGetName(Status status)
 {
     return StatusGetName(static_cast<IRTStatus>(status));

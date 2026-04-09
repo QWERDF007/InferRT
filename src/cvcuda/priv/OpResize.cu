@@ -4,7 +4,7 @@
 
 #include <inferrt/cvcuda/OpResize.h>
 
-namespace irt::cvcuda {
+namespace irt::cvcuda::priv {
 
 // OpenCV的定点算术常量
 static const int INTER_RESIZE_COEF_BITS    = 11;
@@ -278,4 +278,4 @@ template INFERRT_CVCUDA_API void resize_bilinear<float, float>(const float *, fl
 template INFERRT_CVCUDA_API void resize_bilinear<float, double>(const float *, float *, const int2, const int,
                                                                 const int2, const int, const int, cudaStream_t);
 
-} // namespace irt::cvcuda
+} // namespace irt::cvcuda::priv
