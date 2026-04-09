@@ -8,6 +8,10 @@
 
 #include <memory>
 
+namespace irt::cvcuda::priv {
+class IOperatorImpl;
+}
+
 namespace irt::cvcuda {
 
 class IOperator

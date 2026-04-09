@@ -1,6 +1,7 @@
 #include <cuda_runtime.h>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/cvcuda/OpResize.h>
+#include <inferrt/cvcuda/OpResize.hpp>
 
 #include <iostream>
 
@@ -76,9 +77,14 @@ int main(int argc, char *argv[])
             break;
 
         case CV_32F:
-            irt::cvcuda::resize<float>(static_cast<float *>(d_src), static_cast<float *>(d_dst), img.size(), dsize,
-                                       img.channels(), interpolation, nullptr);
+        {
+            // irt::cvcuda::resize<float>(static_cast<float *>(d_src), static_cast<float *>(d_dst), img.size(), dsize,
+            //                            img.channels(), interpolation, nullptr);
+            irt::cvcuda::Resize resizer;
+            resizer.operator()<float>(static_cast<float *>(d_src), static_cast<float *>(d_dst), img.size(), dsize,
+                                      img.channels(), interpolation, nullptr);
             break;
+        }
         default:
             std::cerr << "Unsupported image depth: " << depth << std::endl;
             cudaFree(d_src);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Export.h"
 #include "IOperator.hpp"
 
 #include <cuda_runtime.h>
@@ -7,12 +8,12 @@
 
 namespace irt::cvcuda {
 
-class Resize final : public IOperator
+class INFERRT_CVCUDA_API Resize final : public IOperator
 {
 public:
     explicit Resize();
 
-    ~Resize() = default;
+    ~Resize();
 
     template<typename T>
     [[nodiscard]] int operator()(const T *d_src, T *d_dst, cv::Size ssize, cv::Size dsize, const int CH,

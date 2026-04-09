@@ -1,6 +1,3 @@
-#include "priv/OpResize.cuh"
-
-#include "priv/IOperatorImpl.hpp"
 #include "priv/OpResizeImpl.hpp"
 
 #include <inferrt/core/Exception.hpp>
@@ -58,6 +55,8 @@ Resize::Resize()
     impl_.reset(new priv::ResizeImpl());
 }
 
+Resize::~Resize() = default;
+
 template<typename T>
 int Resize::operator()(const T *d_src, T *d_dst, cv::Size ssize, cv::Size dsize, const int CH, const int interpolation,
                        cudaStream_t stream)
@@ -72,16 +71,22 @@ int Resize::operator()(const T *d_src, T *d_dst, cv::Size ssize, cv::Size dsize,
             _ssize.x = ssize.width;
             _ssize.y = ssize.height;
             int2 _dsize;
-            _dsize.x = dsize.width;
-            _dsize.y = dsize.height;
-            int sstride;
-            sstride = ssize.width * CH;
-            int dstride;
-            dstride = dsize.width * CH;
+            _dsize.x    = dsize.width;
+            _dsize.y    = dsize.height;
+            int sstride = ssize.width * CH;
+            int dstride = dsize.width * CH;
 
-            impl_(d_src, d_dst, _ssize, sstride, _dsize, dstride, CH, interpolation, stream);
+            // 调用 ResizeImpl 的 operator()
+            auto *resizeImpl = static_cast<priv::ResizeImpl *>(impl_.get());
+            (*resizeImpl)(d_src, d_dst, _ssize, sstride, _dsize, dstride, CH, interpolation, stream);
         });
     return status;
 }
+
+// 显式实例化
+template INFERRT_CVCUDA_API int Resize::operator()<uint8_t>(const uint8_t *, uint8_t *, cv::Size, cv::Size, const int,
+                                                            const int, cudaStream_t);
+template INFERRT_CVCUDA_API int Resize::operator()<float>(const float *, float *, cv::Size, cv::Size, const int,
+                                                          const int, cudaStream_t);
 
 } // namespace irt::cvcuda

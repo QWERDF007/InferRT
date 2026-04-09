@@ -1,9 +1,10 @@
 #include "OpResizeImpl.hpp"
-
 #include "saturate.cuh"
 #include "type.cuh"
 
+#include <inferrt/core/Exception.hpp>
 #include <inferrt/cvcuda/OpResize.h>
+#include <opencv2/opencv.hpp>
 
 namespace irt::cvcuda::priv {
 
@@ -279,10 +280,30 @@ template INFERRT_CVCUDA_API void resize_bilinear<float, float>(const float *, fl
 template INFERRT_CVCUDA_API void resize_bilinear<float, double>(const float *, float *, const int2, const int,
                                                                 const int2, const int, const int, cudaStream_t);
 
+// ResizeImpl::RunResize 实现
 template<typename T>
-void ResizeImpl::RunResize(const T *d_src, T *d_dst, const int2 ssize, const int sstride, const int2 dsize, const int dstride,
-                     const int CH, const int interpolation, cudaStream_t stream)
+void ResizeImpl::RunResize(const T *d_src, T *d_dst, const int2 ssize, const int sstride, const int2 dsize,
+                           const int dstride, const int CH, const int interpolation, cudaStream_t stream)
 {
+    switch (interpolation)
+    {
+    case cv::INTER_LINEAR:
+    {
+        resize_bilinear<T, float>(d_src, d_dst, ssize, sstride, dsize, dstride, CH, stream);
+        break;
+    }
+    default:
+    {
+        throw core::Exception(core::Status::ERROR_NOT_IMPLEMENTED, "Interpolation method not implemented");
+        break;
+    }
+    }
 }
+
+// 显式实例化
+template void ResizeImpl::RunResize<uint8_t>(const uint8_t *, uint8_t *, const int2, const int, const int2,
+                                             const int, const int, const int, cudaStream_t);
+template void ResizeImpl::RunResize<float>(const float *, float *, const int2, const int, const int2, const int,
+                                           const int, const int, cudaStream_t);
 
 } // namespace irt::cvcuda::priv
