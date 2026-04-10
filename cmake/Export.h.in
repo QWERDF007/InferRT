@@ -1,0 +1,15 @@
+#pragma once
+
+// clang-format off
+
+#if defined(_WIN32)
+#    if defined(INFERRT_@LIBPREFIX@_BUILD_SHARED_LIBS)
+#        define INFERRT_@LIBPREFIX@_API __declspec(dllexport)
+#    else
+#        define INFERRT_@LIBPREFIX@_API __declspec(dllimport)
+#    endif
+#else
+#    define INFERRT_@LIBPREFIX@_API
+#endif
+
+// clang-format on

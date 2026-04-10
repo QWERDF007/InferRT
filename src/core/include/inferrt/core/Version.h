@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Export.h"
+#include <inferrt/core/Export.h>
 
 #include <string>
 

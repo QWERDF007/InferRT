@@ -31,11 +31,10 @@ function(add_plugin_library PLUGIN_NAME)
     target_include_directories(${TARGET_NAME} 
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/${PLUGIN_NAME}> 
             $<INSTALL_INTERFACE:include>
     )
-
-    configure_version(${TARGET_NAME} INFERRT ${PROJECT_NAME_LOWER}/${PLUGIN_NAME} ${PROJECT_VERSION})
 
     # 将名称转换为大写
     string(TOUPPER ${TARGET_NAME} TARGET_NAME_UPPER)
@@ -44,6 +43,18 @@ function(add_plugin_library PLUGIN_NAME)
     # 添加一个宏定义, 配合动态库导出函数、类
     # https://stackoverflow.com/a/67923443
     target_compile_definitions(${TARGET_NAME} PRIVATE ${TARGET_EXPORTS})
+
+    # 将插件名称转换为大写，用于生成 Export.h
+    string(TOUPPER ${PLUGIN_NAME} PLUGIN_NAME_UPPER)
+    set(LIBPREFIX ${PLUGIN_NAME_UPPER})
+    
+    # 使用 configure_file 生成 Export.h
+    configure_file(
+        ${CMAKE_SOURCE_DIR}/cmake/Export.h.in
+        ${CMAKE_CURRENT_BINARY_DIR}/include/${PROJECT_NAME_LOWER}/${PLUGIN_NAME}/Export.h
+        @ONLY
+    )
+
 
     # 添加接口头文件，链接目标后可以include, 无需另外包含头文件目录
     set(PLUGIN_HEADER "${PROJECT_NAME_LOWER}_${PLUGIN_NAME}_header")

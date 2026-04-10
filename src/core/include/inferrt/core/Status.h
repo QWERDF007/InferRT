@@ -1,9 +1,9 @@
 #pragma once
 
-#include "Export.h"
-
+#include <inferrt/core/Export.h>
 #include <stdarg.h>
 #include <stdint.h>
+
 
 /**
  * @brief 状态码
