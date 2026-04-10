@@ -38,6 +38,7 @@ include(ConfigBuildTree)
 include(ConfigCompiler)
 include(ConfigCUDA)
 include(ConfigOpenCV)
+include(AddPluginLibrary)
 
 # 第三方库
 add_subdirectory(3rdparty EXCLUDE_FROM_ALL)
