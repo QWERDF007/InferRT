@@ -34,7 +34,7 @@ template<typename T>
 int Resize::operator()(const T *d_src, T *d_dst, cv::Size ssize, cv::Size dsize, const int CH, const int interpolation,
                        cudaStream_t stream)
 {
-    core::IRTStatus status = ProtectCall(
+    IRTStatus status = ProtectCall(
         [&]
         {
             if (impl_ == nullptr)
