@@ -83,10 +83,10 @@ private:
     const char *msg_;  ///< 指向消息缓冲区中实际消息部分的指针
 
     // 消息缓冲区大小计算：
-    // MAX_STATUS_MESSAGE_LENGTH: 最大消息长度
+    // IRT_MAX_STATUS_MESSAGE_LENGTH: 最大消息长度
     // 64: 状态枚举字符串表示的最大长度
     // 2: 分隔符 ": " 的长度
-    char msg_buffer_[MAX_STATUS_MESSAGE_LENGTH + 64 + 2];
+    char msg_buffer_[IRT_MAX_STATUS_MESSAGE_LENGTH + 64 + 2];
 
     /**
      * @brief 设置格式化的错误消息

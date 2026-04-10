@@ -158,10 +158,10 @@ int main(int argc, char *argv[])
         func(img_f32, 0.25, cv::INTER_NEAREST);
 
         // Check if there was an error
-        char                 msg[1024];
-        irt::core::IRTStatus status = irt::core::GetLastErrorMessage(msg, 1024);
+        char      msg[1024];
+        IRTStatus status = irt::core::GetLastErrorMessage(msg, 1024);
         std::cout << __FUNCTION__ << " " << __LINE__ << " code: " << status << std::endl;
-        if (status != irt::core::IRT_SUCCESS)
+        if (status != IRT_SUCCESS)
         {
             std::cout << "Error detected: " << msg << std::endl;
         }

@@ -5,8 +5,6 @@
 #include <stdarg.h>
 #include <stdint.h>
 
-namespace irt::core {
-
 /**
  * @brief 状态码
  */
@@ -23,13 +21,15 @@ typedef enum
     IRT_ERROR_UNKNOWN            /**< 未知错误. */
 } IRTStatus;
 
+namespace irt::core {
+
 /**
  * @brief 状态消息的最大长度（字节）
  *
  * 这是 \ref GetLastErrorMessage 和 \ref PeekAtLastErrorMessage 函数
  * 写入状态消息输出缓冲区的最大字节数，包括末尾的 '\0' 终止符。
  */
-#define MAX_STATUS_MESSAGE_LENGTH (256)
+#define IRT_MAX_STATUS_MESSAGE_LENGTH (256)
 
 /**
  * @brief 返回状态码的字符串表示
@@ -59,7 +59,7 @@ INFERRT_CORE_API IRTStatus GetLastError();
  * 再次调用此函数将返回 \ref IRT_SUCCESS，因为线程特定的状态已被重置。
  * 此操作不会影响其他线程中的状态。
  *
- * 保证消息长度不会超过 \ref MAX_STATUS_MESSAGE_LENGTH 字节（包括 '\0' 终止符）。
+ * 保证消息长度不会超过 \ref IRT_MAX_STATUS_MESSAGE_LENGTH 字节（包括 '\0' 终止符）。
  *
  * @param[out] msg 指向用于写入状态消息的内存的指针。
  *                 如果为 NULL，则不返回消息。
@@ -84,7 +84,7 @@ INFERRT_CORE_API IRTStatus PeekAtLastError();
  *
  * 当前线程的内部状态码和消息不会被重置。
  *
- * 保证消息长度不会超过 MAX_STATUS_MESSAGE_LENGTH 字节（包括 '\0' 终止符）。
+ * 保证消息长度不会超过 IRT_MAX_STATUS_MESSAGE_LENGTH 字节（包括 '\0' 终止符）。
  *
  * @param[out] msg 指向用于写入状态消息的内存的指针。如果为 NULL，则不返回消息。
  * @param[in] len msg 缓冲区的大小（字节）。如果小于零，则 len 被视为 0。

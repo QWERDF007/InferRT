@@ -28,7 +28,7 @@ public:
 
 private:
     IRTStatus code_ = IRT_ERROR_INTERNAL;
-    char      buffer_[MAX_STATUS_MESSAGE_LENGTH + 64 + 2]{};
+    char      buffer_[IRT_MAX_STATUS_MESSAGE_LENGTH + 64 + 2]{};
 };
 
 } // namespace irt::core::priv
