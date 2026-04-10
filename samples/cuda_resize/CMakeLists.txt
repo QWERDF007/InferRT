@@ -11,7 +11,7 @@ add_executable(${TARGET_NAME} ${SOURCES} ${HEADERS})
 
 target_link_libraries(${TARGET_NAME}
     PRIVATE
-        ${PROJECT_NAME_LOWER}_cvcuda ${PROJECT_NAME_LOWER}_cvcuda_header
+        inferrt_cvcuda
     PUBLIC
 )
 

@@ -15,7 +15,7 @@ target_link_libraries(${TARGET_NAME}
     PUBLIC
         cudart
         opencv_core
-        ${PROJECT_NAME_LOWER}_core ${PROJECT_NAME_LOWER}_core_header
+        inferrt_core
 )
 
 target_include_directories(${TARGET_NAME} 
@@ -37,12 +37,14 @@ target_compile_definitions(${TARGET_NAME} PRIVATE ${TARGET_EXPORTS})
 
 # 添加接口头文件，链接目标后可以include, 无需另外包含头文件目录
 set(PLUGIN_HEADER "${PROJECT_NAME_LOWER}_${PLUGIN_NAME}_header")
-add_library(${PROJECT_NAME_LOWER}_${PLUGIN_NAME}_header INTERFACE)
+add_library(${PLUGIN_HEADER} INTERFACE)
 target_include_directories(${PLUGIN_HEADER}
     INTERFACE 
         ${CMAKE_CURRENT_SOURCE_DIR}/include 
         ${CMAKE_CURRENT_BINARY_DIR}/include
 )
+
+target_link_libraries(${TARGET_NAME} PUBLIC ${PLUGIN_HEADER})
 
 install(
     DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/${PROJECT_NAME_LOWER}/${PLUGIN_NAME}
