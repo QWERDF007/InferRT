@@ -67,9 +67,11 @@ function(add_plugin_library PLUGIN_NAME)
 
     target_link_libraries(${TARGET_NAME} PUBLIC ${PLUGIN_HEADER})
 
+    # DIRECTORY path/to/dir 会安装 dir 目录本身及其内容
+    # DIRECTORY path/to/dir/ - 只安装 dir 目录的内容（不包含 dir 本身）
     install(
-        DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/${PROJECT_NAME_LOWER}/${PLUGIN_NAME}
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME_LOWER}/${PLUGIN_NAME}
+        DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/${PROJECT_NAME_LOWER}/${PLUGIN_NAME}/ 
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME_LOWER}/${PLUGIN_NAME} # e.g. InferRT-0.0.1/include/inferrt/cvcuda
         COMPONENT dev
         PATTERN "detail" EXCLUDE
     )
@@ -80,4 +82,9 @@ function(add_plugin_library PLUGIN_NAME)
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     )
+
+    # 安装生成的头文件 Export.h（通常用于 dev 组件）
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/${PROJECT_NAME_LOWER}/${PLUGIN_NAME}/Export.h
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME_LOWER}/${PLUGIN_NAME}
+            COMPONENT dev)
 endfunction()
