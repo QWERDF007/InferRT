@@ -6,8 +6,8 @@
 namespace irt::cvcuda::priv {
 
 template<typename T>
-void ResizeImpl::operator()(const T *d_src, T *d_dst, const int2 ssize, const int sstride, const int2 dsize,
-                            const int dstride, const int CH, const int interpolation, cudaStream_t stream)
+void ResizeImpl<T>::operator()(const T *d_src, T *d_dst, const int2 ssize, const int sstride, const int2 dsize,
+                               const int dstride, const int CH, const int interpolation, cudaStream_t stream)
 {
     // 参数检查
     if (d_src == nullptr)
@@ -36,9 +36,9 @@ void ResizeImpl::operator()(const T *d_src, T *d_dst, const int2 ssize, const in
 }
 
 // 显式实例化
-template void ResizeImpl::operator()<uint8_t>(const uint8_t *, uint8_t *, const int2, const int, const int2, const int,
+template void ResizeImpl<uint8_t>::operator()(const uint8_t *, uint8_t *, const int2, const int, const int2, const int,
                                               const int, const int, cudaStream_t);
-template void ResizeImpl::operator()<float>(const float *, float *, const int2, const int, const int2, const int,
+template void ResizeImpl<float>::operator()(const float *, float *, const int2, const int, const int2, const int,
                                             const int, const int, cudaStream_t);
 
 } // namespace irt::cvcuda::priv

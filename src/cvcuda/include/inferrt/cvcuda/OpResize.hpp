@@ -8,6 +8,7 @@
 
 namespace irt::cvcuda {
 
+template<typename T>
 class INFERRT_CVCUDA_API Resize final : public IOperator
 {
 public:
@@ -15,7 +16,6 @@ public:
 
     ~Resize();
 
-    template<typename T>
     [[nodiscard]] int operator()(const T *d_src, T *d_dst, cv::Size ssize, cv::Size dsize, const int CH,
                                  const int interpolation = cv::INTER_LINEAR, cudaStream_t stream = nullptr);
 

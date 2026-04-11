@@ -282,8 +282,8 @@ template INFERRT_CVCUDA_API void resize_bilinear<float, double>(const float *, f
 
 // ResizeImpl::RunResize 实现
 template<typename T>
-void ResizeImpl::RunResize(const T *d_src, T *d_dst, const int2 ssize, const int sstride, const int2 dsize,
-                           const int dstride, const int CH, const int interpolation, cudaStream_t stream)
+void ResizeImpl<T>::RunResize(const T *d_src, T *d_dst, const int2 ssize, const int sstride, const int2 dsize,
+                              const int dstride, const int CH, const int interpolation, cudaStream_t stream)
 {
     switch (interpolation)
     {
@@ -301,9 +301,9 @@ void ResizeImpl::RunResize(const T *d_src, T *d_dst, const int2 ssize, const int
 }
 
 // 显式实例化
-template void ResizeImpl::RunResize<uint8_t>(const uint8_t *, uint8_t *, const int2, const int, const int2,
+template void ResizeImpl<uint8_t>::RunResize(const uint8_t *, uint8_t *, const int2, const int, const int2,
                                              const int, const int, const int, cudaStream_t);
-template void ResizeImpl::RunResize<float>(const float *, float *, const int2, const int, const int2, const int,
-                                           const int, const int, cudaStream_t);
+template void ResizeImpl<float>::RunResize(const float *, float *, const int2, const int, const int2, const int,
+                                            const int, const int, cudaStream_t);
 
 } // namespace irt::cvcuda::priv

@@ -80,9 +80,9 @@ int main(int argc, char *argv[])
         {
             // irt::cvcuda::resize<float>(static_cast<float *>(d_src), static_cast<float *>(d_dst), img.size(), dsize,
             //                            img.channels(), interpolation, nullptr);
-            irt::cvcuda::Resize resizer;
-            resizer.operator()<float>(static_cast<float *>(d_src), static_cast<float *>(d_dst), img.size(), dsize,
-                                      img.channels(), interpolation, nullptr);
+            irt::cvcuda::Resize<float> resizer;
+            resizer(static_cast<float *>(d_src), static_cast<float *>(d_dst), img.size(), dsize, img.channels(),
+                    interpolation, nullptr);
             break;
         }
         default:

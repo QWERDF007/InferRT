@@ -12,8 +12,8 @@ template<typename T>
 int resize(const T *d_src, T *d_dst, cv::Size ssize, cv::Size dsize, const int CH, const int interpolation,
            cudaStream_t stream)
 {
-    Resize resizer;
-    return resizer.operator()<T>(d_src, d_dst, ssize, dsize, CH, interpolation, stream);
+    Resize<T> resizer;
+    return resizer(d_src, d_dst, ssize, dsize, CH, interpolation, stream);
 }
 
 // 显式实例化你需要的类型组合
@@ -23,16 +23,18 @@ template INFERRT_CVCUDA_API int resize<uint8_t>(const uint8_t *, uint8_t *, cv::
 template INFERRT_CVCUDA_API int resize<float>(const float *, float *, cv::Size, cv::Size, const int, const int,
                                               cudaStream_t);
 
-Resize::Resize()
+template<typename T>
+Resize<T>::Resize()
 {
-    impl_.reset(new priv::ResizeImpl());
+    impl_.reset(new priv::ResizeImpl<T>());
 }
 
-Resize::~Resize() = default;
+template<typename T>
+Resize<T>::~Resize() = default;
 
 template<typename T>
-int Resize::operator()(const T *d_src, T *d_dst, cv::Size ssize, cv::Size dsize, const int CH, const int interpolation,
-                       cudaStream_t stream)
+int Resize<T>::operator()(const T *d_src, T *d_dst, cv::Size ssize, cv::Size dsize, const int CH,
+                          const int interpolation, cudaStream_t stream)
 {
     IRTStatus status = ProtectCall(
         [&]
@@ -49,17 +51,15 @@ int Resize::operator()(const T *d_src, T *d_dst, cv::Size ssize, cv::Size dsize,
             int sstride = ssize.width * CH;
             int dstride = dsize.width * CH;
 
-            // 调用 ResizeImpl 的 operator()
-            auto *resizeImpl = static_cast<priv::ResizeImpl *>(impl_.get());
+            // 动态转换到具体类型
+            auto *resizeImpl = static_cast<priv::ResizeImpl<T> *>(impl_.get());
             (*resizeImpl)(d_src, d_dst, _ssize, sstride, _dsize, dstride, CH, interpolation, stream);
         });
     return status;
 }
 
-// 显式实例化
-template INFERRT_CVCUDA_API int Resize::operator()<uint8_t>(const uint8_t *, uint8_t *, cv::Size, cv::Size, const int,
-                                                            const int, cudaStream_t);
-template INFERRT_CVCUDA_API int Resize::operator()<float>(const float *, float *, cv::Size, cv::Size, const int,
-                                                          const int, cudaStream_t);
+// 显式实例化 Resize 类
+template class INFERRT_CVCUDA_API Resize<uint8_t>;
+template class INFERRT_CVCUDA_API Resize<float>;
 
 } // namespace irt::cvcuda
