@@ -96,6 +96,7 @@ const char *GetName(IRTStatus code)
         CASE(IRT_ERROR_DEVICE);
         CASE(IRT_ERROR_NOT_READY);
         CASE(IRT_ERROR_OUT_OF_MEMORY);
+        CASE(IRT_ERROR_INTERNAL);
         CASE(IRT_ERROR_UNKNOWN);
     }
 

@@ -25,7 +25,7 @@ string(TOUPPER ${PROJECT_NAME} PROJECT_NAME_UPPER)
 string(TOLOWER ${PROJECT_NAME} PROJECT_NAME_LOWER)
 
 # 配置构建树的选项
-option(${PROJECT_NAME_UPPER}_BUILD_TESTS "Enable testsuite" OFF)
+option(${PROJECT_NAME_UPPER}_BUILD_TESTS "Enable testsuite" ON)
 option(${PROJECT_NAME_UPPER}_BUILD_DOCS "Build Docs" OFF)
 option(${PROJECT_NAME_UPPER}_BUILD_SAMPLES "Build Samples" ON)
 option(${PROJECT_NAME_UPPER}_ENABLE_SANITIZER "Enabled sanitized build" OFF)
@@ -47,6 +47,7 @@ add_subdirectory(src)
 
 # 构建测试用例
 if(${PROJECT_NAME_UPPER}_BUILD_TESTS)
+    enable_testing()
     add_subdirectory(tests)
 endif()
 
