@@ -8,43 +8,46 @@
 namespace irt::core::priv {
 
 Exception::Exception(IRTStatus code)
-    : Exception(code, "%s", "")
+    : code_(code)
 {
+    snprintf(buffer_, sizeof(buffer_), "%s", GetName(code));
 }
 
 Exception::Exception(IRTStatus code, const char *fmt, va_list va)
     : code_(code)
 {
-    snprintf(buffer_, sizeof(buffer_) - 1, "%s", GetName(code));
+    int written = snprintf(buffer_, sizeof(buffer_), "%s", GetName(code));
 
-    if (fmt != nullptr)
+    if (fmt != nullptr && fmt[0] != '\0' && written > 0 && written < sizeof(buffer_))
     {
-        size_t len = std::char_traits<char>::length(buffer_);
-        snprintf(buffer_ + len, sizeof(buffer_) - len - 1, ": ");
+        int remain = sizeof(buffer_) - written;
+        int used   = snprintf(buffer_ + written, remain, ": ");
 
-        len = std::char_traits<char>::length(buffer_);
-        vsnprintf(buffer_ + len, sizeof(buffer_) - len - 1, fmt, va);
+        if (used > 0 && used < remain)
+            vsnprintf(buffer_ + written + used, remain - used, fmt, va);
     }
 }
 
 Exception::Exception(IRTStatus code, const char *fmt, ...)
     : code_(code)
 {
-    va_list va;
-    va_start(va, fmt);
+    int written = snprintf(buffer_, sizeof(buffer_), "%s", GetName(code));
 
-    snprintf(buffer_, sizeof(buffer_) - 1, "%s", GetName(code));
-
-    if (fmt != nullptr)
+    if (fmt && fmt[0] != '\0' && written > 0 && written < sizeof(buffer_))
     {
-        size_t len = std::char_traits<char>::length(buffer_);
-        snprintf(buffer_ + len, sizeof(buffer_) - len - 1, ": ");
+        int remain = sizeof(buffer_) - written;
 
-        len = std::char_traits<char>::length(buffer_);
-        vsnprintf(buffer_ + len, sizeof(buffer_) - len - 1, fmt, va);
+        int used = snprintf(buffer_ + written, remain, ": ");
+        if (used > 0 && used < remain)
+        {
+            va_list va;
+            va_start(va, fmt);
+
+            vsnprintf(buffer_ + written + used, remain - used, fmt, va);
+
+            va_end(va);
+        }
     }
-
-    va_end(va);
 }
 
 IRTStatus Exception::code() const
@@ -56,9 +59,11 @@ const char *Exception::msg() const
 {
     // Only return the message part
     const char *out = strchr(buffer_, ':');
-    // NVCV_ASSERT(out != nullptr);
 
-    return out += 2; // skip ': '
+    if (out != nullptr)
+        return out + 2; // skip ': '
+    else
+        return ""; // 没有 msg 部分, 返回空
 }
 
 const char *Exception::what() const noexcept
