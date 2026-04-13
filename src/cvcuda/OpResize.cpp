@@ -6,7 +6,7 @@
 
 namespace irt::cvcuda {
 
-using core::ProtectCall;
+using irt::ProtectCall;
 
 template<typename T>
 int resize(const T *d_src, T *d_dst, cv::Size ssize, cv::Size dsize, const int CH, const int interpolation,
@@ -40,7 +40,7 @@ int Resize<T>::operator()(const T *d_src, T *d_dst, cv::Size ssize, cv::Size dsi
         [&]
         {
             if (impl_ == nullptr)
-                throw core::Exception(core::Status::ERROR_NOT_IMPLEMENTED, "Operator not implemented");
+                throw Exception(Status::ERROR_NOT_IMPLEMENTED, "Operator not implemented");
 
             int2 _ssize;
             _ssize.x = ssize.width;

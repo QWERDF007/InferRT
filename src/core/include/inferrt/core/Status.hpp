@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace irt::core {
+namespace irt {
 
 /**
  * @brief 运算状态码枚举类
@@ -33,4 +33,4 @@ inline const char *StatusGetName(Status status)
     return StatusGetName(static_cast<IRTStatus>(status));
 }
 
-} // namespace irt::core
+} // namespace irt

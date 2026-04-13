@@ -8,7 +8,7 @@
 #include <iostream>
 #include <stdexcept>
 
-namespace irt::core {
+namespace irt {
 
 /**
  * @brief InferRT 异常类
@@ -196,4 +196,4 @@ IRTStatus ProtectCall(F &&fn)
     }
 }
 
-} // namespace irt::core
+} // namespace irt

@@ -12,23 +12,23 @@ void ResizeImpl<T>::operator()(const T *d_src, T *d_dst, const int2 ssize, const
     // 参数检查
     if (d_src == nullptr)
     {
-        throw core::Exception(core::Status::ERROR_INVALID_ARGUMENT, "Source pointer is null");
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "Source pointer is null");
     }
     if (d_dst == nullptr)
     {
-        throw core::Exception(core::Status::ERROR_INVALID_ARGUMENT, "Destination pointer is null");
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "Destination pointer is null");
     }
     if (ssize.x <= 0 || ssize.y <= 0)
     {
-        throw core::Exception(core::Status::ERROR_INVALID_ARGUMENT, "Invalid source size");
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "Invalid source size");
     }
     if (dsize.x <= 0 || dsize.y <= 0)
     {
-        throw core::Exception(core::Status::ERROR_INVALID_ARGUMENT, "Invalid destination size");
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "Invalid destination size");
     }
     if (CH <= 0 || CH > 4)
     {
-        throw core::Exception(core::Status::ERROR_INVALID_ARGUMENT, "Invalid channel count (must be 1-4)");
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "Invalid channel count (must be 1-4)");
     }
 
     // 调用 CUDA 实现

@@ -4,7 +4,6 @@
 #include <stdarg.h>
 #include <stdint.h>
 
-
 /**
  * @brief 状态码
  */
@@ -21,7 +20,7 @@ typedef enum
     IRT_ERROR_UNKNOWN            /**< 未知错误. */
 } IRTStatus;
 
-namespace irt::core {
+namespace irt {
 
 /**
  * @brief 状态消息的最大长度（字节）
@@ -124,4 +123,4 @@ INFERRT_CORE_API void SetThreadStatus(IRTStatus status, const char *fmt, ...)
  */
 INFERRT_CORE_API void SetThreadStatusVarArgList(IRTStatus status, const char *fmt, va_list va);
 
-} // namespace irt::core
+} // namespace irt

@@ -40,84 +40,84 @@ TEST_P(StatusNameTest, get_name)
     IRTStatus   status = std::get<0>(GetParam());
     const char *gold   = std::get<1>(GetParam());
 
-    EXPECT_STREQ(gold, irt::core::StatusGetName(status));
+    EXPECT_STREQ(gold, irt::StatusGetName(status));
 }
 
 TEST(StatusTest, main_thread_has_success_status_by_default)
 {
-    EXPECT_EQ(IRT_SUCCESS, irt::core::GetLastError());
-    EXPECT_EQ(IRT_SUCCESS, irt::core::PeekAtLastError());
+    EXPECT_EQ(IRT_SUCCESS, irt::GetLastError());
+    EXPECT_EQ(IRT_SUCCESS, irt::PeekAtLastError());
 }
 
 TEST(StatusTest, get_last_status_msg_success_has_correct_message)
 {
     char msg[IRT_MAX_STATUS_MESSAGE_LENGTH];
-    ASSERT_EQ(IRT_SUCCESS, irt::core::GetLastErrorMessage(msg, sizeof(msg)));
+    ASSERT_EQ(IRT_SUCCESS, irt::GetLastErrorMessage(msg, sizeof(msg)));
     EXPECT_STREQ("success", msg);
 }
 
 TEST(StatusTest, get_last_status_resets_error_state)
 {
-    irt::core::SetThreadStatus(IRT_ERROR_INTERNAL, "%s", "");
-    EXPECT_EQ(IRT_ERROR_INTERNAL, irt::core::GetLastError());
-    EXPECT_EQ(IRT_SUCCESS, irt::core::GetLastError());
+    irt::SetThreadStatus(IRT_ERROR_INTERNAL, "%s", "");
+    EXPECT_EQ(IRT_ERROR_INTERNAL, irt::GetLastError());
+    EXPECT_EQ(IRT_SUCCESS, irt::GetLastError());
 }
 
 TEST(StatusTest, peek_last_status_doesnt_reset_error_state)
 {
-    irt::core::SetThreadStatus(IRT_ERROR_INTERNAL, "%s", "");
-    EXPECT_EQ(IRT_ERROR_INTERNAL, irt::core::PeekAtLastError());
-    EXPECT_EQ(IRT_ERROR_INTERNAL, irt::core::PeekAtLastError());
+    irt::SetThreadStatus(IRT_ERROR_INTERNAL, "%s", "");
+    EXPECT_EQ(IRT_ERROR_INTERNAL, irt::PeekAtLastError());
+    EXPECT_EQ(IRT_ERROR_INTERNAL, irt::PeekAtLastError());
 }
 
 TEST(StatusTest, get_last_status_msg_error_has_correct_message)
 {
-    irt::core::SetThreadStatus(IRT_ERROR_INTERNAL, "test message");
+    irt::SetThreadStatus(IRT_ERROR_INTERNAL, "test message");
 
     char msg[IRT_MAX_STATUS_MESSAGE_LENGTH];
-    ASSERT_EQ(IRT_ERROR_INTERNAL, irt::core::GetLastErrorMessage(msg, sizeof(msg)));
+    ASSERT_EQ(IRT_ERROR_INTERNAL, irt::GetLastErrorMessage(msg, sizeof(msg)));
     EXPECT_STREQ("test message", msg);
 
-    ASSERT_EQ(IRT_SUCCESS, irt::core::GetLastErrorMessage(msg, sizeof(msg)));
+    ASSERT_EQ(IRT_SUCCESS, irt::GetLastErrorMessage(msg, sizeof(msg)));
     EXPECT_STREQ("success", msg);
 }
 
 TEST(StatusTest, peek_at_last_status_msg_success_has_correct_message)
 {
     char msg[IRT_MAX_STATUS_MESSAGE_LENGTH];
-    ASSERT_EQ(IRT_SUCCESS, irt::core::PeekAtLastErrorMessage(msg, sizeof(msg)));
+    ASSERT_EQ(IRT_SUCCESS, irt::PeekAtLastErrorMessage(msg, sizeof(msg)));
     EXPECT_STREQ("success", msg);
 }
 
 // TEST(StatusTest, function_success_doesnot_reset_status)
 // {
-//     ASSERT_EQ(IRT_ERROR_INVALID_ARGUMENT, irt::core::ImageCalcRequirements(640, 480, IRT_IMAGE_FORMAT_U8, 0, 0, nullptr));
+//     ASSERT_EQ(IRT_ERROR_INVALID_ARGUMENT, irt::ImageCalcRequirements(640, 480, IRT_IMAGE_FORMAT_U8, 0, 0, nullptr));
 
 //     NVCVImageRequirements reqs;
-//     ASSERT_EQ(IRT_SUCCESS, irt::core::ImageCalcRequirements(640, 480, IRT_IMAGE_FORMAT_U8, 0, 0, &reqs));
+//     ASSERT_EQ(IRT_SUCCESS, irt::ImageCalcRequirements(640, 480, IRT_IMAGE_FORMAT_U8, 0, 0, &reqs));
 
-//     EXPECT_EQ(IRT_ERROR_INVALID_ARGUMENT, irt::core::GetLastError());
+//     EXPECT_EQ(IRT_ERROR_INVALID_ARGUMENT, irt::GetLastError());
 // }
 
 TEST(StatusTest, peek_at_last_status_msg_error_has_correct_message)
 {
-    irt::core::SetThreadStatus(IRT_ERROR_INTERNAL, "test message");
+    irt::SetThreadStatus(IRT_ERROR_INTERNAL, "test message");
 
     char msg[IRT_MAX_STATUS_MESSAGE_LENGTH];
-    ASSERT_EQ(IRT_ERROR_INTERNAL, irt::core::PeekAtLastErrorMessage(msg, sizeof(msg)));
+    ASSERT_EQ(IRT_ERROR_INTERNAL, irt::PeekAtLastErrorMessage(msg, sizeof(msg)));
     EXPECT_STREQ("test message", msg);
 
     msg[0] = '\0';
-    ASSERT_EQ(IRT_ERROR_INTERNAL, irt::core::PeekAtLastErrorMessage(msg, sizeof(msg)));
+    ASSERT_EQ(IRT_ERROR_INTERNAL, irt::PeekAtLastErrorMessage(msg, sizeof(msg)));
     EXPECT_STREQ("test message", msg);
 }
 
 TEST(StatusTest, set_thread_status_var_arg)
 {
-    irt::core::SetThreadStatus(IRT_ERROR_DEVICE, "test message %d %c %s", 456, 'W', "Liliya");
+    irt::SetThreadStatus(IRT_ERROR_DEVICE, "test message %d %c %s", 456, 'W', "Liliya");
 
     char msg[IRT_MAX_STATUS_MESSAGE_LENGTH];
-    ASSERT_EQ(IRT_ERROR_DEVICE, irt::core::GetLastErrorMessage(msg, sizeof(msg)));
+    ASSERT_EQ(IRT_ERROR_DEVICE, irt::GetLastErrorMessage(msg, sizeof(msg)));
     EXPECT_STREQ("test message 456 W Liliya", msg);
 }
 
@@ -128,29 +128,29 @@ TEST(StatusTest, set_thread_status_var_arg_list)
         va_list va;
         va_start(va, fmt);
 
-        irt::core::SetThreadStatusVarArgList(IRT_ERROR_DEVICE, fmt, va);
+        irt::SetThreadStatusVarArgList(IRT_ERROR_DEVICE, fmt, va);
         va_end(va);
     };
 
     fn("test message %d %s %c", 321, "rod", 'l');
 
     char msg[IRT_MAX_STATUS_MESSAGE_LENGTH];
-    ASSERT_EQ(IRT_ERROR_DEVICE, irt::core::GetLastErrorMessage(msg, sizeof(msg)));
+    ASSERT_EQ(IRT_ERROR_DEVICE, irt::GetLastErrorMessage(msg, sizeof(msg)));
     EXPECT_STREQ("test message 321 rod l", msg);
 }
 
 TEST(StatusTest, set_thread_status_var_arg_list_1)
 {
     va_list va{};
-    irt::core::SetThreadStatusVarArgList(IRT_ERROR_DEVICE, nullptr, va);
-    EXPECT_EQ(IRT_ERROR_DEVICE, irt::core::GetLastError());
+    irt::SetThreadStatusVarArgList(IRT_ERROR_DEVICE, nullptr, va);
+    EXPECT_EQ(IRT_ERROR_DEVICE, irt::GetLastError());
 }
 
 TEST(StatusTest, set_thread_status_null_message)
 {
-    irt::core::SetThreadStatus(IRT_ERROR_DEVICE, nullptr);
+    irt::SetThreadStatus(IRT_ERROR_DEVICE, nullptr);
 
     char msg[IRT_MAX_STATUS_MESSAGE_LENGTH];
-    ASSERT_EQ(IRT_ERROR_DEVICE, irt::core::GetLastErrorMessage(msg, sizeof(msg)));
+    ASSERT_EQ(IRT_ERROR_DEVICE, irt::GetLastErrorMessage(msg, sizeof(msg)));
     EXPECT_STREQ("", msg);
 }

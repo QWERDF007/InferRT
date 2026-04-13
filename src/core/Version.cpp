@@ -4,8 +4,7 @@
 
 #include <string>
 
-
-namespace irt::core {
+namespace irt {
 
 std::string GetVersionString()
 {
@@ -38,4 +37,4 @@ std::string GetBuildTimeString()
     return INFERRT_BUILD_TIME;
 }
 
-} // namespace irt::core
+} // namespace irt

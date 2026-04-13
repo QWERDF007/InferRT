@@ -134,7 +134,7 @@ int main(int argc, char *argv[])
     catch (...)
     {
         char msg[1024];
-        irt::core::GetLastErrorMessage(msg, 1024);
+        irt::GetLastErrorMessage(msg, 1024);
         std::cout << msg << std::endl;
     }
 
@@ -148,7 +148,7 @@ int main(int argc, char *argv[])
     catch (...)
     {
         char msg[1024];
-        irt::core::GetLastErrorMessage(msg, 1024);
+        irt::GetLastErrorMessage(msg, 1024);
         std::cout << msg << std::endl;
     }
 
@@ -159,7 +159,7 @@ int main(int argc, char *argv[])
 
         // Check if there was an error
         char      msg[1024];
-        IRTStatus status = irt::core::GetLastErrorMessage(msg, 1024);
+        IRTStatus status = irt::GetLastErrorMessage(msg, 1024);
         std::cout << __FUNCTION__ << " " << __LINE__ << " code: " << status << std::endl;
         if (status != IRT_SUCCESS)
         {
@@ -170,11 +170,11 @@ int main(int argc, char *argv[])
             std::cout << "INTER_NEAREST - 1" << std::endl;
         }
     }
-    catch (irt::core::Exception &e)
+    catch (irt::Exception &e)
     {
         std::cout << "Catch Exception: " << e.what() << std::endl;
         char msg[1024];
-        irt::core::GetLastErrorMessage(msg, 1024);
+        irt::GetLastErrorMessage(msg, 1024);
         std::cout << msg << std::endl;
     }
 

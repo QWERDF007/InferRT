@@ -294,7 +294,7 @@ void ResizeImpl<T>::RunResize(const T *d_src, T *d_dst, const int2 ssize, const 
     }
     default:
     {
-        throw core::Exception(core::Status::ERROR_NOT_IMPLEMENTED, "Interpolation method not implemented");
+        throw Exception(Status::ERROR_NOT_IMPLEMENTED, "Interpolation method not implemented");
         break;
     }
     }

@@ -23,7 +23,6 @@
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/util/Export.h>
 
-
 namespace irt::util {
 
 namespace detail {
@@ -168,7 +167,7 @@ namespace detail {
  * @param line 源文件行号
  * @param stmt 导致错误的语句字符串
  * @param errmsg 附加错误消息
- * @throws core::Exception 总是抛出包含错误信息的异常
+ * @throws Exception 总是抛出包含错误信息的异常
  * @details 根据是否提供源文件信息，构造包含不同详细程度的异常消息
  */
 template<class T>
@@ -178,14 +177,14 @@ void DoThrow(T error, const char *file, int line, const std::string_view &stmt, 
     if (file != nullptr)
     {
         // 包含文件名和行号的异常消息
-        throw core::Exception(static_cast<core::Status>(TranslateError(error)), "%s:%d %s", file, line,
-                              FormatErrorMessage(ToString(error), stmt, errmsg).c_str());
+        throw Exception(static_cast<Status>(TranslateError(error)), "%s:%d %s", file, line,
+                        FormatErrorMessage(ToString(error), stmt, errmsg).c_str());
     }
     else
     {
         // 不包含源文件信息的异常消息
-        throw core::Exception(static_cast<core::Status>(TranslateError(error)), "%s",
-                              FormatErrorMessage(ToString(error), stmt, errmsg).c_str());
+        throw Exception(static_cast<Status>(TranslateError(error)), "%s",
+                        FormatErrorMessage(ToString(error), stmt, errmsg).c_str());
     }
 }
 
@@ -227,7 +226,7 @@ void DoLog(T error, const char *file, int line, const std::string_view &stmt, co
  *          1. 执行 STMT 语句并获取返回的错误码
  *          2. 调用 PreprocessError 进行预处理
  *          3. 使用 CheckSucceeded 检查是否成功
- *          4. 如果失败，抛出包含详细信息的 core::Exception 异常
+ *          4. 如果失败，抛出包含详细信息的 Exception 异常
  * 
  * @note 使用 lambda 表达式包装以避免宏展开问题
  * 

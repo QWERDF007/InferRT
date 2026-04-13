@@ -14,31 +14,31 @@
 
 #include <iostream>
 
-namespace irt::core {
+namespace irt {
 
 const char *StatusGetName(IRTStatus code)
 {
-    return priv::GetName(code);
+    return core::priv::GetName(code);
 }
 
 IRTStatus GetLastError()
 {
-    return priv::GetLastThreadError();
+    return core::priv::GetLastThreadError();
 }
 
 IRTStatus GetLastErrorMessage(char *msg, int32_t len)
 {
-    return priv::GetLastThreadError(msg, len);
+    return core::priv::GetLastThreadError(msg, len);
 }
 
 IRTStatus PeekAtLastError()
 {
-    return priv::PeekAtLastThreadError();
+    return core::priv::PeekAtLastThreadError();
 }
 
 IRTStatus PeekAtLastErrorMessage(char *msg, int32_t len)
 {
-    return priv::PeekAtLastThreadError(msg, len);
+    return core::priv::PeekAtLastThreadError(msg, len);
 }
 
 /**
@@ -49,36 +49,37 @@ void SetThreadStatus(IRTStatus status, const char *fmt, ...)
     va_list va;
     va_start(va, fmt);
 
-    IRTStatus ret = priv::ProtectCall(
+    IRTStatus ret = core::priv::ProtectCall(
         [&]
         {
             if (fmt)
             {
-                throw priv::Exception(status, fmt, va);
+                throw core::priv::Exception(status, fmt, va);
             }
             else
             {
-                throw priv::Exception(status);
+                throw core::priv::Exception(status);
             }
         });
-
+    (void)ret;
     va_end(va);
 }
 
 void SetThreadStatusVarArgList(IRTStatus status, const char *fmt, va_list va)
 {
-    IRTStatus ret = priv::ProtectCall(
+    IRTStatus ret = core::priv::ProtectCall(
         [&]
         {
             if (fmt)
             {
-                throw priv::Exception(status, fmt, va);
+                throw core::priv::Exception(status, fmt, va);
             }
             else
             {
-                throw priv::Exception(status);
+                throw core::priv::Exception(status);
             }
         });
+    (void)ret;
 }
 
-} // namespace irt::core
+} // namespace irt

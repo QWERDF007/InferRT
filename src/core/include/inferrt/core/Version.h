@@ -4,7 +4,7 @@
 
 #include <string>
 
-namespace irt::core {
+namespace irt {
 
 // 获取完整版本信息字符串，包含版本号、分支、提交哈希和构建时间
 INFERRT_CORE_API std::string GetFullVersionString();
@@ -21,4 +21,4 @@ INFERRT_CORE_API std::string GetCommitHashString();
 // 获取构建时间字符串
 INFERRT_CORE_API std::string GetBuildTimeString();
 
-} // namespace irt::core
+} // namespace irt
