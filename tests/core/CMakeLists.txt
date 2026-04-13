@@ -10,6 +10,7 @@ target_link_libraries(${TARGET_NAME}
 PRIVATE
     GTest::gtest_main GTest::gmock
     inferrt_core
+    vtest
 )
 
 # 注册测试到 CTest
