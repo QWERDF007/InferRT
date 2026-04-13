@@ -2,3 +2,7 @@
 	path = 3rdparty/googletest
 	url = https://github.com/google/googletest.git
 	branch = main
+[submodule "3rdparty/vtest"]
+	path = 3rdparty/vtest
+	url = https://github.com/QWERDF007/vtest.git
+	branch = main
