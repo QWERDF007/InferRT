@@ -224,6 +224,24 @@ TEST_P(MultiParamTest, CppClass32FTest)
 // ============================================================================
 
 /**
+ * @brief 测试未实现的插值方法
+ * 
+ * 验证当插值方法为 -1（无效值）时，函数返回 IRT_ERROR_NOT_IMPLEMENTED。
+ */
+TEST(ResizeFunctionEdgeCaseTest, NotImplementedMethod)
+{
+    uint8_t *d_src = nullptr, *d_dst = nullptr;
+    ASSERT_EQ(cudaMalloc(&d_src, 100 * 100 * 3), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_dst, 100 * 100 * 3), cudaSuccess);
+
+    int ret = irt::cvcuda::resize<uint8_t>(d_src, d_dst, cv::Size(100, 100), cv::Size(100, 100), 3, -1, nullptr);
+    EXPECT_EQ(ret, IRT_ERROR_NOT_IMPLEMENTED);
+
+    cudaFree(d_src);
+    cudaFree(d_dst);
+}
+
+/**
  * @brief 测试空指针输入 - 源指针为空
  * 
  * 验证当源图像指针为 nullptr 时，函数返回 IRT_ERROR_INVALID_ARGUMENT。
@@ -368,6 +386,25 @@ TEST(ResizeClassEdgeCaseTest, ZeroChannels)
     irt::cvcuda::Resize<uint8_t> resize_op;
     int ret = resize_op(d_src, d_dst, cv::Size(10, 10), cv::Size(10, 10), 0, cv::INTER_LINEAR, nullptr);
     EXPECT_EQ(ret, IRT_ERROR_INVALID_ARGUMENT);
+
+    cudaFree(d_src);
+    cudaFree(d_dst);
+}
+
+/**
+ * @brief 测试未实现的插值方法（类版本）
+ * 
+ * 验证当插值方法为 -1（无效值）时，Resize 类返回 IRT_ERROR_NOT_IMPLEMENTED。
+ */
+TEST(ResizeClassEdgeCaseTest, NotImplementedMethod)
+{
+    uint8_t *d_src = nullptr, *d_dst = nullptr;
+    ASSERT_EQ(cudaMalloc(&d_src, 100 * 100 * 3), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_dst, 100 * 100 * 3), cudaSuccess);
+
+    irt::cvcuda::Resize<uint8_t> resize_op;
+    int                          ret = resize_op(d_src, d_dst, cv::Size(100, 100), cv::Size(100, 100), 3, -1, nullptr);
+    EXPECT_EQ(ret, IRT_ERROR_NOT_IMPLEMENTED);
 
     cudaFree(d_src);
     cudaFree(d_dst);

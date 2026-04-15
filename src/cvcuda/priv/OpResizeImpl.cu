@@ -1,4 +1,5 @@
 #include "OpResizeImpl.hpp"
+
 #include "saturate.cuh"
 #include "type.cuh"
 
@@ -223,6 +224,85 @@ __global__ void u8_resize_bilinear_kernel(const uint8_t *src, uint8_t *dst, cons
     }
 }
 
+/**
+ * @brief 最近邻插值图像缩放
+ * 
+ * @tparam T 图像数据类型 (如 float, uint8_t)
+ * @tparam CT 插值小数部分计算类型 (如 float, double)
+ * @tparam CH 通道数 (1,3,4)
+ * @param[in] src 源图像数据指针
+ * @param[out] dst 目标图像数据指针
+ * @param[in] scale X轴缩放比例 (x: src_w / dst_w, y: src_h / dst_h)
+ * @param[in] ssize 源图像尺寸
+ * @param[in] sstride 源图像行宽度
+ * @param[in] dsize 目标图像尺寸
+ * @param[in] dstride 目标图像行宽度
+ * @param[in] dst_N 目标图像总像素数 (dst_h * dst_w)
+ */
+template<typename T, typename CT, int CH>
+__global__ void resize_nearest_kernel(const T *src, T *dst, const double2 scale, const int2 ssize, const int sstride,
+                                      const int2 dsize, const int dstride, const int dst_N)
+{
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= dst_N)
+        return;
+
+    int2 dst_coord;
+    dst_coord.x = idx % dsize.x;
+    dst_coord.y = idx / dsize.x;
+
+    using CT2 = make_vector2_t<CT>;
+    CT2 src_coord;
+
+    src_coord.x = dst_coord.x * scale.x;
+    src_coord.y = dst_coord.y * scale.y;
+
+    int2 s; // sx, sy
+    if constexpr (std::is_same_v<CT, double>)
+    {
+        s.x = __double2int_rd(src_coord.x);
+        s.y = __double2int_rd(src_coord.y);
+    }
+    else if constexpr (std::is_same_v<CT, float>)
+    {
+        s.x = __float2int_rd(src_coord.x);
+        s.y = __float2int_rd(src_coord.y);
+    }
+    else
+    {
+        s.x = __double2int_rd(src_coord.x);
+        s.y = __double2int_rd(src_coord.y);
+    }
+
+    s.x = max(0, min(s.x, ssize.x - 1));
+    s.y = max(0, min(s.y, ssize.y - 1));
+
+    const int src_base = s.y * sstride + s.x * CH;
+    const int dst_base = dst_coord.y * dstride + dst_coord.x * CH;
+#pragma unroll
+    for (int i = 0; i < CH; ++i)
+    {
+        dst[dst_base + i] = src[src_base + i];
+    }
+}
+
+template<typename T, typename CT, int C>
+static void launch_resize_kernel(const T *d_src, T *d_dst, const double2 &scale, const int2 &ssize, const int sstride,
+                                 const int2 &dsize, const int dstride, const int dst_N, const int grid_size,
+                                 const int block_size, cudaStream_t stream)
+{
+    if constexpr (std::is_same_v<T, uint8_t>)
+    {
+        u8_resize_bilinear_kernel<CT, C>
+            <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
+    }
+    else
+    {
+        resize_bilinear_kernel<T, CT, C>
+            <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
+    }
+}
+
 template<typename T, typename CT>
 void resize_bilinear(const T *d_src, T *d_dst, const int2 ssize, const int sstride, const int2 dsize, const int dstride,
                      const int CH, cudaStream_t stream)
@@ -301,9 +381,9 @@ void ResizeImpl<T>::RunResize(const T *d_src, T *d_dst, const int2 ssize, const 
 }
 
 // 显式实例化
-template void ResizeImpl<uint8_t>::RunResize(const uint8_t *, uint8_t *, const int2, const int, const int2,
-                                             const int, const int, const int, cudaStream_t);
+template void ResizeImpl<uint8_t>::RunResize(const uint8_t *, uint8_t *, const int2, const int, const int2, const int,
+                                             const int, const int, cudaStream_t);
 template void ResizeImpl<float>::RunResize(const float *, float *, const int2, const int, const int2, const int,
-                                            const int, const int, cudaStream_t);
+                                           const int, const int, cudaStream_t);
 
 } // namespace irt::cvcuda::priv
