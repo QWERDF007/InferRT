@@ -26,11 +26,18 @@ template INFERRT_CVCUDA_API int resize<float>(const float *, float *, cv::Size, 
 template<typename T>
 Resize<T>::Resize()
 {
-    impl_.reset(new priv::ResizeImpl<T>());
+    impl_ = new priv::ResizeImpl<T>();
 }
 
 template<typename T>
-Resize<T>::~Resize() = default;
+Resize<T>::~Resize()
+{
+    if (impl_)
+    {
+        delete impl_;
+        impl_ = nullptr;
+    }
+}
 
 template<typename T>
 int Resize<T>::operator()(const T *d_src, T *d_dst, cv::Size ssize, cv::Size dsize, const int CH,
@@ -52,7 +59,7 @@ int Resize<T>::operator()(const T *d_src, T *d_dst, cv::Size ssize, cv::Size dsi
             int dstride = dsize.width * CH;
 
             // 动态转换到具体类型
-            auto *resizeImpl = static_cast<priv::ResizeImpl<T> *>(impl_.get());
+            auto *resizeImpl = static_cast<priv::ResizeImpl<T> *>(impl_);
             (*resizeImpl)(d_src, d_dst, _ssize, sstride, _dsize, dstride, CH, interpolation, stream);
         });
     return status;

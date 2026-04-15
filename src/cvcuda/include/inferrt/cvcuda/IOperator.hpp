@@ -6,18 +6,23 @@
 
 #pragma once
 
+#include <inferrt/cvcuda/Export.h>
+
 #include <memory>
 
 namespace irt::cvcuda::priv {
 class IOperatorImpl;
 }
 
-namespace irt::cvcuda {
+typedef irt::cvcuda::priv::IOperatorImpl *OperatorHandle;
 
-class IOperator
+namespace irt::cvcuda {
+class INFERRT_CVCUDA_API IOperator
 {
 public:
     virtual ~IOperator() = default;
+
+    virtual OperatorHandle handle() const noexcept = 0;
 };
 
 } // namespace irt::cvcuda
