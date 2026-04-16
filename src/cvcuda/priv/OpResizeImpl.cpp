@@ -1,7 +1,6 @@
 #include "OpResizeImpl.hpp"
 
 #include <inferrt/core/Exception.hpp>
-#include <opencv2/opencv.hpp>
 
 namespace irt::cvcuda::priv {
 

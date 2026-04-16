@@ -287,9 +287,9 @@ __global__ void resize_nearest_kernel(const T *src, T *dst, const double2 scale,
 }
 
 template<typename T, typename CT, int C>
-static void launch_resize_kernel(const T *d_src, T *d_dst, const double2 &scale, const int2 &ssize, const int sstride,
-                                 const int2 &dsize, const int dstride, const int dst_N, const int grid_size,
-                                 const int block_size, cudaStream_t stream)
+inline void launch_bilinear_kernel(const T *d_src, T *d_dst, const double2 &scale, const int2 &ssize, const int sstride,
+                                   const int2 &dsize, const int dstride, const int dst_N, const int grid_size,
+                                   const int block_size, cudaStream_t stream)
 {
     if constexpr (std::is_same_v<T, uint8_t>)
     {
@@ -304,72 +304,79 @@ static void launch_resize_kernel(const T *d_src, T *d_dst, const double2 &scale,
 }
 
 template<typename T, typename CT>
-void resize_bilinear(const T *d_src, T *d_dst, const int2 ssize, const int sstride, const int2 dsize, const int dstride,
-                     const int CH, cudaStream_t stream)
+void resize_bilinear(const T *d_src, T *d_dst, const double2 &scale, const int2 &ssize, const int sstride,
+                     const int2 &dsize, const int dstride, const int CH, const int dst_N, const int grid_size,
+                     const int block_size, cudaStream_t stream)
 {
-    double2 scale;
-    scale.x = static_cast<double>(ssize.x) / dsize.x;
-    scale.y = static_cast<double>(ssize.y) / dsize.y;
-
-    const int dst_N      = dsize.x * dsize.y;
-    const int block_size = 256;
-    const int grid_size  = (dst_N + block_size - 1) / block_size;
-
-    if constexpr (std::is_same_v<T, uint8_t>)
+    switch (CH)
     {
-        if (CH == 1)
-        {
-            u8_resize_bilinear_kernel<CT, 1>
-                <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
-        }
-        else if (CH == 3)
-        {
-            u8_resize_bilinear_kernel<CT, 3>
-                <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
-        }
-        else if (CH == 4)
-        {
-            u8_resize_bilinear_kernel<CT, 4>
-                <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
-        }
-    }
-    else
-    {
-        if (CH == 1)
-        {
-            resize_bilinear_kernel<T, CT, 1>
-                <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
-        }
-        else if (CH == 3)
-        {
-            resize_bilinear_kernel<T, CT, 3>
-                <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
-        }
-        else if (CH == 4)
-        {
-            resize_bilinear_kernel<T, CT, 4>
-                <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
-        }
+    case 1:
+        launch_bilinear_kernel<T, CT, 1>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N, grid_size,
+                                         block_size, stream);
+        break;
+    case 3:
+        launch_bilinear_kernel<T, CT, 3>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N, grid_size,
+                                         block_size, stream);
+        break;
+    case 4:
+        launch_bilinear_kernel<T, CT, 4>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N, grid_size,
+                                         block_size, stream);
+        break;
+    default:
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "Channels must be 1/3/4");
     }
 }
 
-template INFERRT_CVCUDA_API void resize_bilinear<uint8_t, float>(const uint8_t *, uint8_t *, const int2, const int,
-                                                                 const int2, const int, const int, cudaStream_t);
-template INFERRT_CVCUDA_API void resize_bilinear<float, float>(const float *, float *, const int2, const int,
-                                                               const int2, const int, const int, cudaStream_t);
-template INFERRT_CVCUDA_API void resize_bilinear<float, double>(const float *, float *, const int2, const int,
-                                                                const int2, const int, const int, cudaStream_t);
+template<typename T, typename CT>
+void resize_nearest(const T *d_src, T *d_dst, const double2 &scale, const int2 &ssize, const int sstride,
+                    const int2 &dsize, const int dstride, const int CH, const int dst_N, const int grid_size,
+                    const int block_size, cudaStream_t stream)
+{
+    switch (CH)
+    {
+    case 1:
+        resize_nearest_kernel<T, CT, 1>
+            <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
+        break;
+    case 3:
+        resize_nearest_kernel<T, CT, 3>
+            <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
+        break;
+    case 4:
+        resize_nearest_kernel<T, CT, 4>
+            <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
+        break;
+    default:
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "Channels must be 1/3/4");
+    }
+}
 
 // ResizeImpl::RunResize 实现
 template<typename T>
 void ResizeImpl<T>::RunResize(const T *d_src, T *d_dst, const int2 ssize, const int sstride, const int2 dsize,
                               const int dstride, const int CH, const int interpolation, cudaStream_t stream)
 {
+    // 计算缩放比例和网格参数
+    double2 scale;
+    scale.x = 1.0 / (static_cast<double>(dsize.x) / ssize.x);
+    scale.y = 1.0 / (static_cast<double>(dsize.y) / ssize.y);
+
+    const int dst_N      = dsize.x * dsize.y;
+    const int block_size = 256;
+    const int grid_size  = (dst_N + block_size - 1) / block_size;
+
     switch (interpolation)
     {
     case cv::INTER_LINEAR:
     {
-        resize_bilinear<T, float>(d_src, d_dst, ssize, sstride, dsize, dstride, CH, stream);
+        resize_bilinear<T, float>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, CH, dst_N, grid_size, block_size,
+                                  stream);
+        break;
+    }
+    case cv::INTER_NEAREST:
+    {
+        resize_nearest<T, double>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, CH, dst_N, grid_size, block_size,
+                                  stream);
         break;
     }
     default:

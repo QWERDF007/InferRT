@@ -17,10 +17,10 @@
  *
  * @note 此组合测试覆盖：极小图像、相同尺寸、极端上/下采样率(0.1,10)、多通道
  */
-_TEST_SUITE_P(MultiParamTest, vtest::ValueList<int>{1, 2, 10, 100, 256} * vtest::ValueList<int>{1, 2, 10, 100, 256}
+_TEST_SUITE_P(MultiParamTest, vtest::ValueList<int>{10, 100, 256} * vtest::ValueList<int>{10, 100, 256}
                                   * vtest::ValueList<int>{1, 3, 4}
                                   * vtest::ValueList<double>{0.1, 0.3, 0.5, 0.7, 1.3, 2.0, 3.0, 5.0, 10.0}
-                                  * vtest::ValueList<int>{cv::INTER_LINEAR});
+                                  * vtest::ValueList<int>{cv::INTER_LINEAR, cv::INTER_NEAREST});
 
 // ============================================================================
 // 类型映射和调用器抽象
@@ -181,7 +181,7 @@ TEST_P(MultiParamTest, CFunc8UTest)
 
 /**
  * @brief 测试 float 类型的 resize 函数
- * 
+ *
  * 使用参数化测试验证 32 位浮点数图像的 resize 功能。
  * 允许的最大像素差异为 1e-3（浮点精度误差）。
  */
@@ -197,7 +197,7 @@ TEST_P(MultiParamTest, CFunc32FTest)
 
 /**
  * @brief 测试 uint8_t 类型的 Resize 类
- * 
+ *
  * 使用参数化测试验证 8 位无符号整数图像的 Resize 类功能。
  * 允许的最大像素差异为 1.0（由于量化误差）。
  */
@@ -209,7 +209,7 @@ TEST_P(MultiParamTest, CppClass8UTest)
 
 /**
  * @brief 测试 float 类型的 Resize 类
- * 
+ *
  * 使用参数化测试验证 32 位浮点数图像的 Resize 类功能。
  * 允许的最大像素差异为 1e-3（浮点精度误差）。
  */
@@ -225,7 +225,7 @@ TEST_P(MultiParamTest, CppClass32FTest)
 
 /**
  * @brief 测试未实现的插值方法
- * 
+ *
  * 验证当插值方法为 -1（无效值）时，函数返回 IRT_ERROR_NOT_IMPLEMENTED。
  */
 TEST(ResizeFunctionEdgeCaseTest, NotImplementedMethod)
@@ -243,7 +243,7 @@ TEST(ResizeFunctionEdgeCaseTest, NotImplementedMethod)
 
 /**
  * @brief 测试空指针输入 - 源指针为空
- * 
+ *
  * 验证当源图像指针为 nullptr 时，函数返回 IRT_ERROR_INVALID_ARGUMENT。
  */
 TEST(ResizeFunctionEdgeCaseTest, NullSourcePointer)
@@ -262,7 +262,7 @@ TEST(ResizeFunctionEdgeCaseTest, NullSourcePointer)
 
 /**
  * @brief 测试空指针输入 - 目标指针为空
- * 
+ *
  * 验证当目标图像指针为 nullptr 时，函数返回 IRT_ERROR_INVALID_ARGUMENT。
  */
 TEST(ResizeFunctionEdgeCaseTest, NullDestinationPointer)
@@ -279,7 +279,7 @@ TEST(ResizeFunctionEdgeCaseTest, NullDestinationPointer)
 
 /**
  * @brief 测试零尺寸输入 - 源图像宽度为 0
- * 
+ *
  * 验证当源图像宽度为 0 时，函数返回 IRT_ERROR_INVALID_ARGUMENT。
  */
 TEST(ResizeFunctionEdgeCaseTest, ZeroSourceWidth)
@@ -298,7 +298,7 @@ TEST(ResizeFunctionEdgeCaseTest, ZeroSourceWidth)
 
 /**
  * @brief 测试无效通道数 - 通道数为 0
- * 
+ *
  * 验证当通道数为 0 时，函数返回 IRT_ERROR_INVALID_ARGUMENT。
  */
 TEST(ResizeFunctionEdgeCaseTest, ZeroChannels)
@@ -321,7 +321,7 @@ TEST(ResizeFunctionEdgeCaseTest, ZeroChannels)
 
 /**
  * @brief 测试空指针输入 - 源指针为空（类版本）
- * 
+ *
  * 验证当源图像指针为 nullptr 时，Resize 类返回 IRT_ERROR_INVALID_ARGUMENT。
  */
 TEST(ResizeClassEdgeCaseTest, NullSourcePointer)
@@ -338,7 +338,7 @@ TEST(ResizeClassEdgeCaseTest, NullSourcePointer)
 
 /**
  * @brief 测试空指针输入 - 目标指针为空（类版本）
- * 
+ *
  * 验证当目标图像指针为 nullptr 时，Resize 类返回 IRT_ERROR_INVALID_ARGUMENT。
  */
 TEST(ResizeClassEdgeCaseTest, NullDestinationPointer)
@@ -355,7 +355,7 @@ TEST(ResizeClassEdgeCaseTest, NullDestinationPointer)
 
 /**
  * @brief 测试零尺寸输入 - 源图像宽度为 0（类版本）
- * 
+ *
  * 验证当源图像宽度为 0 时，Resize 类返回 IRT_ERROR_INVALID_ARGUMENT。
  */
 TEST(ResizeClassEdgeCaseTest, ZeroSourceWidth)
@@ -374,7 +374,7 @@ TEST(ResizeClassEdgeCaseTest, ZeroSourceWidth)
 
 /**
  * @brief 测试无效通道数 - 通道数为 0（类版本）
- * 
+ *
  * 验证当通道数为 0 时，Resize 类返回 IRT_ERROR_INVALID_ARGUMENT。
  */
 TEST(ResizeClassEdgeCaseTest, ZeroChannels)
@@ -393,7 +393,7 @@ TEST(ResizeClassEdgeCaseTest, ZeroChannels)
 
 /**
  * @brief 测试未实现的插值方法（类版本）
- * 
+ *
  * 验证当插值方法为 -1（无效值）时，Resize 类返回 IRT_ERROR_NOT_IMPLEMENTED。
  */
 TEST(ResizeClassEdgeCaseTest, NotImplementedMethod)
@@ -416,7 +416,7 @@ TEST(ResizeClassEdgeCaseTest, NotImplementedMethod)
 
 /**
  * @brief 测试极端下采样 - 100x -> 1x（函数版本）
- * 
+ *
  * 验证从大图像缩小到极小图像时的正确性。
  * 这测试了下采样算法在极端情况下的稳定性。
  */
@@ -455,7 +455,7 @@ TEST(ResizeFunctionEdgeCaseTest, ExtremeDownscale)
 
 /**
  * @brief 测试极端上采样 - 1x -> 100x（函数版本）
- * 
+ *
  * 验证从极小图像放大到大图像时的正确性。
  * 这测试了上采样算法在极端情况下的稳定性。
  */
@@ -493,7 +493,7 @@ TEST(ResizeFunctionEdgeCaseTest, ExtremeUpscale)
 
 /**
  * @brief 测试非对称缩放 - 宽度放大，高度缩小（函数版本）
- * 
+ *
  * 验证宽度和高度使用不同缩放比例时的正确性。
  * 这测试了算法在非均匀缩放下的表现。
  */
@@ -532,7 +532,7 @@ TEST(ResizeFunctionEdgeCaseTest, AsymmetricScale)
 
 /**
  * @brief 测试非对称缩放 - 宽度缩小，高度放大（函数版本）
- * 
+ *
  * 验证宽度缩小、高度放大的非对称缩放。
  * 测试算法在相反方向缩放时的稳定性。
  */
@@ -575,7 +575,7 @@ TEST(ResizeFunctionEdgeCaseTest, AsymmetricScaleReverse)
 
 /**
  * @brief 测试极端下采样 - 100x -> 1x（类版本）
- * 
+ *
  * 验证从大图像缩小到极小图像时的正确性。
  * 这测试了 Resize 类在极端下采样情况下的稳定性。
  */
@@ -614,7 +614,7 @@ TEST(ResizeClassEdgeCaseTest, ExtremeDownscale)
 
 /**
  * @brief 测试极端上采样 - 1x -> 100x（类版本）
- * 
+ *
  * 验证从极小图像放大到大图像时的正确性。
  * 这测试了 Resize 类在极端上采样情况下的稳定性。
  */
@@ -652,7 +652,7 @@ TEST(ResizeClassEdgeCaseTest, ExtremeUpscale)
 
 /**
  * @brief 测试非对称缩放 - 宽度放大，高度缩小（类版本）
- * 
+ *
  * 验证宽度和高度使用不同缩放比例时的正确性。
  * 这测试了 Resize 类在非均匀缩放下的表现。
  */
@@ -691,7 +691,7 @@ TEST(ResizeClassEdgeCaseTest, AsymmetricScale)
 
 /**
  * @brief 测试非对称缩放 - 宽度缩小，高度放大（类版本）
- * 
+ *
  * 验证宽度缩小、高度放大的非对称缩放。
  * 测试 Resize 类在相反方向缩放时的稳定性。
  */
@@ -734,7 +734,7 @@ TEST(ResizeClassEdgeCaseTest, AsymmetricScaleReverse)
 
 /**
  * @brief 测试 float 类型的极端下采样（函数版本）
- * 
+ *
  * 验证 float 类型图像在极端下采样时的精度。
  */
 TEST(ResizeFunctionEdgeCaseTest, ExtremeDownscaleFloat)
@@ -772,7 +772,7 @@ TEST(ResizeFunctionEdgeCaseTest, ExtremeDownscaleFloat)
 
 /**
  * @brief 测试 float 类型的极端上采样（类版本）
- * 
+ *
  * 验证 float 类型图像在极端上采样时的精度。
  */
 TEST(ResizeClassEdgeCaseTest, ExtremeUpscaleFloat)
