@@ -357,8 +357,9 @@ void ResizeImpl<T>::RunResize(const T *d_src, T *d_dst, const int2 ssize, const 
                               const int dstride, const int CH, const int interpolation, cudaStream_t stream)
 {
     // 计算缩放比例和网格参数
+    // 注意此处不直接用 ssize / dsize, 因为可能由于精度问题导致和 OpenCV 存在精度差异, 特别是对于 LINE_NEAREST
     double2 scale;
-    scale.x = 1.0 / (static_cast<double>(dsize.x) / ssize.x);
+    scale.x = 1.0 / (static_cast<double>(dsize.x) / ssize.x); 
     scale.y = 1.0 / (static_cast<double>(dsize.y) / ssize.y);
 
     const int dst_N      = dsize.x * dsize.y;
