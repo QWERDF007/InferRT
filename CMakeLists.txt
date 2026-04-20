@@ -39,6 +39,7 @@ include(ConfigCompiler)
 include(ConfigCUDA)
 include(ConfigOpenCV)
 include(AddPluginLibrary)
+include(ConfigTensorRT)
 
 # 第三方库
 add_subdirectory(3rdparty EXCLUDE_FROM_ALL)
