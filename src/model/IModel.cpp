@@ -1,7 +1,6 @@
 #include "priv/AlexNet.hpp"
 
-#include <inferrt/model/Model.h>
-
+#include <inferrt/model/IModel.h>
 
 namespace irt::model {
 

@@ -8,6 +8,6 @@
 
 namespace irt::model {
 
-IModel *CreateModel(const std::string &name);
+INFERRT_MODEL_API IModel *CreateModel(const std::string &name);
 
 } // namespace irt::model
