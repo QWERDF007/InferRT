@@ -1,9 +1,9 @@
 # Set TensorRT root directory
-# You can override this by setting TensorRT_ROOT environment variable
+# You can override this by setting TRT_ROOT environment variable
 # or passing -DTensorRT_ROOT=/path/to/tensorrt to CMake
-if(NOT DEFINED TensorRT_ROOT)
-  set(TRT_ROOT "D:/Software/dev/TensorRT-10.16.1.11")
-  set(TRT_VERSION "10.16.1.11")
+if(NOT DEFINED TRT_ROOT)
+  set(TRT_ROOT "D:/Software/TensorRT-10.16.0.72" CACHE PATH "TensorRT installation directory")
+  set(TRT_VERSION "10.16.0.72" CACHE STRING "TensorRT version")
 endif()
 
 # Include FindTensorRT to locate and configure TensorRT

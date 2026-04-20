@@ -91,6 +91,7 @@ message(STATUS "Using TRT_ROOT: ${TRT_ROOT}")
 #   - "8.6.1.6+cuda12.0.1.011"
 #   - "8.6.1.6.Windows10.x86_64.cuda-12.0"
 set(TRT_VERSION
+    ""
     CACHE
       STRING
       "TensorRT version, e.g. \"8.6.1.6\" or \"8.6.1.6+cuda12.0.1.011\", \"8.6.1.6.Windows10.x86_64.cuda-12.0\" etc"
