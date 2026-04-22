@@ -7,10 +7,23 @@ namespace irt::model {
 class AlexNet : public IModel
 {
 public:
-    explicit AlexNet() = default;
-    ~AlexNet()         = default;
+    explicit AlexNet()
+        : IModel() {};
+    ~AlexNet() override = default;
 
-    void build();
+    std::string name() const noexcept
+    {
+        return "AlexNet";
+    }
+
+    nvinfer1::ILogger::Severity logLevel() const noexcept override
+    {
+        return nvinfer1::ILogger::Severity::kINFO;
+    }
+
+    void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
+
+    void infer(const std::vector<void *> &buffers) override;
 };
 
 } // namespace irt::model

@@ -46,3 +46,7 @@ build/
 other/
 inferrt-*
 
+# model
+*.wts
+*.plan
+*.engine

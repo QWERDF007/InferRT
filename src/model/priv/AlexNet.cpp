@@ -1,11 +1,12 @@
 #include "AlexNet.hpp"
 
 #include <NvInfer.h>
-#include <inferrt/model/Logging.hpp>
+#include <cuda_runtime_api.h>
+#include <inferrt/core/Exception.hpp>
 
 #include <map>
 #include <memory>
-#include <typeinfo>
+#include <vector>
 
 /***
 AlexNet(
@@ -39,34 +40,18 @@ AlexNet(
 
 namespace irt::model {
 
-void AlexNet::build()
+void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
     using namespace nvinfer1;
-    using WeightsMap = std::map<std::string, Weights>;
-
-    WeightsMap weights_map;
-
     constexpr int N = 1;
 
-    // 使用 typeid 自动获取类名作为 logger 的名称
-    Logger logger(typeid(*this).name());
-
     ITensor *input{nullptr};
-
-    auto builder = std::unique_ptr<IBuilder>(createInferBuilder(logger));
-
-    NetworkDefinitionCreationFlags flags = (1 << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kEXPLICIT_BATCH))
-                                         | (1 << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kSTRONGLY_TYPED));
-    auto network = std::unique_ptr<INetworkDefinition>(builder->createNetworkV2(flags));
-
-    auto config = std::unique_ptr<IBuilderConfig>(builder->createBuilderConfig());
-
     input = network->addInput("input", DataType::kFLOAT, Dims4{1, 3, 224, 224});
 
     // features
     // CRP (Conv-Relu-Pool)
-    auto *conv1 = network->addConvolutionNd(*input, 64, DimsHW{11, 11}, weights_map["features.0.weight"],
-                                            weights_map["features.0.bias"]);
+    auto *conv1 = network->addConvolutionNd(*input, 64, DimsHW{11, 11}, weights_map.at("features.0.weight"),
+                                            weights_map.at("features.0.bias"));
     conv1->setStrideNd(DimsHW{4, 4});
     conv1->setPaddingNd(DimsHW{2, 2});
 
@@ -76,8 +61,8 @@ void AlexNet::build()
     pool1->setStrideNd(DimsHW{2, 2});
 
     // CRP
-    auto *conv2 = network->addConvolutionNd(*pool1->getOutput(0), 192, DimsHW{5, 5}, weights_map["features.3.weight"],
-                                            weights_map["features.3.bias"]);
+    auto *conv2 = network->addConvolutionNd(*pool1->getOutput(0), 192, DimsHW{5, 5},
+                                            weights_map.at("features.3.weight"), weights_map.at("features.3.bias"));
     conv2->setPaddingNd(DimsHW{2, 2});
 
     auto *relu2 = network->addActivation(*conv2->getOutput(0), ActivationType::kRELU);
@@ -86,22 +71,22 @@ void AlexNet::build()
     pool2->setStrideNd(DimsHW{2, 2});
 
     // CR
-    auto *conv3 = network->addConvolutionNd(*pool2->getOutput(0), 384, DimsHW{3, 3}, weights_map["features.6.weight"],
-                                            weights_map["features.6.bias"]);
+    auto *conv3 = network->addConvolutionNd(*pool2->getOutput(0), 384, DimsHW{3, 3},
+                                            weights_map.at("features.6.weight"), weights_map.at("features.6.bias"));
     conv3->setPaddingNd(DimsHW{1, 1});
 
     auto *relu3 = network->addActivation(*conv3->getOutput(0), ActivationType::kRELU);
 
     // CR
-    auto *conv4 = network->addConvolutionNd(*relu3->getOutput(0), 256, DimsHW{3, 3}, weights_map["features.8.weight"],
-                                            weights_map["features.8.bias"]);
+    auto *conv4 = network->addConvolutionNd(*relu3->getOutput(0), 256, DimsHW{3, 3},
+                                            weights_map.at("features.8.weight"), weights_map.at("features.8.bias"));
     conv4->setPaddingNd(DimsHW{1, 1});
 
     auto *relu4 = network->addActivation(*conv4->getOutput(0), ActivationType::kRELU);
 
     // CRP
-    auto *conv5 = network->addConvolutionNd(*relu4->getOutput(0), 256, DimsHW{3, 3}, weights_map["features.10.weight"],
-                                            weights_map["features.10.bias"]);
+    auto *conv5 = network->addConvolutionNd(*relu4->getOutput(0), 256, DimsHW{3, 3},
+                                            weights_map.at("features.10.weight"), weights_map.at("features.10.bias"));
     conv5->setPaddingNd(DimsHW{1, 1});
 
     auto *relu5 = network->addActivation(*conv5->getOutput(0), ActivationType::kRELU);
@@ -118,12 +103,12 @@ void AlexNet::build()
     int64_t in_feat = 256ll * 6 * 6;
 
     // classifier
-    auto *fc1w = network->addConstant(DimsHW{4096, in_feat}, weights_map["classifier.1.weight"])->getOutput(0);
-    auto *fc1b = network->addConstant(DimsHW{1, 4096}, weights_map["classifier.1.bias"])->getOutput(0);
-    auto *fc2w = network->addConstant(DimsHW{4096, 4096}, weights_map["classifier.4.weight"])->getOutput(0);
-    auto *fc2b = network->addConstant(DimsHW{1, 4096}, weights_map["classifier.4.bias"])->getOutput(0);
-    auto *fc3w = network->addConstant(DimsHW{1000, 4096}, weights_map["classifier.6.weight"])->getOutput(0);
-    auto *fc3b = network->addConstant(DimsHW{1, 1000}, weights_map["classifier.6.bias"])->getOutput(0);
+    auto *fc1w = network->addConstant(DimsHW{4096, in_feat}, weights_map.at("classifier.1.weight"))->getOutput(0);
+    auto *fc1b = network->addConstant(DimsHW{1, 4096}, weights_map.at("classifier.1.bias"))->getOutput(0);
+    auto *fc2w = network->addConstant(DimsHW{4096, 4096}, weights_map.at("classifier.4.weight"))->getOutput(0);
+    auto *fc2b = network->addConstant(DimsHW{1, 4096}, weights_map.at("classifier.4.bias"))->getOutput(0);
+    auto *fc3w = network->addConstant(DimsHW{1000, 4096}, weights_map.at("classifier.6.weight"))->getOutput(0);
+    auto *fc3b = network->addConstant(DimsHW{1, 1000}, weights_map.at("classifier.6.bias"))->getOutput(0);
 
     // IFullyConnectedLayer* fc1 = network->addFullyConnected(*pool3->getOutput(0), 4096, weightMap["classifier.1.weight"], weightMap["classifier.1.bias"]);
     auto *fc1_0 = network->addMatrixMultiply(*shuffle->getOutput(0), MatrixOperation::kNONE, *fc1w,
@@ -145,12 +130,51 @@ void AlexNet::build()
 
     fc3_1->getOutput(0)->setName("output");
     network->markOutput(*fc3_1->getOutput(0));
+}
 
-    auto buffer = std::unique_ptr<IHostMemory>(builder->buildSerializedNetwork(*network, *config));
+void AlexNet::infer(const std::vector<void *> &buffers)
+{
+    if (!trt_params_.context)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Execution context is not initialized");
+    }
 
-    auto runtime = std::unique_ptr<IRuntime>(nvinfer1::createInferRuntime(logger));
+    if (buffers.size() != 2)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Expected 2 buffers (input and output), got %zu",
+                             buffers.size());
+    }
 
-    auto engine = std::unique_ptr<ICudaEngine>(runtime->deserializeCudaEngine(buffer->data(), buffer->size()));
+    // 设置输入输出张量地址
+    if (!trt_params_.context->setTensorAddress("input", buffers[0]))
+    {
+        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to set input tensor address");
+    }
+
+    if (!trt_params_.context->setTensorAddress("output", buffers[1]))
+    {
+        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to set output tensor address");
+    }
+
+    if (!trt_params_.stream)
+    {
+        trt_params_.stream = MakeCudaStream();
+
+        if (!trt_params_.stream)
+        {
+            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create CUDA stream");
+        }
+    }
+
+    // 执行推理（使用同步执行，stream 参数为 0 表示默认流）
+    bool status = trt_params_.context->enqueueV3(*trt_params_.stream);
+    if (!status)
+    {
+        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to execute inference");
+    }
+
+    // 同步等待执行完成
+    cudaStreamSynchronize(*trt_params_.stream);
 }
 
 } // namespace irt::model
