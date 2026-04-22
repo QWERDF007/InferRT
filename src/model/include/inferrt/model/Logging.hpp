@@ -89,9 +89,9 @@ public:
             std::time_t timestamp = std::time(nullptr);
             tm         *tm_local  = std::localtime(&timestamp);
             std::cout << "[";
-            std::cout << std::setw(2) << std::setfill('0') << 1 + tm_local->tm_mon << "/";
-            std::cout << std::setw(2) << std::setfill('0') << tm_local->tm_mday << "/";
-            std::cout << std::setw(4) << std::setfill('0') << 1900 + tm_local->tm_year << "-";
+            std::cout << std::setw(4) << std::setfill('0') << 1900 + tm_local->tm_year;
+            std::cout << std::setw(2) << std::setfill('0') << 1 + tm_local->tm_mon;
+            std::cout << std::setw(2) << std::setfill('0') << tm_local->tm_mday << "-";
             std::cout << std::setw(2) << std::setfill('0') << tm_local->tm_hour << ":";
             std::cout << std::setw(2) << std::setfill('0') << tm_local->tm_min << ":";
             std::cout << std::setw(2) << std::setfill('0') << tm_local->tm_sec << "] ";
@@ -262,7 +262,7 @@ class Logger : public nvinfer1::ILogger
 public:
     /**
      * @brief 构造函数
-     * @param severity 默认的严重性级别，默认为 WARNING
+     * @param severity 默认的严重性级别，默认为 INFO
      */
     Logger(const std::string &name, Severity severity = Severity::kWARNING)
         : mName(name)
@@ -293,7 +293,7 @@ public:
      */
     void log(Severity severity, const char *msg) noexcept override
     {
-        LogStreamConsumer(mReportableSeverity, severity) << "[" << mName << "]: " << std::string(msg) << std::endl;
+        LogStreamConsumer(mReportableSeverity, severity) << "[" << mName << "] " << std::string(msg) << std::endl;
     }
 
     /**
