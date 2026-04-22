@@ -16,11 +16,6 @@ public:
         return "AlexNet";
     }
 
-    nvinfer1::ILogger::Severity logLevel() const noexcept override
-    {
-        return nvinfer1::ILogger::Severity::kINFO;
-    }
-
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 
     void infer(const std::vector<void *> &buffers) override;

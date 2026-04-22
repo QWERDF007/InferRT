@@ -30,7 +30,7 @@ public:
 
     virtual nvinfer1::ILogger::Severity logLevel() const noexcept
     {
-        return nvinfer1::ILogger::Severity::kWARNING;
+        return trt_params_.log_level;
     }
 
     virtual void build(const std::string &weights_file);
@@ -41,6 +41,15 @@ public:
     virtual void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) = 0;
 
     virtual void infer(const std::vector<void *> &buffers) = 0;
+
+    void setLogLevel(nvinfer1::ILogger::Severity severity)
+    {
+        trt_params_.log_level = severity;
+        if (trt_params_.logger)
+        {
+            trt_params_.logger->setReportableSeverity(severity);
+        }
+    }
 
 protected:
     TRTParams trt_params_;

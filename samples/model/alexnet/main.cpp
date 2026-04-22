@@ -92,6 +92,9 @@ int main(int argc, char *argv[])
             return -1;
         }
 
+        model->setLogLevel(nvinfer1::ILogger::Severity::kINFO);
+
+        std::cout << "Building or Loading model..." << std::endl;
         model->buildOrLoad(weights_file.string());
         std::cout << "Model loaded successfully." << std::endl;
 
@@ -164,12 +167,12 @@ int main(int argc, char *argv[])
             float confidence = scores[i].first;
             if (has_labels)
             {
-                std::cout << "top: " << (i + 1) << ", confidence: " << confidence << ", label: " << labels[idx]
-                          << std::endl;
+                std::cout << "top: " << (i + 1) << ", confidence: " << confidence << ", label[" << idx
+                          << "]: " << labels[idx] << std::endl;
             }
             else
             {
-                std::cout << "top: " << (i + 1) << ", confidence: " << confidence << ", class_index: " << idx
+                std::cout << "top: " << (i + 1) << ", confidence: " << confidence << ", label[" << idx << ']'
                           << std::endl;
             }
         }
@@ -177,6 +180,8 @@ int main(int argc, char *argv[])
         // 释放 GPU 内存
         cudaFree(d_input);
         cudaFree(d_output);
+
+        std::cout << "\nDone!" << std::endl;
 
         return 0;
     }
