@@ -60,6 +60,8 @@ if __name__ == '__main__':
     model = alexnet(weights=AlexNet_Weights.IMAGENET1K_V1)
     model.eval()
 
+    print(model)
+
     output = model(img)
     labels = read_imagenet_labels()
     print("\nPyTorch inference results:")

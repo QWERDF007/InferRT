@@ -43,6 +43,7 @@
 # build directories
 build/
 .vscode/
+.kiro/
 other/
 inferrt-*
 
