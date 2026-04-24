@@ -65,7 +65,7 @@ if __name__ == '__main__':
     print("\nPyTorch inference results:")
     for batch in torch.topk(output, k=3).indices:
         for i, j in enumerate(batch, 1):
-            print(f"top: {i:<2}, confidence: {float(output[0, j]):.4f}, label: {labels[int(j)]}")
+            print(f"top: {i:<2}, confidence: {float(output[0, j]):.4f}, label[{j}]: {labels[int(j)]}")
 
     if not args.predict_only:
         # 生成权重文件

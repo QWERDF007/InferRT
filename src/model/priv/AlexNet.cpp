@@ -50,52 +50,56 @@ void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsM
 
     // features
     // CRP (Conv-Relu-Pool)
-    auto *conv1 = network->addConvolutionNd(*input, 64, DimsHW{11, 11}, weights_map.at("features.0.weight"),
-                                            weights_map.at("features.0.bias"));
+    IConvolutionLayer *conv1 = network->addConvolutionNd(
+        *input, 64, DimsHW{11, 11}, weights_map.at("features.0.weight"), weights_map.at("features.0.bias"));
     conv1->setStrideNd(DimsHW{4, 4});
     conv1->setPaddingNd(DimsHW{2, 2});
 
-    auto *relu1 = network->addActivation(*conv1->getOutput(0), ActivationType::kRELU);
+    IActivationLayer *relu1 = network->addActivation(*conv1->getOutput(0), ActivationType::kRELU);
 
-    auto *pool1 = network->addPoolingNd(*relu1->getOutput(0), PoolingType::kMAX, DimsHW{3, 3});
+    IPoolingLayer *pool1 = network->addPoolingNd(*relu1->getOutput(0), PoolingType::kMAX, DimsHW{3, 3});
     pool1->setStrideNd(DimsHW{2, 2});
 
     // CRP
-    auto *conv2 = network->addConvolutionNd(*pool1->getOutput(0), 192, DimsHW{5, 5},
-                                            weights_map.at("features.3.weight"), weights_map.at("features.3.bias"));
+    IConvolutionLayer *conv2
+        = network->addConvolutionNd(*pool1->getOutput(0), 192, DimsHW{5, 5}, weights_map.at("features.3.weight"),
+                                    weights_map.at("features.3.bias"));
     conv2->setPaddingNd(DimsHW{2, 2});
 
-    auto *relu2 = network->addActivation(*conv2->getOutput(0), ActivationType::kRELU);
+    IActivationLayer *relu2 = network->addActivation(*conv2->getOutput(0), ActivationType::kRELU);
 
-    auto *pool2 = network->addPoolingNd(*relu2->getOutput(0), PoolingType::kMAX, DimsHW{3, 3});
+    IPoolingLayer *pool2 = network->addPoolingNd(*relu2->getOutput(0), PoolingType::kMAX, DimsHW{3, 3});
     pool2->setStrideNd(DimsHW{2, 2});
 
     // CR
-    auto *conv3 = network->addConvolutionNd(*pool2->getOutput(0), 384, DimsHW{3, 3},
-                                            weights_map.at("features.6.weight"), weights_map.at("features.6.bias"));
+    IConvolutionLayer *conv3
+        = network->addConvolutionNd(*pool2->getOutput(0), 384, DimsHW{3, 3}, weights_map.at("features.6.weight"),
+                                    weights_map.at("features.6.bias"));
     conv3->setPaddingNd(DimsHW{1, 1});
 
-    auto *relu3 = network->addActivation(*conv3->getOutput(0), ActivationType::kRELU);
+    IActivationLayer *relu3 = network->addActivation(*conv3->getOutput(0), ActivationType::kRELU);
 
     // CR
-    auto *conv4 = network->addConvolutionNd(*relu3->getOutput(0), 256, DimsHW{3, 3},
-                                            weights_map.at("features.8.weight"), weights_map.at("features.8.bias"));
+    IConvolutionLayer *conv4
+        = network->addConvolutionNd(*relu3->getOutput(0), 256, DimsHW{3, 3}, weights_map.at("features.8.weight"),
+                                    weights_map.at("features.8.bias"));
     conv4->setPaddingNd(DimsHW{1, 1});
 
-    auto *relu4 = network->addActivation(*conv4->getOutput(0), ActivationType::kRELU);
+    IActivationLayer *relu4 = network->addActivation(*conv4->getOutput(0), ActivationType::kRELU);
 
     // CRP
-    auto *conv5 = network->addConvolutionNd(*relu4->getOutput(0), 256, DimsHW{3, 3},
-                                            weights_map.at("features.10.weight"), weights_map.at("features.10.bias"));
+    IConvolutionLayer *conv5
+        = network->addConvolutionNd(*relu4->getOutput(0), 256, DimsHW{3, 3}, weights_map.at("features.10.weight"),
+                                    weights_map.at("features.10.bias"));
     conv5->setPaddingNd(DimsHW{1, 1});
 
-    auto *relu5 = network->addActivation(*conv5->getOutput(0), ActivationType::kRELU);
+    IActivationLayer *relu5 = network->addActivation(*conv5->getOutput(0), ActivationType::kRELU);
 
-    auto *pool3 = network->addPoolingNd(*relu5->getOutput(0), PoolingType::kMAX, DimsHW{3, 3});
+    IPoolingLayer *pool3 = network->addPoolingNd(*relu5->getOutput(0), PoolingType::kMAX, DimsHW{3, 3});
     pool3->setStrideNd(DimsHW{2, 2});
 
     // avgpool
-    auto *adaptive_pool = network->addPoolingNd(*pool3->getOutput(0), PoolingType::kAVERAGE, DimsHW{1, 1});
+    IPoolingLayer *adaptive_pool = network->addPoolingNd(*pool3->getOutput(0), PoolingType::kAVERAGE, DimsHW{1, 1});
 
     IShuffleLayer *shuffle = network->addShuffle(*adaptive_pool->getOutput(0));
     shuffle->setReshapeDimensions(Dims2{N, -1}); // "-1" means "256 * 6 * 6"
@@ -103,29 +107,29 @@ void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsM
     int64_t in_feat = 256ll * 6 * 6;
 
     // classifier
-    auto *fc1w = network->addConstant(DimsHW{4096, in_feat}, weights_map.at("classifier.1.weight"))->getOutput(0);
-    auto *fc1b = network->addConstant(DimsHW{1, 4096}, weights_map.at("classifier.1.bias"))->getOutput(0);
-    auto *fc2w = network->addConstant(DimsHW{4096, 4096}, weights_map.at("classifier.4.weight"))->getOutput(0);
-    auto *fc2b = network->addConstant(DimsHW{1, 4096}, weights_map.at("classifier.4.bias"))->getOutput(0);
-    auto *fc3w = network->addConstant(DimsHW{1000, 4096}, weights_map.at("classifier.6.weight"))->getOutput(0);
-    auto *fc3b = network->addConstant(DimsHW{1, 1000}, weights_map.at("classifier.6.bias"))->getOutput(0);
+    ITensor *fc1w = network->addConstant(DimsHW{4096, in_feat}, weights_map.at("classifier.1.weight"))->getOutput(0);
+    ITensor *fc1b = network->addConstant(DimsHW{1, 4096}, weights_map.at("classifier.1.bias"))->getOutput(0);
+    ITensor *fc2w = network->addConstant(DimsHW{4096, 4096}, weights_map.at("classifier.4.weight"))->getOutput(0);
+    ITensor *fc2b = network->addConstant(DimsHW{1, 4096}, weights_map.at("classifier.4.bias"))->getOutput(0);
+    ITensor *fc3w = network->addConstant(DimsHW{1000, 4096}, weights_map.at("classifier.6.weight"))->getOutput(0);
+    ITensor *fc3b = network->addConstant(DimsHW{1, 1000}, weights_map.at("classifier.6.bias"))->getOutput(0);
 
     // IFullyConnectedLayer* fc1 = network->addFullyConnected(*pool3->getOutput(0), 4096, weightMap["classifier.1.weight"], weightMap["classifier.1.bias"]);
-    auto *fc1_0 = network->addMatrixMultiply(*shuffle->getOutput(0), MatrixOperation::kNONE, *fc1w,
-                                             MatrixOperation::kTRANSPOSE);
-    auto *fc1_1 = network->addElementWise(*fc1_0->getOutput(0), *fc1b, ElementWiseOperation::kSUM);
-    auto *relu6 = network->addActivation(*fc1_1->getOutput(0), ActivationType::kRELU);
+    IMatrixMultiplyLayer *fc1_0 = network->addMatrixMultiply(*shuffle->getOutput(0), MatrixOperation::kNONE, *fc1w,
+                                                             MatrixOperation::kTRANSPOSE);
+    IElementWiseLayer    *fc1_1 = network->addElementWise(*fc1_0->getOutput(0), *fc1b, ElementWiseOperation::kSUM);
+    IActivationLayer     *relu6 = network->addActivation(*fc1_1->getOutput(0), ActivationType::kRELU);
     // fc1_0->setName("fc1_0");  // set name here, only for debug purpose
 
-    auto *fc2_0
+    IMatrixMultiplyLayer *fc2_0
         = network->addMatrixMultiply(*relu6->getOutput(0), MatrixOperation::kNONE, *fc2w, MatrixOperation::kTRANSPOSE);
-    auto *fc2_1 = network->addElementWise(*fc2_0->getOutput(0), *fc2b, ElementWiseOperation::kSUM);
-    auto *relu7 = network->addActivation(*fc2_1->getOutput(0), ActivationType::kRELU);
+    IElementWiseLayer *fc2_1 = network->addElementWise(*fc2_0->getOutput(0), *fc2b, ElementWiseOperation::kSUM);
+    IActivationLayer  *relu7 = network->addActivation(*fc2_1->getOutput(0), ActivationType::kRELU);
     // fc2_0->setName("fc2_0");
 
-    auto *fc3_0
+    IMatrixMultiplyLayer *fc3_0
         = network->addMatrixMultiply(*relu7->getOutput(0), MatrixOperation::kNONE, *fc3w, MatrixOperation::kTRANSPOSE);
-    auto *fc3_1 = network->addElementWise(*fc3_0->getOutput(0), *fc3b, ElementWiseOperation::kSUM);
+    IElementWiseLayer *fc3_1 = network->addElementWise(*fc3_0->getOutput(0), *fc3b, ElementWiseOperation::kSUM);
     // fc3_0->setName("fc3_0");
 
     fc3_1->getOutput(0)->setName("output");
