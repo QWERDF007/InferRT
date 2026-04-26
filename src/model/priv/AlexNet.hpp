@@ -1,12 +1,17 @@
 #pragma once
 
-#include <inferrt/model/IModel.hpp>
+#include <inferrt/model/IModel.h>
 
 namespace irt::model {
 
 class AlexNet : public IModel
 {
 public:
+    static constexpr const char *key() noexcept
+    {
+        return "alexnet";
+    }
+
     explicit AlexNet()
         : IModel() {};
     ~AlexNet() override = default;

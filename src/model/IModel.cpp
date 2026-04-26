@@ -1,12 +1,44 @@
-#include "priv/AlexNet.hpp"
-#include "priv/ResNet.hpp"
-
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/IModel.h>
 
+#include <algorithm>
+#include <cctype>
 #include <fstream>
+#include <map>
 
 namespace irt::model {
+
+namespace {
+
+using ModelRegistry = std::map<std::string, ModelCreator>;
+
+ModelRegistry &GetModelRegistry()
+{
+    static ModelRegistry registry;
+    return registry;
+}
+
+} // namespace
+
+ModelRegistrar::ModelRegistrar(const std::string &name, ModelCreator creator)
+{
+    RegisterModel(name, creator);
+}
+
+bool RegisterModel(const std::string &name, ModelCreator creator)
+{
+    return GetModelRegistry().emplace(name, creator).second;
+}
+
+std::unique_ptr<IModel> CreateModel(const std::string &name)
+{
+    std::string normalized_name = name;
+    std::transform(normalized_name.begin(), normalized_name.end(), normalized_name.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+
+    const auto it = GetModelRegistry().find(normalized_name);
+    return it == GetModelRegistry().end() ? nullptr : it->second();
+}
 
 void IModel::build(const std::string &weights_file)
 {
@@ -224,35 +256,6 @@ void IModel::buildOrLoad(const std::string &weights_file)
     {
         LOG_WARN(*trt_params_.logger) << "Failed to save engine: " << e.what() << std::endl;
     }
-}
-
-IModel *CreateModel(const std::string &name)
-{
-    if (name == "alexnet")
-    {
-        return new AlexNet();
-    }
-    if (name == "resnet18")
-    {
-        return new ResNet18();
-    }
-    if (name == "resnet34")
-    {
-        return new ResNet34();
-    }
-    if (name == "resnet50")
-    {
-        return new ResNet50();
-    }
-    if (name == "resnet101")
-    {
-        return new ResNet101();
-    }
-    if (name == "resnet152")
-    {
-        return new ResNet152();
-    }
-    return nullptr;
 }
 
 } // namespace irt::model

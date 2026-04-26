@@ -56,7 +56,7 @@ nvinfer1::IActivationLayer *BasicBlock(nvinfer1::INetworkDefinition *network, co
     conv1->setStrideNd(DimsHW{stride, stride});
     conv1->setPaddingNd(DimsHW{1, 1});
 
-    IScaleLayer *bn1 = addBatchNorm2d(network, weights_map, *conv1->getOutput(0), lname + "bn1", 1e-5f);
+    IScaleLayer      *bn1   = addBatchNorm2d(network, weights_map, *conv1->getOutput(0), lname + "bn1", 1e-5f);
     IActivationLayer *relu1 = network->addActivation(*bn1->getOutput(0), ActivationType::kRELU);
 
     IConvolutionLayer *conv2 = network->addConvolutionNd(*relu1->getOutput(0), outch, DimsHW{3, 3},
@@ -99,7 +99,7 @@ nvinfer1::IActivationLayer *Bottleneck(nvinfer1::INetworkDefinition *network, co
     IConvolutionLayer *conv1
         = network->addConvolutionNd(input, outch, DimsHW{1, 1}, weights_map.at(lname + "conv1.weight"), empty_weights);
 
-    IScaleLayer *bn1 = addBatchNorm2d(network, weights_map, *conv1->getOutput(0), lname + "bn1", 1e-5f);
+    IScaleLayer      *bn1   = addBatchNorm2d(network, weights_map, *conv1->getOutput(0), lname + "bn1", 1e-5f);
     IActivationLayer *relu1 = network->addActivation(*bn1->getOutput(0), ActivationType::kRELU);
 
     IConvolutionLayer *conv2 = network->addConvolutionNd(*relu1->getOutput(0), outch, DimsHW{3, 3},
@@ -107,7 +107,7 @@ nvinfer1::IActivationLayer *Bottleneck(nvinfer1::INetworkDefinition *network, co
     conv2->setStrideNd(DimsHW{stride, stride});
     conv2->setPaddingNd(DimsHW{1, 1});
 
-    IScaleLayer *bn2 = addBatchNorm2d(network, weights_map, *conv2->getOutput(0), lname + "bn2", 1e-5f);
+    IScaleLayer      *bn2   = addBatchNorm2d(network, weights_map, *conv2->getOutput(0), lname + "bn2", 1e-5f);
     IActivationLayer *relu2 = network->addActivation(*bn2->getOutput(0), ActivationType::kRELU);
 
     IConvolutionLayer *conv3 = network->addConvolutionNd(*relu2->getOutput(0), outch * 4, DimsHW{1, 1},
@@ -157,7 +157,7 @@ void buildResNet(nvinfer1::INetworkDefinition *network, const WeightsMap &weight
     conv1->setStrideNd(DimsHW{2, 2});
     conv1->setPaddingNd(DimsHW{3, 3});
 
-    IScaleLayer *bn1 = addBatchNorm2d(network, weights_map, *conv1->getOutput(0), "bn1", 1e-5f);
+    IScaleLayer      *bn1   = addBatchNorm2d(network, weights_map, *conv1->getOutput(0), "bn1", 1e-5f);
     IActivationLayer *relu1 = network->addActivation(*bn1->getOutput(0), ActivationType::kRELU);
 
     IPoolingLayer *pool1 = network->addPoolingNd(*relu1->getOutput(0), PoolingType::kMAX, DimsHW{3, 3});
@@ -165,14 +165,14 @@ void buildResNet(nvinfer1::INetworkDefinition *network, const WeightsMap &weight
     pool1->setPaddingNd(DimsHW{1, 1});
 
     // 四个残差 stage，通道数分别为 64 / 128 / 256 / 512。
-    IActivationLayer *layer1
-        = makeLayer(network, weights_map, *pool1->getOutput(0), inplanes, 64, layers[0], 1, expansion, "layer1.", block);
-    IActivationLayer *layer2
-        = makeLayer(network, weights_map, *layer1->getOutput(0), inplanes, 128, layers[1], 2, expansion, "layer2.", block);
-    IActivationLayer *layer3
-        = makeLayer(network, weights_map, *layer2->getOutput(0), inplanes, 256, layers[2], 2, expansion, "layer3.", block);
-    IActivationLayer *layer4
-        = makeLayer(network, weights_map, *layer3->getOutput(0), inplanes, 512, layers[3], 2, expansion, "layer4.", block);
+    IActivationLayer *layer1 = makeLayer(network, weights_map, *pool1->getOutput(0), inplanes, 64, layers[0], 1,
+                                         expansion, "layer1.", block);
+    IActivationLayer *layer2 = makeLayer(network, weights_map, *layer1->getOutput(0), inplanes, 128, layers[1], 2,
+                                         expansion, "layer2.", block);
+    IActivationLayer *layer3 = makeLayer(network, weights_map, *layer2->getOutput(0), inplanes, 256, layers[2], 2,
+                                         expansion, "layer3.", block);
+    IActivationLayer *layer4 = makeLayer(network, weights_map, *layer3->getOutput(0), inplanes, 512, layers[3], 2,
+                                         expansion, "layer4.", block);
 
     // 对于固定输入 224x224，layer4 输出空间尺寸为 7x7，可直接做全局平均池化。
     IPoolingLayer *avgpool = network->addPoolingNd(*layer4->getOutput(0), PoolingType::kAVERAGE, DimsHW{7, 7});
@@ -182,8 +182,8 @@ void buildResNet(nvinfer1::INetworkDefinition *network, const WeightsMap &weight
     shuffle->setReshapeDimensions(Dims2{N, -1});
 
     const int fc_in_channels = 512 * expansion;
-    ITensor  *fcw            = network->addConstant(DimsHW{1000, fc_in_channels}, weights_map.at("fc.weight"))->getOutput(0);
-    ITensor  *fcb            = network->addConstant(DimsHW{1, 1000}, weights_map.at("fc.bias"))->getOutput(0);
+    ITensor  *fcw = network->addConstant(DimsHW{1000, fc_in_channels}, weights_map.at("fc.weight"))->getOutput(0);
+    ITensor  *fcb = network->addConstant(DimsHW{1, 1000}, weights_map.at("fc.bias"))->getOutput(0);
 
     IMatrixMultiplyLayer *fc0
         = network->addMatrixMultiply(*shuffle->getOutput(0), MatrixOperation::kNONE, *fcw, MatrixOperation::kTRANSPOSE);
@@ -262,3 +262,9 @@ void ResNet::infer(const std::vector<void *> &buffers)
 }
 
 } // namespace irt::model
+
+INFERRT_REGISTER_MODEL(ResNet18)
+INFERRT_REGISTER_MODEL(ResNet34)
+INFERRT_REGISTER_MODEL(ResNet50)
+INFERRT_REGISTER_MODEL(ResNet101)
+INFERRT_REGISTER_MODEL(ResNet152)

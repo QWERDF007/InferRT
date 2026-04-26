@@ -52,7 +52,7 @@ int main(int argc, char *argv[])
         fs::path          img_path     = fs::absolute(argv[3]);
         fs::path          label_file   = (argc == 5) ? fs::canonical(argv[4]) : fs::path();
 
-        auto model = std::unique_ptr<irt::model::IModel>(irt::model::CreateModel(model_name));
+        auto model = irt::model::CreateModel(model_name);
         if (!model)
         {
             std::cerr << "Failed to create model: " << model_name << std::endl;

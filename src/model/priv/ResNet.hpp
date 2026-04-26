@@ -1,6 +1,6 @@
 #pragma once
 
-#include <inferrt/model/IModel.hpp>
+#include <inferrt/model/IModel.h>
 
 namespace irt::model {
 
@@ -22,6 +22,11 @@ public:
 class ResNet18 : public ResNet
 {
 public:
+    static constexpr const char *key() noexcept
+    {
+        return "resnet18";
+    }
+
     explicit ResNet18()
         : ResNet() {};
     ~ResNet18() override = default;
@@ -37,6 +42,11 @@ public:
 class ResNet34 : public ResNet
 {
 public:
+    static constexpr const char *key() noexcept
+    {
+        return "resnet34";
+    }
+
     explicit ResNet34()
         : ResNet() {};
     ~ResNet34() override = default;
@@ -52,6 +62,11 @@ public:
 class ResNet50 : public ResNet
 {
 public:
+    static constexpr const char *key() noexcept
+    {
+        return "resnet50";
+    }
+
     explicit ResNet50()
         : ResNet() {};
     ~ResNet50() override = default;
@@ -67,6 +82,11 @@ public:
 class ResNet101 : public ResNet
 {
 public:
+    static constexpr const char *key() noexcept
+    {
+        return "resnet101";
+    }
+
     explicit ResNet101()
         : ResNet() {};
     ~ResNet101() override = default;
@@ -82,6 +102,11 @@ public:
 class ResNet152 : public ResNet
 {
 public:
+    static constexpr const char *key() noexcept
+    {
+        return "resnet152";
+    }
+
     explicit ResNet152()
         : ResNet() {};
     ~ResNet152() override = default;

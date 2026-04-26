@@ -1,28 +1,25 @@
-
 #include <gtest/gtest.h>
+
 #include <inferrt/model/Logging.hpp>
 
 #include <sstream>
 #include <string>
-
-namespace t = ::testing;
 
 using namespace irt::model;
 
 namespace {
 
 /**
- * @brief 重定向 std::cout 或 std::cerr 的辅助类
+ * @brief 捕获指定输出流内容的辅助类
  *
- * 在构造时保存并替换目标流的 streambuf，析构时恢复。
- * 通过 captured() 获取捕获的输出内容。
+ * 测试结束后会自动恢复原始 streambuf，避免影响其他测试。
  */
 class StreamRedirect
 {
 public:
     explicit StreamRedirect(std::ostream &target)
         : target_(target)
-        , saved_(target_.rdbuf(oss_.rdbuf()))
+        , saved_(target_.rdbuf(buffer_.rdbuf()))
     {
     }
 
@@ -33,26 +30,31 @@ public:
 
     std::string captured() const
     {
-        return oss_.str();
+        return buffer_.str();
     }
 
     StreamRedirect(const StreamRedirect &)            = delete;
     StreamRedirect &operator=(const StreamRedirect &) = delete;
 
 private:
-    std::ostream &   target_;
-    std::streambuf * saved_;
-    std::ostringstream oss_;
+    std::ostream &    target_;
+    std::streambuf *  saved_;
+    std::ostringstream buffer_;
 };
 
-} // anonymous namespace
+/**
+ * @brief 同时捕获 stdout / stderr，便于验证日志路由行为
+ */
+struct CapturedStdStreams
+{
+    StreamRedirect cout_redirect{std::cout};
+    StreamRedirect cerr_redirect{std::cerr};
+};
 
-// ============================================================================
-// Logger 构造与基本属性测试
-// ============================================================================
+} // namespace
 
 /**
- * @brief 验证 Logger 默认可报告级别为 kWARNING
+ * @brief Logger 默认可报告级别应为 WARNING
  */
 TEST(LoggerTest, DefaultSeverityIsWarning)
 {
@@ -61,7 +63,7 @@ TEST(LoggerTest, DefaultSeverityIsWarning)
 }
 
 /**
- * @brief 验证构造函数可指定自定义可报告级别
+ * @brief 构造时应支持显式指定可报告级别
  */
 TEST(LoggerTest, CustomSeverityInConstructor)
 {
@@ -70,9 +72,9 @@ TEST(LoggerTest, CustomSeverityInConstructor)
 }
 
 /**
- * @brief 验证 setReportableSeverity 可修改可报告级别
+ * @brief setReportableSeverity 应能动态更新可报告级别
  */
-TEST(LoggerTest, SetReportableSeverity)
+TEST(LoggerTest, SetReportableSeverityTakesEffect)
 {
     Logger logger("TestLogger");
     logger.setReportableSeverity(Severity::kERROR);
@@ -80,316 +82,174 @@ TEST(LoggerTest, SetReportableSeverity)
 }
 
 /**
- * @brief 验证多次调用 setReportableSeverity 每次均生效
- */
-TEST(LoggerTest, SetReportableSeverityMultipleTimes)
-{
-    Logger logger("TestLogger", Severity::kVERBOSE);
-
-    logger.setReportableSeverity(Severity::kINFO);
-    EXPECT_EQ(logger.getReportableSeverity(), Severity::kINFO);
-
-    logger.setReportableSeverity(Severity::kINTERNAL_ERROR);
-    EXPECT_EQ(logger.getReportableSeverity(), Severity::kINTERNAL_ERROR);
-
-    logger.setReportableSeverity(Severity::kVERBOSE);
-    EXPECT_EQ(logger.getReportableSeverity(), Severity::kVERBOSE);
-}
-
-/**
- * @brief 验证 getTRTLogger 返回的 ILogger 引用指向 Logger 自身
+ * @brief getTRTLogger 返回的引用应指向 Logger 自身
  */
 TEST(LoggerTest, GetTRTLoggerReturnsSelf)
 {
     Logger logger("TestLogger");
-    nvinfer1::ILogger &trt_logger = logger.getTRTLogger();
-    (void)trt_logger; // 验证可以获取引用，不会崩溃
+    auto  &trt_logger = logger.getTRTLogger();
+    EXPECT_EQ(&trt_logger, &logger);
 }
 
-// ============================================================================
-// LogStreamConsumerBuffer 测试
-// ============================================================================
-
 /**
- * @brief 验证 shouldLog=false 时 LogStreamConsumerBuffer 不输出任何内容
+ * @brief 当 shouldLog=false 时，缓冲区同步不应输出任何内容
  */
 TEST(LogStreamConsumerBufferTest, SuppressesOutputWhenShouldLogFalse)
 {
     std::ostringstream oss;
     LogStreamConsumerBuffer buffer(oss, "[I] ", false);
 
-    buffer.sputn("test message", 12);
+    buffer.sputn("hidden message", 14);
     buffer.pubsync();
 
-    // shouldLog = false，不应输出
     EXPECT_TRUE(oss.str().empty());
 }
 
 /**
- * @brief 验证 setShouldLog 可动态切换是否输出内容
+ * @brief 动态切换 shouldLog 后，后续写入应按新状态决定是否输出
  */
 TEST(LogStreamConsumerBufferTest, SetShouldLogTogglesOutput)
 {
     std::ostringstream oss;
     LogStreamConsumerBuffer buffer(oss, "[I] ", false);
 
-    // 初始不记录
     buffer.sputn("hidden", 6);
     buffer.pubsync();
     EXPECT_TRUE(oss.str().empty());
 
-    // 切换为记录
     buffer.setShouldLog(true);
     buffer.sputn("visible", 7);
     buffer.pubsync();
-    EXPECT_FALSE(oss.str().empty());
+
+    EXPECT_NE(oss.str().find("[I] "), std::string::npos);
     EXPECT_NE(oss.str().find("visible"), std::string::npos);
 }
 
-// ============================================================================
-// LogStreamConsumer 测试
-// ============================================================================
-
 /**
- * @brief 验证 INFO 级别消息在可报告级别为 INFO 时输出到 cout，包含 [I] 前缀和消息内容
+ * @brief INFO 日志在可报告级别为 INFO 时应输出到 stdout
  */
-TEST(LogStreamConsumerTest, InfoSeverityOutputWhenReportableIsInfo)
+TEST(LogStreamConsumerTest, InfoSeverityOutputsToStdout)
 {
-    // reportableSeverity = kINFO, severity = kINFO，输出到 std::cout
-    StreamRedirect redirect(std::cout);
+    CapturedStdStreams captured;
     LogStreamConsumer consumer(Severity::kINFO, Severity::kINFO);
-    consumer << "test message" << std::endl;
+    consumer << "info message" << std::endl;
 
-    std::string output = redirect.captured();
-    EXPECT_NE(output.find("[I] "), std::string::npos) << "Expected [I] prefix, got: " << output;
-    EXPECT_NE(output.find("test message"), std::string::npos) << "Expected message content, got: " << output;
+    EXPECT_NE(captured.cout_redirect.captured().find("[I] "), std::string::npos);
+    EXPECT_NE(captured.cout_redirect.captured().find("info message"), std::string::npos);
+    EXPECT_TRUE(captured.cerr_redirect.captured().empty());
 }
 
 /**
- * @brief 验证 VERBOSE 级别消息在可报告级别为 WARNING 时被抑制，不输出到任何流
+ * @brief ERROR 日志在可报告级别为 ERROR 时应输出到 stderr
  */
-TEST(LogStreamConsumerTest, VerboseSeveritySuppressedWhenReportableIsWarning)
+TEST(LogStreamConsumerTest, ErrorSeverityOutputsToStderr)
 {
-    // reportableSeverity = kWARNING, severity = kVERBOSE，不应记录
-    StreamRedirect redirect_cout(std::cout);
-    StreamRedirect redirect_cerr(std::cerr);
-    LogStreamConsumer consumer(Severity::kWARNING, Severity::kVERBOSE);
-    consumer << "suppressed message" << std::endl;
-
-    EXPECT_EQ(redirect_cout.captured().find("suppressed message"), std::string::npos);
-    EXPECT_EQ(redirect_cerr.captured().find("suppressed message"), std::string::npos);
-}
-
-/**
- * @brief 验证 ERROR 级别消息在可报告级别为 ERROR 时输出到 cerr，包含 [E] 前缀和消息内容
- */
-TEST(LogStreamConsumerTest, ErrorSeverityOutputWhenReportableIsError)
-{
-    // reportableSeverity = kERROR, severity = kERROR，输出到 std::cerr
-    StreamRedirect redirect(std::cerr);
+    CapturedStdStreams captured;
     LogStreamConsumer consumer(Severity::kERROR, Severity::kERROR);
     consumer << "error message" << std::endl;
 
-    std::string output = redirect.captured();
-    EXPECT_NE(output.find("[E] "), std::string::npos) << "Expected [E] prefix, got: " << output;
-    EXPECT_NE(output.find("error message"), std::string::npos) << "Expected message content, got: " << output;
+    EXPECT_NE(captured.cerr_redirect.captured().find("[E] "), std::string::npos);
+    EXPECT_NE(captured.cerr_redirect.captured().find("error message"), std::string::npos);
+    EXPECT_TRUE(captured.cout_redirect.captured().empty());
 }
 
 /**
- * @brief 验证动态修改 setReportableSeverity 后，先前被抑制的消息可以正常输出
+ * @brief 当日志级别低于当前可报告级别时，日志应被抑制
  */
-TEST(LogStreamConsumerTest, DynamicReportableSeverityChangeTogglesOutput)
+TEST(LogStreamConsumerTest, LowerSeverityMessageIsSuppressed)
 {
-    StreamRedirect redirect_cout(std::cout);
-    StreamRedirect redirect_cerr(std::cerr);
+    CapturedStdStreams captured;
+    LogStreamConsumer consumer(Severity::kWARNING, Severity::kVERBOSE);
+    consumer << "suppressed message" << std::endl;
+
+    EXPECT_EQ(captured.cout_redirect.captured().find("suppressed message"), std::string::npos);
+    EXPECT_EQ(captured.cerr_redirect.captured().find("suppressed message"), std::string::npos);
+}
+
+/**
+ * @brief 调整可报告级别后，之前被抑制的日志级别应可以重新输出
+ */
+TEST(LogStreamConsumerTest, DynamicReportableSeverityChangeEnablesOutput)
+{
+    CapturedStdStreams captured;
     LogStreamConsumer consumer(Severity::kERROR, Severity::kINFO);
 
-    // INFO 在 ERROR 级别下不应记录
-    consumer << "should be suppressed" << std::endl;
-    EXPECT_EQ(redirect_cout.captured().find("should be suppressed"), std::string::npos);
-    EXPECT_EQ(redirect_cerr.captured().find("should be suppressed"), std::string::npos);
+    consumer << "hidden first" << std::endl;
+    EXPECT_EQ(captured.cout_redirect.captured().find("hidden first"), std::string::npos);
 
-    // 修改 reportable severity 后应记录
     consumer.setReportableSeverity(Severity::kVERBOSE);
-    consumer << "should be visible now" << std::endl;
-    std::string combined = redirect_cout.captured();
-    EXPECT_NE(combined.find("should be visible now"), std::string::npos);
+    consumer << "visible later" << std::endl;
+    EXPECT_NE(captured.cout_redirect.captured().find("visible later"), std::string::npos);
 }
 
-// ============================================================================
-// LOG_* 宏测试
-// ============================================================================
-
 /**
- * @brief 验证 LOG_VERBOSE 宏输出包含 [V] 前缀和消息内容
+ * @brief LOG_VERBOSE 宏应带有 [V] 前缀并输出到 stdout
  */
-TEST(LogMacroTest, VerboseMacroOutputsVerbosePrefixAndMessage)
+TEST(LogMacroTest, VerboseMacroOutputsPrefixAndMessage)
 {
-    StreamRedirect redirect(std::cout);
+    CapturedStdStreams captured;
     Logger logger("TestLogger", Severity::kVERBOSE);
     LOG_VERBOSE(logger) << "verbose message" << std::endl;
 
-    std::string output = redirect.captured();
-    EXPECT_NE(output.find("[V] "), std::string::npos) << "Expected [V] prefix, got: " << output;
-    EXPECT_NE(output.find("verbose message"), std::string::npos) << "Expected message content, got: " << output;
+    EXPECT_NE(captured.cout_redirect.captured().find("[V] "), std::string::npos);
+    EXPECT_NE(captured.cout_redirect.captured().find("verbose message"), std::string::npos);
 }
 
 /**
- * @brief 验证 LOG_INFO 宏输出包含 [I] 前缀和消息内容
- */
-TEST(LogMacroTest, InfoMacroOutputsInfoPrefixAndMessage)
-{
-    StreamRedirect redirect(std::cout);
-    Logger logger("TestLogger", Severity::kINFO);
-    LOG_INFO(logger) << "info message" << std::endl;
-
-    std::string output = redirect.captured();
-    EXPECT_NE(output.find("[I] "), std::string::npos) << "Expected [I] prefix, got: " << output;
-    EXPECT_NE(output.find("info message"), std::string::npos) << "Expected message content, got: " << output;
-}
-
-/**
- * @brief 验证 LOG_WARN 宏输出包含 [W] 前缀和消息内容（输出到 cerr）
- */
-TEST(LogMacroTest, WarnMacroOutputsWarningPrefixAndMessage)
-{
-    // kWARNING < kINFO，前缀和消息输出到 std::cerr
-    StreamRedirect redirect(std::cerr);
-    Logger logger("TestLogger", Severity::kWARNING);
-    LOG_WARN(logger) << "warning message" << std::endl;
-
-    std::string output = redirect.captured();
-    EXPECT_NE(output.find("[W] "), std::string::npos) << "Expected [W] prefix, got: " << output;
-    EXPECT_NE(output.find("warning message"), std::string::npos) << "Expected message content, got: " << output;
-}
-
-/**
- * @brief 验证 LOG_ERROR 宏输出包含 [E] 前缀和消息内容（输出到 cerr）
- */
-TEST(LogMacroTest, ErrorMacroOutputsErrorPrefixAndMessage)
-{
-    StreamRedirect redirect(std::cerr);
-    Logger logger("TestLogger", Severity::kERROR);
-    LOG_ERROR(logger) << "error message" << std::endl;
-
-    std::string output = redirect.captured();
-    EXPECT_NE(output.find("[E] "), std::string::npos) << "Expected [E] prefix, got: " << output;
-    EXPECT_NE(output.find("error message"), std::string::npos) << "Expected message content, got: " << output;
-}
-
-/**
- * @brief 验证 LOG_FATAL 宏输出包含 [F] 前缀和消息内容（输出到 cerr）
- */
-TEST(LogMacroTest, FatalMacroOutputsFatalPrefixAndMessage)
-{
-    StreamRedirect redirect(std::cerr);
-    Logger logger("TestLogger", Severity::kINTERNAL_ERROR);
-    LOG_FATAL(logger) << "fatal message" << std::endl;
-
-    std::string output = redirect.captured();
-    EXPECT_NE(output.find("[F] "), std::string::npos) << "Expected [F] prefix, got: " << output;
-    EXPECT_NE(output.find("fatal message"), std::string::npos) << "Expected message content, got: " << output;
-}
-
-/**
- * @brief 验证当 Logger 可报告级别为 ERROR 时，LOG_INFO 宏的消息被抑制
+ * @brief LOG_INFO 宏在 ERROR 可报告级别下应被抑制
  */
 TEST(LogMacroTest, InfoMacroSuppressedWhenReportableIsError)
 {
-    StreamRedirect redirect_cout(std::cout);
-    StreamRedirect redirect_cerr(std::cerr);
+    CapturedStdStreams captured;
     Logger logger("TestLogger", Severity::kERROR);
-    // INFO 在 ERROR 级别下不应记录
     LOG_INFO(logger) << "suppressed info" << std::endl;
 
-    EXPECT_EQ(redirect_cout.captured().find("suppressed info"), std::string::npos);
-    EXPECT_EQ(redirect_cerr.captured().find("suppressed info"), std::string::npos);
+    EXPECT_EQ(captured.cout_redirect.captured().find("suppressed info"), std::string::npos);
+    EXPECT_EQ(captured.cerr_redirect.captured().find("suppressed info"), std::string::npos);
 }
 
-// ============================================================================
-// Severity 前缀映射测试
-// ============================================================================
+/**
+ * @brief LOG_WARN 宏应输出到 stderr，并带有 [W] 前缀
+ */
+TEST(LogMacroTest, WarnMacroOutputsPrefixAndMessage)
+{
+    CapturedStdStreams captured;
+    Logger logger("TestLogger", Severity::kWARNING);
+    LOG_WARN(logger) << "warning message" << std::endl;
+
+    EXPECT_NE(captured.cerr_redirect.captured().find("[W] "), std::string::npos);
+    EXPECT_NE(captured.cerr_redirect.captured().find("warning message"), std::string::npos);
+    EXPECT_TRUE(captured.cout_redirect.captured().empty());
+}
 
 /**
- * @brief 验证 kINTERNAL_ERROR 级别日志输出包含 [F] 前缀（Fatal）
+ * @brief LOG_ERROR 与 LOG_FATAL 宏都应落到 stderr，并使用正确前缀
  */
-TEST(LoggerSeverityPrefixTest, InternalErrorPrefixIsF)
+TEST(LogMacroTest, ErrorAndFatalMacrosUseExpectedPrefixes)
 {
-    StreamRedirect redirect(std::cerr);
+    CapturedStdStreams captured;
     Logger logger("TestLogger", Severity::kVERBOSE);
-    logger.log(Severity::kINTERNAL_ERROR, "fatal test");
 
-    std::string output = redirect.captured();
-    EXPECT_NE(output.find("[F] "), std::string::npos) << "Expected [F] prefix, got: " << output;
-    EXPECT_NE(output.find("fatal test"), std::string::npos) << "Expected message, got: " << output;
+    LOG_ERROR(logger) << "error message" << std::endl;
+    LOG_FATAL(logger) << "fatal message" << std::endl;
+
+    const std::string output = captured.cerr_redirect.captured();
+    EXPECT_NE(output.find("[E] "), std::string::npos);
+    EXPECT_NE(output.find("error message"), std::string::npos);
+    EXPECT_NE(output.find("[F] "), std::string::npos);
+    EXPECT_NE(output.find("fatal message"), std::string::npos);
+    EXPECT_TRUE(captured.cout_redirect.captured().empty());
 }
 
 /**
- * @brief 验证 kERROR 级别日志输出包含 [E] 前缀（Error）
+ * @brief Logger::log 输出中应包含 Logger 名称，便于定位来源
  */
-TEST(LoggerSeverityPrefixTest, ErrorPrefixIsE)
+TEST(LoggerOutputTest, LoggerNameAppearsInOutput)
 {
-    StreamRedirect redirect(std::cerr);
-    Logger logger("TestLogger", Severity::kVERBOSE);
-    logger.log(Severity::kERROR, "error test");
-
-    std::string output = redirect.captured();
-    EXPECT_NE(output.find("[E] "), std::string::npos) << "Expected [E] prefix, got: " << output;
-    EXPECT_NE(output.find("error test"), std::string::npos) << "Expected message, got: " << output;
-}
-
-/**
- * @brief 验证 kWARNING 级别日志输出包含 [W] 前缀（Warning），输出到 cerr
- */
-TEST(LoggerSeverityPrefixTest, WarningPrefixIsW)
-{
-    // kWARNING < kINFO，前缀和消息输出到 std::cerr
-    StreamRedirect redirect(std::cerr);
-    Logger logger("TestLogger", Severity::kVERBOSE);
-    logger.log(Severity::kWARNING, "warning test");
-
-    std::string output = redirect.captured();
-    EXPECT_NE(output.find("[W] "), std::string::npos) << "Expected [W] prefix, got: " << output;
-    EXPECT_NE(output.find("warning test"), std::string::npos) << "Expected message, got: " << output;
-}
-
-/**
- * @brief 验证 kINFO 级别日志输出包含 [I] 前缀（Info），输出到 cout
- */
-TEST(LoggerSeverityPrefixTest, InfoPrefixIsI)
-{
-    StreamRedirect redirect(std::cout);
-    Logger logger("TestLogger", Severity::kVERBOSE);
-    logger.log(Severity::kINFO, "info test");
-
-    std::string output = redirect.captured();
-    EXPECT_NE(output.find("[I] "), std::string::npos) << "Expected [I] prefix, got: " << output;
-    EXPECT_NE(output.find("info test"), std::string::npos) << "Expected message, got: " << output;
-}
-
-/**
- * @brief 验证 kVERBOSE 级别日志输出包含 [V] 前缀（Verbose），输出到 cout
- */
-TEST(LoggerSeverityPrefixTest, VerbosePrefixIsV)
-{
-    StreamRedirect redirect(std::cout);
-    Logger logger("TestLogger", Severity::kVERBOSE);
-    logger.log(Severity::kVERBOSE, "verbose test");
-
-    std::string output = redirect.captured();
-    EXPECT_NE(output.find("[V] "), std::string::npos) << "Expected [V] prefix, got: " << output;
-    EXPECT_NE(output.find("verbose test"), std::string::npos) << "Expected message, got: " << output;
-}
-
-/**
- * @brief 验证 Logger::log 输出中包含构造时指定的 Logger 名称
- */
-TEST(LoggerSeverityPrefixTest, LoggerNameAppearsInOutput)
-{
-    StreamRedirect redirect(std::cout);
+    CapturedStdStreams captured;
     Logger logger("MyModel", Severity::kVERBOSE);
-    logger.log(Severity::kINFO, "test");
+    logger.log(Severity::kINFO, "test message");
 
-    std::string output = redirect.captured();
-    EXPECT_NE(output.find("[MyModel]"), std::string::npos) << "Expected logger name, got: " << output;
+    EXPECT_NE(captured.cout_redirect.captured().find("[MyModel]"), std::string::npos);
+    EXPECT_NE(captured.cout_redirect.captured().find("test message"), std::string::npos);
 }

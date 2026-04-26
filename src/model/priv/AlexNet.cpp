@@ -152,3 +152,5 @@ void AlexNet::infer(const std::vector<void *> &buffers)
 }
 
 } // namespace irt::model
+
+INFERRT_REGISTER_MODEL(AlexNet)

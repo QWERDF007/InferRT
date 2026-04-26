@@ -51,7 +51,7 @@ int main(int argc, char *argv[])
         fs::path label_file   = (argc == 4) ? fs::canonical(argv[3]) : fs::path();
 
         // 创建 AlexNet 模型
-        auto model = std::unique_ptr<irt::model::IModel>(irt::model::CreateModel("alexnet"));
+        auto model = irt::model::CreateModel("alexnet");
         if (!model)
         {
             std::cerr << "Failed to create AlexNet model" << std::endl;
