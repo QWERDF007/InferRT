@@ -29,56 +29,25 @@ cv::Mat preprocess(const cv::Mat &img)
     return resized;
 }
 
-std::vector<std::string> read_imagenet_labels(const std::string &label_file)
-{
-    std::vector<std::string> labels(1000);
-    std::ifstream            file(label_file);
-    if (!file.is_open())
-    {
-        std::cerr << "Failed to open label file: " << label_file << std::endl;
-        return labels;
-    }
-
-    std::string line;
-    while (std::getline(file, line))
-    {
-        size_t colon_pos = line.find(": ");
-        if (colon_pos != std::string::npos)
-        {
-            int         idx   = std::stoi(line.substr(0, colon_pos));
-            std::string label = line.substr(colon_pos + 2);
-            if (label.size() >= 2 && label.front() == '\'' && label.back() == ',')
-            {
-                label = label.substr(1, label.size() - 3);
-            }
-            if (idx >= 0 && idx < 1000)
-            {
-                labels[idx] = label;
-            }
-        }
-    }
-
-    return labels;
-}
-
 int main(int argc, char *argv[])
 {
     try
     {
         if (argc < 4 || argc > 5)
         {
-            std::cerr << "Usage: " << argv[0]
-                      << " <resnet18|resnet34|resnet50|resnet101|resnet152> <weights_file.wts> <image_path> [label_file]"
-                      << std::endl;
+            std::cerr
+                << "Usage: " << argv[0]
+                << " <resnet18|resnet34|resnet50|resnet101|resnet152> <weights_file.wts> <image_path> [label_file]"
+                << std::endl;
             std::cerr << "Example: " << argv[0] << " resnet18 resnet18.wts dog.jpg" << std::endl;
-            std::cerr << "         " << argv[0]
-                      << " resnet50 resnet50.wts dog.jpg imagenet1000_clsidx_to_labels.txt" << std::endl;
-            std::cerr << "         " << argv[0]
-                      << " resnet152 resnet152.wts dog.jpg imagenet1000_clsidx_to_labels.txt" << std::endl;
+            std::cerr << "         " << argv[0] << " resnet50 resnet50.wts dog.jpg imagenet1000_clsidx_to_labels.txt"
+                      << std::endl;
+            std::cerr << "         " << argv[0] << " resnet152 resnet152.wts dog.jpg imagenet1000_clsidx_to_labels.txt"
+                      << std::endl;
             return -1;
         }
 
-        const std::string model_name = argv[1];
+        const std::string model_name   = argv[1];
         fs::path          weights_file = fs::path(argv[2]);
         fs::path          img_path     = fs::absolute(argv[3]);
         fs::path          label_file   = (argc == 5) ? fs::canonical(argv[4]) : fs::path();
@@ -137,7 +106,7 @@ int main(int argc, char *argv[])
         bool                     has_labels = false;
         if (!label_file.empty() && fs::exists(label_file))
         {
-            labels     = read_imagenet_labels(label_file.string());
+            labels     = irt::model::readImagenetLabels(label_file.string());
             has_labels = true;
         }
 

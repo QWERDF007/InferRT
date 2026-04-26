@@ -31,40 +31,6 @@ cv::Mat preprocess(const cv::Mat &img)
     return resized;
 }
 
-// 读取 ImageNet 标签
-std::vector<std::string> read_imagenet_labels(const std::string &label_file)
-{
-    std::vector<std::string> labels(1000);
-    std::ifstream            file(label_file);
-    if (!file.is_open())
-    {
-        std::cerr << "Failed to open label file: " << label_file << std::endl;
-        return labels;
-    }
-
-    std::string line;
-    while (std::getline(file, line))
-    {
-        size_t colon_pos = line.find(": ");
-        if (colon_pos != std::string::npos)
-        {
-            int         idx   = std::stoi(line.substr(0, colon_pos));
-            std::string label = line.substr(colon_pos + 2);
-            // 移除引号
-            if (label.size() >= 2 && label.front() == '\'' && label.back() == ',')
-            {
-                label = label.substr(1, label.size() - 3);
-            }
-            if (idx >= 0 && idx < 1000)
-            {
-                labels[idx] = label;
-            }
-        }
-    }
-
-    return labels;
-}
-
 int main(int argc, char *argv[])
 {
     try
@@ -146,7 +112,7 @@ int main(int argc, char *argv[])
         bool                     has_labels = false;
         if (fs::exists(label_file))
         {
-            labels     = read_imagenet_labels(label_file.string());
+            labels     = irt::model::readImagenetLabels(label_file.string());
             has_labels = true;
         }
 
