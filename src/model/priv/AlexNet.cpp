@@ -3,7 +3,9 @@
 #include <NvInfer.h>
 #include <cuda_runtime_api.h>
 #include <inferrt/core/Exception.hpp>
+#include <inferrt/model/IModel.h>
 
+#include <cmath>
 #include <map>
 #include <memory>
 #include <vector>
@@ -13,10 +15,11 @@ namespace irt::model {
 void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
     using namespace nvinfer1;
-    constexpr int N = 1;
+    const auto &input_shape = inputShape();
 
     ITensor *input{nullptr};
-    input = network->addInput("input", DataType::kFLOAT, Dims4{1, 3, 224, 224});
+    input = network->addInput("input", DataType::kFLOAT,
+                              Dims4{1, input_shape.channels, input_shape.height, input_shape.width});
 
     // features
     // CRP (Conv-Relu-Pool)
@@ -68,21 +71,34 @@ void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsM
     IPoolingLayer *pool3 = network->addPoolingNd(*relu5->getOutput(0), PoolingType::kMAX, DimsHW{3, 3});
     pool3->setStrideNd(DimsHW{2, 2});
 
-    // avgpool
-    IPoolingLayer *adaptive_pool = network->addPoolingNd(*pool3->getOutput(0), PoolingType::kAVERAGE, DimsHW{1, 1});
+    const auto fc1_in_features = static_cast<int>(weights_map.at("classifier.1.weight").count / 4096);
+    if (fc1_in_features <= 0 || fc1_in_features % 256 != 0)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Unexpected AlexNet classifier.1.weight shape");
+    }
+
+    const auto pooled_area = fc1_in_features / 256;
+    const auto pooled_hw   = static_cast<int>(std::sqrt(static_cast<double>(pooled_area)));
+    if (pooled_hw <= 0 || pooled_hw * pooled_hw != pooled_area)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "AlexNet flattened feature size is not square");
+    }
+
+    IResizeLayer *adaptive_pool = network->addResize(*pool3->getOutput(0));
+    adaptive_pool->setOutputDimensions(Dims4{1, 256, pooled_hw, pooled_hw});
 
     IShuffleLayer *shuffle = network->addShuffle(*adaptive_pool->getOutput(0));
-    shuffle->setReshapeDimensions(Dims2{N, -1}); // "-1" means "256 * 6 * 6"
-
-    int64_t in_feat = 256ll * 6 * 6;
+    shuffle->setReshapeDimensions(Dims2{1, -1});
 
     // classifier
-    ITensor *fc1w = network->addConstant(DimsHW{4096, in_feat}, weights_map.at("classifier.1.weight"))->getOutput(0);
+    ITensor *fc1w
+        = network->addConstant(DimsHW{4096, fc1_in_features}, weights_map.at("classifier.1.weight"))->getOutput(0);
     ITensor *fc1b = network->addConstant(DimsHW{1, 4096}, weights_map.at("classifier.1.bias"))->getOutput(0);
     ITensor *fc2w = network->addConstant(DimsHW{4096, 4096}, weights_map.at("classifier.4.weight"))->getOutput(0);
     ITensor *fc2b = network->addConstant(DimsHW{1, 4096}, weights_map.at("classifier.4.bias"))->getOutput(0);
-    ITensor *fc3w = network->addConstant(DimsHW{1000, 4096}, weights_map.at("classifier.6.weight"))->getOutput(0);
-    ITensor *fc3b = network->addConstant(DimsHW{1, 1000}, weights_map.at("classifier.6.bias"))->getOutput(0);
+    ITensor *fc3w
+        = network->addConstant(DimsHW{numClasses(), 4096}, weights_map.at("classifier.6.weight"))->getOutput(0);
+    ITensor *fc3b = network->addConstant(DimsHW{1, numClasses()}, weights_map.at("classifier.6.bias"))->getOutput(0);
 
     // IFullyConnectedLayer* fc1 = network->addFullyConnected(*pool3->getOutput(0), 4096, weightMap["classifier.1.weight"], weightMap["classifier.1.bias"]);
     IMatrixMultiplyLayer *fc1_0 = network->addMatrixMultiply(*shuffle->getOutput(0), MatrixOperation::kNONE, *fc1w,
@@ -108,7 +124,9 @@ void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsM
 
 void AlexNet::infer(const std::vector<void *> &buffers)
 {
-    if (!trt_params_.context)
+    auto &trt_params = trtParams();
+
+    if (!trt_params.context)
     {
         throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Execution context is not initialized");
     }
@@ -120,35 +138,35 @@ void AlexNet::infer(const std::vector<void *> &buffers)
     }
 
     // 设置输入输出张量地址
-    if (!trt_params_.context->setTensorAddress("input", buffers[0]))
+    if (!trt_params.context->setTensorAddress("input", buffers[0]))
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to set input tensor address");
     }
 
-    if (!trt_params_.context->setTensorAddress("output", buffers[1]))
+    if (!trt_params.context->setTensorAddress("output", buffers[1]))
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to set output tensor address");
     }
 
-    if (!trt_params_.stream)
+    if (!trt_params.stream)
     {
-        trt_params_.stream = MakeCudaStream();
+        trt_params.stream = MakeCudaStream();
 
-        if (!trt_params_.stream)
+        if (!trt_params.stream)
         {
             throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create CUDA stream");
         }
     }
 
     // 执行推理（使用同步执行，stream 参数为 0 表示默认流）
-    bool status = trt_params_.context->enqueueV3(*trt_params_.stream);
+    bool status = trt_params.context->enqueueV3(*trt_params.stream);
     if (!status)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to execute inference");
     }
 
     // 同步等待执行完成
-    cudaStreamSynchronize(*trt_params_.stream);
+    cudaStreamSynchronize(*trt_params.stream);
 }
 
 } // namespace irt::model

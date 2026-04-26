@@ -4,6 +4,8 @@
 
 #include <inferrt/model/IModel.h>
 
+#include "../../src/model/priv/IModelImpl.hpp"
+
 #include <array>
 #include <memory>
 #include <vector>
@@ -30,7 +32,7 @@ struct RegisteredModelCase
  * 这个模型不会真正构图或推理，只用于验证 RegisterModel / CreateModel
  * 的注册与创建流程是否正常工作。
  */
-class DummyModel final : public irt::model::IModel
+class DummyModel final : public irt::model::priv::IModelImpl
 {
 public:
     static constexpr const char *key() noexcept
@@ -52,7 +54,7 @@ public:
     }
 };
 
-inline std::unique_ptr<irt::model::IModel> CreateDummyModel()
+inline std::unique_ptr<irt::model::priv::IModelImpl> CreateDummyModel()
 {
     return std::make_unique<DummyModel>();
 }

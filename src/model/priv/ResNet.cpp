@@ -3,6 +3,7 @@
 #include "BatchNorm.hpp"
 
 #include <inferrt/core/Exception.hpp>
+#include <inferrt/model/IModel.h>
 
 #include <array>
 
@@ -141,15 +142,15 @@ nvinfer1::IActivationLayer *Bottleneck(nvinfer1::INetworkDefinition *network, co
  * @param block      具体的 block 构建函数。
  */
 void buildResNet(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map, const std::array<int, 4> &layers,
-                 int expansion, BlockBuilder block)
+                 int expansion, int num_classes, const InputShape &input_shape, BlockBuilder block)
 {
     using namespace nvinfer1;
-    constexpr int N = 1;
 
     Weights empty_weights{DataType::kFLOAT, nullptr, 0};
     int     inplanes = 64;
 
-    ITensor *input = network->addInput("input", DataType::kFLOAT, Dims4{1, 3, 224, 224});
+    ITensor *input
+        = network->addInput("input", DataType::kFLOAT, Dims4{1, input_shape.channels, input_shape.height, input_shape.width});
 
     // stem: 7x7 conv -> bn -> relu -> 3x3 maxpool
     IConvolutionLayer *conv1
@@ -175,15 +176,16 @@ void buildResNet(nvinfer1::INetworkDefinition *network, const WeightsMap &weight
                                          expansion, "layer4.", block);
 
     // 对于固定输入 224x224，layer4 输出空间尺寸为 7x7，可直接做全局平均池化。
-    IPoolingLayer *avgpool = network->addPoolingNd(*layer4->getOutput(0), PoolingType::kAVERAGE, DimsHW{7, 7});
-    avgpool->setStrideNd(DimsHW{1, 1});
+    IReduceLayer *avgpool = network->addReduce(*layer4->getOutput(0), ReduceOperation::kAVG,
+                                               (1U << 2U) | (1U << 3U), true);
 
     IShuffleLayer *shuffle = network->addShuffle(*avgpool->getOutput(0));
-    shuffle->setReshapeDimensions(Dims2{N, -1});
+    shuffle->setReshapeDimensions(Dims2{1, -1});
 
     const int fc_in_channels = 512 * expansion;
-    ITensor  *fcw = network->addConstant(DimsHW{1000, fc_in_channels}, weights_map.at("fc.weight"))->getOutput(0);
-    ITensor  *fcb = network->addConstant(DimsHW{1, 1000}, weights_map.at("fc.bias"))->getOutput(0);
+    ITensor  *fcw
+        = network->addConstant(DimsHW{num_classes, fc_in_channels}, weights_map.at("fc.weight"))->getOutput(0);
+    ITensor  *fcb = network->addConstant(DimsHW{1, num_classes}, weights_map.at("fc.bias"))->getOutput(0);
 
     IMatrixMultiplyLayer *fc0
         = network->addMatrixMultiply(*shuffle->getOutput(0), MatrixOperation::kNONE, *fcw, MatrixOperation::kTRANSPOSE);
@@ -197,32 +199,34 @@ void buildResNet(nvinfer1::INetworkDefinition *network, const WeightsMap &weight
 
 void ResNet18::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(network, weights_map, {2, 2, 2, 2}, 1, BasicBlock);
+    buildResNet(network, weights_map, {2, 2, 2, 2}, 1, numClasses(), inputShape(), BasicBlock);
 }
 
 void ResNet34::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(network, weights_map, {3, 4, 6, 3}, 1, BasicBlock);
+    buildResNet(network, weights_map, {3, 4, 6, 3}, 1, numClasses(), inputShape(), BasicBlock);
 }
 
 void ResNet50::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(network, weights_map, {3, 4, 6, 3}, 4, Bottleneck);
+    buildResNet(network, weights_map, {3, 4, 6, 3}, 4, numClasses(), inputShape(), Bottleneck);
 }
 
 void ResNet101::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(network, weights_map, {3, 4, 23, 3}, 4, Bottleneck);
+    buildResNet(network, weights_map, {3, 4, 23, 3}, 4, numClasses(), inputShape(), Bottleneck);
 }
 
 void ResNet152::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(network, weights_map, {3, 8, 36, 3}, 4, Bottleneck);
+    buildResNet(network, weights_map, {3, 8, 36, 3}, 4, numClasses(), inputShape(), Bottleneck);
 }
 
 void ResNet::infer(const std::vector<void *> &buffers)
 {
-    if (!trt_params_.context)
+    auto &trt_params = trtParams();
+
+    if (!trt_params.context)
     {
         throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Execution context is not initialized");
     }
@@ -233,32 +237,32 @@ void ResNet::infer(const std::vector<void *> &buffers)
                              buffers.size());
     }
 
-    if (!trt_params_.context->setTensorAddress("input", buffers[0]))
+    if (!trt_params.context->setTensorAddress("input", buffers[0]))
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to set input tensor address");
     }
 
-    if (!trt_params_.context->setTensorAddress("output", buffers[1]))
+    if (!trt_params.context->setTensorAddress("output", buffers[1]))
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to set output tensor address");
     }
 
-    if (!trt_params_.stream)
+    if (!trt_params.stream)
     {
-        trt_params_.stream = MakeCudaStream();
-        if (!trt_params_.stream)
+        trt_params.stream = MakeCudaStream();
+        if (!trt_params.stream)
         {
             throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create CUDA stream");
         }
     }
 
-    bool status = trt_params_.context->enqueueV3(*trt_params_.stream);
+    bool status = trt_params.context->enqueueV3(*trt_params.stream);
     if (!status)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to execute inference");
     }
 
-    cudaStreamSynchronize(*trt_params_.stream);
+    cudaStreamSynchronize(*trt_params.stream);
 }
 
 } // namespace irt::model

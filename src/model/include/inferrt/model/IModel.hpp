@@ -1,63 +1,66 @@
 #pragma once
 
+#include "IModelConfig.hpp"
 #include "IParams.hpp"
 #include "Utils.hpp"
 
-#include <inferrt/model/Export.h>
-
+#include <memory>
 #include <string>
 #include <vector>
+
+namespace irt::model::priv {
+class IModelImpl;
+}
 
 namespace irt::model {
 
 class INFERRT_MODEL_API IModel
 {
 public:
-    IModel()          = default;
-    virtual ~IModel() = default;
+    IModel();
+    explicit IModel(std::unique_ptr<priv::IModelImpl> impl);
+    ~IModel();
 
-    virtual std::string name() const noexcept = 0;
+    IModel(const IModel &)            = delete;
+    IModel &operator=(const IModel &) = delete;
+    IModel(IModel &&) noexcept;
+    IModel &operator=(IModel &&) noexcept;
 
-    virtual std::string wtsExtension() const noexcept
-    {
-        return ".wts";
-    }
+    virtual std::string name() const noexcept;
 
-    virtual std::string engineExtension() const noexcept
-    {
-        return ".engine";
-    }
+    virtual std::string wtsExtension() const noexcept;
 
-    virtual nvinfer1::ILogger::Severity logLevel() const noexcept
-    {
-        return trt_params_.log_level;
-    }
+    virtual std::string engineExtension() const noexcept;
+
+    virtual nvinfer1::ILogger::Severity logLevel() const noexcept;
 
     virtual void build(const std::string &weights_file);
     virtual void save(const std::string &weights_file);
     virtual void load(const std::string &weights_file);
     virtual void buildOrLoad(const std::string &weights_file);
 
-    virtual void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) = 0;
+    virtual void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map);
 
-    virtual void infer(const std::vector<void *> &buffers) = 0;
+    virtual void infer(const std::vector<void *> &buffers);
 
-    void setLogLevel(nvinfer1::ILogger::Severity severity)
-    {
-        trt_params_.log_level = severity;
-        if (trt_params_.logger)
-        {
-            trt_params_.logger->setReportableSeverity(severity);
-        }
-    }
+    virtual void setModelConfig(std::unique_ptr<IModelConfig> config);
 
-protected:
-    TRTParams trt_params_;
+    virtual void setNumClasses(int num_classes);
 
-    void initLogger()
-    {
-        trt_params_.logger = std::make_unique<Logger>(name(), logLevel());
-    }
+    virtual void setInputShape(const InputShape &shape);
+
+    virtual void setInputShape(int channels, int height, int width);
+
+    virtual const IModelConfig &modelConfig() const noexcept;
+
+    virtual int numClasses() const noexcept;
+
+    virtual const InputShape &inputShape() const noexcept;
+
+    virtual void setLogLevel(nvinfer1::ILogger::Severity severity);
+
+private:
+    std::unique_ptr<priv::IModelImpl> impl_;
 };
 
 } // namespace irt::model

@@ -1,14 +1,14 @@
 #pragma once
 
-#include <inferrt/model/IModel.h>
+#include "IModelImpl.hpp"
 
 namespace irt::model {
 
-class ResNet : public IModel
+class ResNet : public priv::IModelImpl
 {
 public:
     explicit ResNet()
-        : IModel() {};
+        : priv::IModelImpl() {};
     ~ResNet() override = default;
 
     std::string name() const noexcept override

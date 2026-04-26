@@ -1,10 +1,10 @@
 #pragma once
 
-#include <inferrt/model/IModel.h>
+#include "IModelImpl.hpp"
 
 namespace irt::model {
 
-class AlexNet : public IModel
+class AlexNet : public priv::IModelImpl
 {
 public:
     static constexpr const char *key() noexcept
@@ -13,7 +13,7 @@ public:
     }
 
     explicit AlexNet()
-        : IModel() {};
+        : priv::IModelImpl() {};
     ~AlexNet() override = default;
 
     std::string name() const noexcept
