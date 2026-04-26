@@ -1,4 +1,5 @@
 #include "priv/AlexNet.hpp"
+#include "priv/ResNet.hpp"
 
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/IModel.h>
@@ -230,6 +231,26 @@ IModel *CreateModel(const std::string &name)
     if (name == "alexnet")
     {
         return new AlexNet();
+    }
+    if (name == "resnet18")
+    {
+        return new ResNet18();
+    }
+    if (name == "resnet34")
+    {
+        return new ResNet34();
+    }
+    if (name == "resnet50")
+    {
+        return new ResNet50();
+    }
+    if (name == "resnet101")
+    {
+        return new ResNet101();
+    }
+    if (name == "resnet152")
+    {
+        return new ResNet152();
     }
     return nullptr;
 }
