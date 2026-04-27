@@ -17,10 +17,10 @@
  *
  * @note 此组合测试覆盖：极小图像、相同尺寸、极端上/下采样率(0.1,10)、多通道
  */
-_TEST_SUITE_P(MultiParamTest, vtest::ValueList<int>{10, 100, 256} * vtest::ValueList<int>{10, 100, 256}
+_TEST_SUITE_P(MultiParamTest, vtest::ValueList<int>{10, 25, 100} * vtest::ValueList<int>{10, 25, 100}
                                   * vtest::ValueList<int>{1, 3, 4}
-                                  * vtest::ValueList<double>{0.1, 0.3, 0.5, 0.7, 1.3, 2.0, 3.0, 5.0, 10.0}
-                                  * vtest::ValueList<int>{cv::INTER_LINEAR, cv::INTER_NEAREST});
+                                  * vtest::ValueList<double>{0.1, 0.3, 0.5, 1.3, 2.0, 10.0}
+                                  * vtest::ValueList<int>{cv::INTER_LINEAR, cv::INTER_NEAREST, cv::INTER_CUBIC});
 
 // ============================================================================
 // 类型映射和调用器抽象

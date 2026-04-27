@@ -135,6 +135,7 @@ __global__ void resize_bilinear_kernel(const T *src, T *dst, const double2 scale
     using CT4 = make_vector4_t<CT>;
     CT4 w;
 
+    // 双线性插值的四个权重: 左上、右上、左下、右下
     w.x = (1 - f.x) * (1 - f.y);
     w.y = f.x * (1 - f.y);
     w.z = (1 - f.x) * f.y;
@@ -189,13 +190,14 @@ __global__ void u8_resize_bilinear_kernel(const uint8_t *src, uint8_t *dst, cons
 
     cal_bilinear_interpolation<CT2>(ssize, dst_coord, scale, s, f, s1);
 
+    // 定点插值系数: 将浮点小数部分量化为 11 位定点整数 (INTER_RESIZE_COEF_SCALE = 2048)
     short2 alpha;
-    alpha.x = saturate_cast<short>((1.0f - f.x) * (float)INTER_RESIZE_COEF_SCALE);
-    alpha.y = INTER_RESIZE_COEF_SCALE - alpha.x;
+    alpha.x = saturate_cast<short>((1.0f - f.x) * (float)INTER_RESIZE_COEF_SCALE); // 左权重
+    alpha.y = INTER_RESIZE_COEF_SCALE - alpha.x;                                   // 右权重
 
     short2 beta;
-    beta.x = saturate_cast<short>((1.0f - f.y) * (float)INTER_RESIZE_COEF_SCALE);
-    beta.y = INTER_RESIZE_COEF_SCALE - beta.x;
+    beta.x = saturate_cast<short>((1.0f - f.y) * (float)INTER_RESIZE_COEF_SCALE); // 上权重
+    beta.y = INTER_RESIZE_COEF_SCALE - beta.x;                                     // 下权重
 
     // 获取源数据指针
     uint8_t *row0 = const_cast<uint8_t *>(src) + s.y * sstride;
@@ -257,13 +259,13 @@ __global__ void resize_nearest_kernel(const T *src, T *dst, const double2 scale,
     src_coord.x = dst_coord.x * scale.x;
     src_coord.y = dst_coord.y * scale.y;
 
-    int2 s; // sx, sy
-    if constexpr (std::is_same_v<CT, double>)
+    int2 s;
+    if constexpr (std::is_same_v<CT2, double2>)
     {
         s.x = __double2int_rd(src_coord.x);
         s.y = __double2int_rd(src_coord.y);
     }
-    else if constexpr (std::is_same_v<CT, float>)
+    else if constexpr (std::is_same_v<CT2, float2>)
     {
         s.x = __float2int_rd(src_coord.x);
         s.y = __float2int_rd(src_coord.y);
@@ -286,6 +288,168 @@ __global__ void resize_nearest_kernel(const T *src, T *dst, const double2 scale,
     }
 }
 
+
+/**
+ * @brief 三次插值系数计算 (Keys cubic, A=-0.75, 与 OpenCV 一致)
+ * 
+ * @tparam CT 浮点计算类型 (float 或 double)
+ * @param[in] x 小数部分 (0 <= x < 1)
+ * @param[out] coeffs 4 个插值权重系数
+ */
+template<typename CT>
+__device__ __forceinline__ void interpolateCubic(CT x, CT coeffs[4])
+{
+    const CT A = static_cast<CT>(-0.75); // Keys cubic 参数, OpenCV 默认值
+
+    coeffs[0] = ((A * (x + 1) - 5 * A) * (x + 1) + 8 * A) * (x + 1) - 4 * A; // x-1 位置的权重
+    coeffs[1] = ((A + 2) * x - (A + 3)) * x * x + 1;                          // x   位置的权重
+    coeffs[2] = ((A + 2) * (1 - x) - (A + 3)) * (1 - x) * (1 - x) + 1;        // x+1 位置的权重
+    coeffs[3] = static_cast<CT>(1) - coeffs[0] - coeffs[1] - coeffs[2];         // x+2 位置的权重 (由归一化条件推导)
+}
+
+
+/**
+ * @brief 双三次插值图像缩放 (浮点版本)
+ * 
+ * @tparam T 图像数据类型 (如 float, uint8_t)
+ * @tparam CT 插值小数部分计算类型 (如 float, double)
+ * @tparam CH 通道数 (1,3,4)
+ * @param[in] src 源图像数据指针
+ * @param[out] dst 目标图像数据指针
+ * @param[in] scale 缩放比例 (x: src_w / dst_w, y: src_h / dst_h)
+ * @param[in] ssize 源图像尺寸
+ * @param[in] sstride 源图像行宽度 (以元素为单位)
+ * @param[in] dsize 目标图像尺寸
+ * @param[in] dstride 目标图像行宽度 (以元素为单位)
+ * @param[in] dst_N 目标图像总像素数 (dst_h * dst_w)
+ */
+template<typename T, typename CT, int CH>
+__global__ void resize_bicubic_kernel(const T *src, T *dst, const double2 scale, const int2 ssize, const int sstride,
+                                      const int2 dsize, const int dstride, const int dst_N)
+{
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= dst_N)
+        return;
+
+    int2 dst_coord;
+    dst_coord.x = idx % dsize.x;
+    dst_coord.y = idx / dsize.x;
+
+    int2 s;  // 源图像中对应的整数坐标
+    using CT2 = make_vector2_t<CT>;
+    CT2 f;   // 小数部分, 用于插值权重计算
+    cal_interpolation<CT2>(dst_coord, scale, s, f);
+
+    CT alpha[4], beta[4]; // x/y 方向的 4 个三次插值系数
+    interpolateCubic<CT>(f.x, alpha);
+    interpolateCubic<CT>(f.y, beta);
+
+    const int dst_base = dst_coord.y * dstride + dst_coord.x * CH;
+
+#pragma unroll
+    for (int ch = 0; ch < CH; ++ch)
+    {
+        CT sum = 0;
+
+#pragma unroll
+        for (int j = 0; j < 4; ++j) // 遍历 y 方向 4 个采样点
+        {
+            int syj     = max(0, min(s.y + j - 1, ssize.y - 1)); // 边界裁剪
+            CT  row_sum = 0;
+
+#pragma unroll
+            for (int i = 0; i < 4; ++i) // 遍历 x 方向 4 个采样点
+            {
+                int sxi = max(0, min(s.x + i - 1, ssize.x - 1)); // 边界裁剪
+                row_sum += alpha[i] * src[syj * sstride + sxi * CH + ch];
+            }
+
+            sum += beta[j] * row_sum; // y 方向加权
+        }
+
+        dst[dst_base + ch] = saturate_cast<T>(sum); // 饱和截断到目标类型范围
+    }
+}
+
+/**
+ * @brief 双三次插值图像缩放, 定点计算版本 (uint8_t 专用)
+ * 
+ * @tparam CT 插值小数部分计算类型 (如 float, double)
+ * @tparam CH 通道数 (1,3,4)
+ * @param[in] src 源图像数据指针
+ * @param[out] dst 目标图像数据指针
+ * @param[in] scale 缩放比例 (x: src_w / dst_w, y: src_h / dst_h)
+ * @param[in] ssize 源图像尺寸
+ * @param[in] sstride 源图像行宽度 (以元素为单位)
+ * @param[in] dsize 目标图像尺寸
+ * @param[in] dstride 目标图像行宽度 (以元素为单位)
+ * @param[in] dst_N 目标图像总像素数 (dst_h * dst_w)
+ */
+template<typename CT, int CH>
+__global__ void u8_resize_bicubic_kernel(const uint8_t *src, uint8_t *dst, const double2 scale, const int2 ssize,
+                                         const int sstride, const int2 dsize, const int dstride, const int dst_N)
+{
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= dst_N)
+        return;
+
+    int2 dst_coord;
+    dst_coord.x = idx % dsize.x;
+    dst_coord.y = idx / dsize.x;
+
+    int2 s;  // 源图像中对应的整数坐标
+    using CT2 = make_vector2_t<CT>;
+    CT2 f;   // 小数部分
+    cal_interpolation<CT2>(dst_coord, scale, s, f);
+
+    CT alpha[4], beta[4]; // x/y 方向的 4 个三次插值系数 (浮点)
+    interpolateCubic<CT>(f.x, alpha);
+    interpolateCubic<CT>(f.y, beta);
+
+    // 将浮点插值系数量化为定点整数, 对齐 OpenCV 的定点计算方式
+    short ialpha[4], ibeta[4];
+#pragma unroll
+    for (int k = 0; k < 4; ++k)
+    {
+        ialpha[k] = saturate_cast<short>(alpha[k] * INTER_RESIZE_COEF_SCALE);
+        ibeta[k]  = saturate_cast<short>(beta[k] * INTER_RESIZE_COEF_SCALE);
+    }
+
+    const int dst_base = dst_coord.y * dstride + dst_coord.x * CH;
+
+#pragma unroll
+    for (int ch = 0; ch < CH; ++ch)
+    {
+        int sum = 0;
+
+#pragma unroll
+        for (int j = 0; j < 4; ++j) // 遍历 y 方向 4 个采样点
+        {
+            int syj     = max(0, min(s.y + j - 1, ssize.y - 1)); // 边界裁剪
+            int row_sum = 0;
+#pragma unroll
+            for (int i = 0; i < 4; ++i) // 遍历 x 方向 4 个采样点
+            {
+                int sxi = max(0, min(s.x + i - 1, ssize.x - 1)); // 边界裁剪
+                row_sum += ialpha[i] * src[syj * sstride + sxi * CH + ch];
+            }
+            sum += ibeta[j] * row_sum; // y 方向加权
+        }
+
+        // 定点结果还原: 加 DELTA 偏移后右移 SHIFT 位, 等效于四舍五入
+        dst[dst_base + ch] = saturate_cast<uint8_t>((sum + DELTA) >> SHIFT);
+    }
+}
+
+/**
+ * @brief 启动双线性插值 resize kernel 的统一入口
+ * 
+ * 根据 T 类型自动选择: uint8_t 使用定点版本, 其他类型使用浮点版本
+ * 
+ * @tparam T 图像数据类型
+ * @tparam CT 插值计算浮点类型
+ * @tparam C 通道数 (编译期常量)
+ */
 template<typename T, typename CT, int C>
 inline void launch_bilinear_kernel(const T *d_src, T *d_dst, const double2 &scale, const int2 &ssize, const int sstride,
                                    const int2 &dsize, const int dstride, const int dst_N, const int grid_size,
@@ -303,6 +467,38 @@ inline void launch_bilinear_kernel(const T *d_src, T *d_dst, const double2 &scal
     }
 }
 
+/**
+ * @brief 启动双三次插值 resize kernel 的统一入口
+ * 
+ * 根据 T 类型自动选择: uint8_t 使用定点版本, 其他类型使用浮点版本
+ * 
+ * @tparam T 图像数据类型
+ * @tparam CT 插值计算浮点类型
+ * @tparam C 通道数 (编译期常量)
+ */
+template<typename T, typename CT, int C>
+inline void launch_bicubic_kernel(const T *d_src, T *d_dst, const double2 &scale, const int2 &ssize, const int sstride,
+                                  const int2 &dsize, const int dstride, const int dst_N, const int grid_size,
+                                  const int block_size, cudaStream_t stream)
+{
+    if constexpr (std::is_same_v<T, uint8_t>)
+    {
+        u8_resize_bicubic_kernel<CT, C>
+            <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
+    }
+    else
+    {
+        resize_bicubic_kernel<T, CT, C>
+            <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
+    }
+}
+
+/**
+ * @brief 双线性插值 resize 入口, 根据通道数分发到对应的 kernel 模板实例
+ * 
+ * @tparam T 图像数据类型
+ * @tparam CT 插值计算浮点类型
+ */
 template<typename T, typename CT>
 void resize_bilinear(const T *d_src, T *d_dst, const double2 &scale, const int2 &ssize, const int sstride,
                      const int2 &dsize, const int dstride, const int CH, const int dst_N, const int grid_size,
@@ -327,6 +523,42 @@ void resize_bilinear(const T *d_src, T *d_dst, const double2 &scale, const int2 
     }
 }
 
+/**
+ * @brief 双三次插值 resize 入口, 根据通道数分发到对应的 kernel 模板实例
+ * 
+ * @tparam T 图像数据类型
+ * @tparam CT 插值计算浮点类型
+ */
+template<typename T, typename CT>
+void resize_bicubic(const T *d_src, T *d_dst, const double2 &scale, const int2 &ssize, const int sstride,
+                    const int2 &dsize, const int dstride, const int CH, const int dst_N, const int grid_size,
+                    const int block_size, cudaStream_t stream)
+{
+    switch (CH)
+    {
+    case 1:
+        launch_bicubic_kernel<T, CT, 1>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N, grid_size,
+                                        block_size, stream);
+        break;
+    case 3:
+        launch_bicubic_kernel<T, CT, 3>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N, grid_size,
+                                        block_size, stream);
+        break;
+    case 4:
+        launch_bicubic_kernel<T, CT, 4>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N, grid_size,
+                                        block_size, stream);
+        break;
+    default:
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "Channels must be 1/3/4");
+    }
+}
+
+/**
+ * @brief 最近邻插值 resize 入口, 根据通道数分发到对应的 kernel 模板实例
+ * 
+ * @tparam T 图像数据类型
+ * @tparam CT 插值计算浮点类型
+ */
 template<typename T, typename CT>
 void resize_nearest(const T *d_src, T *d_dst, const double2 &scale, const int2 &ssize, const int sstride,
                     const int2 &dsize, const int dstride, const int CH, const int dst_N, const int grid_size,
@@ -351,7 +583,20 @@ void resize_nearest(const T *d_src, T *d_dst, const double2 &scale, const int2 &
     }
 }
 
-// ResizeImpl::RunResize 实现
+/**
+ * @brief Resize 操作的主入口, 根据插值方法调用对应的 resize 实现
+ * 
+ * @tparam T 图像数据类型 (uint8_t 或 float)
+ * @param[in] d_src 源图像设备内存指针
+ * @param[out] d_dst 目标图像设备内存指针
+ * @param[in] ssize 源图像尺寸 (width, height)
+ * @param[in] sstride 源图像行宽度 (以元素为单位, 含 padding)
+ * @param[in] dsize 目标图像尺寸 (width, height)
+ * @param[in] dstride 目标图像行宽度 (以元素为单位, 含 padding)
+ * @param[in] CH 通道数 (1/3/4)
+ * @param[in] interpolation 插值方法 (cv::INTER_LINEAR / INTER_CUBIC / INTER_NEAREST)
+ * @param[in] stream CUDA 流
+ */
 template<typename T>
 void ResizeImpl<T>::RunResize(const T *d_src, T *d_dst, const int2 ssize, const int sstride, const int2 dsize,
                               const int dstride, const int CH, const int interpolation, cudaStream_t stream)
@@ -359,19 +604,26 @@ void ResizeImpl<T>::RunResize(const T *d_src, T *d_dst, const int2 ssize, const 
     // 计算缩放比例和网格参数
     // 注意此处不直接用 ssize / dsize, 因为可能由于精度问题导致和 OpenCV 存在精度差异, 特别是对于 LINE_NEAREST
     double2 scale;
-    scale.x = 1.0 / (static_cast<double>(dsize.x) / ssize.x); 
+    scale.x = 1.0 / (static_cast<double>(dsize.x) / ssize.x);
     scale.y = 1.0 / (static_cast<double>(dsize.y) / ssize.y);
 
-    const int dst_N      = dsize.x * dsize.y;
-    const int block_size = 256;
-    const int grid_size  = (dst_N + block_size - 1) / block_size;
+    const int dst_N      = dsize.x * dsize.y;  // 目标图像总像素数
+    const int block_size = 256;                  // 每个 CUDA 线程块的线程数
+    const int grid_size  = (dst_N + block_size - 1) / block_size; // 向上取整计算所需线程块数
 
+    // 根据插值方法选择对应的 resize 实现
     switch (interpolation)
     {
     case cv::INTER_LINEAR:
     {
         resize_bilinear<T, float>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, CH, dst_N, grid_size, block_size,
                                   stream);
+        break;
+    }
+    case cv::INTER_CUBIC:
+    {
+        resize_bicubic<T, float>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, CH, dst_N, grid_size, block_size,
+                                 stream);
         break;
     }
     case cv::INTER_NEAREST:
@@ -383,12 +635,11 @@ void ResizeImpl<T>::RunResize(const T *d_src, T *d_dst, const int2 ssize, const 
     default:
     {
         throw Exception(Status::ERROR_NOT_IMPLEMENTED, "Interpolation method not implemented");
-        break;
     }
     }
 }
 
-// 显式实例化
+// 显式模板实例化: uint8_t 和 float 两种图像数据类型
 template void ResizeImpl<uint8_t>::RunResize(const uint8_t *, uint8_t *, const int2, const int, const int2, const int,
                                              const int, const int, cudaStream_t);
 template void ResizeImpl<float>::RunResize(const float *, float *, const int2, const int, const int2, const int,
