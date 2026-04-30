@@ -197,7 +197,7 @@ __global__ void u8_resize_bilinear_kernel(const uint8_t *src, uint8_t *dst, cons
 
     short2 beta;
     beta.x = saturate_cast<short>((1.0f - f.y) * (float)INTER_RESIZE_COEF_SCALE); // 上权重
-    beta.y = INTER_RESIZE_COEF_SCALE - beta.x;                                     // 下权重
+    beta.y = INTER_RESIZE_COEF_SCALE - beta.x;                                    // 下权重
 
     // 获取源数据指针
     uint8_t *row0 = const_cast<uint8_t *>(src) + s.y * sstride;
@@ -288,7 +288,6 @@ __global__ void resize_nearest_kernel(const T *src, T *dst, const double2 scale,
     }
 }
 
-
 /**
  * @brief 三次插值系数计算 (Keys cubic, A=-0.75, 与 OpenCV 一致)
  * 
@@ -302,11 +301,10 @@ __device__ __forceinline__ void interpolateCubic(CT x, CT coeffs[4])
     const CT A = static_cast<CT>(-0.75); // Keys cubic 参数, OpenCV 默认值
 
     coeffs[0] = ((A * (x + 1) - 5 * A) * (x + 1) + 8 * A) * (x + 1) - 4 * A; // x-1 位置的权重
-    coeffs[1] = ((A + 2) * x - (A + 3)) * x * x + 1;                          // x   位置的权重
-    coeffs[2] = ((A + 2) * (1 - x) - (A + 3)) * (1 - x) * (1 - x) + 1;        // x+1 位置的权重
-    coeffs[3] = static_cast<CT>(1) - coeffs[0] - coeffs[1] - coeffs[2];         // x+2 位置的权重 (由归一化条件推导)
+    coeffs[1] = ((A + 2) * x - (A + 3)) * x * x + 1;                         // x   位置的权重
+    coeffs[2] = ((A + 2) * (1 - x) - (A + 3)) * (1 - x) * (1 - x) + 1;       // x+1 位置的权重
+    coeffs[3] = static_cast<CT>(1) - coeffs[0] - coeffs[1] - coeffs[2];      // x+2 位置的权重 (由归一化条件推导)
 }
-
 
 /**
  * @brief 双三次插值图像缩放 (浮点版本)
@@ -335,9 +333,9 @@ __global__ void resize_bicubic_kernel(const T *src, T *dst, const double2 scale,
     dst_coord.x = idx % dsize.x;
     dst_coord.y = idx / dsize.x;
 
-    int2 s;  // 源图像中对应的整数坐标
+    int2 s; // 源图像中对应的整数坐标
     using CT2 = make_vector2_t<CT>;
-    CT2 f;   // 小数部分, 用于插值权重计算
+    CT2 f; // 小数部分, 用于插值权重计算
     cal_interpolation<CT2>(dst_coord, scale, s, f);
 
     CT alpha[4], beta[4]; // x/y 方向的 4 个三次插值系数
@@ -397,9 +395,9 @@ __global__ void u8_resize_bicubic_kernel(const uint8_t *src, uint8_t *dst, const
     dst_coord.x = idx % dsize.x;
     dst_coord.y = idx / dsize.x;
 
-    int2 s;  // 源图像中对应的整数坐标
+    int2 s; // 源图像中对应的整数坐标
     using CT2 = make_vector2_t<CT>;
-    CT2 f;   // 小数部分
+    CT2 f; // 小数部分
     cal_interpolation<CT2>(dst_coord, scale, s, f);
 
     CT alpha[4], beta[4]; // x/y 方向的 4 个三次插值系数 (浮点)
@@ -441,7 +439,6 @@ __global__ void u8_resize_bicubic_kernel(const uint8_t *src, uint8_t *dst, const
     }
 }
 
-
 /**
  * @brief Lanczos4 插值的预计算三角函数系数表 (常量内存)
  * 
@@ -450,14 +447,14 @@ __global__ void u8_resize_bicubic_kernel(const uint8_t *src, uint8_t *dst, const
  * cs[i] = {sin((i-3)*PI/4) 的系数, cos((i-3)*PI/4) 的系数}
  */
 __constant__ double cs[8][2] = {
-    {                                  1,                                   0},  // i=0: sin(0)
-    {-0.70710678118654752440084436210485, -0.70710678118654752440084436210485},  // i=1: sin(-PI/4)
-    {                                  0,                                   1},  // i=2: sin(-PI/2)
-    { 0.70710678118654752440084436210485, -0.70710678118654752440084436210485},  // i=3: sin(-3PI/4)
-    {                                 -1,                                   0},  // i=4: sin(-PI)
-    { 0.70710678118654752440084436210485,  0.70710678118654752440084436210485},  // i=5: sin(-5PI/4)
-    {                                  0,                                  -1},  // i=6: sin(-3PI/2)
-    {-0.70710678118654752440084436210485,  0.70710678118654752440084436210485}   // i=7: sin(-7PI/4)
+    {                                  1,                                   0}, // i=0: sin(0)
+    {-0.70710678118654752440084436210485, -0.70710678118654752440084436210485}, // i=1: sin(-PI/4)
+    {                                  0,                                   1}, // i=2: sin(-PI/2)
+    { 0.70710678118654752440084436210485, -0.70710678118654752440084436210485}, // i=3: sin(-3PI/4)
+    {                                 -1,                                   0}, // i=4: sin(-PI)
+    { 0.70710678118654752440084436210485,  0.70710678118654752440084436210485}, // i=5: sin(-5PI/4)
+    {                                  0,                                  -1}, // i=6: sin(-3PI/2)
+    {-0.70710678118654752440084436210485,  0.70710678118654752440084436210485}  // i=7: sin(-7PI/4)
 };
 
 /**
@@ -530,9 +527,9 @@ __global__ void resize_lanczos_kernel(const T *src, T *dst, const double2 scale,
     dst_coord.x = idx % dsize.x;
     dst_coord.y = idx / dsize.x;
 
-    int2 s;  // 源图像中对应的整数坐标
+    int2 s; // 源图像中对应的整数坐标
     using CT2 = make_vector2_t<CT>;
-    CT2 f;   // 小数部分, 用于插值权重计算
+    CT2 f; // 小数部分, 用于插值权重计算
     cal_interpolation<CT2>(dst_coord, scale, s, f);
 
     // 计算 Lanczos4 插值权重 (8 个采样点)
@@ -593,9 +590,9 @@ __global__ void u8_resize_lanczos_kernel(const uint8_t *src, uint8_t *dst, const
     dst_coord.x = idx % dsize.x;
     dst_coord.y = idx / dsize.x;
 
-    int2 s;  // 源图像中对应的整数坐标
+    int2 s; // 源图像中对应的整数坐标
     using CT2 = make_vector2_t<CT>;
-    CT2 f;   // 小数部分
+    CT2 f; // 小数部分
     cal_interpolation<CT2>(dst_coord, scale, s, f);
 
     CT alpha[8], beta[8]; // x/y 方向的 8 个 Lanczos4 插值系数 (浮点)
@@ -636,6 +633,439 @@ __global__ void u8_resize_lanczos_kernel(const uint8_t *src, uint8_t *dst, const
 
         // 定点结果还原: 加 DELTA 偏移后右移 SHIFT 位, 等效于四舍五入
         dst[dst_base + ch] = saturate_cast<uint8_t>((sum + DELTA) >> SHIFT);
+    }
+}
+
+/**
+ * @brief 计算 AREA 插值的源图像采样区域
+ * 
+ * 将目标像素 (dst_coord) 映射回源图像坐标，确定参与加权的源像素范围
+ * 
+ * @tparam CT 计算精度类型 (float 或 double)
+ * @param[in] ssize 源图像尺寸
+ * @param[in] dst_coord 目标像素坐标
+ * @param[in] scale 缩放比例 (x: src_w / dst_w, y: src_h / dst_h)
+ * @param[out] fs1 目标像素左上角在源图中的浮点坐标
+ * @param[out] fs2 目标像素右下角在源图中的浮点坐标
+ * @param[out] cell 实际采样区域的宽高 (处理边界时可能小于 scale)
+ * @param[out] s1 采样区域起始整数坐标 (向上取整)
+ * @param[out] s2 采样区域结束整数坐标 (向下取整)
+ */
+template<typename CT>
+__device__ __forceinline__ void cal_area_interpolation(const int2 ssize, const int2 dst_coord, const double2 scale,
+                                                       make_vector2_t<CT> &fs1, make_vector2_t<CT> &fs2,
+                                                       make_vector2_t<CT> &cell, int2 &s1, int2 &s2)
+{
+    // 目标像素映射到源图的左上角坐标
+    fs1.x = dst_coord.x * scale.x;
+    fs1.y = dst_coord.y * scale.y;
+    // 目标像素映射到源图的右下角坐标
+    fs2.x = fs1.x + scale.x;
+    fs2.y = fs1.y + scale.y;
+    // 实际采样区域大小：取 scale 和到图像边界的距离的较小值
+    cell.x = min(static_cast<CT>(scale.x), static_cast<CT>(ssize.x) - fs1.x);
+    cell.y = min(static_cast<CT>(scale.y), static_cast<CT>(ssize.y) - fs1.y);
+
+    // s1 向上取整 (ru = round up)，s2 向下取整 (rd = round down)
+    // 确保 s1..s2 范围内的像素完全落在采样区域内
+    if constexpr (std::is_same_v<CT, double>)
+    {
+        s1.x = __double2int_ru(fs1.x);
+        s1.y = __double2int_ru(fs1.y);
+        s2.x = __double2int_rd(fs2.x);
+        s2.y = __double2int_rd(fs2.y);
+    }
+    else
+    {
+        s1.x = __float2int_ru(fs1.x);
+        s1.y = __float2int_ru(fs1.y);
+        s2.x = __float2int_rd(fs2.x);
+        s2.y = __float2int_rd(fs2.y);
+    }
+
+    // 钳位到源图有效范围
+    s2.x = min(s2.x, ssize.x - 1);
+    s2.y = min(s2.y, ssize.y - 1);
+    // 确保 s1 <= s2 (当缩放比 < 1 时 s1 可能大于 s2)
+    s1.x = min(s1.x, s2.x);
+    s1.y = min(s1.y, s2.y);
+}
+
+/**
+ * @brief AREA 插值：单行水平方向加权求和
+ * 
+ * 对源图第 sy 行，在 [fsx1, fsx2) 范围内按面积比加权累加
+ * 三部分：左边缘部分像素、中间完整像素、右边缘部分像素
+ * 
+ * @tparam T 像素数据类型
+ * @tparam CT 计算精度类型 (float 或 double)
+ * @tparam CH 通道数 (1, 3, 4)
+ * @param[in] src 源图像数据指针
+ * @param[in] sy 当前处理的源图行号
+ * @param[in] src_w 源图像宽度
+ * @param[in] sstride 源图像行宽度 (以元素为单位)
+ * @param[in] ch 当前处理的通道索引
+ * @param[in] fsx1 采样区域左边界浮点坐标
+ * @param[in] fsx2 采样区域右边界浮点坐标
+ * @param[in] cell_width 采样区域宽度
+ * @param[in] sx1 采样区域起始整数坐标
+ * @param[in] sx2 采样区域结束整数坐标
+ * @return 水平方向加权求和结果
+ */
+template<typename T, typename CT, int CH>
+__device__ __forceinline__ CT HResizeArea(const T *src, const int sy, const int src_w, const int sstride, const int ch,
+                                          const CT fsx1, const CT fsx2, const CT cell_width, const int sx1,
+                                          const int sx2)
+{
+    CT row_sum = 0;
+
+    // 左边缘：s1 向上取整后，fsx1 到 s1 之间的部分像素
+    if (sx1 - fsx1 > static_cast<CT>(1e-3))
+    {
+        const int sx = sx1 - 1;
+        if (sx >= 0)
+        {
+            const CT alpha = (sx1 - fsx1) / cell_width;
+            row_sum += src[sy * sstride + sx * CH + ch] * alpha;
+        }
+    }
+
+    // 中间：完全落在采样区域内的像素，权重均为 1/cell_width
+    for (int sx = sx1; sx < sx2; ++sx)
+    {
+        row_sum += src[sy * sstride + sx * CH + ch] * (static_cast<CT>(1.0) / cell_width);
+    }
+
+    // 右边缘：s2 向下取整后，s2 到 fsx2 之间的部分像素
+    if (fsx2 - sx2 > static_cast<CT>(1e-3) && sx2 < src_w)
+    {
+        const CT alpha = min(fsx2 - sx2, static_cast<CT>(1.0)) / cell_width;
+        row_sum += src[sy * sstride + sx2 * CH + ch] * alpha;
+    }
+
+    return row_sum;
+}
+
+/**
+ * @brief AREA 插值图像缩放, 通用浮点版本
+ * 
+ * 对源像素按面积比加权求和，适用于非 uint8 类型
+ * 垂直方向同样分三部分：上边缘、中间完整行、下边缘
+ * 
+ * @tparam T 像素数据类型
+ * @tparam CT 计算精度类型 (float 或 double)
+ * @tparam CH 通道数 (1, 3, 4)
+ * @param[in] src 源图像数据指针
+ * @param[out] dst 目标图像数据指针
+ * @param[in] scale 缩放比例 (x: src_w / dst_w, y: src_h / dst_h)
+ * @param[in] ssize 源图像尺寸
+ * @param[in] sstride 源图像行宽度 (以元素为单位)
+ * @param[in] dsize 目标图像尺寸
+ * @param[in] dstride 目标图像行宽度 (以元素为单位)
+ * @param[in] dst_N 目标图像总像素数 (dst_h * dst_w)
+ */
+template<typename T, typename CT, int CH>
+__global__ void resize_area_kernel(const T *src, T *dst, const double2 scale, const int2 ssize, const int sstride,
+                                   const int2 dsize, const int dstride, const int dst_N)
+{
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= dst_N)
+        return;
+
+    int2 dst_coord;
+    dst_coord.x = idx % dsize.x;
+    dst_coord.y = idx / dsize.x;
+
+    using CT2 = make_vector2_t<CT>;
+    CT2  fs1, fs2, cell;
+    int2 s1, s2;
+    cal_area_interpolation<CT>(ssize, dst_coord, scale, fs1, fs2, cell, s1, s2);
+
+    const int dst_base = dst_coord.y * dstride + dst_coord.x * CH;
+
+#pragma unroll
+    for (int ch = 0; ch < CH; ++ch)
+    {
+        CT sum = 0;
+
+        // 上边缘：fs1.y 到 s1.y 之间的部分行
+        if (s1.y - fs1.y > static_cast<CT>(1e-3))
+        {
+            const int sy = s1.y - 1;
+            if (sy >= 0)
+            {
+                const CT beta = (s1.y - fs1.y) / cell.y;
+                sum += HResizeArea<T, CT, CH>(src, sy, ssize.x, sstride, ch, fs1.x, fs2.x, cell.x, s1.x, s2.x) * beta;
+            }
+        }
+
+        // 中间：完全落在采样区域内的行，垂直权重均为 1/cell.y
+        for (int sy = s1.y; sy < s2.y; ++sy)
+        {
+            const CT beta = static_cast<CT>(1.0) / cell.y;
+            sum += HResizeArea<T, CT, CH>(src, sy, ssize.x, sstride, ch, fs1.x, fs2.x, cell.x, s1.x, s2.x) * beta;
+        }
+
+        // 下边缘：s2.y 到 fs2.y 之间的部分行
+        if (fs2.y - s2.y > static_cast<CT>(1e-3) && s2.y < ssize.y)
+        {
+            const CT beta = (fs2.y - s2.y) / cell.y;
+            sum += HResizeArea<T, CT, CH>(src, s2.y, ssize.x, sstride, ch, fs1.x, fs2.x, cell.x, s1.x, s2.x) * beta;
+        }
+
+        dst[dst_base + ch] = saturate_cast<T>(sum);
+    }
+}
+
+/**
+ * @brief AREA 插值图像缩放, uint8_t 精确计算版本
+ * 
+ * 强制使用 double 精度计算，避免浮点累积误差
+ * 与 resize_area_kernel 逻辑相同，但下边缘 beta 额外 min(cell.y) 防止超出采样区域
+ * 
+ * @tparam CH 通道数 (1, 3, 4)
+ * @param[in] src 源图像数据指针
+ * @param[out] dst 目标图像数据指针
+ * @param[in] scale 缩放比例 (x: src_w / dst_w, y: src_h / dst_h)
+ * @param[in] ssize 源图像尺寸
+ * @param[in] sstride 源图像行宽度 (以元素为单位)
+ * @param[in] dsize 目标图像尺寸
+ * @param[in] dstride 目标图像行宽度 (以元素为单位)
+ * @param[in] dst_N 目标图像总像素数 (dst_h * dst_w)
+ */
+template<int CH>
+__global__ void u8_resize_area_exact_kernel(const uint8_t *src, uint8_t *dst, const double2 scale, const int2 ssize,
+                                            const int sstride, const int2 dsize, const int dstride, const int dst_N)
+{
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= dst_N)
+        return;
+
+    int2 dst_coord;
+    dst_coord.x = idx % dsize.x;
+    dst_coord.y = idx / dsize.x;
+
+    double2 fs1, fs2, cell;
+    int2    s1, s2;
+    cal_area_interpolation<double>(ssize, dst_coord, scale, fs1, fs2, cell, s1, s2);
+
+    const int dst_base = dst_coord.y * dstride + dst_coord.x * CH;
+
+#pragma unroll
+    for (int ch = 0; ch < CH; ++ch)
+    {
+        double sum = 0.0;
+
+        // 上边缘
+        if (s1.y - fs1.y > 1e-3)
+        {
+            const int sy = s1.y - 1;
+            if (sy >= 0)
+            {
+                const double beta = (s1.y - fs1.y) / cell.y;
+                sum += HResizeArea<uint8_t, double, CH>(src, sy, ssize.x, sstride, ch, fs1.x, fs2.x, cell.x, s1.x, s2.x)
+                     * beta;
+            }
+        }
+
+        // 中间完整行
+        for (int sy = s1.y; sy < s2.y; ++sy)
+        {
+            const double beta = 1.0 / cell.y;
+            sum += HResizeArea<uint8_t, double, CH>(src, sy, ssize.x, sstride, ch, fs1.x, fs2.x, cell.x, s1.x, s2.x)
+                 * beta;
+        }
+
+        // 下边缘：额外 min(cell.y) 防止 beta 超过 1.0
+        if (fs2.y - s2.y > 1e-3)
+        {
+            const double beta = min(min(fs2.y - s2.y, 1.0), cell.y) / cell.y;
+            sum += HResizeArea<uint8_t, double, CH>(src, s2.y, ssize.x, sstride, ch, fs1.x, fs2.x, cell.x, s1.x, s2.x)
+                 * beta;
+        }
+
+        dst[dst_base + ch] = saturate_cast<uint8_t>(sum);
+    }
+}
+
+/**
+ * @brief 计算 AREA 插值退化双线性模式的插值参数
+ * 
+ * 当缩放比 < 1 (即放大) 时，AREA 退化为双线性插值
+ * 
+ * @param[in] ssize 源图像尺寸
+ * @param[in] dst_coord 目标像素坐标
+ * @param[in] scale 缩放比例 (x: src_w / dst_w, y: src_h / dst_h)
+ * @param[out] s 左上角源像素整数坐标
+ * @param[out] f 双线性插值的小数权重 (0~1)
+ * @param[out] s1 右下角源像素整数坐标 (s+1)
+ */
+__device__ __forceinline__ void cal_area_bilinear_interpolation(const int2 ssize, const int2 dst_coord,
+                                                                const double2 scale, int2 &s, float2 &f, int2 &s1)
+{
+    // 目标像素映射到源图坐标 (scale = src/dst，放大时 scale < 1)
+    const double2 src_coord = {dst_coord.x * scale.x, dst_coord.y * scale.y};
+
+    // 取左上角整数坐标
+    s.x = __double2int_rd(src_coord.x);
+    s.y = __double2int_rd(src_coord.y);
+
+    // 计算插值小数部分：目标像素右边缘 - 源像素右边缘 在源图中的距离
+    const float fxf = static_cast<float>((dst_coord.x + 1.0) - (s.x + 1.0) / scale.x);
+    const float fyf = static_cast<float>((dst_coord.y + 1.0) - (s.y + 1.0) / scale.y);
+
+    // 取小数部分作为双线性权重
+    f.x = fxf <= 0.f ? 0.f : fxf - __float2int_rd(fxf);
+    f.y = fyf <= 0.f ? 0.f : fyf - __float2int_rd(fyf);
+
+    // 边界处理：超出源图范围时钳位并置零权重
+    if (s.x < 0)
+    {
+        s.x = 0;
+        f.x = 0;
+    }
+    else if (s.x >= ssize.x - 1)
+    {
+        s.x = ssize.x - 1;
+        f.x = 0;
+    }
+
+    if (s.y < 0)
+    {
+        s.y = 0;
+        f.y = 0;
+    }
+    else if (s.y >= ssize.y - 1)
+    {
+        s.y = ssize.y - 1;
+        f.y = 0;
+    }
+
+    // 右下角像素坐标，钳位到源图边界
+    s1.x = min(s.x + 1, ssize.x - 1);
+    s1.y = min(s.y + 1, ssize.y - 1);
+}
+
+/**
+ * @brief AREA 退化双线性插值图像缩放, 通用浮点版本
+ * 
+ * 缩放比 < 1 (即放大) 时使用，取 2x2 邻域像素按双线性权重加权
+ * 
+ * @tparam T 像素数据类型
+ * @tparam CT 计算精度类型 (float 或 double)
+ * @tparam CH 通道数 (1, 3, 4)
+ * @param[in] src 源图像数据指针
+ * @param[out] dst 目标图像数据指针
+ * @param[in] scale 缩放比例 (x: src_w / dst_w, y: src_h / dst_h)
+ * @param[in] ssize 源图像尺寸
+ * @param[in] sstride 源图像行宽度 (以元素为单位)
+ * @param[in] dsize 目标图像尺寸
+ * @param[in] dstride 目标图像行宽度 (以元素为单位)
+ * @param[in] dst_N 目标图像总像素数 (dst_h * dst_w)
+ */
+template<typename T, typename CT, int CH>
+__global__ void resize_area_bilinear_kernel(const T *src, T *dst, const double2 scale, const int2 ssize,
+                                            const int sstride, const int2 dsize, const int dstride, const int dst_N)
+{
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= dst_N)
+        return;
+
+    int2 dst_coord;
+    dst_coord.x = idx % dsize.x;
+    dst_coord.y = idx / dsize.x;
+
+    int2 s, s1;
+    using CT4 = make_vector4_t<CT>;
+    float2 f;
+    cal_area_bilinear_interpolation(ssize, dst_coord, scale, s, f, s1);
+
+    // 双线性插值 4 个权重：左上、右上、左下、右下
+    CT4 w;
+    w.x = (1 - f.x) * (1 - f.y);
+    w.y = f.x * (1 - f.y);
+    w.z = (1 - f.x) * f.y;
+    w.w = f.x * f.y;
+
+    // 2x2 邻域像素指针
+    const T *v1 = src + s.y * sstride + s.x * CH;   // 左上
+    const T *v2 = src + s.y * sstride + s1.x * CH;  // 右上
+    const T *v3 = src + s1.y * sstride + s.x * CH;  // 左下
+    const T *v4 = src + s1.y * sstride + s1.x * CH; // 右下
+
+    const int dst_base = dst_coord.y * dstride + dst_coord.x * CH;
+
+#pragma unroll
+    for (int i = 0; i < CH; ++i)
+    {
+        const CT v        = w.x * v1[i] + w.y * v2[i] + w.z * v3[i] + w.w * v4[i];
+        dst[dst_base + i] = saturate_cast<T>(v);
+    }
+}
+
+/**
+ * @brief AREA 退化双线性插值图像缩放, 定点计算版本 (uint8_t 专用)
+ * 
+ * 使用定点数运算 (INTER_RESIZE_COEF_SCALE) 替代浮点，提升 uint8 性能
+ * 先水平方向加权得到两行中间值，再垂直方向加权得到最终结果
+ * 
+ * @tparam CT 插值小数部分计算类型 (如 float, double)
+ * @tparam CH 通道数 (1, 3, 4)
+ * @param[in] src 源图像数据指针
+ * @param[out] dst 目标图像数据指针
+ * @param[in] scale 缩放比例 (x: src_w / dst_w, y: src_h / dst_h)
+ * @param[in] ssize 源图像尺寸
+ * @param[in] sstride 源图像行宽度 (以元素为单位)
+ * @param[in] dsize 目标图像尺寸
+ * @param[in] dstride 目标图像行宽度 (以元素为单位)
+ * @param[in] dst_N 目标图像总像素数 (dst_h * dst_w)
+ */
+template<typename CT, int CH>
+__global__ void u8_resize_area_bilinear_kernel(const uint8_t *src, uint8_t *dst, const double2 scale, const int2 ssize,
+                                               const int sstride, const int2 dsize, const int dstride, const int dst_N)
+{
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= dst_N)
+        return;
+
+    int2 dst_coord;
+    dst_coord.x = idx % dsize.x;
+    dst_coord.y = idx / dsize.x;
+
+    int2   s, s1;
+    float2 f;
+    cal_area_bilinear_interpolation(ssize, dst_coord, scale, s, f, s1);
+
+    // 水平方向插值系数 (定点数)
+    short2 alpha;
+    alpha.x = saturate_cast<short>((1.0f - f.x) * static_cast<float>(INTER_RESIZE_COEF_SCALE));
+    alpha.y = INTER_RESIZE_COEF_SCALE - alpha.x;
+
+    // 垂直方向插值系数 (定点数)
+    short2 beta;
+    beta.x = saturate_cast<short>((1.0f - f.y) * static_cast<float>(INTER_RESIZE_COEF_SCALE));
+    beta.y = INTER_RESIZE_COEF_SCALE - beta.x;
+
+    // 上下两行源像素起始指针
+    const uint8_t *row0 = src + s.y * sstride;
+    const uint8_t *row1 = src + s1.y * sstride;
+
+    const int dst_base = dst_coord.y * dstride + dst_coord.x * CH;
+
+#pragma unroll
+    for (int i = 0; i < CH; ++i)
+    {
+        // 水平方向：分别对上下两行加权
+        int2 hval;
+        hval.x = row0[s.x * CH + i] * alpha.x + row0[s1.x * CH + i] * alpha.y;
+        hval.y = row1[s.x * CH + i] * alpha.x + row1[s1.x * CH + i] * alpha.y;
+
+        // 垂直方向：对水平中间结果加权，>>4 对齐，>>16 取高位，+2 四舍五入，>>2 除以 4
+        int2 term;
+        term.x = (beta.x * (hval.x >> 4)) >> 16;
+        term.y = (beta.y * (hval.y >> 4)) >> 16;
+
+        dst[dst_base + i] = static_cast<uint8_t>((term.x + term.y + 2) >> 2);
     }
 }
 
@@ -714,6 +1144,34 @@ inline void launch_lanczos_kernel(const T *d_src, T *d_dst, const double2 &scale
     {
         resize_lanczos_kernel<T, CT, C>
             <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
+    }
+}
+
+template<typename T, typename CT, int C>
+inline void launch_area_kernel(const T *d_src, T *d_dst, const double2 &scale, const int2 &ssize, const int sstride,
+                               const int2 &dsize, const int dstride, const int dst_N, const int grid_size,
+                               const int block_size, cudaStream_t stream)
+{
+    const bool is_downscale = scale.x >= 1.0 && scale.y >= 1.0;
+
+    if (!is_downscale)
+    {
+        resize_area_bilinear_kernel<T, float, C>
+            <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
+        return;
+    }
+    else
+    {
+        if constexpr (std::is_same_v<T, uint8_t>)
+        {
+            u8_resize_area_exact_kernel<C>
+                <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
+        }
+        else
+        {
+            resize_area_kernel<T, CT, C>
+                <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
+        }
     }
 }
 
@@ -807,6 +1265,30 @@ void resize_nearest(const T *d_src, T *d_dst, const double2 &scale, const int2 &
     }
 }
 
+template<typename T, typename CT>
+void resize_area(const T *d_src, T *d_dst, const double2 &scale, const int2 &ssize, const int sstride,
+                 const int2 &dsize, const int dstride, const int CH, const int dst_N, const int grid_size,
+                 const int block_size, cudaStream_t stream)
+{
+    switch (CH)
+    {
+    case 1:
+        launch_area_kernel<T, CT, 1>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N, grid_size, block_size,
+                                     stream);
+        break;
+    case 3:
+        launch_area_kernel<T, CT, 3>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N, grid_size, block_size,
+                                     stream);
+        break;
+    case 4:
+        launch_area_kernel<T, CT, 4>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N, grid_size, block_size,
+                                     stream);
+        break;
+    default:
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "Channels must be 1/3/4");
+    }
+}
+
 /**
  * @brief Lanczos4 插值 resize 入口, 根据通道数分发到对应的 kernel 模板实例
  * 
@@ -861,8 +1343,8 @@ void ResizeImpl<T>::RunResize(const T *d_src, T *d_dst, const int2 ssize, const 
     scale.x = 1.0 / (static_cast<double>(dsize.x) / ssize.x);
     scale.y = 1.0 / (static_cast<double>(dsize.y) / ssize.y);
 
-    const int dst_N      = dsize.x * dsize.y;  // 目标图像总像素数
-    const int block_size = 256;                  // 每个 CUDA 线程块的线程数
+    const int dst_N      = dsize.x * dsize.y;                     // 目标图像总像素数
+    const int block_size = 256;                                   // 每个 CUDA 线程块的线程数
     const int grid_size  = (dst_N + block_size - 1) / block_size; // 向上取整计算所需线程块数
 
     // 根据插值方法选择对应的 resize 实现
@@ -884,6 +1366,12 @@ void ResizeImpl<T>::RunResize(const T *d_src, T *d_dst, const int2 ssize, const 
     {
         resize_nearest<T, double>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, CH, dst_N, grid_size, block_size,
                                   stream);
+        break;
+    }
+    case cv::INTER_AREA:
+    {
+        resize_area<T, float>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, CH, dst_N, grid_size, block_size,
+                              stream);
         break;
     }
     case cv::INTER_LANCZOS4:
