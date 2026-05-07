@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // 根据编译选项决定是否暴露文件、行号、代码调用
 #if IRT_EXPOSE_CODE
