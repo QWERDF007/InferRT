@@ -17,3 +17,10 @@ endif()
 # HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OpenSSL (64-bit)_is1
 # 这是 Inno Setup 安装程序（OpenSSL Windows 安装包使用的安装器）在注册表中记录的安装路径。
 add_subdirectory(vtest)
+
+# benchmark
+if (${PROJECT_NAME_UPPER}_BUILD_BENCHMARK)
+    set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "Disable benchmark testing.")
+    set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "Disable benchmark install to avoid overwriting vendor install.")
+    add_subdirectory(benchmark)
+endif()

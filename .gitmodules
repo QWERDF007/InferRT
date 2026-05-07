@@ -6,3 +6,7 @@
 	path = 3rdparty/vtest
 	url = https://github.com/QWERDF007/vtest.git
 	branch = main
+[submodule "3rdparty/benchmark"]
+	path = 3rdparty/benchmark
+	url = https://github.com/google/benchmark.git
+	branch = main

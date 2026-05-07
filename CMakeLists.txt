@@ -29,6 +29,7 @@ option(${PROJECT_NAME_UPPER}_BUILD_TESTS "Enable testsuite" ON)
 option(${PROJECT_NAME_UPPER}_BUILD_DOCS "Build Docs" OFF)
 option(${PROJECT_NAME_UPPER}_BUILD_SAMPLES "Build Samples" ON)
 option(${PROJECT_NAME_UPPER}_ENABLE_SANITIZER "Enabled sanitized build" OFF)
+option(${PROJECT_NAME_UPPER}_BUILD_BENCHMARK "Build Benchmark" ON)
 
 # 配置构建树
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake" )
@@ -39,6 +40,7 @@ include(ConfigCompiler)
 include(ConfigCUDA)
 include(ConfigOpenCV)
 include(AddPluginLibrary)
+include(AddSample)
 include(ConfigTensorRT)
 
 # 第三方库
@@ -55,6 +57,10 @@ endif()
 # 构建示例
 if (${PROJECT_NAME_UPPER}_BUILD_SAMPLES)
     add_subdirectory(samples)
+endif()
+
+if (${PROJECT_NAME_UPPER}_BUILD_BENCHMARK)
+    add_subdirectory(benchmark)
 endif()
 
 message(STATUS "")
