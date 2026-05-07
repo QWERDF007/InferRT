@@ -5,6 +5,8 @@
 #include <opencv2/opencv.hpp>
 #include <vtest/common/ValueTests.hpp>
 
+#include <type_traits>
+
 /**
  * @brief 多参数组合测试套件
  * 
@@ -17,11 +19,11 @@
  *
  * @note 此组合测试覆盖：极小图像、相同尺寸、极端上/下采样率(0.1,10)、多通道
  */
-_TEST_SUITE_P(MultiParamTest, vtest::ValueList<int>{10, 25, 100} * vtest::ValueList<int>{10, 25, 100}
-                                  * vtest::ValueList<int>{1, 3, 4}
-                                  * vtest::ValueList<double>{0.1, 0.3, 0.5, 1.3, 2.0, 10.0}
-                                  * vtest::ValueList<int>{cv::INTER_LINEAR, cv::INTER_NEAREST, cv::INTER_CUBIC,
-                                                          cv::INTER_LANCZOS4, cv::INTER_AREA});
+_TEST_SUITE_P(MultiParamTest,
+              vtest::ValueList<int>{10, 25, 100} * vtest::ValueList<int>{10, 25, 100} * vtest::ValueList<int>{1, 3, 4}
+                  * vtest::ValueList<double>{0.1, 0.3, 0.5, 1.3, 2.0, 10.0}
+                  * vtest::ValueList<int>{cv::INTER_NEAREST, cv::INTER_LINEAR, cv::INTER_CUBIC, cv::INTER_AREA,
+                                          cv::INTER_LANCZOS4, cv::INTER_NEAREST_EXACT, cv::INTER_LINEAR_EXACT});
 
 // ============================================================================
 // 类型映射和调用器抽象
@@ -92,6 +94,25 @@ struct ResizeClassCaller
     }
 };
 
+static ::testing::AssertionResult AssertInferRTSuccess(int ret)
+{
+    if (ret == IRT_SUCCESS)
+    {
+        return ::testing::AssertionSuccess();
+    }
+
+    char msg[IRT_MAX_STATUS_MESSAGE_LENGTH] = {};
+    irt::PeekAtLastErrorMessage(msg, sizeof(msg));
+    return ::testing::AssertionFailure() << "ret=" << ret << " (" << irt::StatusGetName(static_cast<IRTStatus>(ret))
+                                         << "), last_error=" << msg;
+}
+
+template<typename T>
+bool ShouldSkipExactInterpolation(int interp)
+{
+    return std::is_same_v<T, float> && (interp == cv::INTER_NEAREST_EXACT || interp == cv::INTER_LINEAR_EXACT);
+}
+
 // ============================================================================
 // 公共测试逻辑
 // ============================================================================
@@ -118,6 +139,11 @@ struct ResizeClassCaller
 template<typename T, typename Caller>
 void runResizeTest(int src_w, int src_h, int ch, double scale, int interp, double max_diff)
 {
+    if (ShouldSkipExactInterpolation<T>(interp))
+    {
+        GTEST_SKIP() << "Skipping *_EXACT interpolation for float";
+    }
+
     const int dst_w = std::max(1, static_cast<int>(src_w * scale));
     const int dst_h = std::max(1, static_cast<int>(src_h * scale));
 
@@ -145,7 +171,7 @@ void runResizeTest(int src_w, int src_h, int ch, double scale, int interp, doubl
     // 执行 resize（通过 Caller 调用）
     Caller caller;
     int    ret = caller(d_src, d_dst, cv::Size(src_w, src_h), cv::Size(dst_w, dst_h), ch, interp, nullptr);
-    ASSERT_EQ(ret, IRT_SUCCESS);
+    ASSERT_TRUE(AssertInferRTSuccess(ret));
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     // 下载结果
@@ -438,7 +464,7 @@ TEST(ResizeFunctionEdgeCaseTest, ExtremeDownscale)
 
     int ret = irt::cvcuda::resize<uint8_t>(d_src, d_dst, cv::Size(src_w, src_h), cv::Size(dst_w, dst_h), ch,
                                            cv::INTER_LINEAR, nullptr);
-    ASSERT_EQ(ret, IRT_SUCCESS);
+    ASSERT_TRUE(AssertInferRTSuccess(ret));
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     cv::Mat dst(dst_h, dst_w, CV_8UC(ch));
@@ -476,7 +502,7 @@ TEST(ResizeFunctionEdgeCaseTest, ExtremeUpscale)
 
     int ret = irt::cvcuda::resize<uint8_t>(d_src, d_dst, cv::Size(src_w, src_h), cv::Size(dst_w, dst_h), ch,
                                            cv::INTER_LINEAR, nullptr);
-    ASSERT_EQ(ret, IRT_SUCCESS);
+    ASSERT_TRUE(AssertInferRTSuccess(ret));
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     cv::Mat dst(dst_h, dst_w, CV_8UC(ch));
@@ -515,7 +541,7 @@ TEST(ResizeFunctionEdgeCaseTest, AsymmetricScale)
 
     int ret = irt::cvcuda::resize<uint8_t>(d_src, d_dst, cv::Size(src_w, src_h), cv::Size(dst_w, dst_h), ch,
                                            cv::INTER_LINEAR, nullptr);
-    ASSERT_EQ(ret, IRT_SUCCESS);
+    ASSERT_TRUE(AssertInferRTSuccess(ret));
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     cv::Mat dst(dst_h, dst_w, CV_8UC(ch));
@@ -554,7 +580,7 @@ TEST(ResizeFunctionEdgeCaseTest, AsymmetricScaleReverse)
 
     int ret = irt::cvcuda::resize<uint8_t>(d_src, d_dst, cv::Size(src_w, src_h), cv::Size(dst_w, dst_h), ch,
                                            cv::INTER_LINEAR, nullptr);
-    ASSERT_EQ(ret, IRT_SUCCESS);
+    ASSERT_TRUE(AssertInferRTSuccess(ret));
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     cv::Mat dst(dst_h, dst_w, CV_8UC(ch));
@@ -597,7 +623,7 @@ TEST(ResizeClassEdgeCaseTest, ExtremeDownscale)
 
     irt::cvcuda::Resize<uint8_t> resize_op;
     int ret = resize_op(d_src, d_dst, cv::Size(src_w, src_h), cv::Size(dst_w, dst_h), ch, cv::INTER_LINEAR, nullptr);
-    ASSERT_EQ(ret, IRT_SUCCESS);
+    ASSERT_TRUE(AssertInferRTSuccess(ret));
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     cv::Mat dst(dst_h, dst_w, CV_8UC(ch));
@@ -635,7 +661,7 @@ TEST(ResizeClassEdgeCaseTest, ExtremeUpscale)
 
     irt::cvcuda::Resize<uint8_t> resize_op;
     int ret = resize_op(d_src, d_dst, cv::Size(src_w, src_h), cv::Size(dst_w, dst_h), ch, cv::INTER_LINEAR, nullptr);
-    ASSERT_EQ(ret, IRT_SUCCESS);
+    ASSERT_TRUE(AssertInferRTSuccess(ret));
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     cv::Mat dst(dst_h, dst_w, CV_8UC(ch));
@@ -674,7 +700,7 @@ TEST(ResizeClassEdgeCaseTest, AsymmetricScale)
 
     irt::cvcuda::Resize<uint8_t> resize_op;
     int ret = resize_op(d_src, d_dst, cv::Size(src_w, src_h), cv::Size(dst_w, dst_h), ch, cv::INTER_LINEAR, nullptr);
-    ASSERT_EQ(ret, IRT_SUCCESS);
+    ASSERT_TRUE(AssertInferRTSuccess(ret));
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     cv::Mat dst(dst_h, dst_w, CV_8UC(ch));
@@ -713,7 +739,7 @@ TEST(ResizeClassEdgeCaseTest, AsymmetricScaleReverse)
 
     irt::cvcuda::Resize<uint8_t> resize_op;
     int ret = resize_op(d_src, d_dst, cv::Size(src_w, src_h), cv::Size(dst_w, dst_h), ch, cv::INTER_LINEAR, nullptr);
-    ASSERT_EQ(ret, IRT_SUCCESS);
+    ASSERT_TRUE(AssertInferRTSuccess(ret));
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     cv::Mat dst(dst_h, dst_w, CV_8UC(ch));
@@ -755,7 +781,7 @@ TEST(ResizeFunctionEdgeCaseTest, ExtremeDownscaleFloat)
 
     int ret = irt::cvcuda::resize<float>(d_src, d_dst, cv::Size(src_w, src_h), cv::Size(dst_w, dst_h), ch,
                                          cv::INTER_LINEAR, nullptr);
-    ASSERT_EQ(ret, IRT_SUCCESS);
+    ASSERT_TRUE(AssertInferRTSuccess(ret));
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     cv::Mat dst(dst_h, dst_w, CV_32FC(ch));
@@ -792,7 +818,7 @@ TEST(ResizeClassEdgeCaseTest, ExtremeUpscaleFloat)
 
     irt::cvcuda::Resize<float> resize_op;
     int ret = resize_op(d_src, d_dst, cv::Size(src_w, src_h), cv::Size(dst_w, dst_h), ch, cv::INTER_LINEAR, nullptr);
-    ASSERT_EQ(ret, IRT_SUCCESS);
+    ASSERT_TRUE(AssertInferRTSuccess(ret));
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     cv::Mat dst(dst_h, dst_w, CV_32FC(ch));

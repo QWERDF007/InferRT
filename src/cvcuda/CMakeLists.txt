@@ -6,4 +6,5 @@ add_plugin_library(cvcuda
         cudart
         opencv_core
         inferrt_core
+        inferrt_util
 )

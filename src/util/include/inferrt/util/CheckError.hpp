@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file CheckError.hpp
  *
  * @brief 可扩展的错误处理框架, 将各种错误码转换成异常或者日志消息
@@ -74,7 +74,7 @@ inline bool CheckSucceeded(cudaError_t err)
  * @param err CUDA 错误码
  * @return 对应的 IRTStatus 状态码
  */
-IRTStatus TranslateError(cudaError_t err);
+INFERRT_UTIL_API IRTStatus TranslateError(cudaError_t err);
 
 /**
  * @brief 将 CUDA 错误码转换为字符串描述
@@ -82,14 +82,14 @@ IRTStatus TranslateError(cudaError_t err);
  * @param perrdescr 可选的输出参数，用于接收详细错误描述指针
  * @return 返回错误名称字符串（如 "cudaErrorInvalidValue"）
  */
-const char *ToString(cudaError_t err, const char **perrdescr = nullptr);
+INFERRT_UTIL_API const char *ToString(cudaError_t err, const char **perrdescr = nullptr);
 
 /**
  * @brief CUDA 错误预处理函数
  * @param err CUDA 错误码
  * @details 在错误检查之前调用，可用于清除 CUDA 错误状态等操作
  */
-void PreprocessError(cudaError_t err);
+INFERRT_UTIL_API void PreprocessError(cudaError_t err);
 
 // ============================================================================
 // 默认错误处理实现（模板）

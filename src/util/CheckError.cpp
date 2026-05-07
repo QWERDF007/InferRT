@@ -59,7 +59,7 @@ std::string FormatErrorMessage(const std::string_view &errname, const std::strin
     // 如果有完整的调用语句，直接打印完整语句（包括参数）
     if (!callstr.empty())
     {
-        ss << callstr;
+        ss << callstr << " - ";
     }
 
     ss << errname << " ]: ";

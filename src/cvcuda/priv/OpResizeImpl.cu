@@ -1,10 +1,11 @@
-#include "OpResizeImpl.hpp"
+﻿#include "OpResizeImpl.hpp"
 
 #include "saturate.cuh"
 #include "type.cuh"
 
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/cvcuda/OpResize.h>
+#include <inferrt/util/CheckError.hpp>
 #include <opencv2/opencv.hpp>
 
 namespace irt::cvcuda::priv {
@@ -1070,6 +1071,137 @@ __global__ void u8_resize_area_bilinear_kernel(const uint8_t *src, uint8_t *dst,
 }
 
 /**
+ * @brief 最近邻位精确插值图像缩放 (bit-exact nearest neighbor)
+ * 
+ * 使用 16 位定点数计算源像素坐标，保证与 OpenCV INTER_NEAREST_EXACT 结果一致
+ * 当缩放比为 2x 或 10x 时，额外偏移 +1 以匹配 OpenCV 行为
+ * 
+ * @tparam CT 插值小数部分计算类型 (如 float, double)
+ * @tparam CH 通道数 (1,3,4)
+ * @param[in] src 源图像数据指针
+ * @param[out] dst 目标图像数据指针
+ * @param[in] scale 缩放比例 (x: src_w / dst_w, y: src_h / dst_h)
+ * @param[in] ssize 源图像尺寸
+ * @param[in] sstride 源图像行宽度 (以元素为单位)
+ * @param[in] dsize 目标图像尺寸
+ * @param[in] dstride 目标图像行宽度 (以元素为单位)
+ * @param[in] dst_N 目标图像总像素数 (dst_h * dst_w)
+ */
+template<typename CT, int CH>
+__global__ void resize_nearest_bitexact_kernel(const uint8_t *src, uint8_t *dst, const double2 scale, const int2 ssize,
+                                               const int sstride, const int2 dsize, const int dstride, const int dst_N)
+{
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= dst_N)
+        return;
+
+    int2 dst_coord;
+    dst_coord.x = idx % dsize.x;
+    dst_coord.y = idx / dsize.x;
+
+    // 16 位定点缩放因子：((src_size << 16) + dst_size/2) / dst_size
+    const int2 ifactor  = {((ssize.x << 16) + dsize.x / 2) / dsize.x, ((ssize.y << 16) + dsize.y / 2) / dsize.y};
+    const int2 ifactor0 = {ifactor.x / 2 - 1, ifactor.y / 2 - 1}; // 偏移修正（使用中心像素坐标）
+
+    int2 s;
+    s.x = min((ifactor.x * dst_coord.x + ifactor0.x) >> 16, ssize.x - 1);
+    s.y = min((ifactor.y * dst_coord.y + ifactor0.y) >> 16, ssize.y - 1);
+
+    // OpenCV 特殊处理：2x 和 10x 缩放时额外偏移 +1
+    if (scale.x == 2 || scale.x == 10)
+    {
+        s.x += 1;
+    }
+
+    if (scale.y == 2 || scale.y == 10)
+    {
+        s.y += 1;
+    }
+
+    const int src_base = s.y * sstride + s.x * CH;
+    const int dst_base = dst_coord.y * dstride + dst_coord.x * CH;
+
+#pragma unroll
+    for (int i = 0; i < CH; ++i)
+    {
+        dst[dst_base + i] = src[src_base + i];
+    }
+}
+
+/**
+ * @brief 8 位定点数工具, 用于双线性位精确插值的定点系数计算
+ */
+struct ufixedpoint16
+{
+    static const int fixedShift = 8;
+
+    static __device__ __forceinline__ uint16_t toFixedPoint(double _val)
+    {
+        return _val > 0 ? (uint16_t)round(_val * double((1 << fixedShift))) : 0;
+    }
+};
+
+/**
+ * @brief 双线性位精确插值图像缩放 (bit-exact bilinear)
+ * 
+ * 使用 8 位定点数 (ufixedpoint16) 计算插值系数，保证与 OpenCV INTER_LINEAR_EXACT 结果一致
+ * 
+ * @tparam CT 插值小数部分计算类型 (如 float, double)
+ * @tparam CH 通道数 (1,3,4)
+ * @param[in] src 源图像数据指针
+ * @param[out] dst 目标图像数据指针
+ * @param[in] scale 缩放比例 (x: src_w / dst_w, y: src_h / dst_h)
+ * @param[in] ssize 源图像尺寸
+ * @param[in] sstride 源图像行宽度 (以元素为单位)
+ * @param[in] dsize 目标图像尺寸
+ * @param[in] dstride 目标图像行宽度 (以元素为单位)
+ * @param[in] dst_N 目标图像总像素数 (dst_h * dst_w)
+ */
+template<typename CT, int CH>
+__global__ void resize_bilinear_bitexact_kernel(const uint8_t *src, uint8_t *dst, const double2 scale, const int2 ssize,
+                                                const int sstride, const int2 dsize, const int dstride, const int dst_N)
+{
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= dst_N)
+        return;
+
+    int2 dst_coord;
+    dst_coord.x = idx % dsize.x;
+    dst_coord.y = idx / dsize.x;
+
+    int2 s, s1;
+    using CT2 = make_vector2_t<CT>;
+    CT2 f;
+    cal_bilinear_interpolation<CT2>(ssize, dst_coord, scale, s, f, s1);
+
+    // 定点插值系数: 将浮点小数部分量化为 8 位定点整数
+    uint16_t coeff_x1 = ufixedpoint16::toFixedPoint(f.x);
+    uint16_t coeff_x0 = 256 - coeff_x1;
+    uint16_t coeff_y1 = ufixedpoint16::toFixedPoint(f.y);
+    uint16_t coeff_y0 = 256 - coeff_y1;
+
+    const uint8_t *v1 = src + s.y * sstride + s.x * CH;
+    const uint8_t *v2 = src + s.y * sstride + s1.x * CH;
+    const uint8_t *v3 = src + s1.y * sstride + s.x * CH;
+    const uint8_t *v4 = src + s1.y * sstride + s1.x * CH;
+
+    const int dst_base = dst_coord.y * dstride + dst_coord.x * CH;
+
+    const uint32_t round_y = (1u << (ufixedpoint16::fixedShift * 2 - 1));
+
+#pragma unroll
+    for (int i = 0; i < CH; ++i)
+    {
+        uint32_t s0   = coeff_x0 * v1[i] + coeff_x1 * v2[i];
+        uint32_t s1v  = coeff_x0 * v3[i] + coeff_x1 * v4[i];
+        uint32_t temp = coeff_y0 * s0 + coeff_y1 * s1v;
+        uint16_t v    = (uint16_t)((temp + round_y) >> (ufixedpoint16::fixedShift * 2));
+
+        dst[dst_base + i] = saturate_cast<uint8_t>(int(v));
+    }
+}
+
+/**
  * @brief 启动双线性插值 resize kernel 的统一入口
  * 
  * 根据 T 类型自动选择: uint8_t 使用定点版本, 其他类型使用浮点版本
@@ -1265,6 +1397,66 @@ void resize_nearest(const T *d_src, T *d_dst, const double2 &scale, const int2 &
     }
 }
 
+/**
+ * @brief 最近邻位精确插值 resize 入口, 根据通道数分发到对应的 kernel 模板实例
+ * 
+ * @tparam T 图像数据类型
+ * @tparam CT 插值计算浮点类型
+ */
+template<typename CT>
+void resize_nearest_bitexact(const uint8_t *d_src, uint8_t *d_dst, const double2 &scale, const int2 &ssize,
+                             const int sstride, const int2 &dsize, const int dstride, const int CH, const int dst_N,
+                             const int grid_size, const int block_size, cudaStream_t stream)
+{
+    switch (CH)
+    {
+    case 1:
+        resize_nearest_bitexact_kernel<CT, 1>
+            <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
+        break;
+    case 3:
+        resize_nearest_bitexact_kernel<CT, 3>
+            <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
+        break;
+    case 4:
+        resize_nearest_bitexact_kernel<CT, 4>
+            <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
+        break;
+    default:
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "Channels must be 1/3/4");
+    }
+}
+
+/**
+ * @brief 双线性位精确插值 resize 入口, 根据通道数分发到对应的 kernel 模板实例
+ * 
+ * @tparam T 图像数据类型
+ * @tparam CT 插值计算浮点类型
+ */
+template<typename CT>
+void resize_bilinear_bitexact(const uint8_t *d_src, uint8_t *d_dst, const double2 &scale, const int2 &ssize,
+                              const int sstride, const int2 &dsize, const int dstride, const int CH, const int dst_N,
+                              const int grid_size, const int block_size, cudaStream_t stream)
+{
+    switch (CH)
+    {
+    case 1:
+        resize_bilinear_bitexact_kernel<CT, 1>
+            <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
+        break;
+    case 3:
+        resize_bilinear_bitexact_kernel<CT, 3>
+            <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
+        break;
+    case 4:
+        resize_bilinear_bitexact_kernel<CT, 4>
+            <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, dst_N);
+        break;
+    default:
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "Channels must be 1/3/4");
+    }
+}
+
 template<typename T, typename CT>
 void resize_area(const T *d_src, T *d_dst, const double2 &scale, const int2 &ssize, const int sstride,
                  const int2 &dsize, const int dstride, const int CH, const int dst_N, const int grid_size,
@@ -1368,6 +1560,32 @@ void ResizeImpl<T>::RunResize(const T *d_src, T *d_dst, const int2 ssize, const 
                                   stream);
         break;
     }
+    case cv::INTER_NEAREST_EXACT:
+    {
+        if constexpr (std::is_same_v<T, uint8_t>)
+        {
+            resize_nearest_bitexact<float>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, CH, dst_N, grid_size,
+                                           block_size, stream);
+        }
+        else
+        {
+            throw Exception(Status::ERROR_NOT_IMPLEMENTED, "INTER_NEAREST_EXACT is only supported for uint8_t");
+        }
+        break;
+    }
+    case cv::INTER_LINEAR_EXACT:
+    {
+        if constexpr (std::is_same_v<T, uint8_t>)
+        {
+            resize_bilinear_bitexact<float>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, CH, dst_N, grid_size,
+                                            block_size, stream);
+        }
+        else
+        {
+            throw Exception(Status::ERROR_NOT_IMPLEMENTED, "INTER_LINEAR_EXACT is only supported for uint8_t");
+        }
+        break;
+    }
     case cv::INTER_AREA:
     {
         resize_area<T, float>(d_src, d_dst, scale, ssize, sstride, dsize, dstride, CH, dst_N, grid_size, block_size,
@@ -1385,6 +1603,9 @@ void ResizeImpl<T>::RunResize(const T *d_src, T *d_dst, const int2 ssize, const 
         throw Exception(Status::ERROR_NOT_IMPLEMENTED, "Interpolation method not implemented");
     }
     }
+
+    // IRT_CHECK_THROW(cudaPeekAtLastError(), "Resize kernel launch failed: interpolation=%d ch=%d src=%dx%d dst=%dx%d",
+    //                 interpolation, CH, ssize.x, ssize.y, dsize.x, dsize.y);
 }
 
 // 显式模板实例化: uint8_t 和 float 两种图像数据类型
