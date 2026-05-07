@@ -41,6 +41,8 @@ include(ConfigCUDA)
 include(ConfigOpenCV)
 include(AddPluginLibrary)
 include(AddSample)
+include(AddTest)
+include(AddBenchmark)
 include(ConfigTensorRT)
 
 # 第三方库

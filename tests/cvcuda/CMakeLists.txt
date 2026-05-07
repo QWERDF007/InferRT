@@ -1,18 +1,9 @@
-set(TARGET_NAME inferrt_cvcuda_test)
-file(GLOB SRCS *.cpp)
-
-
-add_executable(${TARGET_NAME}
-    ${SRCS}
+add_inferrt_test(cvcuda
+    PRIVATE_LIBS
+        GTest::gtest_main
+        GTest::gmock
+        inferrt_core
+        inferrt_cvcuda
+        opencv_core
+        vtest
 )
-
-target_link_libraries(${TARGET_NAME} 
-PRIVATE
-    GTest::gtest_main GTest::gmock
-    inferrt_core inferrt_cvcuda
-    opencv_core
-    vtest
-)
-
-# 注册测试到 CTest
-add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME})
