@@ -16,8 +16,7 @@ WeightsMap loadWeights(const std::string &file)
     }
 
     int32_t count;
-    input >> count;
-    if (count <= 0)
+    if (!(input >> count) || count <= 0)
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Failed to read valid count of weights from file: %s",
                              file.c_str());
