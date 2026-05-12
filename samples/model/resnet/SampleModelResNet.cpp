@@ -37,10 +37,14 @@ int main(int argc, char *argv[])
         {
             std::cerr
                 << "Usage: " << argv[0]
-                << " <resnet18|resnet34|resnet50|resnet101|resnet152> <weights_file.wts> <image_path> [label_file]"
+                << " <resnet18|resnet34|resnet50|resnet101|resnet152|wide_resnet50_2|wide_resnet101_2>"
+                   " <weights_file.wts> <image_path> [label_file]"
                 << std::endl;
             std::cerr << "Example: " << argv[0] << " resnet18 resnet18.wts dog.jpg" << std::endl;
             std::cerr << "         " << argv[0] << " resnet50 resnet50.wts dog.jpg imagenet1000_clsidx_to_labels.txt"
+                      << std::endl;
+            std::cerr << "         " << argv[0]
+                      << " wide_resnet50_2 wide_resnet50_2.wts dog.jpg imagenet1000_clsidx_to_labels.txt"
                       << std::endl;
             std::cerr << "         " << argv[0] << " resnet152 resnet152.wts dog.jpg imagenet1000_clsidx_to_labels.txt"
                       << std::endl;

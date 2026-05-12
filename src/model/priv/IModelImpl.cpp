@@ -39,11 +39,9 @@ std::string BuildEngineFileName(const IModelImpl &impl, const std::string &weigh
         engine_file += impl.engineExtension();
     }
 
-    const auto &config      = impl.modelConfig();
-    const auto &input_shape = config.inputShape();
-    const auto  ext_pos     = engine_file.rfind(impl.engineExtension());
-    const auto  suffix = "." + std::to_string(input_shape.channels) + "x" + std::to_string(input_shape.height) + "x"
-                       + std::to_string(input_shape.width) + ".cls" + std::to_string(config.numClasses());
+    const auto &config  = impl.modelConfig();
+    const auto  ext_pos = engine_file.rfind(impl.engineExtension());
+    const auto  suffix  = impl.generateSuffix(config);
 
     if (ext_pos != std::string::npos)
     {
@@ -62,6 +60,13 @@ std::string BuildEngineFileName(const IModelImpl &impl, const std::string &weigh
 nvinfer1::ILogger::Severity IModelImpl::logLevel() const noexcept
 {
     return trt_params_.log_level;
+}
+
+std::string IModelImpl::generateSuffix(const IModelConfig &config) const noexcept
+{
+    const auto &input_shape = config.inputShape();
+    return "_" + std::to_string(input_shape.channels) + "x" + std::to_string(input_shape.height) + "x"
+         + std::to_string(input_shape.width) + "_" + std::to_string(config.numClasses());
 }
 
 void IModelImpl::setModelConfig(std::unique_ptr<IModelConfig> config)

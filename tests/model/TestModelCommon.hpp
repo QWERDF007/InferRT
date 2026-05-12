@@ -4,11 +4,7 @@
 
 #include <inferrt/model/IModel.h>
 
-#include "../../src/model/priv/IModelImpl.hpp"
-
 #include <array>
-#include <memory>
-#include <vector>
 
 namespace test::model {
 
@@ -32,43 +28,18 @@ struct RegisteredModelCase
  * 这个模型不会真正构图或推理，只用于验证 RegisterModel / CreateModel
  * 的注册与创建流程是否正常工作。
  */
-class DummyModel final : public irt::model::priv::IModelImpl
-{
-public:
-    static constexpr const char *key() noexcept
-    {
-        return "dummy_model";
-    }
-
-    std::string name() const noexcept override
-    {
-        return "DummyModel";
-    }
-
-    void buildNetwork(nvinfer1::INetworkDefinition *, const irt::model::WeightsMap &) override
-    {
-    }
-
-    void infer(const std::vector<void *> &) override
-    {
-    }
-};
-
-inline std::unique_ptr<irt::model::priv::IModelImpl> CreateDummyModel()
-{
-    return std::make_unique<DummyModel>();
-}
-
 /**
  * @brief 当前仓库中内置注册的模型清单
  */
-inline constexpr std::array<RegisteredModelCase, 6> kRegisteredModels = {{
+inline constexpr std::array<RegisteredModelCase, 8> kRegisteredModels = {{
     {"alexnet", "AlexNet", "AlexNet"},
     {"resnet18", "ResNet18", "ResNet18"},
     {"resnet34", "ResNet34", "ResNet34"},
     {"resnet50", "ResNet50", "ResNet50"},
     {"resnet101", "ResNet101", "ResNet101"},
     {"resnet152", "ResNet152", "ResNet152"},
+    {"wide_resnet50_2", "Wide_ResNet50_2", "WideResNet50_2"},
+    {"wide_resnet101_2", "Wide_ResNet101_2", "WideResNet101_2"},
 }};
 
 /**

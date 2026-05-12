@@ -7,6 +7,8 @@
 - `resnet50`
 - `resnet101`
 - `resnet152`
+- `wide_resnet50_2`
+- `wide_resnet101_2`
 
 ## 文件说明
 
@@ -25,6 +27,8 @@ python gen_wts.py -m resnet34
 python gen_wts.py -m resnet50
 python gen_wts.py -m resnet101
 python gen_wts.py -m resnet152
+python gen_wts.py -m wide_resnet50_2
+python gen_wts.py -m wide_resnet101_2
 ```
 
 也可以指定输出文件名：
@@ -58,7 +62,7 @@ build/bin/inferrt_sample_resnet.exe
 命令格式：
 
 ```bash
-build/bin/inferrt_sample_resnet.exe <resnet18|resnet34|resnet50|resnet101|resnet152> <weights_file.wts> <image_path> [label_file]
+build/bin/inferrt_sample_resnet.exe <resnet18|resnet34|resnet50|resnet101|resnet152|wide_resnet50_2|wide_resnet101_2> <weights_file.wts> <image_path> [label_file]
 ```
 
 示例：
@@ -69,6 +73,8 @@ build/bin/inferrt_sample_resnet.exe resnet34 samples/model/resnet/resnet34.wts a
 build/bin/inferrt_sample_resnet.exe resnet50 samples/model/resnet/resnet50.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
 build/bin/inferrt_sample_resnet.exe resnet101 samples/model/resnet/resnet101.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
 build/bin/inferrt_sample_resnet.exe resnet152 samples/model/resnet/resnet152.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
+build/bin/inferrt_sample_resnet.exe wide_resnet50_2 samples/model/resnet/wide_resnet50_2.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
+build/bin/inferrt_sample_resnet.exe wide_resnet101_2 samples/model/resnet/wide_resnet101_2.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
 ```
 
 程序会完成：
@@ -101,5 +107,6 @@ assets/imagenet1000_clsidx_to_labels.txt
 
 - `resnet18` 和 `resnet34` 使用 `BasicBlock`
 - `resnet50`、`resnet101` 和 `resnet152` 使用 `Bottleneck`
+- `wide_resnet50_2` 和 `wide_resnet101_2` 使用 `Bottleneck`，并将中间宽度扩展到 `2x`
 - 当前输入尺寸固定为 `1x3x224x224`
 - 首次运行会从 `.wts` 构建 engine，耗时通常明显高于后续直接加载 `.engine`

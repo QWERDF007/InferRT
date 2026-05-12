@@ -16,6 +16,7 @@ public:
         : config_(std::make_unique<IModelConfig>())
     {
     }
+
     virtual ~IModelImpl() = default;
 
     virtual std::string name() const noexcept = 0;
@@ -30,6 +31,8 @@ public:
         return ".engine";
     }
 
+    virtual std::string generateSuffix(const IModelConfig &config) const noexcept;
+
     nvinfer1::ILogger::Severity logLevel() const noexcept;
 
     void build(const std::string &weights_file);
@@ -38,6 +41,7 @@ public:
     void buildOrLoad(const std::string &weights_file);
 
     virtual void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) = 0;
+
     virtual void infer(const std::vector<void *> &buffers) = 0;
 
     void setModelConfig(std::unique_ptr<IModelConfig> config);

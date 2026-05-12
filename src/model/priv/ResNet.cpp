@@ -13,7 +13,7 @@ namespace {
 
 // 统一描述残差块构建函数的签名，便于 makeLayer 同时兼容 BasicBlock / Bottleneck。
 using BlockBuilder = nvinfer1::IActivationLayer *(*)(nvinfer1::INetworkDefinition *, const WeightsMap &,
-                                                     nvinfer1::ITensor &, int, int, int, std::string);
+                                                     nvinfer1::ITensor &, int, int, int, int, std::string);
 
 /**
  * @brief 按照 torchvision.models.resnet._make_layer 的思路构建一个 stage。
@@ -24,15 +24,15 @@ using BlockBuilder = nvinfer1::IActivationLayer *(*)(nvinfer1::INetworkDefinitio
  */
 nvinfer1::IActivationLayer *makeLayer(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
                                       nvinfer1::ITensor &input, int &inplanes, int planes, int blocks, int stride,
-                                      int expansion, const std::string &lname, BlockBuilder block_builder)
+                                      int expansion, int base_width, const std::string &lname, BlockBuilder block_builder)
 {
     nvinfer1::IActivationLayer *output
-        = block_builder(network, weights_map, input, inplanes, planes, stride, lname + "0.");
+        = block_builder(network, weights_map, input, inplanes, planes, stride, base_width, lname + "0.");
 
     inplanes = planes * expansion;
     for (int i = 1; i < blocks; ++i)
     {
-        output = block_builder(network, weights_map, *output->getOutput(0), inplanes, planes, 1,
+        output = block_builder(network, weights_map, *output->getOutput(0), inplanes, planes, 1, base_width,
                                lname + std::to_string(i) + ".");
     }
 
@@ -46,7 +46,8 @@ nvinfer1::IActivationLayer *makeLayer(nvinfer1::INetworkDefinition *network, con
  * conv3x3 -> bn -> relu -> conv3x3 -> bn -> add(shortcut) -> relu
  */
 nvinfer1::IActivationLayer *BasicBlock(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
-                                       nvinfer1::ITensor &input, int inch, int outch, int stride, std::string lname)
+                                       nvinfer1::ITensor &input, int inch, int outch, int stride, int /* base_width */,
+                                       std::string lname)
 {
     using namespace nvinfer1;
 
@@ -91,19 +92,21 @@ nvinfer1::IActivationLayer *BasicBlock(nvinfer1::INetworkDefinition *network, co
  * stride 放在中间的 3x3 卷积上，而不是第一个 1x1 卷积上。
  */
 nvinfer1::IActivationLayer *Bottleneck(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
-                                       nvinfer1::ITensor &input, int inch, int outch, int stride, std::string lname)
+                                       nvinfer1::ITensor &input, int inch, int outch, int stride, int base_width,
+                                       std::string lname)
 {
     using namespace nvinfer1;
 
     Weights empty_weights{DataType::kFLOAT, nullptr, 0};
+    const int width = outch * base_width / 64;
 
     IConvolutionLayer *conv1
-        = network->addConvolutionNd(input, outch, DimsHW{1, 1}, weights_map.at(lname + "conv1.weight"), empty_weights);
+        = network->addConvolutionNd(input, width, DimsHW{1, 1}, weights_map.at(lname + "conv1.weight"), empty_weights);
 
     IScaleLayer      *bn1   = addBatchNorm2d(network, weights_map, *conv1->getOutput(0), lname + "bn1", 1e-5f);
     IActivationLayer *relu1 = network->addActivation(*bn1->getOutput(0), ActivationType::kRELU);
 
-    IConvolutionLayer *conv2 = network->addConvolutionNd(*relu1->getOutput(0), outch, DimsHW{3, 3},
+    IConvolutionLayer *conv2 = network->addConvolutionNd(*relu1->getOutput(0), width, DimsHW{3, 3},
                                                          weights_map.at(lname + "conv2.weight"), empty_weights);
     conv2->setStrideNd(DimsHW{stride, stride});
     conv2->setPaddingNd(DimsHW{1, 1});
@@ -142,7 +145,7 @@ nvinfer1::IActivationLayer *Bottleneck(nvinfer1::INetworkDefinition *network, co
  * @param block      具体的 block 构建函数。
  */
 void buildResNet(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map, const std::array<int, 4> &layers,
-                 int expansion, int num_classes, const InputShape &input_shape, BlockBuilder block)
+                 int expansion, int base_width, int num_classes, const InputShape &input_shape, BlockBuilder block)
 {
     using namespace nvinfer1;
 
@@ -167,13 +170,13 @@ void buildResNet(nvinfer1::INetworkDefinition *network, const WeightsMap &weight
 
     // 四个残差 stage，通道数分别为 64 / 128 / 256 / 512。
     IActivationLayer *layer1 = makeLayer(network, weights_map, *pool1->getOutput(0), inplanes, 64, layers[0], 1,
-                                         expansion, "layer1.", block);
+                                         expansion, base_width, "layer1.", block);
     IActivationLayer *layer2 = makeLayer(network, weights_map, *layer1->getOutput(0), inplanes, 128, layers[1], 2,
-                                         expansion, "layer2.", block);
+                                         expansion, base_width, "layer2.", block);
     IActivationLayer *layer3 = makeLayer(network, weights_map, *layer2->getOutput(0), inplanes, 256, layers[2], 2,
-                                         expansion, "layer3.", block);
+                                         expansion, base_width, "layer3.", block);
     IActivationLayer *layer4 = makeLayer(network, weights_map, *layer3->getOutput(0), inplanes, 512, layers[3], 2,
-                                         expansion, "layer4.", block);
+                                         expansion, base_width, "layer4.", block);
 
     // 对于固定输入 224x224，layer4 输出空间尺寸为 7x7，可直接做全局平均池化。
     IReduceLayer *avgpool = network->addReduce(*layer4->getOutput(0), ReduceOperation::kAVG,
@@ -199,27 +202,37 @@ void buildResNet(nvinfer1::INetworkDefinition *network, const WeightsMap &weight
 
 void ResNet18::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(network, weights_map, {2, 2, 2, 2}, 1, numClasses(), inputShape(), BasicBlock);
+    buildResNet(network, weights_map, {2, 2, 2, 2}, 1, 64, numClasses(), inputShape(), BasicBlock);
 }
 
 void ResNet34::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(network, weights_map, {3, 4, 6, 3}, 1, numClasses(), inputShape(), BasicBlock);
+    buildResNet(network, weights_map, {3, 4, 6, 3}, 1, 64, numClasses(), inputShape(), BasicBlock);
 }
 
 void ResNet50::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(network, weights_map, {3, 4, 6, 3}, 4, numClasses(), inputShape(), Bottleneck);
+    buildResNet(network, weights_map, {3, 4, 6, 3}, 4, 64, numClasses(), inputShape(), Bottleneck);
 }
 
 void ResNet101::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(network, weights_map, {3, 4, 23, 3}, 4, numClasses(), inputShape(), Bottleneck);
+    buildResNet(network, weights_map, {3, 4, 23, 3}, 4, 64, numClasses(), inputShape(), Bottleneck);
 }
 
 void ResNet152::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(network, weights_map, {3, 8, 36, 3}, 4, numClasses(), inputShape(), Bottleneck);
+    buildResNet(network, weights_map, {3, 8, 36, 3}, 4, 64, numClasses(), inputShape(), Bottleneck);
+}
+
+void WideResNet50_2::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
+{
+    buildResNet(network, weights_map, {3, 4, 6, 3}, 4, 128, numClasses(), inputShape(), Bottleneck);
+}
+
+void WideResNet101_2::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
+{
+    buildResNet(network, weights_map, {3, 4, 23, 3}, 4, 128, numClasses(), inputShape(), Bottleneck);
 }
 
 void ResNet::infer(const std::vector<void *> &buffers)
@@ -272,3 +285,5 @@ INFERRT_REGISTER_MODEL(ResNet34)
 INFERRT_REGISTER_MODEL(ResNet50)
 INFERRT_REGISTER_MODEL(ResNet101)
 INFERRT_REGISTER_MODEL(ResNet152)
+INFERRT_REGISTER_MODEL(WideResNet50_2)
+INFERRT_REGISTER_MODEL(WideResNet101_2)

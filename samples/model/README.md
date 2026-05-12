@@ -77,6 +77,8 @@ build/bin/inferrt_sample_alexnet.exe samples/model/alexnet/alexnet.wts assets/pi
 - `resnet50`
 - `resnet101`
 - `resnet152`
+- `wide_resnet50_2`
+- `wide_resnet101_2`
 
 生成权重：
 
@@ -87,6 +89,8 @@ python gen_wts.py -m resnet34
 python gen_wts.py -m resnet50
 python gen_wts.py -m resnet101
 python gen_wts.py -m resnet152
+python gen_wts.py -m wide_resnet50_2
+python gen_wts.py -m wide_resnet101_2
 ```
 
 运行推理：
@@ -96,6 +100,8 @@ build/bin/inferrt_sample_resnet.exe resnet18 samples/model/resnet/resnet18.wts a
 build/bin/inferrt_sample_resnet.exe resnet50 samples/model/resnet/resnet50.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
 build/bin/inferrt_sample_resnet.exe resnet101 samples/model/resnet/resnet101.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
 build/bin/inferrt_sample_resnet.exe resnet152 samples/model/resnet/resnet152.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
+build/bin/inferrt_sample_resnet.exe wide_resnet50_2 samples/model/resnet/wide_resnet50_2.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
+build/bin/inferrt_sample_resnet.exe wide_resnet101_2 samples/model/resnet/wide_resnet101_2.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
 ```
 
 ## 4. 依赖说明

@@ -77,3 +77,32 @@ TEST(ResNetInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
     std::vector<void *> buffers(1, nullptr);
     EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
 }
+
+TEST(WideResNetInferTest, InferWithoutContextThrowsInvalidOperation)
+{
+    auto model = irt::model::CreateModel("wide_resnet50_2");
+    ASSERT_NE(model, nullptr);
+
+    std::vector<void *> buffers(2, nullptr);
+
+    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
+
+    try
+    {
+        model->infer(buffers);
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
+    }
+}
+
+TEST(WideResNetInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
+{
+    auto model = irt::model::CreateModel("wide_resnet101_2");
+    ASSERT_NE(model, nullptr);
+
+    std::vector<void *> buffers(1, nullptr);
+    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
+}

@@ -12,13 +12,27 @@ from torchvision.models import (
     ResNet50_Weights,
     ResNet101_Weights,
     ResNet152_Weights,
+    Wide_ResNet50_2_Weights,
+    Wide_ResNet101_2_Weights,
     resnet18,
     resnet34,
     resnet50,
     resnet101,
     resnet152,
+    wide_resnet50_2,
+    wide_resnet101_2,
 )
-from timm import create_model, list_models
+
+
+TORCHVISION_MODEL_ZOO = {
+    "resnet18": (resnet18, ResNet18_Weights.IMAGENET1K_V1),
+    "resnet34": (resnet34, ResNet34_Weights.IMAGENET1K_V1),
+    "resnet50": (resnet50, ResNet50_Weights.IMAGENET1K_V2),
+    "resnet101": (resnet101, ResNet101_Weights.IMAGENET1K_V2),
+    "resnet152": (resnet152, ResNet152_Weights.IMAGENET1K_V2),
+    "wide_resnet50_2": (wide_resnet50_2, Wide_ResNet50_2_Weights.IMAGENET1K_V2),
+    "wide_resnet101_2": (wide_resnet101_2, Wide_ResNet101_2_Weights.IMAGENET1K_V2),
+}
 
 
 def read_imagenet_labels() -> dict[int, str]:
@@ -53,14 +67,38 @@ def preprocess(img: np.array) -> torch.Tensor:
     img = img.transpose(2, 0, 1)[None, ...]
     return torch.from_numpy(img)
 
+
+def list_supported_models(backend: str) -> list[str]:
+    if backend == "torchvision":
+        return list(TORCHVISION_MODEL_ZOO.keys())
+    if backend == "timm":
+        from timm import list_models
+
+        return list_models("resnet*") + list_models("wide_resnet*")
+    raise ValueError(f"Unsupported backend: {backend}")
+
+
+def create_resnet_model(model_name: str, backend: str) -> torch.nn.Module:
+    if backend == "torchvision":
+        if model_name not in TORCHVISION_MODEL_ZOO:
+            available = ", ".join(TORCHVISION_MODEL_ZOO.keys())
+            raise ValueError(f"Unsupported torchvision model: {model_name}. Available: {available}")
+
+        model_fn, weights = TORCHVISION_MODEL_ZOO[model_name]
+        return model_fn(weights=weights)
+
+    if backend == "timm":
+        from timm import create_model
+
+        return create_model(model_name, pretrained=True)
+
+    raise ValueError(f"Unsupported backend: {backend}")
+
 @torch.no_grad()
 def main(args):
     if args.list_model:
-        models = list_models('resnet*')
-        print('ResNet:', len(models))
-        print(models)
-        models = list_models('wide_resnet*')
-        print('Wide ResNet:', len(models))
+        models = list_supported_models(args.backend)
+        print(f"{args.backend} models:", len(models))
         print(models)
         exit(0)
 
@@ -71,21 +109,7 @@ def main(args):
         raise FileNotFoundError(f"Img {img_path} Not Found")
     img = preprocess(img)
 
-    # download url: https://download.pytorch.org/models/
-    # model = create_model(args.model, pretrained=True)
-    model_zoo = {
-        "resnet18": (resnet18, ResNet18_Weights.IMAGENET1K_V1), # https://download.pytorch.org/models/resnet18-f37072fd.pth
-        "resnet34": (resnet34, ResNet34_Weights.IMAGENET1K_V1),
-        "resnet50": (resnet50, ResNet50_Weights.IMAGENET1K_V2),
-        "resnet101": (resnet101, ResNet101_Weights.IMAGENET1K_V2),
-        "resnet152": (resnet152, ResNet152_Weights.IMAGENET1K_V2),
-    }
-
-    if args.model not in model_zoo:
-        raise ValueError(f"Unsupported model: {args.model}. Available: {', '.join(model_zoo.keys())}")
-
-    model_fn, weights = model_zoo[args.model]
-    model = model_fn(weights=weights)
+    model = create_resnet_model(args.model, args.backend)
     model.eval()
 
     print(model)
@@ -122,6 +146,14 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Generate ResNet weights for TensorRT")
     parser.add_argument("-i", "--img_path", type=str, default=os.path.abspath("../../../assets/pics/dog.jpg"), help="Path to the input image")
     parser.add_argument("-m", "--model", type=str, default="resnet18", help="Model name")
+    parser.add_argument(
+        "-b",
+        "--backend",
+        type=str,
+        choices=("timm", "torchvision"),
+        default="torchvision",
+        help="Model provider backend",
+    )
     parser.add_argument("-o", "--output", type=str, default=None, help="Path to wts output file")
     parser.add_argument("-l", "--list_model", action='store_true')
     parser.add_argument("-p", '--predict_only', action='store_true')

@@ -119,4 +119,44 @@ public:
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
+class WideResNet50_2 : public ResNet
+{
+public:
+    static constexpr const char *key() noexcept
+    {
+        return "wide_resnet50_2";
+    }
+
+    explicit WideResNet50_2()
+        : ResNet() {};
+    ~WideResNet50_2() override = default;
+
+    std::string name() const noexcept override
+    {
+        return "WideResNet50_2";
+    }
+
+    void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
+};
+
+class WideResNet101_2 : public ResNet
+{
+public:
+    static constexpr const char *key() noexcept
+    {
+        return "wide_resnet101_2";
+    }
+
+    explicit WideResNet101_2()
+        : ResNet() {};
+    ~WideResNet101_2() override = default;
+
+    std::string name() const noexcept override
+    {
+        return "WideResNet101_2";
+    }
+
+    void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
+};
+
 } // namespace irt::model

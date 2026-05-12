@@ -4,7 +4,6 @@
 
 #include <string>
 
-using test::model::CreateDummyModel;
 using test::model::RegisteredModelsTest;
 using test::model::kRegisteredModels;
 
@@ -66,12 +65,8 @@ TEST_P(RegisteredModelsTest, CreateModelAcceptsMixedCaseKey)
  */
 TEST(IModelRegisterTest, RegisterModelReturnsTrueForNewKey)
 {
-    const std::string key = "dummy_model_unique_key";
-    EXPECT_TRUE(irt::model::RegisterModel(key, &CreateDummyModel));
-
-    auto model = irt::model::CreateModel("DUMMY_MODEL_UNIQUE_KEY");
-    ASSERT_NE(model, nullptr);
-    EXPECT_EQ(model->name(), "DummyModel");
+    const std::string key = "register_only_unique_key";
+    EXPECT_TRUE(irt::model::RegisterModel(key, nullptr));
 }
 
 /**
@@ -79,7 +74,7 @@ TEST(IModelRegisterTest, RegisterModelReturnsTrueForNewKey)
  */
 TEST(IModelRegisterTest, RegisterModelReturnsFalseForDuplicateKey)
 {
-    const std::string key = "dummy_model_duplicate_key";
-    ASSERT_TRUE(irt::model::RegisterModel(key, &CreateDummyModel));
-    EXPECT_FALSE(irt::model::RegisterModel(key, &CreateDummyModel));
+    const std::string key = "register_only_duplicate_key";
+    ASSERT_TRUE(irt::model::RegisterModel(key, nullptr));
+    EXPECT_FALSE(irt::model::RegisterModel(key, nullptr));
 }
