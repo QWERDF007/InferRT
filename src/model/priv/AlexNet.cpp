@@ -17,9 +17,7 @@ void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsM
     using namespace nvinfer1;
     const auto &input_shape = inputShape();
 
-    ITensor *input{nullptr};
-    input = network->addInput("input", DataType::kFLOAT,
-                              Dims4{1, input_shape.channels, input_shape.height, input_shape.width});
+    ITensor *input = addInputTensor(network, Dims4{1, input_shape.channels, input_shape.height, input_shape.width});
 
     // features
     // CRP (Conv-Relu-Pool)
@@ -118,35 +116,13 @@ void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsM
     IElementWiseLayer *fc3_1 = network->addElementWise(*fc3_0->getOutput(0), *fc3b, ElementWiseOperation::kSUM);
     // fc3_0->setName("fc3_0");
 
-    fc3_1->getOutput(0)->setName("output");
-    network->markOutput(*fc3_1->getOutput(0));
+    markOutputTensors(network, {fc3_1->getOutput(0)});
 }
 
 void AlexNet::infer(const std::vector<void *> &buffers)
 {
     auto &trt_params = trtParams();
-
-    if (!trt_params.context)
-    {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Execution context is not initialized");
-    }
-
-    if (buffers.size() != 2)
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Expected 2 buffers (input and output), got %zu",
-                             buffers.size());
-    }
-
-    // 设置输入输出张量地址
-    if (!trt_params.context->setTensorAddress("input", buffers[0]))
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to set input tensor address");
-    }
-
-    if (!trt_params.context->setTensorAddress("output", buffers[1]))
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to set output tensor address");
-    }
+    bindTensorAddresses(buffers);
 
     if (!trt_params.stream)
     {
@@ -158,7 +134,6 @@ void AlexNet::infer(const std::vector<void *> &buffers)
         }
     }
 
-    // 执行推理（使用同步执行，stream 参数为 0 表示默认流）
     bool status = trt_params.context->enqueueV3(*trt_params.stream);
     if (!status)
     {

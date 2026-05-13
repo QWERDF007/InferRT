@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace irt::model::priv {
 
@@ -48,12 +49,22 @@ public:
     void setNumClasses(int num_classes);
     void setInputShape(const InputShape &shape);
     void setInputShape(int channels, int height, int width);
+    void setInputTensorNames(std::vector<std::string> input_tensor_names);
+    void setOutputTensorNames(std::vector<std::string> output_tensor_names);
 
     const IModelConfig &modelConfig() const noexcept;
     int                 numClasses() const noexcept;
     const InputShape   &inputShape() const noexcept;
+    const std::vector<std::string> &inputTensorNames() const noexcept;
+    const std::vector<std::string> &outputTensorNames() const noexcept;
 
     void setLogLevel(nvinfer1::ILogger::Severity severity);
+
+    nvinfer1::ITensor *addInputTensor(nvinfer1::INetworkDefinition *network, const nvinfer1::Dims &dims,
+                                      nvinfer1::DataType data_type = nvinfer1::DataType::kFLOAT,
+                                      size_t input_index = 0) const;
+    void markOutputTensors(nvinfer1::INetworkDefinition *network, const std::vector<nvinfer1::ITensor *> &outputs) const;
+    void bindTensorAddresses(const std::vector<void *> &buffers);
 
     TRTParams &trtParams() noexcept
     {

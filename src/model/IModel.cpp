@@ -89,6 +89,16 @@ void IModel::setInputShape(int channels, int height, int width)
     impl_->setInputShape(channels, height, width);
 }
 
+void IModel::setInputTensorNames(std::vector<std::string> input_tensor_names)
+{
+    impl_->setInputTensorNames(std::move(input_tensor_names));
+}
+
+void IModel::setOutputTensorNames(std::vector<std::string> output_tensor_names)
+{
+    impl_->setOutputTensorNames(std::move(output_tensor_names));
+}
+
 const IModelConfig &IModel::modelConfig() const noexcept
 {
     return impl_->modelConfig();
@@ -102,6 +112,16 @@ int IModel::numClasses() const noexcept
 const InputShape &IModel::inputShape() const noexcept
 {
     return impl_->inputShape();
+}
+
+const std::vector<std::string> &IModel::inputTensorNames() const noexcept
+{
+    return impl_->inputTensorNames();
+}
+
+const std::vector<std::string> &IModel::outputTensorNames() const noexcept
+{
+    return impl_->outputTensorNames();
 }
 
 void IModel::setLogLevel(nvinfer1::ILogger::Severity severity)

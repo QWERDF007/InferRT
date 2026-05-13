@@ -51,11 +51,19 @@ public:
 
     virtual void setInputShape(int channels, int height, int width);
 
+    virtual void setInputTensorNames(std::vector<std::string> input_tensor_names);
+
+    virtual void setOutputTensorNames(std::vector<std::string> output_tensor_names);
+
     virtual const IModelConfig &modelConfig() const noexcept;
 
     virtual int numClasses() const noexcept;
 
     virtual const InputShape &inputShape() const noexcept;
+
+    virtual const std::vector<std::string> &inputTensorNames() const noexcept;
+
+    virtual const std::vector<std::string> &outputTensorNames() const noexcept;
 
     virtual void setLogLevel(nvinfer1::ILogger::Severity severity);
 

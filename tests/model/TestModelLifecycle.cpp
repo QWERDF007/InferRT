@@ -3,6 +3,10 @@
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/core/Status.h>
 
+#include <memory>
+#include <string>
+#include <vector>
+
 using test::model::RegisteredModelsTest;
 using test::model::kRegisteredModels;
 
@@ -49,6 +53,40 @@ TEST(IModelDefaultPropertiesTest, SetLogLevelTakesEffect)
 
     model->setLogLevel(nvinfer1::ILogger::Severity::kINFO);
     EXPECT_EQ(model->logLevel(), nvinfer1::ILogger::Severity::kINFO);
+}
+
+/**
+ * @brief 通过 IModel 接口设置输入/输出张量名称后，应能原样读回配置值
+ */
+TEST(IModelConfigTest, TensorNamesCanBeConfiguredThroughModelApi)
+{
+    auto model = irt::model::CreateModel("alexnet");
+    ASSERT_NE(model, nullptr);
+
+    const std::vector<std::string> input_names{"image", "aux"};
+    const std::vector<std::string> output_names{"logits", "scores"};
+
+    model->setInputTensorNames(input_names);
+    model->setOutputTensorNames(output_names);
+
+    EXPECT_EQ(model->inputTensorNames(), input_names);
+    EXPECT_EQ(model->outputTensorNames(), output_names);
+}
+
+/**
+ * @brief 通过 CreateModel 传入的自定义 config，应保留其中的输入/输出张量名称
+ */
+TEST(IModelConfigTest, CreateModelPreservesCustomTensorNamesFromConfig)
+{
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setInputTensorNames({"custom_input_0", "custom_input_1"});
+    config->setOutputTensorNames({"custom_output_0", "custom_output_1"});
+
+    auto model = irt::model::CreateModel("alexnet", std::move(config));
+    ASSERT_NE(model, nullptr);
+
+    EXPECT_EQ(model->inputTensorNames(), (std::vector<std::string>{"custom_input_0", "custom_input_1"}));
+    EXPECT_EQ(model->outputTensorNames(), (std::vector<std::string>{"custom_output_0", "custom_output_1"}));
 }
 
 /**
@@ -127,12 +165,150 @@ TEST(IModelBuildTest, BuildWithNonExistentWeightsThrowsInvalidArgument)
 }
 
 /**
+ * @brief 当输入张量名称列表为空时，build 应在配置校验阶段抛出 ERROR_INVALID_ARGUMENT
+ */
+TEST(IModelBuildTest, BuildWithEmptyInputTensorNamesThrowsInvalidArgument)
+{
+    auto model = irt::model::CreateModel("alexnet");
+    ASSERT_NE(model, nullptr);
+
+    model->setInputTensorNames({});
+
+    EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
+
+    try
+    {
+        model->build("/non/existent/path/model.wts");
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
+    }
+}
+
+/**
+ * @brief 当输出张量名称列表为空时，build 应在配置校验阶段抛出 ERROR_INVALID_ARGUMENT
+ */
+TEST(IModelBuildTest, BuildWithEmptyOutputTensorNamesThrowsInvalidArgument)
+{
+    auto model = irt::model::CreateModel("alexnet");
+    ASSERT_NE(model, nullptr);
+
+    model->setOutputTensorNames({});
+
+    EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
+
+    try
+    {
+        model->build("/non/existent/path/model.wts");
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
+    }
+}
+
+/**
+ * @brief 当输入张量名称中包含空字符串时，build 应拒绝该非法配置
+ */
+TEST(IModelBuildTest, BuildWithEmptyInputTensorNameThrowsInvalidArgument)
+{
+    auto model = irt::model::CreateModel("alexnet");
+    ASSERT_NE(model, nullptr);
+
+    model->setInputTensorNames({""});
+
+    EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
+
+    try
+    {
+        model->build("/non/existent/path/model.wts");
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
+    }
+}
+
+/**
+ * @brief 当输出张量名称中包含空字符串时，build 应拒绝该非法配置
+ */
+TEST(IModelBuildTest, BuildWithEmptyOutputTensorNameThrowsInvalidArgument)
+{
+    auto model = irt::model::CreateModel("alexnet");
+    ASSERT_NE(model, nullptr);
+
+    model->setOutputTensorNames({""});
+
+    EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
+
+    try
+    {
+        model->build("/non/existent/path/model.wts");
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
+    }
+}
+
+/**
  * @brief buildOrLoad 在权重文件不存在时，也应沿用同样的错误码约定
  */
 TEST(IModelBuildOrLoadTest, BuildOrLoadNonExistentWeightsThrowsInvalidArgument)
 {
     auto model = irt::model::CreateModel("alexnet");
     ASSERT_NE(model, nullptr);
+
+    EXPECT_THROW({ model->buildOrLoad("/non/existent/path/model.wts"); }, irt::Exception);
+
+    try
+    {
+        model->buildOrLoad("/non/existent/path/model.wts");
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
+    }
+}
+
+/**
+ * @brief 当输入张量名称列表为空时，buildOrLoad 也应沿用相同的配置校验规则
+ */
+TEST(IModelBuildOrLoadTest, BuildOrLoadWithEmptyInputTensorNamesThrowsInvalidArgument)
+{
+    auto model = irt::model::CreateModel("alexnet");
+    ASSERT_NE(model, nullptr);
+
+    model->setInputTensorNames({});
+
+    EXPECT_THROW({ model->buildOrLoad("/non/existent/path/model.wts"); }, irt::Exception);
+
+    try
+    {
+        model->buildOrLoad("/non/existent/path/model.wts");
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
+    }
+}
+
+/**
+ * @brief 当输出张量名称列表为空时，buildOrLoad 也应沿用相同的配置校验规则
+ */
+TEST(IModelBuildOrLoadTest, BuildOrLoadWithEmptyOutputTensorNamesThrowsInvalidArgument)
+{
+    auto model = irt::model::CreateModel("alexnet");
+    ASSERT_NE(model, nullptr);
+
+    model->setOutputTensorNames({});
 
     EXPECT_THROW({ model->buildOrLoad("/non/existent/path/model.wts"); }, irt::Exception);
 

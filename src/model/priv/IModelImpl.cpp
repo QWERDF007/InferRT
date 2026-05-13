@@ -10,8 +10,10 @@ namespace {
 
 void ValidateModelConfig(const IModelImpl &impl)
 {
-    const auto &config      = impl.modelConfig();
-    const auto &input_shape = config.inputShape();
+    const auto &config             = impl.modelConfig();
+    const auto &input_shape        = config.inputShape();
+    const auto &input_tensor_names = config.inputTensorNames();
+    const auto &output_tensor_names = config.outputTensorNames();
 
     if (config.numClasses() <= 0)
     {
@@ -23,6 +25,32 @@ void ValidateModelConfig(const IModelImpl &impl)
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "input shape must be positive, got C=%d H=%d W=%d",
                              input_shape.channels, input_shape.height, input_shape.width);
+    }
+
+    if (input_tensor_names.empty())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "at least one input tensor name is required");
+    }
+
+    if (output_tensor_names.empty())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "at least one output tensor name is required");
+    }
+
+    for (const auto &input_tensor_name : input_tensor_names)
+    {
+        if (input_tensor_name.empty())
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "input tensor name must not be empty");
+        }
+    }
+
+    for (const auto &output_tensor_name : output_tensor_names)
+    {
+        if (output_tensor_name.empty())
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "output tensor name must not be empty");
+        }
     }
 }
 
@@ -89,6 +117,16 @@ void IModelImpl::setInputShape(int channels, int height, int width)
     config_->setInputShape(channels, height, width);
 }
 
+void IModelImpl::setInputTensorNames(std::vector<std::string> input_tensor_names)
+{
+    config_->setInputTensorNames(std::move(input_tensor_names));
+}
+
+void IModelImpl::setOutputTensorNames(std::vector<std::string> output_tensor_names)
+{
+    config_->setOutputTensorNames(std::move(output_tensor_names));
+}
+
 const IModelConfig &IModelImpl::modelConfig() const noexcept
 {
     return *config_;
@@ -104,12 +142,96 @@ const InputShape &IModelImpl::inputShape() const noexcept
     return config_->inputShape();
 }
 
+const std::vector<std::string> &IModelImpl::inputTensorNames() const noexcept
+{
+    return config_->inputTensorNames();
+}
+
+const std::vector<std::string> &IModelImpl::outputTensorNames() const noexcept
+{
+    return config_->outputTensorNames();
+}
+
 void IModelImpl::setLogLevel(nvinfer1::ILogger::Severity severity)
 {
     trt_params_.log_level = severity;
     if (trt_params_.logger)
     {
         trt_params_.logger->setReportableSeverity(severity);
+    }
+}
+
+nvinfer1::ITensor *IModelImpl::addInputTensor(nvinfer1::INetworkDefinition *network, const nvinfer1::Dims &dims,
+                                              nvinfer1::DataType data_type, size_t input_index) const
+{
+    const auto &tensor_names = inputTensorNames();
+    if (input_index >= tensor_names.size())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                             "input index %zu is out of range for %zu configured input tensor names", input_index,
+                             tensor_names.size());
+    }
+
+    return network->addInput(tensor_names[input_index].c_str(), data_type, dims);
+}
+
+void IModelImpl::markOutputTensors(nvinfer1::INetworkDefinition *network,
+                                   const std::vector<nvinfer1::ITensor *> &outputs) const
+{
+    const auto &tensor_names = outputTensorNames();
+    if (outputs.size() != tensor_names.size())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                             "output tensor count mismatch: got %zu tensors but %zu names were configured",
+                             outputs.size(), tensor_names.size());
+    }
+
+    for (size_t i = 0; i < outputs.size(); ++i)
+    {
+        if (outputs[i] == nullptr)
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "output tensor at index %zu is null", i);
+        }
+
+        outputs[i]->setName(tensor_names[i].c_str());
+        network->markOutput(*outputs[i]);
+    }
+}
+
+void IModelImpl::bindTensorAddresses(const std::vector<void *> &buffers)
+{
+    auto &trt_params = trtParams();
+    if (!trt_params.context)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Execution context is not initialized");
+    }
+
+    const auto &input_names  = inputTensorNames();
+    const auto &output_names = outputTensorNames();
+    const auto  expected     = input_names.size() + output_names.size();
+    if (buffers.size() != expected)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                             "Expected %zu buffers (%zu inputs and %zu outputs), got %zu", expected, input_names.size(),
+                             output_names.size(), buffers.size());
+    }
+
+    size_t buffer_index = 0;
+    for (const auto &input_name : input_names)
+    {
+        if (!trt_params.context->setTensorAddress(input_name.c_str(), buffers[buffer_index++]))
+        {
+            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to set input tensor address: %s", input_name.c_str());
+        }
+    }
+
+    for (const auto &output_name : output_names)
+    {
+        if (!trt_params.context->setTensorAddress(output_name.c_str(), buffers[buffer_index++]))
+        {
+            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to set output tensor address: %s",
+                                 output_name.c_str());
+        }
     }
 }
 
