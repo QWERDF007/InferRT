@@ -1,3 +1,1 @@
-add_subdirectory(alexnet)
-add_subdirectory(resnet)
-add_subdirectory(vgg)
+add_subdirectory(classification)

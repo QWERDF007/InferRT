@@ -1,124 +1,46 @@
 # Model Samples
 
-这里汇总了 `InferRT` 当前提供的分类模型示例。
+This directory contains the ImageNet-style classification sample assets provided by InferRT.
 
-## 当前可用示例
+## Layout
 
-- [alexnet](./alexnet/README.md)
-- [resnet](./resnet/README.md)
+- `classification/`: shared weight export and inference entry for all supported classification models
 
-## 目录结构
+## Build
 
-```text
-samples/model/
-├─ alexnet/
-│  ├─ CMakeLists.txt
-│  ├─ gen_wts.py
-│  ├─ main.cpp
-│  └─ README.md
-└─ resnet/
-   ├─ CMakeLists.txt
-   ├─ gen_wts.py
-   ├─ main.cpp
-   └─ README.md
-```
-
-## 通用流程
-
-每个 sample 基本都分为两步：
-
-1. 使用 `torchvision` 预训练模型生成 `.wts`
-2. 使用对应的 sample 可执行文件加载 `.wts` 并运行 TensorRT 推理
-
-## 1. 构建所有 model samples
-
-在工程根目录执行：
+Build the shared sample from the project root:
 
 ```bash
-cmake --build build --config Debug --target inferrt_sample_alexnet inferrt_sample_resnet
+cmake --build build --config Debug --target inferrt_sample_classification
 ```
 
-如果只想构建某一个 sample，也可以分别执行：
+## Run
 
 ```bash
-cmake --build build --config Debug --target inferrt_sample_alexnet
-cmake --build build --config Debug --target inferrt_sample_resnet
+build/bin/inferrt_sample_classification.exe <model_name> <weights_file.wts> <image_path> [label_file]
 ```
 
-## 2. AlexNet
-
-文档入口：
-
-- [AlexNet Sample README](./alexnet/README.md)
-
-生成权重：
+Examples:
 
 ```bash
-cd samples/model/alexnet
-python gen_wts.py
+build/bin/inferrt_sample_classification.exe alexnet samples/model/classification/alexnet.wts assets/pics/dog.jpg
+build/bin/inferrt_sample_classification.exe resnet50 samples/model/classification/resnet50.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
+build/bin/inferrt_sample_classification.exe vgg16 samples/model/classification/vgg16.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
 ```
 
-运行推理：
+## Weight export
+
+Generate weights with the shared script:
 
 ```bash
-build/bin/inferrt_sample_alexnet.exe samples/model/alexnet/alexnet.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
-```
-
-## 3. ResNet
-
-文档入口：
-
-- [ResNet Sample README](./resnet/README.md)
-
-当前支持：
-
-- `resnet18`
-- `resnet34`
-- `resnet50`
-- `resnet101`
-- `resnet152`
-- `wide_resnet50_2`
-- `wide_resnet101_2`
-
-生成权重：
-
-```bash
-cd samples/model/resnet
-python gen_wts.py -m resnet18
-python gen_wts.py -m resnet34
+cd samples/model/classification
+python gen_wts.py -m alexnet
 python gen_wts.py -m resnet50
-python gen_wts.py -m resnet101
-python gen_wts.py -m resnet152
-python gen_wts.py -m wide_resnet50_2
-python gen_wts.py -m wide_resnet101_2
+python gen_wts.py -m vgg16
 ```
 
-运行推理：
+## Notes
 
-```bash
-build/bin/inferrt_sample_resnet.exe resnet18 samples/model/resnet/resnet18.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
-build/bin/inferrt_sample_resnet.exe resnet50 samples/model/resnet/resnet50.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
-build/bin/inferrt_sample_resnet.exe resnet101 samples/model/resnet/resnet101.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
-build/bin/inferrt_sample_resnet.exe resnet152 samples/model/resnet/resnet152.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
-build/bin/inferrt_sample_resnet.exe wide_resnet50_2 samples/model/resnet/wide_resnet50_2.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
-build/bin/inferrt_sample_resnet.exe wide_resnet101_2 samples/model/resnet/wide_resnet101_2.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
-```
-
-## 4. 依赖说明
-
-权重导出脚本通常需要以下 Python 依赖：
-
-- `torch`
-- `torchvision`
-- `opencv-python`
-
-其中 `samples/model/resnet/gen_wts.py` 还会用到：
-
-- `timm`
-
-## 5. 常见说明
-
-- 输入图像预处理默认对齐 ImageNet 分类任务
-- 当前示例默认输入尺寸为 `224x224`
-- 首次运行 sample 时，如果不存在 `.engine` 文件，会先从 `.wts` 构建 TensorRT engine
-- 后续再次运行时会优先加载已有 `.engine`
+- Input preprocessing is aligned with standard ImageNet classification
+- The shared sample assumes `1x3x224x224` input and `1000` output classes
+- The first run builds an engine from `.wts`, and later runs reuse the generated `.engine`
