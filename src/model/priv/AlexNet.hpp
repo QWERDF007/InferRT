@@ -4,9 +4,16 @@
 
 namespace irt::model {
 
+/**
+ * @brief AlexNet 模型实现。
+ */
 class AlexNet : public priv::IModelImpl
 {
 public:
+    /**
+     * @brief 返回模型注册 key。
+     * @return 小写模型名称。
+     */
     static constexpr const char *key() noexcept
     {
         return "alexnet";
@@ -16,13 +23,26 @@ public:
         : priv::IModelImpl() {};
     ~AlexNet() override = default;
 
+    /**
+     * @brief 获取模型显示名称。
+     * @return `AlexNet`。
+     */
     std::string name() const noexcept
     {
         return "AlexNet";
     }
 
+    /**
+     * @brief 构建 AlexNet 的 TensorRT 网络。
+     * @param network TensorRT 网络定义。
+     * @param weights_map 权重映射表。
+     */
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 
+    /**
+     * @brief 执行 AlexNet 推理。
+     * @param buffers 输入输出缓冲区地址。
+     */
     void infer(const std::vector<void *> &buffers) override;
 };
 

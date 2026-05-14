@@ -8,6 +8,10 @@ namespace irt::model::priv {
 
 namespace {
 
+/**
+ * @brief 在构建或加载模型前验证配置合法性。
+ * @param impl 模型内部实现对象。
+ */
 void ValidateModelConfig(const IModelImpl &impl)
 {
     const auto &config             = impl.modelConfig();
@@ -54,6 +58,12 @@ void ValidateModelConfig(const IModelImpl &impl)
     }
 }
 
+/**
+ * @brief 根据权重文件路径和模型配置生成 engine 文件路径。
+ * @param impl 模型内部实现对象。
+ * @param weights_file 权重文件路径。
+ * @return engine 文件路径。
+ */
 std::string BuildEngineFileName(const IModelImpl &impl, const std::string &weights_file)
 {
     std::string engine_file = weights_file;
@@ -312,6 +322,10 @@ void IModelImpl::build(const std::string &weights_file)
     }
 }
 
+/**
+ * @brief 将当前 engine 序列化保存到磁盘。
+ * @param engine_file 输出文件路径。
+ */
 void IModelImpl::save(const std::string &engine_file)
 {
     if (!trt_params_.engine)
@@ -345,6 +359,10 @@ void IModelImpl::save(const std::string &engine_file)
                                   << " MiB" << std::endl;
 }
 
+/**
+ * @brief 从磁盘加载并反序列化 engine。
+ * @param engine_file engine 文件路径。
+ */
 void IModelImpl::load(const std::string &engine_file)
 {
     if (trt_params_.logger == nullptr)
@@ -393,6 +411,10 @@ void IModelImpl::load(const std::string &engine_file)
     LOG_INFO(*trt_params_.logger) << "TensorRT engine loaded successfully" << std::endl;
 }
 
+/**
+ * @brief 优先加载已有 engine，失败时回退到重新构建。
+ * @param weights_file 权重文件路径。
+ */
 void IModelImpl::buildOrLoad(const std::string &weights_file)
 {
     ValidateModelConfig(*this);

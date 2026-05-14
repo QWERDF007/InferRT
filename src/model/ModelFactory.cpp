@@ -12,6 +12,10 @@ namespace {
 
 using ModelRegistry = std::map<std::string, ModelCreator>;
 
+/**
+ * @brief 获取全局模型注册表单例。
+ * @return 注册表引用。
+ */
 ModelRegistry &GetModelRegistry()
 {
     static ModelRegistry registry;
@@ -20,16 +24,33 @@ ModelRegistry &GetModelRegistry()
 
 } // namespace
 
+/**
+ * @brief 构造时立即完成模型注册。
+ * @param name 模型名称。
+ * @param creator 模型创建函数。
+ */
 ModelRegistrar::ModelRegistrar(const std::string &name, ModelCreator creator)
 {
     RegisterModel(name, creator);
 }
 
+/**
+ * @brief 向全局注册表写入模型创建器。
+ * @param name 模型名称。
+ * @param creator 模型创建函数。
+ * @return 若名称未冲突则返回 `true`。
+ */
 bool RegisterModel(const std::string &name, ModelCreator creator)
 {
     return GetModelRegistry().emplace(name, creator).second;
 }
 
+/**
+ * @brief 根据名称创建模型并注入配置。
+ * @param name 模型名称。
+ * @param config 模型配置对象。
+ * @return 成功时返回模型对象，失败时返回空指针。
+ */
 std::unique_ptr<IModel> CreateModel(const std::string &name, std::unique_ptr<IModelConfig> config)
 {
     std::string normalized_name = name;

@@ -4,6 +4,9 @@
 
 namespace irt::model {
 
+/**
+ * @brief VGG 家族模型实现基类。
+ */
 class VGG : public priv::IModelImpl
 {
 public:
@@ -19,6 +22,9 @@ public:
     void infer(const std::vector<void *> &buffers) override;
 };
 
+/**
+ * @brief torchvision 风格的 VGG11 实现。
+ */
 class VGG11 : public VGG
 {
 public:
@@ -39,6 +45,9 @@ public:
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
+/**
+ * @brief torchvision 风格的 VGG13 实现。
+ */
 class VGG13 : public VGG
 {
 public:
@@ -59,6 +68,9 @@ public:
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
+/**
+ * @brief torchvision 风格的 VGG16 实现。
+ */
 class VGG16 : public VGG
 {
 public:
@@ -79,6 +91,9 @@ public:
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
+/**
+ * @brief torchvision 风格的 VGG19 实现。
+ */
 class VGG19 : public VGG
 {
 public:

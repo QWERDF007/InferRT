@@ -5,6 +5,11 @@
 
 namespace irt::model {
 
+/**
+ * @brief 解析文本格式的 `.wts` 权重文件。
+ * @param file 权重文件路径。
+ * @return 权重映射表。
+ */
 WeightsMap loadWeights(const std::string &file)
 {
     WeightsMap weights_map;
@@ -44,6 +49,11 @@ WeightsMap loadWeights(const std::string &file)
     return weights_map;
 }
 
+/**
+ * @brief 读取 ImageNet 标签文件。
+ * @param label_file 标签文件路径。
+ * @return 长度为 1000 的标签数组。
+ */
 std::vector<std::string> readImagenetLabels(const std::string &label_file)
 {
     std::vector<std::string> labels(1000);

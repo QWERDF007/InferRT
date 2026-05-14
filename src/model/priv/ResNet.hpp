@@ -4,6 +4,9 @@
 
 namespace irt::model {
 
+/**
+ * @brief ResNet 家族模型实现基类。
+ */
 class ResNet : public priv::IModelImpl
 {
 public:
@@ -19,6 +22,9 @@ public:
     void infer(const std::vector<void *> &buffers) override;
 };
 
+/**
+ * @brief torchvision 风格的 ResNet-18 实现。
+ */
 class ResNet18 : public ResNet
 {
 public:
@@ -39,6 +45,9 @@ public:
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
+/**
+ * @brief torchvision 风格的 ResNet-34 实现。
+ */
 class ResNet34 : public ResNet
 {
 public:
@@ -59,6 +68,9 @@ public:
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
+/**
+ * @brief torchvision 风格的 ResNet-50 实现。
+ */
 class ResNet50 : public ResNet
 {
 public:
@@ -79,6 +91,9 @@ public:
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
+/**
+ * @brief torchvision 风格的 ResNet-101 实现。
+ */
 class ResNet101 : public ResNet
 {
 public:
@@ -99,6 +114,9 @@ public:
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
+/**
+ * @brief torchvision 风格的 ResNet-152 实现。
+ */
 class ResNet152 : public ResNet
 {
 public:
@@ -119,6 +137,9 @@ public:
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
+/**
+ * @brief torchvision 风格的 Wide-ResNet-50-2 实现。
+ */
 class WideResNet50_2 : public ResNet
 {
 public:
@@ -139,6 +160,9 @@ public:
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
+/**
+ * @brief torchvision 风格的 Wide-ResNet-101-2 实现。
+ */
 class WideResNet101_2 : public ResNet
 {
 public:
