@@ -31,8 +31,12 @@ struct RegisteredModelCase
 /**
  * @brief 当前仓库中内置注册的模型清单
  */
-inline constexpr std::array<RegisteredModelCase, 8> kRegisteredModels = {{
+inline constexpr std::array<RegisteredModelCase, 12> kRegisteredModels = {{
     {"alexnet", "AlexNet", "AlexNet"},
+    {"vgg11", "VGG11", "VGG11"},
+    {"vgg13", "VGG13", "VGG13"},
+    {"vgg16", "VGG16", "VGG16"},
+    {"vgg19", "VGG19", "VGG19"},
     {"resnet18", "ResNet18", "ResNet18"},
     {"resnet34", "ResNet34", "ResNet34"},
     {"resnet50", "ResNet50", "ResNet50"},

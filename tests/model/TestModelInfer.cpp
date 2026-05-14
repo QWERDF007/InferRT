@@ -78,6 +78,95 @@ TEST(ResNetInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
     EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
 }
 
+TEST(VGGInferTest, InferWithoutContextThrowsInvalidOperation)
+{
+    auto model = irt::model::CreateModel("vgg11");
+    ASSERT_NE(model, nullptr);
+
+    std::vector<void *> buffers(2, nullptr);
+
+    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
+
+    try
+    {
+        model->infer(buffers);
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
+    }
+}
+
+TEST(VGGInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
+{
+    auto model = irt::model::CreateModel("vgg11");
+    ASSERT_NE(model, nullptr);
+
+    std::vector<void *> buffers(1, nullptr);
+    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
+}
+
+TEST(VGGInferTest, VGG13InferWithoutContextThrowsInvalidOperation)
+{
+    auto model = irt::model::CreateModel("vgg13");
+    ASSERT_NE(model, nullptr);
+
+    std::vector<void *> buffers(2, nullptr);
+
+    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
+
+    try
+    {
+        model->infer(buffers);
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
+    }
+}
+
+TEST(VGGInferTest, VGG16InferWithoutContextThrowsInvalidOperation)
+{
+    auto model = irt::model::CreateModel("vgg16");
+    ASSERT_NE(model, nullptr);
+
+    std::vector<void *> buffers(2, nullptr);
+
+    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
+
+    try
+    {
+        model->infer(buffers);
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
+    }
+}
+
+TEST(VGGInferTest, VGG19InferWithoutContextThrowsInvalidOperation)
+{
+    auto model = irt::model::CreateModel("vgg19");
+    ASSERT_NE(model, nullptr);
+
+    std::vector<void *> buffers(2, nullptr);
+
+    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
+
+    try
+    {
+        model->infer(buffers);
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
+    }
+}
+
 TEST(WideResNetInferTest, InferWithoutContextThrowsInvalidOperation)
 {
     auto model = irt::model::CreateModel("wide_resnet50_2");
