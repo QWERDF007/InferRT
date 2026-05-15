@@ -66,10 +66,10 @@ public:
      */
     nvinfer1::ILogger::Severity logLevel() const noexcept;
 
-    void build(const std::string &weights_file);
-    void save(const std::string &engine_file);
-    void load(const std::string &engine_file);
-    void buildOrLoad(const std::string &weights_file);
+    virtual void build(const std::string &weights_file);
+    virtual void save(const std::string &engine_file);
+    virtual void load(const std::string &engine_file);
+    virtual void buildOrLoad(const std::string &weights_file);
 
     virtual void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) = 0;
 
@@ -94,6 +94,11 @@ public:
 
     const std::vector<std::string> &inputTensorNames() const noexcept;
     const std::vector<std::string> &outputTensorNames() const noexcept;
+
+    std::vector<std::string> ioTensorNames(nvinfer1::TensorIOMode mode) const;
+    nvinfer1::Dims           tensorShape(const std::string &tensor_name) const;
+    nvinfer1::DataType       tensorDataType(const std::string &tensor_name) const;
+    void                     setTensorShape(const std::string &tensor_name, const nvinfer1::Dims &dims);
 
     void setLogLevel(nvinfer1::ILogger::Severity severity);
 

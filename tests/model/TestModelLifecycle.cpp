@@ -21,7 +21,8 @@ TEST_P(RegisteredModelsTest, DefaultExtensionsMatchExpectedValues)
 
     auto model = irt::model::CreateModel(param.key);
     ASSERT_NE(model, nullptr);
-    EXPECT_EQ(model->wtsExtension(), ".wts");
+    const std::string expected_wts_extension = std::string(param.key) == "onnx" ? ".onnx" : ".wts";
+    EXPECT_EQ(model->wtsExtension(), expected_wts_extension);
     EXPECT_EQ(model->engineExtension(), ".engine");
 }
 

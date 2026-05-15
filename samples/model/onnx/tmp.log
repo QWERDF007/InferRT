@@ -1,0 +1,4 @@
+F:\Projects\InferRT\samples\model\onnx\export_onnx.py:115: DeprecationWarning: You are using the legacy TorchScript-based ONNX export. Starting in PyTorch 2.9, the new torch.export-based ONNX exporter will be the default. To switch now, set dynamo=True in torch.onnx.export. This new exporter supports features like exporting LLMs with DynamicCache. We encourage you to try it and share feedback to help improve the experience. Learn more about the new export logic: https://pytorch.org/docs/stable/onnx_dynamo.html. For exporting control flow: https://pytorch.org/tutorials/beginner/onnx/export_control_flow_model_to_onnx_tutorial.html.
+  torch.onnx.export(model, dummy_input, output_path, **export_kwargs)
+Exporting model 'resnet50' to resnet50.onnx ...
+ONNX file 'resnet50.onnx' exported successfully with legacy exporter.

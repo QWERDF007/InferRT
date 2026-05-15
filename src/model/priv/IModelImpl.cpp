@@ -162,6 +162,66 @@ const std::vector<std::string> &IModelImpl::outputTensorNames() const noexcept
     return config_->outputTensorNames();
 }
 
+std::vector<std::string> IModelImpl::ioTensorNames(nvinfer1::TensorIOMode mode) const
+{
+    if (!trt_params_.engine)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Engine is not initialized");
+    }
+
+    std::vector<std::string> names;
+    const int32_t            num_io_tensors = trt_params_.engine->getNbIOTensors();
+    for (int32_t i = 0; i < num_io_tensors; ++i)
+    {
+        const char *tensor_name = trt_params_.engine->getIOTensorName(i);
+        if (trt_params_.engine->getTensorIOMode(tensor_name) == mode)
+        {
+            names.emplace_back(tensor_name);
+        }
+    }
+
+    return names;
+}
+
+nvinfer1::Dims IModelImpl::tensorShape(const std::string &tensor_name) const
+{
+    if (trt_params_.context)
+    {
+        return trt_params_.context->getTensorShape(tensor_name.c_str());
+    }
+
+    if (!trt_params_.engine)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Engine is not initialized");
+    }
+
+    return trt_params_.engine->getTensorShape(tensor_name.c_str());
+}
+
+nvinfer1::DataType IModelImpl::tensorDataType(const std::string &tensor_name) const
+{
+    if (!trt_params_.engine)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Engine is not initialized");
+    }
+
+    return trt_params_.engine->getTensorDataType(tensor_name.c_str());
+}
+
+void IModelImpl::setTensorShape(const std::string &tensor_name, const nvinfer1::Dims &dims)
+{
+    if (!trt_params_.context)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Execution context is not initialized");
+    }
+
+    if (!trt_params_.context->setInputShape(tensor_name.c_str(), dims))
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Failed to set input tensor shape: %s",
+                             tensor_name.c_str());
+    }
+}
+
 void IModelImpl::setLogLevel(nvinfer1::ILogger::Severity severity)
 {
     trt_params_.log_level = severity;

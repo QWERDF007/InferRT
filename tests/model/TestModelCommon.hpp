@@ -9,11 +9,10 @@
 namespace test::model {
 
 /**
- * @brief 已注册模型的测试样例
+ * @brief 已注册模型的测试样例。
  *
- * key            : 注册表中使用的小写 key
- * mixed_case_key : 用于验证大小写不敏感查找
- * display_name   : 实例方法 name() 返回的展示名
+ * `key` 为注册表中的标准 key，`mixed_case_key` 用于验证大小写不敏感查找，
+ * `display_name` 则对应模型实例 `name()` 的期望返回值。
  */
 struct RegisteredModelCase
 {
@@ -23,15 +22,10 @@ struct RegisteredModelCase
 };
 
 /**
- * @brief 一个仅用于注册表测试的最小假模型
- *
- * 这个模型不会真正构图或推理，只用于验证 RegisterModel / CreateModel
- * 的注册与创建流程是否正常工作。
+ * @brief 当前仓库中内置注册的模型清单。
  */
-/**
- * @brief 当前仓库中内置注册的模型清单
- */
-inline constexpr std::array<RegisteredModelCase, 12> kRegisteredModels = {{
+inline constexpr std::array<RegisteredModelCase, 13> kRegisteredModels = {{
+    {"onnx", "ONNX", "ONNX"},
     {"alexnet", "AlexNet", "AlexNet"},
     {"vgg11", "VGG11", "VGG11"},
     {"vgg13", "VGG13", "VGG13"},
@@ -47,7 +41,7 @@ inline constexpr std::array<RegisteredModelCase, 12> kRegisteredModels = {{
 }};
 
 /**
- * @brief 对所有已注册模型做参数化测试
+ * @brief 面向全部已注册模型的参数化测试基类。
  */
 class RegisteredModelsTest : public ::testing::TestWithParam<RegisteredModelCase>
 {

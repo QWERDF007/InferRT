@@ -15,9 +15,10 @@ class IModelImpl;
 namespace irt::model {
 
 /**
- * @brief 对外暴露的模型包装类。
+ * @brief 面向外部的统一模型包装类。
  *
- * 该类负责将内部模型实现封装成统一的构建、加载、配置和推理接口。
+ * 该类将不同模型实现封装为一致的构建、加载、配置与推理接口，
+ * 调用方无需直接接触具体的内部实现类型。
  */
 class INFERRT_MODEL_API IModel
 {
@@ -46,13 +47,13 @@ public:
     virtual std::string name() const noexcept;
 
     /**
-     * @brief 获取权重文件扩展名。
+     * @brief 获取模型权重文件扩展名。
      * @return 权重文件扩展名。
      */
     virtual std::string wtsExtension() const noexcept;
 
     /**
-     * @brief 获取 engine 文件扩展名。
+     * @brief 获取 TensorRT engine 文件扩展名。
      * @return engine 文件扩展名。
      */
     virtual std::string engineExtension() const noexcept;
@@ -82,7 +83,7 @@ public:
     virtual void load(const std::string &weights_file);
 
     /**
-     * @brief 优先加载已有 engine，不存在时构建。
+     * @brief 优先加载已有 engine，不存在时再构建。
      * @param weights_file 权重文件路径。
      */
     virtual void buildOrLoad(const std::string &weights_file);
@@ -96,7 +97,7 @@ public:
 
     /**
      * @brief 执行一次推理。
-     * @param buffers 输入输出缓冲区地址。
+     * @param buffers 输入输出缓冲区地址列表。
      */
     virtual void infer(const std::vector<void *> &buffers);
 
@@ -167,6 +168,34 @@ public:
      * @return 输出张量名称列表。
      */
     virtual const std::vector<std::string> &outputTensorNames() const noexcept;
+
+    /**
+     * @brief 获取当前 engine 中指定类型的 I/O 张量名称。
+     * @param mode TensorRT 张量 I/O 类型。
+     * @return 张量名称列表。
+     */
+    virtual std::vector<std::string> ioTensorNames(nvinfer1::TensorIOMode mode) const;
+
+    /**
+     * @brief 获取指定张量的运行时形状。
+     * @param tensor_name 张量名称。
+     * @return 张量维度。
+     */
+    virtual nvinfer1::Dims tensorShape(const std::string &tensor_name) const;
+
+    /**
+     * @brief 获取指定张量的数据类型。
+     * @param tensor_name 张量名称。
+     * @return TensorRT 数据类型。
+     */
+    virtual nvinfer1::DataType tensorDataType(const std::string &tensor_name) const;
+
+    /**
+     * @brief 设置输入张量的运行时形状。
+     * @param tensor_name 张量名称。
+     * @param dims 运行时维度。
+     */
+    virtual void setTensorShape(const std::string &tensor_name, const nvinfer1::Dims &dims);
 
     /**
      * @brief 设置日志级别。

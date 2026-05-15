@@ -124,6 +124,26 @@ const std::vector<std::string> &IModel::outputTensorNames() const noexcept
     return impl_->outputTensorNames();
 }
 
+std::vector<std::string> IModel::ioTensorNames(nvinfer1::TensorIOMode mode) const
+{
+    return impl_->ioTensorNames(mode);
+}
+
+nvinfer1::Dims IModel::tensorShape(const std::string &tensor_name) const
+{
+    return impl_->tensorShape(tensor_name);
+}
+
+nvinfer1::DataType IModel::tensorDataType(const std::string &tensor_name) const
+{
+    return impl_->tensorDataType(tensor_name);
+}
+
+void IModel::setTensorShape(const std::string &tensor_name, const nvinfer1::Dims &dims)
+{
+    impl_->setTensorShape(tensor_name, dims);
+}
+
 void IModel::setLogLevel(nvinfer1::ILogger::Severity severity)
 {
     impl_->setLogLevel(severity);

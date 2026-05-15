@@ -5,6 +5,7 @@ This directory contains the ImageNet-style classification sample assets provided
 ## Layout
 
 - `classification/`: shared weight export and inference entry for all supported classification models
+- `onnx/`: ONNX export script and ONNX -> TensorRT inference sample
 
 ## Build
 
