@@ -51,3 +51,4 @@ inferrt-*
 *.wts
 *.plan
 *.engine
+*.onnx
