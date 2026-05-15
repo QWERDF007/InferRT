@@ -86,15 +86,21 @@ public:
         if (mShouldLog)
         {
             // 添加时间戳前缀
-            std::time_t timestamp = std::time(nullptr);
-            tm         *tm_local  = std::localtime(&timestamp);
+            std::time_t timestamp{};
+            std::time(&timestamp);
+            tm tm_local{};
+#if defined(_WIN32)
+            localtime_s(&tm_local, &timestamp);
+#else
+            localtime_r(&timestamp, &tm_local);
+#endif
             mOutput << "[";
-            mOutput << std::setw(4) << std::setfill('0') << 1900 + tm_local->tm_year;
-            mOutput << std::setw(2) << std::setfill('0') << 1 + tm_local->tm_mon;
-            mOutput << std::setw(2) << std::setfill('0') << tm_local->tm_mday << "-";
-            mOutput << std::setw(2) << std::setfill('0') << tm_local->tm_hour << ":";
-            mOutput << std::setw(2) << std::setfill('0') << tm_local->tm_min << ":";
-            mOutput << std::setw(2) << std::setfill('0') << tm_local->tm_sec << "] ";
+            mOutput << std::setw(4) << std::setfill('0') << 1900 + tm_local.tm_year;
+            mOutput << std::setw(2) << std::setfill('0') << 1 + tm_local.tm_mon;
+            mOutput << std::setw(2) << std::setfill('0') << tm_local.tm_mday << "-";
+            mOutput << std::setw(2) << std::setfill('0') << tm_local.tm_hour << ":";
+            mOutput << std::setw(2) << std::setfill('0') << tm_local.tm_min << ":";
+            mOutput << std::setw(2) << std::setfill('0') << tm_local.tm_sec << "] ";
             // std::stringbuf::str() 获取缓冲区的字符串内容
             // 将带有适当前缀的缓冲区内容插入到流中
             mOutput << mPrefix << str();
