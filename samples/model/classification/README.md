@@ -5,6 +5,9 @@ This directory is the shared entry for classification weight export and inferenc
 ## Supported models
 
 - `alexnet`
+- `mobilenet_v2`
+- `mobilenet_v3_large`
+- `mobilenet_v3_small`
 - `vgg11`
 - `vgg13`
 - `vgg16`
@@ -30,6 +33,9 @@ Run in a Python environment with `torch`, `torchvision`, and `opencv-python` ins
 ```bash
 cd samples/model/classification
 python gen_wts.py -m alexnet
+python gen_wts.py -m mobilenet_v2
+python gen_wts.py -m mobilenet_v3_large
+python gen_wts.py -m mobilenet_v3_small
 python gen_wts.py -m resnet50
 python gen_wts.py -m vgg16
 ```
@@ -57,6 +63,7 @@ Examples:
 
 ```bash
 build/bin/inferrt_sample_classification.exe alexnet samples/model/classification/alexnet.wts assets/pics/dog.jpg
+build/bin/inferrt_sample_classification.exe mobilenet_v2 samples/model/classification/mobilenet_v2.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
 build/bin/inferrt_sample_classification.exe resnet50 samples/model/classification/resnet50.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
 build/bin/inferrt_sample_classification.exe vgg16 samples/model/classification/vgg16.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
 ```

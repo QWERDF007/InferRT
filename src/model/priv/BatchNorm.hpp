@@ -23,8 +23,8 @@ namespace irt::model {
  * @param eps        防止除零的小常数
  * @return IScaleLayer 指针
  */
-nvinfer1::IScaleLayer *addBatchNorm2d(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
-                                      nvinfer1::ITensor &input, std::string lname, float eps)
+inline nvinfer1::IScaleLayer *addBatchNorm2d(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
+                                             nvinfer1::ITensor &input, std::string lname, float eps)
 {
     // 从权重表中读取 BatchNorm 的四个参数
     float *gamma = (float *)weights_map.at(lname + ".weight").values;       // 缩放因子 (γ)

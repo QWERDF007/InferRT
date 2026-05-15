@@ -8,6 +8,9 @@ import numpy as np
 import torch
 from torchvision.models import (
     AlexNet_Weights,
+    MobileNet_V2_Weights,
+    MobileNet_V3_Large_Weights,
+    MobileNet_V3_Small_Weights,
     ResNet18_Weights,
     ResNet34_Weights,
     ResNet50_Weights,
@@ -20,6 +23,9 @@ from torchvision.models import (
     Wide_ResNet50_2_Weights,
     Wide_ResNet101_2_Weights,
     alexnet,
+    mobilenet_v2,
+    mobilenet_v3_large,
+    mobilenet_v3_small,
     resnet18,
     resnet34,
     resnet50,
@@ -36,6 +42,9 @@ from torchvision.models import (
 
 TORCHVISION_MODEL_ZOO = {
     "alexnet": (alexnet, AlexNet_Weights.IMAGENET1K_V1),
+    "mobilenet_v2": (mobilenet_v2, MobileNet_V2_Weights.IMAGENET1K_V2),
+    "mobilenet_v3_large": (mobilenet_v3_large, MobileNet_V3_Large_Weights.IMAGENET1K_V2),
+    "mobilenet_v3_small": (mobilenet_v3_small, MobileNet_V3_Small_Weights.IMAGENET1K_V1),
     "vgg11": (vgg11, VGG11_Weights.IMAGENET1K_V1),
     "vgg13": (vgg13, VGG13_Weights.IMAGENET1K_V1),
     "vgg16": (vgg16, VGG16_Weights.IMAGENET1K_V1),

@@ -19,20 +19,56 @@ struct ModelSampleSpec
     const char *name;
 };
 
-inline constexpr std::array<ModelSampleSpec, 12> kSupportedModels = {{
-    {"alexnet"},
-    {"vgg11"},
-    {"vgg13"},
-    {"vgg16"},
-    {"vgg19"},
-    {"resnet18"},
-    {"resnet34"},
-    {"resnet50"},
-    {"resnet101"},
-    {"resnet152"},
-    {"wide_resnet50_2"},
-    {"wide_resnet101_2"},
-}};
+inline constexpr std::array<ModelSampleSpec, 15> kSupportedModels = {
+    {
+     {"alexnet"},
+     {"mobilenet_v2"},
+     {"mobilenet_v3_large"},
+     {"mobilenet_v3_small"},
+     {"vgg11"},
+     {"vgg13"},
+     {"vgg16"},
+     {"vgg19"},
+     {"resnet18"},
+     {"resnet34"},
+     {"resnet50"},
+     {"resnet101"},
+     {"resnet152"},
+     {"wide_resnet50_2"},
+     {"wide_resnet101_2"},
+     }
+};
+
+const fs::path kDefaultImagePath = "assets/pics/dog.jpg";
+const fs::path kDefaultLabelPath = "assets/imagenet1000_clsidx_to_labels.txt";
+
+fs::path findProjectRoot(const char *program_name)
+{
+    std::vector<fs::path> starts;
+    starts.push_back(fs::path(__FILE__).parent_path());
+    starts.push_back(fs::current_path());
+    if (program_name && *program_name)
+    {
+        starts.push_back(fs::absolute(program_name).parent_path());
+    }
+
+    for (auto start : starts)
+    {
+        for (fs::path path = fs::absolute(start); !path.empty(); path = path.parent_path())
+        {
+            if (fs::exists(path / kDefaultImagePath) && fs::exists(path / kDefaultLabelPath))
+            {
+                return path;
+            }
+            if (path == path.root_path())
+            {
+                break;
+            }
+        }
+    }
+
+    return fs::current_path();
+}
 
 bool isSupportedModel(const std::string &model_name)
 {
@@ -42,7 +78,9 @@ bool isSupportedModel(const std::string &model_name)
 
 void printUsage(const char *program_name)
 {
-    std::cerr << "Usage: " << program_name << " <model_name> <weights_file.wts> <image_path> [label_file]" << std::endl;
+    std::cerr << "Usage: " << program_name << " <model_name> <weights_file.wts> [image_path] [label_file]" << std::endl;
+    std::cerr << "Default image: " << kDefaultImagePath.generic_string() << std::endl;
+    std::cerr << "Default labels: " << kDefaultLabelPath.generic_string() << std::endl;
     std::cerr << "Supported models:";
     for (const auto &model : kSupportedModels)
     {
@@ -52,8 +90,13 @@ void printUsage(const char *program_name)
     std::cerr << "Example: " << program_name << " alexnet samples/model/alexnet/alexnet.wts assets/pics/dog.jpg"
               << std::endl;
     std::cerr << "         " << program_name
-              << " resnet50 samples/model/resnet/resnet50.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt"
+              << " mobilenet_v2 samples/model/classification/mobilenet_v2.wts assets/pics/dog.jpg "
+                 "assets/imagenet1000_clsidx_to_labels.txt"
               << std::endl;
+    std::cerr
+        << "         " << program_name
+        << " resnet50 samples/model/resnet/resnet50.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt"
+        << std::endl;
     std::cerr << "         " << program_name
               << " vgg16 samples/model/vgg/vgg16.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt"
               << std::endl;
@@ -84,7 +127,7 @@ int main(int argc, char *argv[])
 {
     try
     {
-        if (argc < 4 || argc > 5)
+        if (argc < 3 || argc > 5)
         {
             printUsage(argv[0]);
             return -1;
@@ -98,9 +141,10 @@ int main(int argc, char *argv[])
             return -1;
         }
 
+        fs::path project_root = findProjectRoot(argv[0]);
         fs::path weights_file = fs::path(argv[2]);
-        fs::path img_path     = fs::absolute(argv[3]);
-        fs::path label_file   = (argc == 5) ? fs::canonical(argv[4]) : fs::path();
+        fs::path img_path     = (argc >= 4) ? fs::path(argv[3]) : project_root / kDefaultImagePath;
+        fs::path label_file   = (argc >= 5) ? fs::path(argv[4]) : project_root / kDefaultLabelPath;
 
         auto model = irt::model::CreateModel(model_name);
         if (!model)
