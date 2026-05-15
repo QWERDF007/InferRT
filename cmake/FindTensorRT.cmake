@@ -122,11 +122,11 @@ if(WIN32)
   # TensorRT 10+ 版本的库文件名包含版本号后缀
   if(${TRT_MAJOR_VERSION} GREATER_EQUAL 10)
     set(_modules nvinfer_10 nvinfer_plugin_10 nvinfer_vc_plugin_10
-                 nvinfer_dispatch_10 nvinfer_lean_10)
+                 nvinfer_dispatch_10 nvinfer_lean_10 nvonnxparser_10)
     message(DEBUG "Using ${_modules}")
   else()
     set(_modules nvinfer nvinfer_plugin nvinfer_vc_plugin nvinfer_dispatch
-                 nvinfer_lean)
+                 nvinfer_lean nvonnxparser)
   endif()
 
   # Windows 下的库和头文件路径结构比较简单
@@ -134,7 +134,7 @@ if(WIN32)
   set(TensorRT_INCLUDE_DIR "${TRT_ROOT}/include")
 elseif(UNIX)
   # Linux/Unix 平台配置
-  set(_modules nvinfer nvinfer_plugin)
+  set(_modules nvinfer nvinfer_plugin nvonnxparser)
   # TensorRT 8+ 版本增加了额外的库模块
   if(${TRT_MAJOR_VERSION} GREATER_EQUAL 8)
     list(APPEND _modules nvinfer_vc_plugin nvinfer_dispatch nvinfer_lean)

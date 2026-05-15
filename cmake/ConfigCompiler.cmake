@@ -1,16 +1,16 @@
 
-# 将C++标准设置为20
+# 将 C++ 标准设置为 20
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-# 在RelWithDebInfo模式下给CXX编译器添加-O3和-ggdb参数
+# 在 RelWithDebInfo 模式下给 C/C++ 编译器添加 O3 和 ggdb 参数
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -O3 -ggdb")
 set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} -O3 -ggdb")
 
 
 if(WARNINGS_AS_ERRORS)
-    # 设置C语言警告为错误
+    # 设置 C 语言警告为错误
     set(C_WARNING_ERROR_FLAG "-Werror")
-    # 设置CUDA语言警告全部为错误
+    # 设置 CUDA 语言警告全部为错误
     set(CUDA_WARNING_ERROR_FLAG "-Werror all-warnings")
 endif()
 
@@ -27,8 +27,9 @@ if (MSVC)
     # set(C_WARNING_FLAGS "-Wall")
     # /EHa: 启用 C++ 异常处理和 SEH 异常（跨 DLL 异常传播所需）
     # /utf-8: 将源文件和执行字符集设置为 UTF-8
+    # /wd4251: 关闭 STL 成员经 DLL 导出时的接口警告
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHa /utf-8 /bigobj")
-    set(C_WARNING_FLAGS "-W4")
+    set(C_WARNING_FLAGS "-W4 /wd4251")
     # set(CXX_WARNING_FLAGS "/permissive-")
 else ()
     set(C_WARNING_FLAGS "-Wall -Wno-unknown-pragmas -Wpointer-arith -Wmissing-declarations -Wredundant-decls -Wmultichar -Wno-unused-local-typedefs -Wunused")
@@ -93,5 +94,4 @@ if(${PROJECT_NAME_UPPER}_ENABLE_SANITIZER AND CMAKE_CXX_COMPILER_ID STREQUAL "GN
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${COMPILER_SANITIZER_FLAGS}")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${COMPILER_SANITIZER_FLAGS}")
 endif()
-
 
