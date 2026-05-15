@@ -1,5 +1,6 @@
-#pragma once
+﻿#pragma once
 
+#include <NvInfer.h>
 #include <inferrt/model/Export.h>
 
 #include <string>
@@ -8,61 +9,24 @@
 namespace irt::model {
 
 /**
- * @brief 模型输入张量的空间尺寸描述。
- */
-struct INFERRT_MODEL_API InputShape
-{
-    /// 输入通道数，例如 RGB 图像通常为 3。
-    int channels{3};
-    /// 输入高度。
-    int height{224};
-    /// 输入宽度。
-    int width{224};
-};
-
-/**
  * @brief 模型配置基类。
  *
- * 该类统一描述模型的类别数、输入尺寸以及输入输出张量名称。
+ * 统一描述模型的类别数、输入张量尺寸、输入张量名称以及输出张量名称。
+ * 输入尺寸使用 NCHW 顺序的 nvinfer1::Dims4 表示，并与输入张量名称按索引一一对应。
  */
 class INFERRT_MODEL_API IModelConfig
 {
 public:
     /**
-     * @brief 使用默认参数构造模型配置。
+     * @brief 使用默认 ImageNet-1K 分类配置构造。
+     *
+     * 默认输入张量名为 `input`，输出张量名为 `output`，输入尺寸为 1x3x224x224。
      */
     IModelConfig()          = default;
     virtual ~IModelConfig() = default;
 
     /**
-     * @brief 使用类别数和输入尺寸构造模型配置。
-     * @param num_classes 分类类别数。
-     * @param input_shape 输入张量尺寸。
-     */
-    IModelConfig(int num_classes, const InputShape &input_shape)
-        : num_classes_(num_classes)
-        , input_shape_(input_shape)
-    {
-    }
-
-    /**
-     * @brief 使用完整参数构造模型配置。
-     * @param num_classes 分类类别数。
-     * @param input_shape 输入张量尺寸。
-     * @param input_tensor_names 输入张量名称列表。
-     * @param output_tensor_names 输出张量名称列表。
-     */
-    IModelConfig(int num_classes, const InputShape &input_shape, std::vector<std::string> input_tensor_names,
-                 std::vector<std::string> output_tensor_names)
-        : num_classes_(num_classes)
-        , input_shape_(input_shape)
-        , input_tensor_names_(std::move(input_tensor_names))
-        , output_tensor_names_(std::move(output_tensor_names))
-    {
-    }
-
-    /**
-     * @brief 设置分类类别数。
+     * @brief 设置类别数。
      * @param num_classes 目标类别数。
      */
     virtual void setNumClasses(int num_classes)
@@ -71,23 +35,28 @@ public:
     }
 
     /**
-     * @brief 设置输入尺寸。
-     * @param input_shape 输入张量尺寸。
+     * @brief 设置第一个输入张量尺寸。
+     * @param input_shape 输入张量尺寸，按 NCHW 顺序表示。
+     *
+     * 该接口面向单输入模型；若当前输入尺寸列表为空，则会新增第一个输入尺寸。
      */
-    virtual void setInputShape(const InputShape &input_shape)
+    virtual void setInputShape(const nvinfer1::Dims4 &input_shape)
     {
-        input_shape_ = input_shape;
+        if (input_shapes_.empty())
+        {
+            input_shapes_.push_back(input_shape);
+            return;
+        }
+        input_shapes_.front() = input_shape;
     }
 
     /**
-     * @brief 以通道、高度、宽度形式设置输入尺寸。
-     * @param channels 输入通道数。
-     * @param height 输入高度。
-     * @param width 输入宽度。
+     * @brief 设置多个输入张量尺寸。
+     * @param input_shapes 输入张量尺寸列表，顺序与输入张量名称列表一致。
      */
-    virtual void setInputShape(int channels, int height, int width)
+    virtual void setInputShapes(std::vector<nvinfer1::Dims4> input_shapes)
     {
-        input_shape_ = InputShape{channels, height, width};
+        input_shapes_ = std::move(input_shapes);
     }
 
     /**
@@ -109,7 +78,7 @@ public:
     }
 
     /**
-     * @brief 获取分类类别数。
+     * @brief 获取类别数。
      * @return 当前类别数。
      */
     virtual int numClasses() const noexcept
@@ -118,12 +87,23 @@ public:
     }
 
     /**
-     * @brief 获取输入尺寸。
-     * @return 输入尺寸描述。
+     * @brief 获取第一个输入张量尺寸。
+     * @return 第一个输入张量尺寸，按 NCHW 顺序表示。
+     *
+     * 该接口面向单输入模型；多输入模型应优先使用 inputShapes()。
      */
-    virtual const InputShape &inputShape() const noexcept
+    virtual const nvinfer1::Dims4 &inputShape() const noexcept
     {
-        return input_shape_;
+        return input_shapes_.front();
+    }
+
+    /**
+     * @brief 获取多个输入张量尺寸。
+     * @return 输入张量尺寸列表，顺序与输入张量名称列表一致。
+     */
+    virtual const std::vector<nvinfer1::Dims4> &inputShapes() const noexcept
+    {
+        return input_shapes_;
     }
 
     /**
@@ -145,13 +125,15 @@ public:
     }
 
 protected:
-    /// 分类类别数，默认对应 ImageNet-1K。
-    int                      num_classes_{1000};
-    /// 默认输入尺寸为 3x224x224。
-    InputShape               input_shape_{3, 224, 224};
-    /// 默认输入张量名称。
+    /// 类别数，默认对应 ImageNet-1K。
+    int                          num_classes_{1000};
+    /// 输入张量尺寸列表，默认输入为 1x3x224x224。
+    std::vector<nvinfer1::Dims4> input_shapes_{
+        nvinfer1::Dims4{1, 3, 224, 224}
+    };
+    /// 输入张量名称列表。
     std::vector<std::string> input_tensor_names_{"input"};
-    /// 默认输出张量名称。
+    /// 输出张量名称列表。
     std::vector<std::string> output_tensor_names_{"output"};
 };
 

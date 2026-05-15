@@ -46,8 +46,7 @@ void buildVGG(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *networ
 {
     using namespace nvinfer1;
 
-    const auto &input_shape = impl.inputShape();
-    ITensor    *tensor      = impl.addInputTensor(network, Dims4{1, input_shape.channels, input_shape.height, input_shape.width});
+    ITensor *tensor = impl.addInputTensor(network);
 
     int feature_index = 0;
     for (int block_depth : config.block_depths)
@@ -87,12 +86,13 @@ void buildVGG(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *networ
                         ->addConstant(DimsHW{1, 4096},
                                       weights_map.at("classifier." + std::to_string(config.classifier_weight_indices[1]) + ".bias"))
                         ->getOutput(0);
-    ITensor *fc3w = network
-                        ->addConstant(DimsHW{impl.numClasses(), 4096},
-                                      weights_map.at("classifier." + std::to_string(config.classifier_weight_indices[2]) + ".weight"))
-                        ->getOutput(0);
+    const int num_classes = impl.modelConfig().numClasses();
+    ITensor  *fc3w        = network
+                       ->addConstant(DimsHW{num_classes, 4096},
+                                     weights_map.at("classifier." + std::to_string(config.classifier_weight_indices[2]) + ".weight"))
+                       ->getOutput(0);
     ITensor *fc3b = network
-                        ->addConstant(DimsHW{1, impl.numClasses()},
+                        ->addConstant(DimsHW{1, num_classes},
                                       weights_map.at("classifier." + std::to_string(config.classifier_weight_indices[2]) + ".bias"))
                         ->getOutput(0);
 

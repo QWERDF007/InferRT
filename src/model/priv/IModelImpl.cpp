@@ -15,7 +15,7 @@ namespace {
 void ValidateModelConfig(const IModelImpl &impl)
 {
     const auto &config             = impl.modelConfig();
-    const auto &input_shape        = config.inputShape();
+    const auto &input_shapes       = config.inputShapes();
     const auto &input_tensor_names = config.inputTensorNames();
     const auto &output_tensor_names = config.outputTensorNames();
 
@@ -25,15 +25,32 @@ void ValidateModelConfig(const IModelImpl &impl)
                              config.numClasses());
     }
 
-    if (input_shape.channels <= 0 || input_shape.height <= 0 || input_shape.width <= 0)
+    if (input_shapes.empty())
     {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "input shape must be positive, got C=%d H=%d W=%d",
-                             input_shape.channels, input_shape.height, input_shape.width);
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "at least one input shape is required");
+    }
+
+    for (size_t i = 0; i < input_shapes.size(); ++i)
+    {
+        const auto &input_shape = input_shapes[i];
+        if (input_shape.d[0] <= 0 || input_shape.d[1] <= 0 || input_shape.d[2] <= 0 || input_shape.d[3] <= 0)
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                                 "input shape at index %zu must be positive, got N=%d C=%d H=%d W=%d", i,
+                                 input_shape.d[0], input_shape.d[1], input_shape.d[2], input_shape.d[3]);
+        }
     }
 
     if (input_tensor_names.empty())
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "at least one input tensor name is required");
+    }
+
+    if (input_tensor_names.size() != input_shapes.size())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                             "input tensor name count (%zu) must match input shape count (%zu)",
+                             input_tensor_names.size(), input_shapes.size());
     }
 
     if (output_tensor_names.empty())
@@ -102,9 +119,14 @@ nvinfer1::ILogger::Severity IModelImpl::logLevel() const noexcept
 
 std::string IModelImpl::generateSuffix(const IModelConfig &config) const noexcept
 {
-    const auto &input_shape = config.inputShape();
-    return "_" + std::to_string(input_shape.channels) + "x" + std::to_string(input_shape.height) + "x"
-         + std::to_string(input_shape.width) + "_" + std::to_string(config.numClasses());
+    std::string suffix;
+    for (const auto &input_shape : config.inputShapes())
+    {
+        suffix += "_" + std::to_string(input_shape.d[0]) + "x" + std::to_string(input_shape.d[1]) + "x"
+                + std::to_string(input_shape.d[2]) + "x" + std::to_string(input_shape.d[3]);
+    }
+    suffix += "_" + std::to_string(config.numClasses());
+    return suffix;
 }
 
 void IModelImpl::setModelConfig(std::unique_ptr<IModelConfig> config)
@@ -112,54 +134,9 @@ void IModelImpl::setModelConfig(std::unique_ptr<IModelConfig> config)
     config_ = config ? std::move(config) : std::make_unique<IModelConfig>();
 }
 
-void IModelImpl::setNumClasses(int num_classes)
-{
-    config_->setNumClasses(num_classes);
-}
-
-void IModelImpl::setInputShape(const InputShape &shape)
-{
-    config_->setInputShape(shape);
-}
-
-void IModelImpl::setInputShape(int channels, int height, int width)
-{
-    config_->setInputShape(channels, height, width);
-}
-
-void IModelImpl::setInputTensorNames(std::vector<std::string> input_tensor_names)
-{
-    config_->setInputTensorNames(std::move(input_tensor_names));
-}
-
-void IModelImpl::setOutputTensorNames(std::vector<std::string> output_tensor_names)
-{
-    config_->setOutputTensorNames(std::move(output_tensor_names));
-}
-
 const IModelConfig &IModelImpl::modelConfig() const noexcept
 {
     return *config_;
-}
-
-int IModelImpl::numClasses() const noexcept
-{
-    return config_->numClasses();
-}
-
-const InputShape &IModelImpl::inputShape() const noexcept
-{
-    return config_->inputShape();
-}
-
-const std::vector<std::string> &IModelImpl::inputTensorNames() const noexcept
-{
-    return config_->inputTensorNames();
-}
-
-const std::vector<std::string> &IModelImpl::outputTensorNames() const noexcept
-{
-    return config_->outputTensorNames();
 }
 
 std::vector<std::string> IModelImpl::ioTensorNames(nvinfer1::TensorIOMode mode) const
@@ -234,7 +211,7 @@ void IModelImpl::setLogLevel(nvinfer1::ILogger::Severity severity)
 nvinfer1::ITensor *IModelImpl::addInputTensor(nvinfer1::INetworkDefinition *network, const nvinfer1::Dims &dims,
                                               nvinfer1::DataType data_type, size_t input_index) const
 {
-    const auto &tensor_names = inputTensorNames();
+    const auto &tensor_names = modelConfig().inputTensorNames();
     if (input_index >= tensor_names.size())
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
@@ -245,10 +222,24 @@ nvinfer1::ITensor *IModelImpl::addInputTensor(nvinfer1::INetworkDefinition *netw
     return network->addInput(tensor_names[input_index].c_str(), data_type, dims);
 }
 
+nvinfer1::ITensor *IModelImpl::addInputTensor(nvinfer1::INetworkDefinition *network, nvinfer1::DataType data_type,
+                                              size_t input_index) const
+{
+    const auto &shapes = modelConfig().inputShapes();
+    if (input_index >= shapes.size())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                             "input index %zu is out of range for %zu configured input shapes", input_index,
+                             shapes.size());
+    }
+
+    return addInputTensor(network, shapes[input_index], data_type, input_index);
+}
+
 void IModelImpl::markOutputTensors(nvinfer1::INetworkDefinition *network,
                                    const std::vector<nvinfer1::ITensor *> &outputs) const
 {
-    const auto &tensor_names = outputTensorNames();
+    const auto &tensor_names = modelConfig().outputTensorNames();
     if (outputs.size() != tensor_names.size())
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
@@ -276,8 +267,8 @@ void IModelImpl::bindTensorAddresses(const std::vector<void *> &buffers)
         throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Execution context is not initialized");
     }
 
-    const auto &input_names  = inputTensorNames();
-    const auto &output_names = outputTensorNames();
+    const auto &input_names  = modelConfig().inputTensorNames();
+    const auto &output_names = modelConfig().outputTensorNames();
     const auto  expected     = input_names.size() + output_names.size();
     if (buffers.size() != expected)
     {

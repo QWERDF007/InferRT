@@ -74,54 +74,9 @@ void IModel::setModelConfig(std::unique_ptr<IModelConfig> config)
     impl_->setModelConfig(std::move(config));
 }
 
-void IModel::setNumClasses(int num_classes)
-{
-    impl_->setNumClasses(num_classes);
-}
-
-void IModel::setInputShape(const InputShape &shape)
-{
-    impl_->setInputShape(shape);
-}
-
-void IModel::setInputShape(int channels, int height, int width)
-{
-    impl_->setInputShape(channels, height, width);
-}
-
-void IModel::setInputTensorNames(std::vector<std::string> input_tensor_names)
-{
-    impl_->setInputTensorNames(std::move(input_tensor_names));
-}
-
-void IModel::setOutputTensorNames(std::vector<std::string> output_tensor_names)
-{
-    impl_->setOutputTensorNames(std::move(output_tensor_names));
-}
-
 const IModelConfig &IModel::modelConfig() const noexcept
 {
     return impl_->modelConfig();
-}
-
-int IModel::numClasses() const noexcept
-{
-    return impl_->numClasses();
-}
-
-const InputShape &IModel::inputShape() const noexcept
-{
-    return impl_->inputShape();
-}
-
-const std::vector<std::string> &IModel::inputTensorNames() const noexcept
-{
-    return impl_->inputTensorNames();
-}
-
-const std::vector<std::string> &IModel::outputTensorNames() const noexcept
-{
-    return impl_->outputTensorNames();
 }
 
 std::vector<std::string> IModel::ioTensorNames(nvinfer1::TensorIOMode mode) const

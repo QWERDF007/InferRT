@@ -12,6 +12,32 @@ using test::model::kRegisteredModels;
 
 INSTANTIATE_TEST_SUITE_P(KnownModels, RegisteredModelsTest, ::testing::ValuesIn(kRegisteredModels));
 
+namespace {
+
+void SetModelTensorNames(irt::model::IModel &model, std::vector<std::string> input_names,
+                         std::vector<std::string> output_names)
+{
+    const auto &config = model.modelConfig();
+    auto        new_config = std::make_unique<irt::model::IModelConfig>();
+    new_config->setNumClasses(config.numClasses());
+    new_config->setInputShapes(config.inputShapes());
+    new_config->setInputTensorNames(std::move(input_names));
+    new_config->setOutputTensorNames(std::move(output_names));
+    model.setModelConfig(std::move(new_config));
+}
+
+void SetModelInputTensorNames(irt::model::IModel &model, std::vector<std::string> input_names)
+{
+    SetModelTensorNames(model, std::move(input_names), model.modelConfig().outputTensorNames());
+}
+
+void SetModelOutputTensorNames(irt::model::IModel &model, std::vector<std::string> output_names)
+{
+    SetModelTensorNames(model, model.modelConfig().inputTensorNames(), std::move(output_names));
+}
+
+} // namespace
+
 /**
  * @brief 所有内置模型都应使用统一的默认权重扩展名和引擎扩展名
  */
@@ -67,11 +93,10 @@ TEST(IModelConfigTest, TensorNamesCanBeConfiguredThroughModelApi)
     const std::vector<std::string> input_names{"image", "aux"};
     const std::vector<std::string> output_names{"logits", "scores"};
 
-    model->setInputTensorNames(input_names);
-    model->setOutputTensorNames(output_names);
+    SetModelTensorNames(*model, input_names, output_names);
 
-    EXPECT_EQ(model->inputTensorNames(), input_names);
-    EXPECT_EQ(model->outputTensorNames(), output_names);
+    EXPECT_EQ(model->modelConfig().inputTensorNames(), input_names);
+    EXPECT_EQ(model->modelConfig().outputTensorNames(), output_names);
 }
 
 /**
@@ -86,8 +111,8 @@ TEST(IModelConfigTest, CreateModelPreservesCustomTensorNamesFromConfig)
     auto model = irt::model::CreateModel("alexnet", std::move(config));
     ASSERT_NE(model, nullptr);
 
-    EXPECT_EQ(model->inputTensorNames(), (std::vector<std::string>{"custom_input_0", "custom_input_1"}));
-    EXPECT_EQ(model->outputTensorNames(), (std::vector<std::string>{"custom_output_0", "custom_output_1"}));
+    EXPECT_EQ(model->modelConfig().inputTensorNames(), (std::vector<std::string>{"custom_input_0", "custom_input_1"}));
+    EXPECT_EQ(model->modelConfig().outputTensorNames(), (std::vector<std::string>{"custom_output_0", "custom_output_1"}));
 }
 
 /**
@@ -173,7 +198,7 @@ TEST(IModelBuildTest, BuildWithEmptyInputTensorNamesThrowsInvalidArgument)
     auto model = irt::model::CreateModel("alexnet");
     ASSERT_NE(model, nullptr);
 
-    model->setInputTensorNames({});
+    SetModelInputTensorNames(*model, {});
 
     EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
 
@@ -196,7 +221,7 @@ TEST(IModelBuildTest, BuildWithEmptyOutputTensorNamesThrowsInvalidArgument)
     auto model = irt::model::CreateModel("alexnet");
     ASSERT_NE(model, nullptr);
 
-    model->setOutputTensorNames({});
+    SetModelOutputTensorNames(*model, {});
 
     EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
 
@@ -219,7 +244,7 @@ TEST(IModelBuildTest, BuildWithEmptyInputTensorNameThrowsInvalidArgument)
     auto model = irt::model::CreateModel("alexnet");
     ASSERT_NE(model, nullptr);
 
-    model->setInputTensorNames({""});
+    SetModelInputTensorNames(*model, {""});
 
     EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
 
@@ -242,7 +267,7 @@ TEST(IModelBuildTest, BuildWithEmptyOutputTensorNameThrowsInvalidArgument)
     auto model = irt::model::CreateModel("alexnet");
     ASSERT_NE(model, nullptr);
 
-    model->setOutputTensorNames({""});
+    SetModelOutputTensorNames(*model, {""});
 
     EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
 
@@ -286,7 +311,7 @@ TEST(IModelBuildOrLoadTest, BuildOrLoadWithEmptyInputTensorNamesThrowsInvalidArg
     auto model = irt::model::CreateModel("alexnet");
     ASSERT_NE(model, nullptr);
 
-    model->setInputTensorNames({});
+    SetModelInputTensorNames(*model, {});
 
     EXPECT_THROW({ model->buildOrLoad("/non/existent/path/model.wts"); }, irt::Exception);
 
@@ -309,7 +334,7 @@ TEST(IModelBuildOrLoadTest, BuildOrLoadWithEmptyOutputTensorNamesThrowsInvalidAr
     auto model = irt::model::CreateModel("alexnet");
     ASSERT_NE(model, nullptr);
 
-    model->setOutputTensorNames({});
+    SetModelOutputTensorNames(*model, {});
 
     EXPECT_THROW({ model->buildOrLoad("/non/existent/path/model.wts"); }, irt::Exception);
 

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <inferrt/model/IModelConfig.hpp>
 #include <inferrt/model/IParams.hpp>
@@ -14,19 +14,23 @@ namespace irt::model::priv {
  * @brief 模型内部实现基类。
  *
  * 该类集中管理模型配置、TensorRT engine 生命周期、张量命名与绑定、
- * 以及日志初始化等公共能力。
+ * 运行时查询以及日志初始化等公共能力。具体模型只需要实现模型名称、
+ * 网络构建和推理入口。
  */
 class IModelImpl
 {
 public:
     /**
-     * @brief 使用默认配置构造内部实现对象。
+     * @brief 使用默认模型配置构造内部实现对象。
      */
     IModelImpl()
         : config_(std::make_unique<IModelConfig>())
     {
     }
 
+    /**
+     * @brief 析构内部实现对象。
+     */
     virtual ~IModelImpl() = default;
 
     /**
@@ -37,7 +41,7 @@ public:
 
     /**
      * @brief 获取权重文件扩展名。
-     * @return 权重文件扩展名。
+     * @return 权重文件扩展名，默认返回 `.wts`。
      */
     virtual std::string wtsExtension() const noexcept
     {
@@ -45,8 +49,8 @@ public:
     }
 
     /**
-     * @brief 获取 engine 文件扩展名。
-     * @return engine 文件扩展名。
+     * @brief 获取 TensorRT engine 文件扩展名。
+     * @return engine 文件扩展名，默认返回 `.engine`。
      */
     virtual std::string engineExtension() const noexcept
     {
@@ -54,7 +58,7 @@ public:
     }
 
     /**
-     * @brief 根据配置生成 engine 文件名后缀。
+     * @brief 根据模型配置生成 engine 文件名后缀。
      * @param config 模型配置。
      * @return 后缀字符串，例如 `_3x224x224_1000`。
      */
@@ -66,40 +70,89 @@ public:
      */
     nvinfer1::ILogger::Severity logLevel() const noexcept;
 
+    /**
+     * @brief 从权重文件构建模型。
+     * @param weights_file 权重文件路径。
+     *
+     * 构建时会根据当前配置生成 TensorRT engine，并保存到派生出的 engine 文件路径。
+     */
     virtual void build(const std::string &weights_file);
+
+    /**
+     * @brief 保存当前 TensorRT engine。
+     * @param engine_file 目标 engine 文件路径。
+     */
     virtual void save(const std::string &engine_file);
+
+    /**
+     * @brief 加载已有 TensorRT engine。
+     * @param engine_file engine 文件路径。
+     */
     virtual void load(const std::string &engine_file);
+
+    /**
+     * @brief 优先加载已有 engine，不存在时再从权重文件构建。
+     * @param weights_file 权重文件路径。
+     */
     virtual void buildOrLoad(const std::string &weights_file);
 
+    /**
+     * @brief 构建 TensorRT 网络定义。
+     * @param network TensorRT 网络定义。
+     * @param weights_map 权重映射表。
+     */
     virtual void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) = 0;
 
+    /**
+     * @brief 执行一次推理。
+     * @param buffers 输入输出缓冲区地址列表。
+     */
     virtual void infer(const std::vector<void *> &buffers) = 0;
 
     /**
      * @brief 设置完整模型配置。
-     * @param config 配置对象。
+     * @param config 模型配置对象；传入空指针时恢复为默认配置。
      */
     void setModelConfig(std::unique_ptr<IModelConfig> config);
-    void setNumClasses(int num_classes);
-    void setInputShape(const InputShape &shape);
-    void setInputShape(int channels, int height, int width);
-    void setInputTensorNames(std::vector<std::string> input_tensor_names);
-    void setOutputTensorNames(std::vector<std::string> output_tensor_names);
 
+    /**
+     * @brief 获取当前模型配置。
+     * @return 模型配置常量引用。
+     */
     const IModelConfig &modelConfig() const noexcept;
 
-    int numClasses() const noexcept;
-
-    const InputShape &inputShape() const noexcept;
-
-    const std::vector<std::string> &inputTensorNames() const noexcept;
-    const std::vector<std::string> &outputTensorNames() const noexcept;
-
+    /**
+     * @brief 获取当前 engine 中指定 I/O 类型的张量名称列表。
+     * @param mode TensorRT 张量 I/O 类型。
+     * @return 符合指定 I/O 类型的张量名称列表。
+     */
     std::vector<std::string> ioTensorNames(nvinfer1::TensorIOMode mode) const;
-    nvinfer1::Dims           tensorShape(const std::string &tensor_name) const;
-    nvinfer1::DataType       tensorDataType(const std::string &tensor_name) const;
-    void                     setTensorShape(const std::string &tensor_name, const nvinfer1::Dims &dims);
 
+    /**
+     * @brief 获取指定张量的运行时形状。
+     * @param tensor_name 张量名称。
+     * @return 张量维度。
+     */
+    nvinfer1::Dims tensorShape(const std::string &tensor_name) const;
+
+    /**
+     * @brief 获取指定张量的数据类型。
+     * @param tensor_name 张量名称。
+     * @return TensorRT 数据类型。
+     */
+    nvinfer1::DataType tensorDataType(const std::string &tensor_name) const;
+
+    /**
+     * @brief 设置输入张量的运行时形状。
+     * @param tensor_name 张量名称。
+     * @param dims 运行时维度。
+     */
+    void setTensorShape(const std::string &tensor_name, const nvinfer1::Dims &dims);
+
+    /**
+     * @brief 设置日志级别。
+     * @param severity TensorRT 日志严重性级别。
+     */
     void setLogLevel(nvinfer1::ILogger::Severity severity);
 
     /**
@@ -113,6 +166,19 @@ public:
     nvinfer1::ITensor *addInputTensor(nvinfer1::INetworkDefinition *network, const nvinfer1::Dims &dims,
                                       nvinfer1::DataType data_type   = nvinfer1::DataType::kFLOAT,
                                       size_t             input_index = 0) const;
+
+    /**
+     * @brief 按配置向网络中添加输入张量。
+     * @param network TensorRT 网络定义。
+     * @param data_type 输入张量数据类型。
+     * @param input_index 输入张量索引，用于同时选择输入名称和输入尺寸。
+     * @return 新增的输入张量。
+     *
+     * 输入名称来自 inputTensorNames()[input_index]，输入尺寸来自 inputShapes()[input_index]。
+     */
+    nvinfer1::ITensor *addInputTensor(nvinfer1::INetworkDefinition *network,
+                                      nvinfer1::DataType            data_type   = nvinfer1::DataType::kFLOAT,
+                                      size_t                        input_index = 0) const;
 
     /**
      * @brief 为输出张量命名并标记为网络输出。
@@ -155,7 +221,7 @@ private:
     /// 模型配置对象。
     std::unique_ptr<IModelConfig> config_;
     /// TensorRT 相关运行时对象。
-    TRTParams                     trt_params_;
+    TRTParams trt_params_;
 };
 
 } // namespace irt::model::priv

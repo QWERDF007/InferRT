@@ -108,66 +108,10 @@ public:
     virtual void setModelConfig(std::unique_ptr<IModelConfig> config);
 
     /**
-     * @brief 设置类别数。
-     * @param num_classes 分类类别数。
-     */
-    virtual void setNumClasses(int num_classes);
-
-    /**
-     * @brief 设置输入尺寸。
-     * @param shape 输入尺寸。
-     */
-    virtual void setInputShape(const InputShape &shape);
-
-    /**
-     * @brief 设置输入尺寸。
-     * @param channels 输入通道数。
-     * @param height 输入高度。
-     * @param width 输入宽度。
-     */
-    virtual void setInputShape(int channels, int height, int width);
-
-    /**
-     * @brief 设置输入张量名称列表。
-     * @param input_tensor_names 输入张量名称列表。
-     */
-    virtual void setInputTensorNames(std::vector<std::string> input_tensor_names);
-
-    /**
-     * @brief 设置输出张量名称列表。
-     * @param output_tensor_names 输出张量名称列表。
-     */
-    virtual void setOutputTensorNames(std::vector<std::string> output_tensor_names);
-
-    /**
      * @brief 获取当前模型配置。
-     * @return 模型配置的常量引用。
+     * @return 模型配置常量引用。
      */
     virtual const IModelConfig &modelConfig() const noexcept;
-
-    /**
-     * @brief 获取类别数。
-     * @return 当前类别数。
-     */
-    virtual int numClasses() const noexcept;
-
-    /**
-     * @brief 获取输入尺寸。
-     * @return 输入尺寸。
-     */
-    virtual const InputShape &inputShape() const noexcept;
-
-    /**
-     * @brief 获取输入张量名称列表。
-     * @return 输入张量名称列表。
-     */
-    virtual const std::vector<std::string> &inputTensorNames() const noexcept;
-
-    /**
-     * @brief 获取输出张量名称列表。
-     * @return 输出张量名称列表。
-     */
-    virtual const std::vector<std::string> &outputTensorNames() const noexcept;
 
     /**
      * @brief 获取当前 engine 中指定类型的 I/O 张量名称。

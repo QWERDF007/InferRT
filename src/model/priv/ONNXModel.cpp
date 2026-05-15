@@ -44,48 +44,93 @@ std::string BuildEngineFileName(const ONNXModel &model, const std::string &onnx_
 void ValidateConfig(const ONNXModel &model)
 {
     const auto &config  = model.modelConfig();
-    const auto &shape   = config.inputShape();
+    const auto &shapes  = config.inputShapes();
     const auto &inputs  = config.inputTensorNames();
     const auto &outputs = config.outputTensorNames();
 
-    if (shape.channels <= 0 || shape.height <= 0 || shape.width <= 0)
+    if (shapes.empty())
     {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "input shape must be positive, got C=%d H=%d W=%d",
-                             shape.channels, shape.height, shape.width);
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "input shapes must not be empty");
+    }
+
+    for (size_t i = 0; i < shapes.size(); ++i)
+    {
+        const auto &shape = shapes[i];
+        if (shape.d[0] <= 0 || shape.d[1] <= 0 || shape.d[2] <= 0 || shape.d[3] <= 0)
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                                 "input shape at index %zu must be positive, got N=%d C=%d H=%d W=%d", i,
+                                 shape.d[0], shape.d[1], shape.d[2], shape.d[3]);
+        }
     }
 
     if (inputs.empty() || outputs.empty())
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "input and output tensor names must not be empty");
     }
+
+    if (inputs.size() != shapes.size())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                             "input tensor name count (%zu) must match input shape count (%zu)", inputs.size(),
+                             shapes.size());
+    }
 }
 
 void SyncModelMetadataFromEngine(ONNXModel &model)
 {
-    const auto input_names  = model.ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
-    const auto output_names = model.ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+    const auto &current_config = model.modelConfig();
+    const int   num_classes    = current_config.numClasses();
+    auto        input_shapes   = current_config.inputShapes();
+    auto        input_names    = current_config.inputTensorNames();
+    auto        output_names   = current_config.outputTensorNames();
 
-    if (!input_names.empty())
+    const auto engine_input_names  = model.ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
+    const auto engine_output_names = model.ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+
+    if (!engine_input_names.empty())
     {
-        model.setInputTensorNames(input_names);
+        input_names = engine_input_names;
 
-        const auto input_dims = model.tensorShape(input_names.front());
-        if (input_dims.nbDims >= 3)
+        std::vector<nvinfer1::Dims4> engine_input_shapes;
+        engine_input_shapes.reserve(input_names.size());
+        for (const auto &input_name : input_names)
         {
-            const int c = static_cast<int>(input_dims.d[input_dims.nbDims - 3]);
-            const int h = static_cast<int>(input_dims.d[input_dims.nbDims - 2]);
-            const int w = static_cast<int>(input_dims.d[input_dims.nbDims - 1]);
-            if (c > 0 && h > 0 && w > 0)
+            const auto input_dims = model.tensorShape(input_name);
+            if (input_dims.nbDims >= 3)
             {
-                model.setInputShape(c, h, w);
+                int batch = 1;
+                if (input_dims.nbDims >= 4 && input_dims.d[input_dims.nbDims - 4] > 0)
+                {
+                    batch = static_cast<int>(input_dims.d[input_dims.nbDims - 4]);
+                }
+                const int c = static_cast<int>(input_dims.d[input_dims.nbDims - 3]);
+                const int h = static_cast<int>(input_dims.d[input_dims.nbDims - 2]);
+                const int w = static_cast<int>(input_dims.d[input_dims.nbDims - 1]);
+                if (c > 0 && h > 0 && w > 0)
+                {
+                    engine_input_shapes.emplace_back(batch, c, h, w);
+                }
             }
+        }
+
+        if (engine_input_shapes.size() == input_names.size())
+        {
+            input_shapes = std::move(engine_input_shapes);
         }
     }
 
-    if (!output_names.empty())
+    if (!engine_output_names.empty())
     {
-        model.setOutputTensorNames(output_names);
+        output_names = engine_output_names;
     }
+
+    auto config = std::make_unique<IModelConfig>();
+    config->setNumClasses(num_classes);
+    config->setInputShapes(std::move(input_shapes));
+    config->setInputTensorNames(std::move(input_names));
+    config->setOutputTensorNames(std::move(output_names));
+    model.setModelConfig(std::move(config));
 }
 
 } // namespace

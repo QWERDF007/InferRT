@@ -210,8 +210,7 @@ void buildMobileNetV2(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition
 {
     using namespace nvinfer1;
 
-    const auto &shape = impl.inputShape();
-    ITensor    *x     = impl.addInputTensor(network, Dims4{1, shape.channels, shape.height, shape.width});
+    ITensor *x = impl.addInputTensor(network);
     x = addConvBnAct(network, weights_map, *x, "features.0.", 32, {3, 2, 1, 1, Act::Relu6}, 1e-5f);
 
     const std::array<std::array<int, 4>, 7> cfg = {{{1, 16, 1, 1}, {6, 24, 2, 2}, {6, 32, 3, 2}, {6, 64, 4, 2},
@@ -229,7 +228,8 @@ void buildMobileNetV2(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition
     }
 
     x = addConvBnAct(network, weights_map, *x, "features.18.", 1280, {1, 1, 1, 0, Act::Relu6}, 1e-5f);
-    x = addLinear(network, *addAvgFlatten(network, *x), weights_map, "classifier.1", impl.numClasses(), 1280);
+    x = addLinear(network, *addAvgFlatten(network, *x), weights_map, "classifier.1", impl.modelConfig().numClasses(),
+                  1280);
     impl.markOutputTensors(network, {x});
 }
 
@@ -238,8 +238,7 @@ void buildMobileNetV3(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition
 {
     using namespace nvinfer1;
 
-    const auto &shape = impl.inputShape();
-    ITensor    *x     = impl.addInputTensor(network, Dims4{1, shape.channels, shape.height, shape.width});
+    ITensor *x = impl.addInputTensor(network);
     x = addConvBnAct(network, weights_map, *x, "features.0.", 16, {3, 2, 1, 1, Act::HSwish}, 1e-3f);
 
     for (size_t i = 0; i < blocks.size(); ++i)
@@ -252,7 +251,7 @@ void buildMobileNetV3(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition
     x = addActivation(network, *addLinear(network, *addAvgFlatten(network, *x), weights_map, "classifier.0", last_channel,
                                           last_conv_channels),
                       Act::HSwish);
-    x = addLinear(network, *x, weights_map, "classifier.3", impl.numClasses(), last_channel);
+    x = addLinear(network, *x, weights_map, "classifier.3", impl.modelConfig().numClasses(), last_channel);
     impl.markOutputTensors(network, {x});
 }
 

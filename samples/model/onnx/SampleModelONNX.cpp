@@ -427,9 +427,6 @@ int main(int argc, char *argv[])
                                  "This sample currently supports exactly one input tensor, got %zu", input_names.size());
         }
 
-        model->setInputTensorNames(input_names);
-        model->setOutputTensorNames(output_names);
-
         const std::string &input_name        = input_names.front();
         const auto         input_engine_dims = model->tensorShape(input_name);
         const auto         input_type        = model->tensorDataType(input_name);

@@ -15,9 +15,7 @@ namespace irt::model {
 void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
     using namespace nvinfer1;
-    const auto &input_shape = inputShape();
-
-    ITensor *input = addInputTensor(network, Dims4{1, input_shape.channels, input_shape.height, input_shape.width});
+    ITensor *input = addInputTensor(network);
 
     // features
     // CRP (Conv-Relu-Pool)
@@ -94,9 +92,10 @@ void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsM
     ITensor *fc1b = network->addConstant(DimsHW{1, 4096}, weights_map.at("classifier.1.bias"))->getOutput(0);
     ITensor *fc2w = network->addConstant(DimsHW{4096, 4096}, weights_map.at("classifier.4.weight"))->getOutput(0);
     ITensor *fc2b = network->addConstant(DimsHW{1, 4096}, weights_map.at("classifier.4.bias"))->getOutput(0);
-    ITensor *fc3w
-        = network->addConstant(DimsHW{numClasses(), 4096}, weights_map.at("classifier.6.weight"))->getOutput(0);
-    ITensor *fc3b = network->addConstant(DimsHW{1, numClasses()}, weights_map.at("classifier.6.bias"))->getOutput(0);
+    const int num_classes = modelConfig().numClasses();
+    ITensor  *fc3w
+        = network->addConstant(DimsHW{num_classes, 4096}, weights_map.at("classifier.6.weight"))->getOutput(0);
+    ITensor *fc3b = network->addConstant(DimsHW{1, num_classes}, weights_map.at("classifier.6.bias"))->getOutput(0);
 
     // IFullyConnectedLayer* fc1 = network->addFullyConnected(*pool3->getOutput(0), 4096, weightMap["classifier.1.weight"], weightMap["classifier.1.bias"]);
     IMatrixMultiplyLayer *fc1_0 = network->addMatrixMultiply(*shuffle->getOutput(0), MatrixOperation::kNONE, *fc1w,

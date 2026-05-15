@@ -147,15 +147,14 @@ nvinfer1::IActivationLayer *Bottleneck(nvinfer1::INetworkDefinition *network, co
  */
 void buildResNet(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
                  const std::array<int, 4> &layers, int expansion, int base_width, int num_classes,
-                 const InputShape &input_shape, BlockBuilder block)
+                 BlockBuilder block)
 {
     using namespace nvinfer1;
 
     Weights empty_weights{DataType::kFLOAT, nullptr, 0};
     int     inplanes = 64;
 
-    ITensor *input
-        = impl.addInputTensor(network, Dims4{1, input_shape.channels, input_shape.height, input_shape.width});
+    ITensor *input = impl.addInputTensor(network);
 
     IConvolutionLayer *conv1
         = network->addConvolutionNd(*input, 64, DimsHW{7, 7}, weights_map.at("conv1.weight"), empty_weights);
@@ -200,37 +199,37 @@ void buildResNet(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *net
 
 void ResNet18::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(*this, network, weights_map, {2, 2, 2, 2}, 1, 64, numClasses(), inputShape(), BasicBlock);
+    buildResNet(*this, network, weights_map, {2, 2, 2, 2}, 1, 64, modelConfig().numClasses(), BasicBlock);
 }
 
 void ResNet34::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 1, 64, numClasses(), inputShape(), BasicBlock);
+    buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 1, 64, modelConfig().numClasses(), BasicBlock);
 }
 
 void ResNet50::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 4, 64, numClasses(), inputShape(), Bottleneck);
+    buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 4, 64, modelConfig().numClasses(), Bottleneck);
 }
 
 void ResNet101::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(*this, network, weights_map, {3, 4, 23, 3}, 4, 64, numClasses(), inputShape(), Bottleneck);
+    buildResNet(*this, network, weights_map, {3, 4, 23, 3}, 4, 64, modelConfig().numClasses(), Bottleneck);
 }
 
 void ResNet152::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(*this, network, weights_map, {3, 8, 36, 3}, 4, 64, numClasses(), inputShape(), Bottleneck);
+    buildResNet(*this, network, weights_map, {3, 8, 36, 3}, 4, 64, modelConfig().numClasses(), Bottleneck);
 }
 
 void WideResNet50_2::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 4, 128, numClasses(), inputShape(), Bottleneck);
+    buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 4, 128, modelConfig().numClasses(), Bottleneck);
 }
 
 void WideResNet101_2::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(*this, network, weights_map, {3, 4, 23, 3}, 4, 128, numClasses(), inputShape(), Bottleneck);
+    buildResNet(*this, network, weights_map, {3, 4, 23, 3}, 4, 128, modelConfig().numClasses(), Bottleneck);
 }
 
 void ResNet::infer(const std::vector<void *> &buffers)
