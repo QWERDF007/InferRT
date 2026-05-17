@@ -74,4 +74,4 @@ When a new ImageNet-style classification model is added:
 
 1. register the model in `inferrt_model`
 2. add its name to `kSupportedModels` in `SampleModelClassification.cpp`
-3. add its builder to `TORCHVISION_MODEL_ZOO` or handle it in `create_model()` inside `gen_wts.py`
+3. add its builder to `TORCHVISION_MODEL_ZOO` or handle it in `create_model()` inside `model_zoo.py`

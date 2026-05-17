@@ -5,6 +5,8 @@
 #include <inferrt/model/Utils.hpp>
 
 #include <memory>
+#include <functional>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -20,6 +22,8 @@ namespace irt::model::priv {
 class IModelImpl
 {
 public:
+    using NamedTensorMap = std::unordered_map<std::string, nvinfer1::ITensor *>;
+
     /**
      * @brief 使用默认模型配置构造内部实现对象。
      */
@@ -104,10 +108,25 @@ public:
     virtual void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) = 0;
 
     /**
+     * @brief 构建用于特征提取的裁剪网络定义。
+     * @param network TensorRT 网络定义。
+     * @param weights_map 权重映射表。
+     *
+     * 默认实现表示当前模型不支持特征提取裁剪构建。
+     */
+    virtual void buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map);
+
+    /**
      * @brief 执行一次推理。
      * @param buffers 输入输出缓冲区地址列表。
      */
     virtual void infer(const std::vector<void *> &buffers) = 0;
+
+    /**
+     * @brief 执行一次特征提取前向。
+     * @param buffers 输入与特征输出缓冲区地址列表。
+     */
+    virtual void forwardFeatures(const std::vector<void *> &buffers);
 
     /**
      * @brief 设置完整模型配置。
@@ -189,10 +208,31 @@ public:
                            const std::vector<nvinfer1::ITensor *> &outputs) const;
 
     /**
+     * @brief 按配置选中的中间特征输出命名并标记为网络输出。
+     * @param network TensorRT 网络定义。
+     * @param named_tensors 可用于特征提取的命名张量表。
+     */
+    void markFeatureOutputTensors(nvinfer1::INetworkDefinition *network, const NamedTensorMap &named_tensors) const;
+
+    /**
+     * @brief 当所有请求的特征张量都已可用时，立即标记并返回 true。
+     * @param network TensorRT 网络定义。
+     * @param named_tensors 当前已可用的命名张量表。
+     * @return 若已完成特征输出标记则返回 true，否则返回 false。
+     */
+    bool tryMarkFeatureOutputTensors(nvinfer1::INetworkDefinition *network, const NamedTensorMap &named_tensors) const;
+
+    /**
      * @brief 将用户缓冲区地址绑定到 TensorRT 执行上下文。
      * @param buffers 输入输出缓冲区地址列表。
      */
     void bindTensorAddresses(const std::vector<void *> &buffers);
+
+    /**
+     * @brief 将用户缓冲区地址绑定到特征提取执行上下文。
+     * @param buffers 输入与特征输出缓冲区地址列表。
+     */
+    void bindFeatureTensorAddresses(const std::vector<void *> &buffers);
 
     /**
      * @brief 获取可写 TensorRT 运行时参数。
@@ -212,16 +252,77 @@ public:
         return trt_params_;
     }
 
+    TRTParams &featureTrtParams() noexcept
+    {
+        return feature_trt_params_;
+    }
+
+    const TRTParams &featureTrtParams() const noexcept
+    {
+        return feature_trt_params_;
+    }
+
     /**
      * @brief 初始化日志对象。
      */
     void initLogger();
+
+    /**
+     * @brief 获取主推理输出张量名称列表。
+     */
+    std::vector<std::string> primaryOutputTensorNames() const;
+
+    /**
+     * @brief 获取特征提取输出张量名称列表。
+     */
+    std::vector<std::string> featureOutputTensorNames() const;
+
+    /**
+     * @brief 从可用命名张量表中解析用户请求的特征输出张量。
+     * @param named_tensors 可用命名张量表。
+     * @return 与配置顺序一致的特征张量列表。
+     */
+    std::vector<nvinfer1::ITensor *> resolveFeatureTensors(const NamedTensorMap &named_tensors) const;
+
+    /**
+     * @brief 创建并缓存一套 TensorRT 运行时对象。
+     * @param weights_file 权重文件路径，仅用于日志。
+     * @param weights_map 权重映射表。
+     * @param build_fn 网络构建回调。
+     * @param params 目标运行时对象集合。
+     */
+    void buildRuntimeFromWeights(const std::string &weights_file, const WeightsMap &weights_map,
+                                 const std::function<void(nvinfer1::INetworkDefinition *)> &build_fn,
+                                 TRTParams &params);
+
+    /**
+     * @brief 从序列化 engine 文件加载一套运行时对象。
+     * @param engine_file engine 文件路径。
+     * @param params 目标运行时对象集合。
+     */
+    void loadRuntimeFromFile(const std::string &engine_file, TRTParams &params);
+
+    /**
+     * @brief 将当前 engine 序列化保存到文件。
+     * @param engine_file 目标文件路径。
+     * @param params 目标运行时对象集合。
+     */
+    void saveRuntimeToFile(const std::string &engine_file, const TRTParams &params);
+
+    /**
+     * @brief 创建特征提取 sidecar engine 文件路径。
+     * @param base_engine_file 主 engine 文件路径。
+     * @return 特征 engine 文件路径。
+     */
+    std::string featureEngineFileName(const std::string &base_engine_file) const;
 
 private:
     /// 模型配置对象。
     std::unique_ptr<IModelConfig> config_;
     /// TensorRT 相关运行时对象。
     TRTParams trt_params_;
+    /// 特征提取相关运行时对象。
+    TRTParams feature_trt_params_;
 };
 
 } // namespace irt::model::priv

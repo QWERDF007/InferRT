@@ -11,7 +11,8 @@ namespace irt::model {
 /**
  * @brief 模型配置基类。
  *
- * 统一描述模型的类别数、输入张量尺寸、输入张量名称以及输出张量名称。
+ * 统一描述模型的类别数、输入张量尺寸、输入张量名称、主输出张量名称，
+ * 以及可选的中间特征提取配置。
  * 输入尺寸使用 NCHW 顺序的 nvinfer1::Dims4 表示，并与输入张量名称按索引一一对应。
  */
 class INFERRT_MODEL_API IModelConfig
@@ -78,6 +79,28 @@ public:
     }
 
     /**
+     * @brief 设置需要额外导出的中间特征层 key 列表。
+     * @param feature_tensor_names 特征层 key 列表，顺序即输出顺序。
+     *
+     * 这些 key 由具体模型实现定义，例如 `layer1`、`layer4`、`avgpool` 等。
+     */
+    virtual void setFeatureTensorNames(std::vector<std::string> feature_tensor_names)
+    {
+        feature_tensor_names_ = std::move(feature_tensor_names);
+    }
+
+    /**
+     * @brief 设置中间特征输出张量名称列表。
+     * @param feature_output_tensor_names 特征输出张量名称列表。
+     *
+     * 若为空，则默认直接使用 feature_tensor_names 作为输出张量名称。
+     */
+    virtual void setFeatureOutputTensorNames(std::vector<std::string> feature_output_tensor_names)
+    {
+        feature_output_tensor_names_ = std::move(feature_output_tensor_names);
+    }
+
+    /**
      * @brief 获取类别数。
      * @return 当前类别数。
      */
@@ -124,6 +147,24 @@ public:
         return output_tensor_names_;
     }
 
+    /**
+     * @brief 获取请求导出的中间特征层 key 列表。
+     * @return 特征层 key 列表。
+     */
+    virtual const std::vector<std::string> &featureTensorNames() const noexcept
+    {
+        return feature_tensor_names_;
+    }
+
+    /**
+     * @brief 获取中间特征输出张量名称列表。
+     * @return 特征输出张量名称列表。
+     */
+    virtual const std::vector<std::string> &featureOutputTensorNames() const noexcept
+    {
+        return feature_output_tensor_names_;
+    }
+
 protected:
     /// 类别数，默认对应 ImageNet-1K。
     int                          num_classes_{1000};
@@ -135,6 +176,10 @@ protected:
     std::vector<std::string> input_tensor_names_{"input"};
     /// 输出张量名称列表。
     std::vector<std::string> output_tensor_names_{"output"};
+    /// 请求导出的中间特征层 key 列表。
+    std::vector<std::string> feature_tensor_names_{};
+    /// 中间特征输出张量名称列表；为空时回退到 feature_tensor_names_。
+    std::vector<std::string> feature_output_tensor_names_{};
 };
 
 } // namespace irt::model

@@ -47,6 +47,13 @@ public:
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 
     /**
+     * @brief 构建 AlexNet 的特征提取裁剪网络。
+     * @param network TensorRT 网络定义。
+     * @param weights_map 权重映射表。
+     */
+    void buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
+
+    /**
      * @brief 执行 AlexNet 推理。
      * @param buffers 输入输出缓冲区地址列表。
      */

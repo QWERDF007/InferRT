@@ -69,6 +69,11 @@ void IModel::infer(const std::vector<void *> &buffers)
     impl_->infer(buffers);
 }
 
+void IModel::forwardFeatures(const std::vector<void *> &buffers)
+{
+    impl_->forwardFeatures(buffers);
+}
+
 void IModel::setModelConfig(std::unique_ptr<IModelConfig> config)
 {
     impl_->setModelConfig(std::move(config));

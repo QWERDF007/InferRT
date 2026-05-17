@@ -75,6 +75,12 @@ void ValidateConfig(const ONNXModel &model)
                              "input tensor name count (%zu) must match input shape count (%zu)", inputs.size(),
                              shapes.size());
     }
+
+    if (!config.featureTensorNames().empty())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION,
+                             "ONNXModel does not support selecting intermediate feature tensors");
+    }
 }
 
 void SyncModelMetadataFromEngine(ONNXModel &model)

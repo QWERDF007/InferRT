@@ -35,6 +35,8 @@ public:
      * @param buffers 输入输出缓冲区地址列表。
      */
     void infer(const std::vector<void *> &buffers) override;
+
+    virtual void buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override = 0;
 };
 
 /**
@@ -67,6 +69,7 @@ public:
      * @param weights_map 权重映射表。
      */
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
+    void buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
 /**
@@ -99,6 +102,7 @@ public:
      * @param weights_map 权重映射表。
      */
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
+    void buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
 /**
@@ -131,6 +135,7 @@ public:
      * @param weights_map 权重映射表。
      */
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
+    void buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
 } // namespace irt::model

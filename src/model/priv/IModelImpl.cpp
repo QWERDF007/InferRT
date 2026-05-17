@@ -2,11 +2,34 @@
 
 #include <inferrt/core/Exception.hpp>
 
+#include <cctype>
 #include <fstream>
+#include <functional>
+#include <unordered_set>
 
 namespace irt::model::priv {
 
 namespace {
+
+bool HasTensor(const nvinfer1::ICudaEngine *engine, const std::string &tensor_name)
+{
+    if (!engine)
+    {
+        return false;
+    }
+
+    const int32_t num_io_tensors = engine->getNbIOTensors();
+    for (int32_t i = 0; i < num_io_tensors; ++i)
+    {
+        const char *name = engine->getIOTensorName(i);
+        if (name && tensor_name == name)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 /**
  * @brief 在构建或加载模型前验证配置合法性。
@@ -14,10 +37,12 @@ namespace {
  */
 void ValidateModelConfig(const IModelImpl &impl)
 {
-    const auto &config             = impl.modelConfig();
-    const auto &input_shapes       = config.inputShapes();
-    const auto &input_tensor_names = config.inputTensorNames();
-    const auto &output_tensor_names = config.outputTensorNames();
+    const auto &config                       = impl.modelConfig();
+    const auto &input_shapes                 = config.inputShapes();
+    const auto &input_tensor_names           = config.inputTensorNames();
+    const auto &output_tensor_names          = config.outputTensorNames();
+    const auto &feature_tensor_names         = config.featureTensorNames();
+    const auto &feature_output_tensor_names = config.featureOutputTensorNames();
 
     if (config.numClasses() <= 0)
     {
@@ -73,6 +98,50 @@ void ValidateModelConfig(const IModelImpl &impl)
             throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "output tensor name must not be empty");
         }
     }
+
+    for (const auto &feature_tensor_name : feature_tensor_names)
+    {
+        if (feature_tensor_name.empty())
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "feature tensor name must not be empty");
+        }
+    }
+
+    if (!feature_output_tensor_names.empty() && feature_output_tensor_names.size() != feature_tensor_names.size())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                             "feature output tensor name count (%zu) must match feature tensor count (%zu)",
+                             feature_output_tensor_names.size(), feature_tensor_names.size());
+    }
+
+    for (const auto &feature_output_tensor_name : feature_output_tensor_names)
+    {
+        if (feature_output_tensor_name.empty())
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "feature output tensor name must not be empty");
+        }
+    }
+
+    std::unordered_set<std::string> unique_output_names;
+    for (const auto &output_tensor_name : output_tensor_names)
+    {
+        if (!unique_output_names.insert(output_tensor_name).second)
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "duplicate output tensor name: %s",
+                                 output_tensor_name.c_str());
+        }
+    }
+
+    std::unordered_set<std::string> unique_feature_output_names;
+    const auto &feature_export_names = feature_output_tensor_names.empty() ? feature_tensor_names : feature_output_tensor_names;
+    for (const auto &feature_export_name : feature_export_names)
+    {
+        if (!unique_feature_output_names.insert(feature_export_name).second)
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "duplicate feature output tensor name: %s",
+                                 feature_export_name.c_str());
+        }
+    }
 }
 
 /**
@@ -96,7 +165,12 @@ std::string BuildEngineFileName(const IModelImpl &impl, const std::string &weigh
 
     const auto &config  = impl.modelConfig();
     const auto  ext_pos = engine_file.rfind(impl.engineExtension());
-    const auto  suffix  = impl.generateSuffix(config);
+    auto        base_config = IModelConfig{};
+    base_config.setNumClasses(config.numClasses());
+    base_config.setInputShapes(config.inputShapes());
+    base_config.setInputTensorNames(config.inputTensorNames());
+    base_config.setOutputTensorNames(config.outputTensorNames());
+    const auto suffix = impl.generateSuffix(base_config);
 
     if (ext_pos != std::string::npos)
     {
@@ -110,6 +184,26 @@ std::string BuildEngineFileName(const IModelImpl &impl, const std::string &weigh
     return engine_file;
 }
 
+std::string BuildFeatureEngineSuffix(const IModelImpl &impl)
+{
+    auto sanitize = [](const std::string &value) {
+        std::string result;
+        result.reserve(value.size());
+        for (unsigned char ch : value)
+        {
+            result.push_back(std::isalnum(ch) ? static_cast<char>(ch) : '_');
+        }
+        return result;
+    };
+
+    std::string suffix = "_features";
+    for (const auto &feature_tensor_name : impl.modelConfig().featureTensorNames())
+    {
+        suffix += "_feat_" + sanitize(feature_tensor_name);
+    }
+    return suffix;
+}
+
 } // namespace
 
 nvinfer1::ILogger::Severity IModelImpl::logLevel() const noexcept
@@ -119,6 +213,16 @@ nvinfer1::ILogger::Severity IModelImpl::logLevel() const noexcept
 
 std::string IModelImpl::generateSuffix(const IModelConfig &config) const noexcept
 {
+    auto sanitize = [](const std::string &value) {
+        std::string result;
+        result.reserve(value.size());
+        for (unsigned char ch : value)
+        {
+            result.push_back(std::isalnum(ch) ? static_cast<char>(ch) : '_');
+        }
+        return result;
+    };
+
     std::string suffix;
     for (const auto &input_shape : config.inputShapes())
     {
@@ -126,12 +230,22 @@ std::string IModelImpl::generateSuffix(const IModelConfig &config) const noexcep
                 + std::to_string(input_shape.d[2]) + "x" + std::to_string(input_shape.d[3]);
     }
     suffix += "_" + std::to_string(config.numClasses());
+    for (const auto &feature_tensor_name : config.featureTensorNames())
+    {
+        suffix += "_feat_" + sanitize(feature_tensor_name);
+    }
     return suffix;
 }
 
 void IModelImpl::setModelConfig(std::unique_ptr<IModelConfig> config)
 {
     config_ = config ? std::move(config) : std::make_unique<IModelConfig>();
+    trt_params_.engine.reset();
+    trt_params_.context.reset();
+    trt_params_.stream.reset();
+    feature_trt_params_.engine.reset();
+    feature_trt_params_.context.reset();
+    feature_trt_params_.stream.reset();
 }
 
 const IModelConfig &IModelImpl::modelConfig() const noexcept
@@ -162,27 +276,52 @@ std::vector<std::string> IModelImpl::ioTensorNames(nvinfer1::TensorIOMode mode) 
 
 nvinfer1::Dims IModelImpl::tensorShape(const std::string &tensor_name) const
 {
-    if (trt_params_.context)
+    if (trt_params_.context && HasTensor(trt_params_.engine.get(), tensor_name))
     {
         return trt_params_.context->getTensorShape(tensor_name.c_str());
     }
 
-    if (!trt_params_.engine)
+    if (trt_params_.engine && HasTensor(trt_params_.engine.get(), tensor_name))
+    {
+        return trt_params_.engine->getTensorShape(tensor_name.c_str());
+    }
+
+    if (feature_trt_params_.context && HasTensor(feature_trt_params_.engine.get(), tensor_name))
+    {
+        return feature_trt_params_.context->getTensorShape(tensor_name.c_str());
+    }
+
+    if (feature_trt_params_.engine && HasTensor(feature_trt_params_.engine.get(), tensor_name))
+    {
+        return feature_trt_params_.engine->getTensorShape(tensor_name.c_str());
+    }
+
+    if (!trt_params_.engine && !feature_trt_params_.engine)
     {
         throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Engine is not initialized");
     }
 
-    return trt_params_.engine->getTensorShape(tensor_name.c_str());
+    throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Tensor not found: %s", tensor_name.c_str());
 }
 
 nvinfer1::DataType IModelImpl::tensorDataType(const std::string &tensor_name) const
 {
-    if (!trt_params_.engine)
+    if (trt_params_.engine && HasTensor(trt_params_.engine.get(), tensor_name))
+    {
+        return trt_params_.engine->getTensorDataType(tensor_name.c_str());
+    }
+
+    if (feature_trt_params_.engine && HasTensor(feature_trt_params_.engine.get(), tensor_name))
+    {
+        return feature_trt_params_.engine->getTensorDataType(tensor_name.c_str());
+    }
+
+    if (!trt_params_.engine && !feature_trt_params_.engine)
     {
         throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Engine is not initialized");
     }
 
-    return trt_params_.engine->getTensorDataType(tensor_name.c_str());
+    throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Tensor not found: %s", tensor_name.c_str());
 }
 
 void IModelImpl::setTensorShape(const std::string &tensor_name, const nvinfer1::Dims &dims)
@@ -197,14 +336,26 @@ void IModelImpl::setTensorShape(const std::string &tensor_name, const nvinfer1::
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Failed to set input tensor shape: %s",
                              tensor_name.c_str());
     }
+
+    if (feature_trt_params_.context
+        && !feature_trt_params_.context->setInputShape(tensor_name.c_str(), dims))
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Failed to set feature input tensor shape: %s",
+                             tensor_name.c_str());
+    }
 }
 
 void IModelImpl::setLogLevel(nvinfer1::ILogger::Severity severity)
 {
     trt_params_.log_level = severity;
+    feature_trt_params_.log_level = severity;
     if (trt_params_.logger)
     {
         trt_params_.logger->setReportableSeverity(severity);
+    }
+    if (feature_trt_params_.logger)
+    {
+        feature_trt_params_.logger->setReportableSeverity(severity);
     }
 }
 
@@ -239,7 +390,7 @@ nvinfer1::ITensor *IModelImpl::addInputTensor(nvinfer1::INetworkDefinition *netw
 void IModelImpl::markOutputTensors(nvinfer1::INetworkDefinition *network,
                                    const std::vector<nvinfer1::ITensor *> &outputs) const
 {
-    const auto &tensor_names = modelConfig().outputTensorNames();
+    const auto tensor_names = primaryOutputTensorNames();
     if (outputs.size() != tensor_names.size())
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
@@ -259,6 +410,49 @@ void IModelImpl::markOutputTensors(nvinfer1::INetworkDefinition *network,
     }
 }
 
+void IModelImpl::markFeatureOutputTensors(nvinfer1::INetworkDefinition *network, const NamedTensorMap &named_tensors) const
+{
+    const auto feature_outputs = resolveFeatureTensors(named_tensors);
+    const auto tensor_names    = featureOutputTensorNames();
+    if (feature_outputs.size() != tensor_names.size())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                             "feature output tensor count mismatch: got %zu tensors but %zu names were configured",
+                             feature_outputs.size(), tensor_names.size());
+    }
+
+    for (size_t i = 0; i < feature_outputs.size(); ++i)
+    {
+        if (feature_outputs[i] == nullptr)
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "feature output tensor at index %zu is null", i);
+        }
+
+        feature_outputs[i]->setName(tensor_names[i].c_str());
+        network->markOutput(*feature_outputs[i]);
+    }
+}
+
+bool IModelImpl::tryMarkFeatureOutputTensors(nvinfer1::INetworkDefinition *network, const NamedTensorMap &named_tensors) const
+{
+    const auto &feature_tensor_names = modelConfig().featureTensorNames();
+    if (feature_tensor_names.empty())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "feature tensor names must not be empty");
+    }
+
+    for (const auto &feature_tensor_name : feature_tensor_names)
+    {
+        if (named_tensors.find(feature_tensor_name) == named_tensors.end())
+        {
+            return false;
+        }
+    }
+
+    markFeatureOutputTensors(network, named_tensors);
+    return true;
+}
+
 void IModelImpl::bindTensorAddresses(const std::vector<void *> &buffers)
 {
     auto &trt_params = trtParams();
@@ -268,7 +462,7 @@ void IModelImpl::bindTensorAddresses(const std::vector<void *> &buffers)
     }
 
     const auto &input_names  = modelConfig().inputTensorNames();
-    const auto &output_names = modelConfig().outputTensorNames();
+    const auto  output_names = primaryOutputTensorNames();
     const auto  expected     = input_names.size() + output_names.size();
     if (buffers.size() != expected)
     {
@@ -296,34 +490,137 @@ void IModelImpl::bindTensorAddresses(const std::vector<void *> &buffers)
     }
 }
 
+void IModelImpl::bindFeatureTensorAddresses(const std::vector<void *> &buffers)
+{
+    auto &trt_params = featureTrtParams();
+    if (!trt_params.context)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Feature extraction context is not initialized");
+    }
+
+    const auto &input_names   = modelConfig().inputTensorNames();
+    const auto  output_names  = featureOutputTensorNames();
+    const auto  expected      = input_names.size() + output_names.size();
+    if (buffers.size() != expected)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                             "Expected %zu buffers (%zu inputs and %zu feature outputs), got %zu", expected,
+                             input_names.size(), output_names.size(), buffers.size());
+    }
+
+    size_t buffer_index = 0;
+    for (const auto &input_name : input_names)
+    {
+        if (!trt_params.context->setTensorAddress(input_name.c_str(), buffers[buffer_index++]))
+        {
+            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to set feature input tensor address: %s",
+                                 input_name.c_str());
+        }
+    }
+
+    for (const auto &output_name : output_names)
+    {
+        if (!trt_params.context->setTensorAddress(output_name.c_str(), buffers[buffer_index++]))
+        {
+            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to set feature output tensor address: %s",
+                                 output_name.c_str());
+        }
+    }
+}
+
 void IModelImpl::initLogger()
 {
     trt_params_.logger = std::make_unique<Logger>(name(), logLevel());
 }
 
-void IModelImpl::build(const std::string &weights_file)
+std::vector<std::string> IModelImpl::primaryOutputTensorNames() const
+{
+    return modelConfig().outputTensorNames();
+}
+
+std::vector<std::string> IModelImpl::featureOutputTensorNames() const
+{
+    const auto &feature_output_names = modelConfig().featureOutputTensorNames();
+    if (!feature_output_names.empty())
+    {
+        return feature_output_names;
+    }
+
+    return modelConfig().featureTensorNames();
+}
+
+std::vector<nvinfer1::ITensor *> IModelImpl::resolveFeatureTensors(const NamedTensorMap &named_tensors) const
+{
+    std::vector<nvinfer1::ITensor *> outputs;
+    const auto &feature_tensor_names = modelConfig().featureTensorNames();
+    outputs.reserve(feature_tensor_names.size());
+
+    for (const auto &feature_tensor_name : feature_tensor_names)
+    {
+        const auto it = named_tensors.find(feature_tensor_name);
+        if (it == named_tensors.end())
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Requested feature tensor is not available: %s",
+                                 feature_tensor_name.c_str());
+        }
+        if (it->second == nullptr)
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Requested feature tensor is null: %s",
+                                 feature_tensor_name.c_str());
+        }
+        outputs.push_back(it->second);
+    }
+
+    return outputs;
+}
+
+void IModelImpl::buildFeatureNetwork(nvinfer1::INetworkDefinition *, const WeightsMap &)
+{
+    throw irt::Exception(Status::ERROR_INVALID_OPERATION,
+                         "%s does not support building a truncated feature extraction network", name().c_str());
+}
+
+void IModelImpl::forwardFeatures(const std::vector<void *> &buffers)
+{
+    auto &trt_params = featureTrtParams();
+    bindFeatureTensorAddresses(buffers);
+
+    if (!trt_params.stream)
+    {
+        trt_params.stream = MakeCudaStream();
+        if (!trt_params.stream)
+        {
+            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create CUDA stream");
+        }
+    }
+
+    if (!trt_params.context->enqueueV3(*trt_params.stream))
+    {
+        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to execute feature extraction");
+    }
+
+    cudaStreamSynchronize(*trt_params.stream);
+}
+
+void IModelImpl::buildRuntimeFromWeights(const std::string &weights_file, const WeightsMap &,
+                                         const std::function<void(nvinfer1::INetworkDefinition *)> &build_fn,
+                                         TRTParams &params)
 {
     using namespace nvinfer1;
 
-    ValidateModelConfig(*this);
-
-    if (trt_params_.logger == nullptr)
+    if (params.logger == nullptr)
     {
-        initLogger();
+        params.logger = std::make_unique<Logger>(name(), logLevel());
     }
 
-    LOG_INFO(*trt_params_.logger) << "Loading weights file: " << weights_file << std::endl;
-    auto weights_map = loadWeights(weights_file);
-
-    auto builder = std::unique_ptr<IBuilder>(createInferBuilder(*trt_params_.logger));
+    auto builder = std::unique_ptr<IBuilder>(createInferBuilder(*params.logger));
     if (!builder)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create InferBuilder");
     }
 
     const auto flags = 1U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kSTRONGLY_TYPED);
-
-    auto network = std::unique_ptr<INetworkDefinition>(builder->createNetworkV2(flags));
+    auto network     = std::unique_ptr<INetworkDefinition>(builder->createNetworkV2(flags));
     if (!network)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create NetworkDefinition");
@@ -335,92 +632,43 @@ void IModelImpl::build(const std::string &weights_file)
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create BuilderConfig");
     }
 
-    LOG_INFO(*trt_params_.logger) << "Building TensorRT network..." << std::endl;
+    LOG_INFO(*params.logger) << "Building TensorRT network from: " << weights_file << std::endl;
+    build_fn(network.get());
 
-    buildNetwork(network.get(), weights_map);
-
-    LOG_INFO(*trt_params_.logger) << "Building TensorRT engine..." << std::endl;
     auto buffer = std::unique_ptr<IHostMemory>(builder->buildSerializedNetwork(*network, *config));
     if (!buffer)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to build serialized network");
     }
 
-    auto runtime = std::unique_ptr<IRuntime>(nvinfer1::createInferRuntime(*trt_params_.logger));
+    auto runtime = std::unique_ptr<IRuntime>(nvinfer1::createInferRuntime(*params.logger));
     if (!runtime)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create InferRuntime");
     }
 
-    trt_params_.engine = std::shared_ptr<ICudaEngine>(runtime->deserializeCudaEngine(buffer->data(), buffer->size()),
-                                                      [](ICudaEngine *engine) { delete engine; });
-    if (!trt_params_.engine)
+    params.engine = std::shared_ptr<ICudaEngine>(runtime->deserializeCudaEngine(buffer->data(), buffer->size()),
+                                                 [](ICudaEngine *engine) { delete engine; });
+    if (!params.engine)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to deserialize CUDA engine");
     }
 
-    trt_params_.context.reset(trt_params_.engine->createExecutionContext());
-    if (!trt_params_.context)
+    params.context.reset(params.engine->createExecutionContext());
+    if (!params.context)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create execution context");
     }
-
-    LOG_INFO(*trt_params_.logger) << "TensorRT engine built successfully" << std::endl;
-
-    for (auto &wt : weights_map)
-    {
-        delete[] static_cast<const uint32_t *>(wt.second.values);
-    }
 }
 
-/**
- * @brief 将当前 engine 序列化保存到磁盘。
- * @param engine_file 输出文件路径。
- */
-void IModelImpl::save(const std::string &engine_file)
+void IModelImpl::loadRuntimeFromFile(const std::string &engine_file, TRTParams &params)
 {
-    if (!trt_params_.engine)
+    if (params.logger == nullptr)
     {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Engine is not initialized, cannot save");
+        params.logger = std::make_unique<Logger>(name(), logLevel());
     }
 
-    if (trt_params_.logger == nullptr)
-    {
-        initLogger();
-    }
-    LOG_INFO(*trt_params_.logger) << "Saving TensorRT engine to: " << engine_file << std::endl;
-
-    auto serialized = std::unique_ptr<nvinfer1::IHostMemory>(trt_params_.engine->serialize());
-    if (!serialized)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to serialize engine");
-    }
-
-    std::ofstream file(engine_file, std::ios::binary);
-    if (!file.is_open())
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Failed to open file for writing: %s",
-                             engine_file.c_str());
-    }
-
-    file.write(static_cast<const char *>(serialized->data()), serialized->size());
-    file.close();
-
-    LOG_INFO(*trt_params_.logger) << "Engine saved successfully, size: " << serialized->size() / (1024.0 * 1024.0)
-                                  << " MiB" << std::endl;
-}
-
-/**
- * @brief 从磁盘加载并反序列化 engine。
- * @param engine_file engine 文件路径。
- */
-void IModelImpl::load(const std::string &engine_file)
-{
-    if (trt_params_.logger == nullptr)
-    {
-        initLogger();
-    }
-    LOG_INFO(*trt_params_.logger) << "Loading TensorRT engine from: " << engine_file << std::endl;
+    LOG_INFO(*params.logger) << "Loading TensorRT engine from: " << engine_file << std::endl;
 
     std::ifstream file(engine_file, std::ios::binary);
     if (!file.is_open())
@@ -436,30 +684,139 @@ void IModelImpl::load(const std::string &engine_file)
     file.read(engine_data.data(), file_size);
     file.close();
 
-    LOG_INFO(*trt_params_.logger) << "Engine file loaded, size: " << file_size / (1024.0 * 1024.0) << " MiB"
-                                  << std::endl;
-
-    auto runtime = std::unique_ptr<nvinfer1::IRuntime>(nvinfer1::createInferRuntime(*trt_params_.logger));
+    auto runtime = std::unique_ptr<nvinfer1::IRuntime>(nvinfer1::createInferRuntime(*params.logger));
     if (!runtime)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create InferRuntime");
     }
 
-    trt_params_.engine
-        = std::shared_ptr<nvinfer1::ICudaEngine>(runtime->deserializeCudaEngine(engine_data.data(), file_size),
-                                                 [](nvinfer1::ICudaEngine *engine) { delete engine; });
-    if (!trt_params_.engine)
+    params.engine = std::shared_ptr<nvinfer1::ICudaEngine>(runtime->deserializeCudaEngine(engine_data.data(), file_size),
+                                                           [](nvinfer1::ICudaEngine *engine) { delete engine; });
+    if (!params.engine)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to deserialize CUDA engine");
     }
 
-    trt_params_.context.reset(trt_params_.engine->createExecutionContext());
-    if (!trt_params_.context)
+    params.context.reset(params.engine->createExecutionContext());
+    if (!params.context)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create execution context");
     }
+}
 
-    LOG_INFO(*trt_params_.logger) << "TensorRT engine loaded successfully" << std::endl;
+void IModelImpl::saveRuntimeToFile(const std::string &engine_file, const TRTParams &params)
+{
+    if (!params.engine)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Engine is not initialized, cannot save");
+    }
+
+    auto serialized = std::unique_ptr<nvinfer1::IHostMemory>(params.engine->serialize());
+    if (!serialized)
+    {
+        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to serialize engine");
+    }
+
+    std::ofstream file(engine_file, std::ios::binary);
+    if (!file.is_open())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Failed to open file for writing: %s",
+                             engine_file.c_str());
+    }
+
+    file.write(static_cast<const char *>(serialized->data()), serialized->size());
+    file.close();
+}
+
+std::string IModelImpl::featureEngineFileName(const std::string &base_engine_file) const
+{
+    std::string engine_file = base_engine_file;
+    const auto  ext_pos     = engine_file.rfind(engineExtension());
+    const auto  suffix      = BuildFeatureEngineSuffix(*this);
+
+    if (ext_pos != std::string::npos)
+    {
+        engine_file.insert(ext_pos, suffix);
+    }
+    else
+    {
+        engine_file += suffix;
+    }
+
+    return engine_file;
+}
+
+void IModelImpl::build(const std::string &weights_file)
+{
+    ValidateModelConfig(*this);
+    feature_trt_params_.engine.reset();
+    feature_trt_params_.context.reset();
+    feature_trt_params_.stream.reset();
+
+    if (trt_params_.logger == nullptr)
+    {
+        initLogger();
+    }
+
+    LOG_INFO(*trt_params_.logger) << "Loading weights file: " << weights_file << std::endl;
+    auto weights_map = loadWeights(weights_file);
+    buildRuntimeFromWeights(weights_file, weights_map, [&](nvinfer1::INetworkDefinition *network) {
+        buildNetwork(network, weights_map);
+    }, trt_params_);
+
+    if (!modelConfig().featureTensorNames().empty())
+    {
+        buildRuntimeFromWeights(weights_file, weights_map, [&](nvinfer1::INetworkDefinition *network) {
+            buildFeatureNetwork(network, weights_map);
+        }, feature_trt_params_);
+    }
+
+    for (auto &wt : weights_map)
+    {
+        delete[] static_cast<const uint32_t *>(wt.second.values);
+    }
+}
+
+/**
+ * @brief 将当前 engine 序列化保存到磁盘。
+ * @param engine_file 输出文件路径。
+ */
+void IModelImpl::save(const std::string &engine_file)
+{
+    if (trt_params_.logger == nullptr)
+    {
+        initLogger();
+    }
+    LOG_INFO(*trt_params_.logger) << "Saving TensorRT engine to: " << engine_file << std::endl;
+    saveRuntimeToFile(engine_file, trt_params_);
+
+    if (feature_trt_params_.engine)
+    {
+        saveRuntimeToFile(featureEngineFileName(engine_file), feature_trt_params_);
+    }
+}
+
+/**
+ * @brief 从磁盘加载并反序列化 engine。
+ * @param engine_file engine 文件路径。
+ */
+void IModelImpl::load(const std::string &engine_file)
+{
+    feature_trt_params_.engine.reset();
+    feature_trt_params_.context.reset();
+    feature_trt_params_.stream.reset();
+    loadRuntimeFromFile(engine_file, trt_params_);
+
+    if (!modelConfig().featureTensorNames().empty())
+    {
+        const auto feature_engine_file = featureEngineFileName(engine_file);
+        std::ifstream feature_file(feature_engine_file, std::ios::binary);
+        if (feature_file.good())
+        {
+            feature_file.close();
+            loadRuntimeFromFile(feature_engine_file, feature_trt_params_);
+        }
+    }
 }
 
 /**
@@ -480,6 +837,9 @@ void IModelImpl::buildOrLoad(const std::string &weights_file)
     std::ifstream file(engine_file);
     bool          engine_exists = file.good();
     file.close();
+    const bool need_feature_engine = !modelConfig().featureTensorNames().empty();
+    const auto feature_engine_file = featureEngineFileName(engine_file);
+    bool       feature_engine_loaded = false;
 
     if (engine_exists)
     {
@@ -487,7 +847,14 @@ void IModelImpl::buildOrLoad(const std::string &weights_file)
         try
         {
             load(engine_file);
-            return;
+            feature_engine_loaded = !need_feature_engine || static_cast<bool>(feature_trt_params_.context);
+            if (feature_engine_loaded)
+            {
+                return;
+            }
+
+            LOG_INFO(*trt_params_.logger) << "Feature engine is missing, will build it from weights file: "
+                                          << weights_file << std::endl;
         }
         catch (const std::exception &e)
         {
@@ -506,6 +873,25 @@ void IModelImpl::buildOrLoad(const std::string &weights_file)
     catch (const std::exception &e)
     {
         LOG_WARN(*trt_params_.logger) << "Failed to save engine: " << e.what() << std::endl;
+    }
+
+    if (need_feature_engine)
+    {
+        std::ifstream feature_file(feature_engine_file);
+        const bool feature_exists = feature_file.good();
+        feature_file.close();
+
+        if (feature_exists)
+        {
+            try
+            {
+                loadRuntimeFromFile(feature_engine_file, feature_trt_params_);
+            }
+            catch (const std::exception &e)
+            {
+                LOG_WARN(*trt_params_.logger) << "Failed to load feature engine: " << e.what() << std::endl;
+            }
+        }
     }
 }
 

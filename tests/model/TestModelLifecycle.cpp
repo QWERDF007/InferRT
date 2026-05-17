@@ -23,6 +23,8 @@ void SetModelTensorNames(irt::model::IModel &model, std::vector<std::string> inp
     new_config->setInputShapes(config.inputShapes());
     new_config->setInputTensorNames(std::move(input_names));
     new_config->setOutputTensorNames(std::move(output_names));
+    new_config->setFeatureTensorNames(config.featureTensorNames());
+    new_config->setFeatureOutputTensorNames(config.featureOutputTensorNames());
     model.setModelConfig(std::move(new_config));
 }
 
@@ -113,6 +115,38 @@ TEST(IModelConfigTest, CreateModelPreservesCustomTensorNamesFromConfig)
 
     EXPECT_EQ(model->modelConfig().inputTensorNames(), (std::vector<std::string>{"custom_input_0", "custom_input_1"}));
     EXPECT_EQ(model->modelConfig().outputTensorNames(), (std::vector<std::string>{"custom_output_0", "custom_output_1"}));
+}
+
+TEST(IModelConfigTest, FeatureTensorNamesCanBeConfiguredThroughModelApi)
+{
+    auto model = irt::model::CreateModel("resnet18");
+    ASSERT_NE(model, nullptr);
+
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setNumClasses(model->modelConfig().numClasses());
+    config->setInputShapes(model->modelConfig().inputShapes());
+    config->setInputTensorNames(model->modelConfig().inputTensorNames());
+    config->setOutputTensorNames(model->modelConfig().outputTensorNames());
+    config->setFeatureTensorNames({"layer1", "layer4"});
+    config->setFeatureOutputTensorNames({"feat_low", "feat_high"});
+    model->setModelConfig(std::move(config));
+
+    EXPECT_EQ(model->modelConfig().featureTensorNames(), (std::vector<std::string>{"layer1", "layer4"}));
+    EXPECT_EQ(model->modelConfig().featureOutputTensorNames(), (std::vector<std::string>{"feat_low", "feat_high"}));
+}
+
+TEST(IModelConfigTest, CreateModelPreservesFeatureTensorNamesFromConfig)
+{
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setFeatureTensorNames({"layer2", "avgpool"});
+    config->setFeatureOutputTensorNames({"feat_stage2", "feat_pool"});
+
+    auto model = irt::model::CreateModel("resnet50", std::move(config));
+    ASSERT_NE(model, nullptr);
+
+    EXPECT_EQ(model->modelConfig().featureTensorNames(), (std::vector<std::string>{"layer2", "avgpool"}));
+    EXPECT_EQ(model->modelConfig().featureOutputTensorNames(),
+              (std::vector<std::string>{"feat_stage2", "feat_pool"}));
 }
 
 /**
@@ -282,6 +316,31 @@ TEST(IModelBuildTest, BuildWithEmptyOutputTensorNameThrowsInvalidArgument)
     }
 }
 
+TEST(IModelBuildTest, BuildWithEmptyFeatureTensorNameThrowsInvalidArgument)
+{
+    auto model = irt::model::CreateModel("alexnet");
+    ASSERT_NE(model, nullptr);
+
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setFeatureTensorNames({""});
+    model->setModelConfig(std::move(config));
+
+    EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
+}
+
+TEST(IModelBuildTest, BuildWithMismatchedFeatureOutputTensorNamesThrowsInvalidArgument)
+{
+    auto model = irt::model::CreateModel("alexnet");
+    ASSERT_NE(model, nullptr);
+
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setFeatureTensorNames({"pool1", "pool3"});
+    config->setFeatureOutputTensorNames({"feat_only_one"});
+    model->setModelConfig(std::move(config));
+
+    EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
+}
+
 /**
  * @brief buildOrLoad 在权重文件不存在时，也应沿用同样的错误码约定
  */
@@ -347,4 +406,17 @@ TEST(IModelBuildOrLoadTest, BuildOrLoadWithEmptyOutputTensorNamesThrowsInvalidAr
     {
         EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
     }
+}
+
+TEST(IModelBuildOrLoadTest, BuildOrLoadWithMismatchedFeatureOutputTensorNamesThrowsInvalidArgument)
+{
+    auto model = irt::model::CreateModel("alexnet");
+    ASSERT_NE(model, nullptr);
+
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setFeatureTensorNames({"pool1", "pool3"});
+    config->setFeatureOutputTensorNames({"feat_only_one"});
+    model->setModelConfig(std::move(config));
+
+    EXPECT_THROW({ model->buildOrLoad("/non/existent/path/model.wts"); }, irt::Exception);
 }

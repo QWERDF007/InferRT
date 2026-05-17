@@ -147,7 +147,7 @@ nvinfer1::IActivationLayer *Bottleneck(nvinfer1::INetworkDefinition *network, co
  */
 void buildResNet(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
                  const std::array<int, 4> &layers, int expansion, int base_width, int num_classes,
-                 BlockBuilder block)
+                 BlockBuilder block, bool feature_only = false)
 {
     using namespace nvinfer1;
 
@@ -155,6 +155,7 @@ void buildResNet(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *net
     int     inplanes = 64;
 
     ITensor *input = impl.addInputTensor(network);
+    priv::IModelImpl::NamedTensorMap named_tensors{{"input", input}};
 
     IConvolutionLayer *conv1
         = network->addConvolutionNd(*input, 64, DimsHW{7, 7}, weights_map.at("conv1.weight"), empty_weights);
@@ -163,26 +164,70 @@ void buildResNet(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *net
 
     IScaleLayer      *bn1   = addBatchNorm2d(network, weights_map, *conv1->getOutput(0), "bn1", 1e-5f);
     IActivationLayer *relu1 = network->addActivation(*bn1->getOutput(0), ActivationType::kRELU);
+    named_tensors["stem.conv1"] = conv1->getOutput(0);
+    named_tensors["stem.relu"]  = relu1->getOutput(0);
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    {
+        return;
+    }
 
     IPoolingLayer *pool1 = network->addPoolingNd(*relu1->getOutput(0), PoolingType::kMAX, DimsHW{3, 3});
     pool1->setStrideNd(DimsHW{2, 2});
     pool1->setPaddingNd(DimsHW{1, 1});
+    named_tensors["stem.pool"] = pool1->getOutput(0);
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    {
+        return;
+    }
 
     IActivationLayer *layer1 = makeLayer(network, weights_map, *pool1->getOutput(0), inplanes, 64, layers[0], 1,
                                          expansion, base_width, "layer1.", block);
+    named_tensors["layer1"] = layer1->getOutput(0);
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    {
+        return;
+    }
+
     IActivationLayer *layer2 = makeLayer(network, weights_map, *layer1->getOutput(0), inplanes, 128, layers[1], 2,
                                          expansion, base_width, "layer2.", block);
+    named_tensors["layer2"] = layer2->getOutput(0);
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    {
+        return;
+    }
+
     IActivationLayer *layer3 = makeLayer(network, weights_map, *layer2->getOutput(0), inplanes, 256, layers[2], 2,
                                          expansion, base_width, "layer3.", block);
+    named_tensors["layer3"] = layer3->getOutput(0);
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    {
+        return;
+    }
+
     IActivationLayer *layer4 = makeLayer(network, weights_map, *layer3->getOutput(0), inplanes, 512, layers[3], 2,
                                          expansion, base_width, "layer4.", block);
+    named_tensors["layer4"] = layer4->getOutput(0);
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    {
+        return;
+    }
 
     // 对于固定输入 224x224，layer4 输出空间尺寸为 7x7，可直接做全局平均池化。
     IReduceLayer *avgpool
         = network->addReduce(*layer4->getOutput(0), ReduceOperation::kAVG, (1U << 2U) | (1U << 3U), true);
+    named_tensors["avgpool"] = avgpool->getOutput(0);
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    {
+        return;
+    }
 
     IShuffleLayer *shuffle = network->addShuffle(*avgpool->getOutput(0));
     shuffle->setReshapeDimensions(Dims2{1, -1});
+    named_tensors["flatten"] = shuffle->getOutput(0);
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    {
+        return;
+    }
 
     const int fc_in_channels = 512 * expansion;
     ITensor *fcw = network->addConstant(DimsHW{num_classes, fc_in_channels}, weights_map.at("fc.weight"))->getOutput(0);
@@ -191,6 +236,12 @@ void buildResNet(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *net
     IMatrixMultiplyLayer *fc0
         = network->addMatrixMultiply(*shuffle->getOutput(0), MatrixOperation::kNONE, *fcw, MatrixOperation::kTRANSPOSE);
     IElementWiseLayer *fc1 = network->addElementWise(*fc0->getOutput(0), *fcb, ElementWiseOperation::kSUM);
+    named_tensors["logits"] = fc1->getOutput(0);
+    if (feature_only)
+    {
+        impl.markFeatureOutputTensors(network, named_tensors);
+        return;
+    }
 
     impl.markOutputTensors(network, {fc1->getOutput(0)});
 }
@@ -202,9 +253,19 @@ void ResNet18::buildNetwork(nvinfer1::INetworkDefinition *network, const Weights
     buildResNet(*this, network, weights_map, {2, 2, 2, 2}, 1, 64, modelConfig().numClasses(), BasicBlock);
 }
 
+void ResNet18::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
+{
+    buildResNet(*this, network, weights_map, {2, 2, 2, 2}, 1, 64, modelConfig().numClasses(), BasicBlock, true);
+}
+
 void ResNet34::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
     buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 1, 64, modelConfig().numClasses(), BasicBlock);
+}
+
+void ResNet34::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
+{
+    buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 1, 64, modelConfig().numClasses(), BasicBlock, true);
 }
 
 void ResNet50::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
@@ -212,9 +273,19 @@ void ResNet50::buildNetwork(nvinfer1::INetworkDefinition *network, const Weights
     buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 4, 64, modelConfig().numClasses(), Bottleneck);
 }
 
+void ResNet50::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
+{
+    buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 4, 64, modelConfig().numClasses(), Bottleneck, true);
+}
+
 void ResNet101::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
     buildResNet(*this, network, weights_map, {3, 4, 23, 3}, 4, 64, modelConfig().numClasses(), Bottleneck);
+}
+
+void ResNet101::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
+{
+    buildResNet(*this, network, weights_map, {3, 4, 23, 3}, 4, 64, modelConfig().numClasses(), Bottleneck, true);
 }
 
 void ResNet152::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
@@ -222,14 +293,29 @@ void ResNet152::buildNetwork(nvinfer1::INetworkDefinition *network, const Weight
     buildResNet(*this, network, weights_map, {3, 8, 36, 3}, 4, 64, modelConfig().numClasses(), Bottleneck);
 }
 
+void ResNet152::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
+{
+    buildResNet(*this, network, weights_map, {3, 8, 36, 3}, 4, 64, modelConfig().numClasses(), Bottleneck, true);
+}
+
 void WideResNet50_2::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
     buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 4, 128, modelConfig().numClasses(), Bottleneck);
 }
 
+void WideResNet50_2::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
+{
+    buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 4, 128, modelConfig().numClasses(), Bottleneck, true);
+}
+
 void WideResNet101_2::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
     buildResNet(*this, network, weights_map, {3, 4, 23, 3}, 4, 128, modelConfig().numClasses(), Bottleneck);
+}
+
+void WideResNet101_2::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
+{
+    buildResNet(*this, network, weights_map, {3, 4, 23, 3}, 4, 128, modelConfig().numClasses(), Bottleneck, true);
 }
 
 void ResNet::infer(const std::vector<void *> &buffers)

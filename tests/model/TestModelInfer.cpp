@@ -43,6 +43,29 @@ TEST(AlexNetInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
     EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
 }
 
+TEST(AlexNetFeatureInferTest, ForwardFeaturesWithoutFeatureContextThrowsInvalidOperation)
+{
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setFeatureTensorNames({"pool1"});
+
+    auto model = irt::model::CreateModel("alexnet", std::move(config));
+    ASSERT_NE(model, nullptr);
+
+    std::vector<void *> buffers(2, nullptr);
+
+    EXPECT_THROW({ model->forwardFeatures(buffers); }, irt::Exception);
+
+    try
+    {
+        model->forwardFeatures(buffers);
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
+    }
+}
+
 /**
  * @brief ResNet 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION
  */

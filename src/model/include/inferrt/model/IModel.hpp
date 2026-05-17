@@ -117,6 +117,14 @@ public:
     virtual void infer(const std::vector<void *> &buffers);
 
     /**
+     * @brief 执行一次特征提取前向。
+     * @param buffers 输入与特征输出缓冲区地址列表。
+     *
+     * 缓冲区顺序为所有输入张量，随后是 featureTensorNames() 对应的特征输出。
+     */
+    virtual void forwardFeatures(const std::vector<void *> &buffers);
+
+    /**
      * @brief 设置模型配置。
      * @param config 模型配置对象；为空时使用默认配置。
      */
