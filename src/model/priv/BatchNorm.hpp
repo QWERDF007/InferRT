@@ -1,20 +1,20 @@
-#pragma once
+﻿#pragma once
 
 #include <inferrt/model/Utils.hpp>
 
 namespace irt::model {
 
 /**
- * @brief 将 PyTorch BatchNorm2d 层转换为 TensorRT IScaleLayer
+ * @brief 将 PyTorch BatchNorm2d 层转换为 TensorRT IScaleLayer。
  *
- * BatchNorm2d 的推理公式为:
- *   y = gamma * (x - mean) / sqrt(var + eps) + beta
+ * BatchNorm2d 的推理公式为：
+ * y = gamma * (x - mean) / sqrt(var + eps) + beta
  *
- * 可重写为 Scale 层的逐通道仿射变换:
- *   y = scale * x + shift = (gamma / sqrt(var + eps)) * x + (beta - mean * gamma / sqrt(var + eps))
- * 其中:
- *   scale = gamma / sqrt(var + eps)
- *   shift = beta - mean * gamma / sqrt(var + eps)
+ * 可重写为 Scale 层的逐通道仿射变换：
+ * y = scale * x + shift = (gamma / sqrt(var + eps)) * x + (beta - mean * gamma / sqrt(var + eps))
+ *
+ * 其中 scale = gamma / sqrt(var + eps)，shift = beta - mean * gamma / sqrt(var + eps)，
+ * power 恒为 1。
  *
  * @param network    TensorRT 网络定义
  * @param weights_map 模型权重映射表

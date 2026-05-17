@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <NvInfer.h>
 #include <inferrt/model/Export.h>
@@ -12,12 +12,12 @@ namespace irt::model {
 /**
  * @brief 模型权重映射表。
  *
- * key 通常与 PyTorch `state_dict` 中的参数名称一致。
+ * key 通常与 PyTorch state_dict 中的参数名称一致，value 为 TensorRT 权重对象。
  */
 using WeightsMap = std::map<std::string, nvinfer1::Weights>;
 
 /**
- * @brief 从文本格式 `.wts` 文件加载权重。
+ * @brief 从文本格式 .wts 文件加载权重。
  * @param file 权重文件路径。
  * @return 解析后的权重映射表。
  */

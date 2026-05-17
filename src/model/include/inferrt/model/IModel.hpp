@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "IModelConfig.hpp"
 #include "IParams.hpp"
@@ -17,7 +17,7 @@ namespace irt::model {
 /**
  * @brief 面向外部的统一模型包装类。
  *
- * 该类将不同模型实现封装为一致的构建、加载、配置与推理接口，
+ * 该类将不同模型实现封装为一致的构建、加载、配置、运行时查询与推理接口，
  * 调用方无需直接接触具体的内部实现类型。
  */
 class INFERRT_MODEL_API IModel
@@ -33,11 +33,26 @@ public:
      * @param impl 模型内部实现对象。
      */
     explicit IModel(std::unique_ptr<priv::IModelImpl> impl);
+
+    /**
+     * @brief 析构模型包装对象。
+     */
     ~IModel();
 
-    IModel(const IModel &)            = delete;
+    /** @brief 禁止拷贝构造。 */
+    IModel(const IModel &) = delete;
+    /** @brief 禁止拷贝赋值。 */
     IModel &operator=(const IModel &) = delete;
+    /**
+     * @brief 移动构造模型包装对象。
+     * @param other 被移动的模型包装对象。
+     */
     IModel(IModel &&) noexcept;
+    /**
+     * @brief 移动赋值模型包装对象。
+     * @param other 被移动的模型包装对象。
+     * @return 当前对象引用。
+     */
     IModel &operator=(IModel &&) noexcept;
 
     /**
@@ -65,31 +80,31 @@ public:
     virtual nvinfer1::ILogger::Severity logLevel() const noexcept;
 
     /**
-     * @brief 从权重文件构建 engine。
+     * @brief 从权重文件构建 TensorRT engine。
      * @param weights_file 权重文件路径。
      */
     virtual void build(const std::string &weights_file);
 
     /**
-     * @brief 保存当前 engine。
+     * @brief 保存当前 TensorRT engine。
      * @param weights_file 目标文件路径。
      */
     virtual void save(const std::string &weights_file);
 
     /**
-     * @brief 加载已有 engine。
+     * @brief 加载已有 TensorRT engine。
      * @param weights_file engine 文件路径。
      */
     virtual void load(const std::string &weights_file);
 
     /**
-     * @brief 优先加载已有 engine，不存在时再构建。
+     * @brief 优先加载已有 engine，不存在时再从权重文件构建。
      * @param weights_file 权重文件路径。
      */
     virtual void buildOrLoad(const std::string &weights_file);
 
     /**
-     * @brief 构建 TensorRT 网络。
+     * @brief 构建 TensorRT 网络定义。
      * @param network TensorRT 网络定义。
      * @param weights_map 权重映射表。
      */
@@ -103,7 +118,7 @@ public:
 
     /**
      * @brief 设置模型配置。
-     * @param config 模型配置对象。
+     * @param config 模型配置对象；为空时使用默认配置。
      */
     virtual void setModelConfig(std::unique_ptr<IModelConfig> config);
 
@@ -148,6 +163,7 @@ public:
     virtual void setLogLevel(nvinfer1::ILogger::Severity severity);
 
 private:
+    /// 模型内部实现对象。
     std::unique_ptr<priv::IModelImpl> impl_;
 };
 

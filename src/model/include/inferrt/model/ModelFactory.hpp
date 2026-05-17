@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "IModel.hpp"
 
@@ -8,22 +8,21 @@
 namespace irt::model {
 
 /**
- * @brief 模型内部实现对象的创建器类型。
+ * @brief 模型内部实现对象的创建函数类型。
  */
 using ModelCreator = std::unique_ptr<priv::IModelImpl> (*)();
 
 /**
  * @brief 模型注册器。
  *
- * 该类通常配合静态对象或注册宏使用，在程序启动时将模型名称与创建函数
- * 加入全局工厂表。
+ * 该类通常配合静态对象或注册宏使用，在程序启动时将模型名称与创建函数加入全局工厂表。
  */
 class INFERRT_MODEL_API ModelRegistrar
 {
 public:
     /**
      * @brief 注册一个模型创建器。
-     * @param name 模型名称。
+     * @param name 模型注册名称。
      * @param creator 模型创建函数。
      */
     ModelRegistrar(const std::string &name, ModelCreator creator);
@@ -31,9 +30,9 @@ public:
 
 /**
  * @brief 向全局模型注册表注册模型。
- * @param name 模型名称。
+ * @param name 模型注册名称。
  * @param creator 模型创建函数。
- * @return 注册成功返回 `true`，若名称重复则返回 `false`。
+ * @return 注册成功返回 true；名称重复或创建函数无效时返回 false。
  */
 INFERRT_MODEL_API bool RegisterModel(const std::string &name, ModelCreator creator);
 
@@ -41,7 +40,7 @@ INFERRT_MODEL_API bool RegisterModel(const std::string &name, ModelCreator creat
  * @brief 根据名称创建模型对象。
  * @param name 模型名称，查找时会进行大小写归一化。
  * @param config 模型初始配置；为空时使用默认配置。
- * @return 成功时返回模型对象，失败时返回 `nullptr`。
+ * @return 成功时返回模型对象，失败时返回 nullptr。
  */
 INFERRT_MODEL_API std::unique_ptr<IModel> CreateModel(const std::string &name, std::unique_ptr<IModelConfig> config
                                                                                = std::make_unique<IModelConfig>());

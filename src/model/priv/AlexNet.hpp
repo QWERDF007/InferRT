@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "IModelImpl.hpp"
 
@@ -12,15 +12,22 @@ class AlexNet : public priv::IModelImpl
 public:
     /**
      * @brief 返回模型注册 key。
-     * @return 小写模型名称。
+     * @return 小写模型名称 `alexnet`。
      */
     static constexpr const char *key() noexcept
     {
         return "alexnet";
     }
 
+    /**
+     * @brief 构造 AlexNet 模型实现。
+     */
     explicit AlexNet()
         : priv::IModelImpl() {};
+
+    /**
+     * @brief 析构 AlexNet 模型实现。
+     */
     ~AlexNet() override = default;
 
     /**
@@ -41,7 +48,7 @@ public:
 
     /**
      * @brief 执行 AlexNet 推理。
-     * @param buffers 输入输出缓冲区地址。
+     * @param buffers 输入输出缓冲区地址列表。
      */
     void infer(const std::vector<void *> &buffers) override;
 };

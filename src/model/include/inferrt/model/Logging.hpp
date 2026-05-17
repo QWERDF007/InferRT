@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <NvInferRuntime.h>
 #include <NvInferRuntimeCommon.h>
@@ -16,19 +16,19 @@ namespace irt::model {
 using Severity = nvinfer1::ILogger::Severity;
 
 /**
- * @class LogStreamConsumerBuffer
- * @brief 日志流消费者缓冲区类，继承自 std::stringbuf
- * 
- * 该类用于管理日志输出的缓冲区，支持添加前缀和时间戳
+ * @brief 日志流消费者缓冲区。
+ *
+ * 该类继承 std::stringbuf，在缓冲区同步或析构时将内容写入目标输出流，
+ * 并按需添加时间戳和严重性前缀。
  */
 class LogStreamConsumerBuffer : public std::stringbuf
 {
 public:
     /**
-     * @brief 构造函数
-     * @param stream 输出流引用（如 std::cout 或 std::cerr）
-     * @param prefix 日志前缀字符串（如 "[I] ", "[E] " 等）
-     * @param shouldLog 是否应该记录日志的标志
+     * @brief 构造日志缓冲区。
+     * @param stream 目标输出流。
+     * @param prefix 日志前缀，例如 `[I] ` 或 `[E] `。
+     * @param shouldLog 是否输出当前日志。
      */
     LogStreamConsumerBuffer(std::ostream &stream, const std::string &prefix, bool shouldLog)
         : mOutput(stream)
@@ -38,8 +38,8 @@ public:
     }
 
     /**
-     * @brief 移动构造函数
-     * @param other 要移动的源对象
+     * @brief 移动构造日志缓冲区。
+     * @param other 被移动的缓冲区对象。
      */
     LogStreamConsumerBuffer(LogStreamConsumerBuffer &&other)
         : mOutput(other.mOutput)
@@ -49,12 +49,9 @@ public:
     }
 
     /**
-     * @brief 析构函数
-     * 
-     * 在对象销毁时，如果缓冲区中还有未输出的内容，则将其输出
-     * std::streambuf::pbase() 返回指向输出序列缓冲部分开始位置的指针
-     * std::streambuf::pptr() 返回指向输出序列当前位置的指针
-     * 如果开始位置指针不等于当前位置指针，说明缓冲区中有内容需要输出
+     * @brief 析构日志缓冲区。
+     *
+     * 若缓冲区中仍有未输出内容，则在析构前写入目标流。
      */
     ~LogStreamConsumerBuffer()
     {
@@ -65,10 +62,8 @@ public:
     }
 
     /**
-     * @brief 同步流缓冲区
-     * @return 成功返回 0
-     * 
-     * 同步操作包括：将缓冲区内容插入到流中，重置缓冲区，并刷新流
+     * @brief 同步流缓冲区。
+     * @return 成功时返回 0。
      */
     virtual int sync()
     {
@@ -77,9 +72,9 @@ public:
     }
 
     /**
-     * @brief 将缓冲区内容输出到流
-     * 
-     * 如果 mShouldLog 为 true，则在日志前添加时间戳和前缀，然后输出缓冲区内容
+     * @brief 将缓冲区内容输出到目标流。
+     *
+     * 当 mShouldLog 为 true 时，会在日志前添加时间戳和严重性前缀，随后清空缓冲区。
      */
     void putOutput()
     {
@@ -112,8 +107,8 @@ public:
     }
 
     /**
-     * @brief 设置是否应该记录日志
-     * @param shouldLog 是否记录日志的标志
+     * @brief 设置当前缓冲区是否输出日志。
+     * @param shouldLog 是否输出日志。
      */
     void setShouldLog(bool shouldLog)
     {
@@ -121,25 +116,27 @@ public:
     }
 
 private:
-    std::ostream &mOutput;    // 输出流引用
-    std::string   mPrefix;    // 日志前缀
-    bool          mShouldLog; // 是否应该记录日志
+    /// 目标输出流。
+    std::ostream &mOutput;
+    /// 日志严重性前缀。
+    std::string   mPrefix;
+    /// 是否输出当前日志。
+    bool          mShouldLog;
 };
 
 /**
- * @class LogStreamConsumerBase
- * @brief 日志流消费者基类
- * 
- * 便利对象，用于在 LogStreamConsumer 中的 std::ostream 之前初始化 LogStreamConsumerBuffer
+ * @brief 日志流消费者基类。
+ *
+ * 该基类保证 LogStreamConsumerBuffer 先于 std::ostream 初始化。
  */
 class LogStreamConsumerBase
 {
 public:
     /**
-     * @brief 构造函数
-     * @param stream 输出流引用
-     * @param prefix 日志前缀
-     * @param shouldLog 是否应该记录日志
+     * @brief 构造日志流消费者基类。
+     * @param stream 目标输出流。
+     * @param prefix 日志前缀。
+     * @param shouldLog 是否输出当前日志。
      */
     LogStreamConsumerBase(std::ostream &stream, const std::string &prefix, bool shouldLog)
         : mBuffer(stream, prefix, shouldLog)
@@ -147,7 +144,8 @@ public:
     }
 
 protected:
-    LogStreamConsumerBuffer mBuffer; // 日志流缓冲区
+    /// 日志流缓冲区。
+    LogStreamConsumerBuffer mBuffer;
 };
 
 /**
@@ -168,33 +166,33 @@ class LogStreamConsumer
 {
 public:
     /**
-     * @brief 构造函数，创建一个记录指定严重性级别消息的 LogStreamConsumer
-     * @param reportableSeverity 可报告的严重性级别，决定消息是否足够严重以被记录
-     * @param severity 当前消息的严重性级别
+     * @brief 构造日志流消费者。
+     * @param reportableSeverity 当前允许输出的最低严重性级别。
+     * @param severity 当前消息的严重性级别。
      */
     LogStreamConsumer(Severity reportableSeverity, Severity severity)
         : LogStreamConsumerBase(severityOstream(severity), severityPrefix(severity), severity <= reportableSeverity)
-        , std::ostream(&mBuffer) // 将流缓冲区与流关联
+        , std::ostream(&mBuffer)
         , mShouldLog(severity <= reportableSeverity)
         , mSeverity(severity)
     {
     }
 
     /**
-     * @brief 移动构造函数
-     * @param other 要移动的源对象
+     * @brief 移动构造日志流消费者。
+     * @param other 被移动的日志流消费者。
      */
     LogStreamConsumer(LogStreamConsumer &&other)
         : LogStreamConsumerBase(severityOstream(other.mSeverity), severityPrefix(other.mSeverity), other.mShouldLog)
-        , std::ostream(&mBuffer) // 将流缓冲区与流关联
+        , std::ostream(&mBuffer)
         , mShouldLog(other.mShouldLog)
         , mSeverity(other.mSeverity)
     {
     }
 
     /**
-     * @brief 设置可报告的严重性级别
-     * @param reportableSeverity 新的可报告严重性级别
+     * @brief 设置可报告的最低严重性级别。
+     * @param reportableSeverity 新的可报告严重性级别。
      */
     void setReportableSeverity(Severity reportableSeverity)
     {
@@ -204,9 +202,9 @@ public:
 
 private:
     /**
-     * @brief 根据严重性级别返回相应的输出流
-     * @param severity 严重性级别
-     * @return INFO 及以上级别返回 std::cout，否则返回 std::cerr
+     * @brief 根据严重性级别选择输出流。
+     * @param severity 严重性级别。
+     * @return INFO 及更低严重性输出到 std::cout，WARNING 及更高严重性输出到 std::cerr。
      */
     static std::ostream &severityOstream(Severity severity)
     {
@@ -214,9 +212,9 @@ private:
     }
 
     /**
-     * @brief 根据严重性级别返回相应的前缀字符串
-     * @param severity 严重性级别
-     * @return 前缀字符串（如 "[I] ", "[E] " 等）
+     * @brief 根据严重性级别生成日志前缀。
+     * @param severity 严重性级别。
+     * @return 日志前缀字符串。
      */
     static std::string severityPrefix(Severity severity)
     {
@@ -238,8 +236,10 @@ private:
         }
     }
 
-    bool     mShouldLog; // 是否应该记录日志
-    Severity mSeverity;  // 当前消息的严重性级别
+    /// 当前消息是否应输出。
+    bool     mShouldLog;
+    /// 当前消息的严重性级别。
+    Severity mSeverity;
 };
 
 /**
@@ -267,8 +267,9 @@ class Logger : public nvinfer1::ILogger
 {
 public:
     /**
-     * @brief 构造函数
-     * @param severity 默认的严重性级别，默认为 INFO
+     * @brief 构造日志对象。
+     * @param name 日志来源名称。
+     * @param severity 默认可报告严重性级别。
      */
     Logger(const std::string &name, Severity severity = Severity::kWARNING)
         : mName(name)
@@ -277,11 +278,8 @@ public:
     }
 
     /**
-     * @brief 获取与此 Logger 关联的 nvinfer::ILogger 的前向兼容方法
-     * @return 与此 Logger 关联的 nvinfer1::ILogger
-     * 
-     * TODO: 一旦所有示例都更新为使用此方法向 TensorRT 注册 logger
-     * 我们就可以消除 Logger 对 ILogger 的继承
+     * @brief 获取 TensorRT ILogger 接口引用。
+     * @return 当前对象的 nvinfer1::ILogger 引用。
      */
     nvinfer1::ILogger &getTRTLogger()
     {
@@ -289,13 +287,9 @@ public:
     }
 
     /**
-     * @brief nvinfer1::ILogger::log() 虚方法的实现
-     * 
-     * 注意：示例不应直接调用此函数；一旦我们消除对 nvinfer1::ILogger 的继承
-     * 此函数最终将被移除
-     * 
-     * @param severity 消息的严重性级别
-     * @param msg 消息内容
+     * @brief 实现 nvinfer1::ILogger::log()。
+     * @param severity 消息严重性级别。
+     * @param msg 消息内容。
      */
     void log(Severity severity, const char *msg) noexcept override
     {
@@ -303,8 +297,8 @@ public:
     }
 
     /**
-     * @brief 控制日志输出详细程度的方法
-     * @param severity logger 只会输出此级别或更高级别的消息
+     * @brief 设置可报告的最低严重性级别。
+     * @param severity logger 将输出该级别及更高严重性的消息。
      */
     void setReportableSeverity(Severity severity)
     {
@@ -312,8 +306,8 @@ public:
     }
 
     /**
-     * @brief 获取可报告的严重性级别
-     * @return 当前的可报告严重性级别
+     * @brief 获取可报告的最低严重性级别。
+     * @return 当前可报告严重性级别。
      */
     Severity getReportableSeverity() const
     {
@@ -322,24 +316,24 @@ public:
 
 private:
     /**
-     * @brief 根据严重性级别返回适当的日志消息前缀字符串
-     * @param severity 严重性级别
-     * @return 前缀字符串
+     * @brief 根据严重性级别生成日志前缀。
+     * @param severity 严重性级别。
+     * @return 日志前缀字符串。
      */
     static const char *severityPrefix(Severity severity)
     {
         switch (severity)
         {
         case Severity::kINTERNAL_ERROR:
-            return "[F] "; // Fatal - 致命错误
+            return "[F] ";
         case Severity::kERROR:
-            return "[E] "; // Error - 错误
+            return "[E] ";
         case Severity::kWARNING:
-            return "[W] "; // Warning - 警告
+            return "[W] ";
         case Severity::kINFO:
-            return "[I] "; // Info - 信息
+            return "[I] ";
         case Severity::kVERBOSE:
-            return "[V] "; // Verbose - 详细信息
+            return "[V] ";
         default:
             assert(0);
             return "";
@@ -347,10 +341,10 @@ private:
     }
 
     /**
-     * @brief 从给定的 (argc, argv) 值生成命令行字符串
-     * @param argc 参数数量
-     * @param argv 参数数组
-     * @return 命令行字符串
+     * @brief 从 argc 和 argv 生成命令行字符串。
+     * @param argc 参数数量。
+     * @param argv 参数数组。
+     * @return 命令行字符串。
      */
     static std::string genCmdlineString(int argc, const char *const *argv)
     {
@@ -366,8 +360,9 @@ private:
         return ss.str();
     }
 
-    Severity mReportableSeverity; // 可报告的严重性级别
-
+    /// 可报告的最低严重性级别。
+    Severity    mReportableSeverity;
+    /// 日志来源名称。
     std::string mName;
 };
 
