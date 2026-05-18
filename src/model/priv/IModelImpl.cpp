@@ -32,24 +32,18 @@ bool HasTensor(const nvinfer1::ICudaEngine *engine, const std::string &tensor_na
 }
 
 /**
- * @brief 在构建或加载模型前验证配置合法性。
- * @param impl 模型内部实现对象。
+ * @brief 校验模型的类别数量和输入尺寸配置是否合法。
+ * @param config 待校验的模型配置。
  */
-void ValidateModelConfig(const IModelImpl &impl)
+void ValidatePositiveModelDimensions(const IModelConfig &config)
 {
-    const auto &config                       = impl.modelConfig();
-    const auto &input_shapes                 = config.inputShapes();
-    const auto &input_tensor_names           = config.inputTensorNames();
-    const auto &output_tensor_names          = config.outputTensorNames();
-    const auto &feature_tensor_names         = config.featureTensorNames();
-    const auto &feature_output_tensor_names = config.featureOutputTensorNames();
-
     if (config.numClasses() <= 0)
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "num_classes must be positive, got %d",
                              config.numClasses());
     }
 
+    const auto &input_shapes = config.inputShapes();
     if (input_shapes.empty())
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "at least one input shape is required");
@@ -65,6 +59,16 @@ void ValidateModelConfig(const IModelImpl &impl)
                                  input_shape.d[0], input_shape.d[1], input_shape.d[2], input_shape.d[3]);
         }
     }
+}
+
+/**
+ * @brief 校验输入张量名称列表是否合法，并确认其数量与输入尺寸一一对应。
+ * @param config 待校验的模型配置。
+ */
+void ValidateInputTensorConfig(const IModelConfig &config)
+{
+    const auto &input_shapes       = config.inputShapes();
+    const auto &input_tensor_names = config.inputTensorNames();
 
     if (input_tensor_names.empty())
     {
@@ -78,17 +82,26 @@ void ValidateModelConfig(const IModelImpl &impl)
                              input_tensor_names.size(), input_shapes.size());
     }
 
-    if (output_tensor_names.empty())
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "at least one output tensor name is required");
-    }
-
     for (const auto &input_tensor_name : input_tensor_names)
     {
         if (input_tensor_name.empty())
         {
             throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "input tensor name must not be empty");
         }
+    }
+}
+
+/**
+ * @brief 校验主输出张量名称列表是否合法。
+ * @param config 待校验的模型配置。
+ */
+void ValidatePrimaryOutputTensorConfig(const IModelConfig &config)
+{
+    const auto &output_tensor_names = config.outputTensorNames();
+
+    if (output_tensor_names.empty())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "at least one output tensor name is required");
     }
 
     for (const auto &output_tensor_name : output_tensor_names)
@@ -98,6 +111,19 @@ void ValidateModelConfig(const IModelImpl &impl)
             throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "output tensor name must not be empty");
         }
     }
+}
+
+/**
+ * @brief 校验特征提取相关配置是否合法。
+ *
+ * 包括特征张量名称、导出名称数量匹配关系，以及 featureOnly 模式下的必填项约束。
+ *
+ * @param config 待校验的模型配置。
+ */
+void ValidateFeatureTensorConfig(const IModelConfig &config)
+{
+    const auto &feature_tensor_names        = config.featureTensorNames();
+    const auto &feature_output_tensor_names = config.featureOutputTensorNames();
 
     for (const auto &feature_tensor_name : feature_tensor_names)
     {
@@ -127,9 +153,16 @@ void ValidateModelConfig(const IModelImpl &impl)
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
                              "featureTensorNames must not be empty when featureOnly is enabled");
     }
+}
 
+/**
+ * @brief 校验主输出张量名称不存在重复项。
+ * @param config 待校验的模型配置。
+ */
+void ValidateUniqueOutputTensorNames(const IModelConfig &config)
+{
     std::unordered_set<std::string> unique_output_names;
-    for (const auto &output_tensor_name : output_tensor_names)
+    for (const auto &output_tensor_name : config.outputTensorNames())
     {
         if (!unique_output_names.insert(output_tensor_name).second)
         {
@@ -137,9 +170,23 @@ void ValidateModelConfig(const IModelImpl &impl)
                                  output_tensor_name.c_str());
         }
     }
+}
+
+/**
+ * @brief 校验特征输出张量名称不存在重复项。
+ *
+ * 当未显式配置 `featureOutputTensorNames()` 时，使用 `featureTensorNames()` 作为导出名称集合。
+ *
+ * @param config 待校验的模型配置。
+ */
+void ValidateUniqueFeatureOutputTensorNames(const IModelConfig &config)
+{
+    const auto &feature_tensor_names        = config.featureTensorNames();
+    const auto &feature_output_tensor_names = config.featureOutputTensorNames();
+    const auto &feature_export_names =
+        feature_output_tensor_names.empty() ? feature_tensor_names : feature_output_tensor_names;
 
     std::unordered_set<std::string> unique_feature_output_names;
-    const auto &feature_export_names = feature_output_tensor_names.empty() ? feature_tensor_names : feature_output_tensor_names;
     for (const auto &feature_export_name : feature_export_names)
     {
         if (!unique_feature_output_names.insert(feature_export_name).second)
@@ -151,10 +198,26 @@ void ValidateModelConfig(const IModelImpl &impl)
 }
 
 /**
- * @brief 根据权重文件路径和模型配置生成 engine 文件路径。
+ * @brief 在构建或加载模型前验证配置合法性。
+ * @param impl 模型内部实现对象。
+ */
+void ValidateModelConfig(const IModelImpl &impl)
+{
+    const auto &config = impl.modelConfig();
+
+    ValidatePositiveModelDimensions(config);
+    ValidateInputTensorConfig(config);
+    ValidatePrimaryOutputTensorConfig(config);
+    ValidateFeatureTensorConfig(config);
+    ValidateUniqueOutputTensorNames(config);
+    ValidateUniqueFeatureOutputTensorNames(config);
+}
+
+/**
+ * @brief 根据权重文件路径和模型基础配置生成主 engine 文件路径。
  * @param impl 模型内部实现对象。
  * @param weights_file 权重文件路径。
- * @return engine 文件路径。
+ * @return 对应的 engine 文件路径。
  */
 std::string BuildEngineFileName(const IModelImpl &impl, const std::string &weights_file)
 {
