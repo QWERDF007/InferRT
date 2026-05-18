@@ -25,6 +25,7 @@ void SetModelTensorNames(irt::model::IModel &model, std::vector<std::string> inp
     new_config->setOutputTensorNames(std::move(output_names));
     new_config->setFeatureTensorNames(config.featureTensorNames());
     new_config->setFeatureOutputTensorNames(config.featureOutputTensorNames());
+    new_config->setFeatureOnly(config.featureOnly());
     model.setModelConfig(std::move(new_config));
 }
 
@@ -41,7 +42,7 @@ void SetModelOutputTensorNames(irt::model::IModel &model, std::vector<std::strin
 } // namespace
 
 /**
- * @brief 所有内置模型都应使用统一的默认权重扩展名和引擎扩展名
+ * @brief 所有内置模型都应使用统一的默认权重扩展名和引擎扩展名。
  */
 TEST_P(RegisteredModelsTest, DefaultExtensionsMatchExpectedValues)
 {
@@ -55,7 +56,7 @@ TEST_P(RegisteredModelsTest, DefaultExtensionsMatchExpectedValues)
 }
 
 /**
- * @brief 所有内置模型默认日志级别都应为 WARNING
+ * @brief 所有内置模型的默认日志级别都应为 WARNING。
  */
 TEST_P(RegisteredModelsTest, DefaultLogLevelIsWarning)
 {
@@ -67,7 +68,7 @@ TEST_P(RegisteredModelsTest, DefaultLogLevelIsWarning)
 }
 
 /**
- * @brief 多次设置日志级别后，当前值应始终与最后一次设置保持一致
+ * @brief 多次设置日志级别后，当前值应始终与最后一次设置保持一致。
  */
 TEST(IModelDefaultPropertiesTest, SetLogLevelTakesEffect)
 {
@@ -85,7 +86,7 @@ TEST(IModelDefaultPropertiesTest, SetLogLevelTakesEffect)
 }
 
 /**
- * @brief 通过 IModel 接口设置输入/输出张量名称后，应能原样读回配置值
+ * @brief 通过 IModel 接口设置输入/输出张量名称后，应能原样读回配置值。
  */
 TEST(IModelConfigTest, TensorNamesCanBeConfiguredThroughModelApi)
 {
@@ -102,7 +103,7 @@ TEST(IModelConfigTest, TensorNamesCanBeConfiguredThroughModelApi)
 }
 
 /**
- * @brief 通过 CreateModel 传入的自定义 config，应保留其中的输入/输出张量名称
+ * @brief 通过 CreateModel 传入的自定义 config，应保留其中的输入/输出张量名称。
  */
 TEST(IModelConfigTest, CreateModelPreservesCustomTensorNamesFromConfig)
 {
@@ -117,6 +118,9 @@ TEST(IModelConfigTest, CreateModelPreservesCustomTensorNamesFromConfig)
     EXPECT_EQ(model->modelConfig().outputTensorNames(), (std::vector<std::string>{"custom_output_0", "custom_output_1"}));
 }
 
+/**
+ * @brief 通过 IModel 接口设置特征张量名称及其导出名称后，应能正确保留配置。
+ */
 TEST(IModelConfigTest, FeatureTensorNamesCanBeConfiguredThroughModelApi)
 {
     auto model = irt::model::CreateModel("resnet18");
@@ -135,6 +139,30 @@ TEST(IModelConfigTest, FeatureTensorNamesCanBeConfiguredThroughModelApi)
     EXPECT_EQ(model->modelConfig().featureOutputTensorNames(), (std::vector<std::string>{"feat_low", "feat_high"}));
 }
 
+/**
+ * @brief 通过 IModel 接口启用 featureOnly 后，应能在模型配置中正确读回。
+ */
+TEST(IModelConfigTest, FeatureOnlyCanBeConfiguredThroughModelApi)
+{
+    auto model = irt::model::CreateModel("resnet18");
+    ASSERT_NE(model, nullptr);
+
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setNumClasses(model->modelConfig().numClasses());
+    config->setInputShapes(model->modelConfig().inputShapes());
+    config->setInputTensorNames(model->modelConfig().inputTensorNames());
+    config->setOutputTensorNames(model->modelConfig().outputTensorNames());
+    config->setFeatureTensorNames({"layer1"});
+    config->setFeatureOnly(true);
+    model->setModelConfig(std::move(config));
+
+    EXPECT_TRUE(model->modelConfig().featureOnly());
+    EXPECT_EQ(model->modelConfig().featureTensorNames(), (std::vector<std::string>{"layer1"}));
+}
+
+/**
+ * @brief 通过 CreateModel 传入的特征张量配置，应在模型实例中完整保留。
+ */
 TEST(IModelConfigTest, CreateModelPreservesFeatureTensorNamesFromConfig)
 {
     auto config = std::make_unique<irt::model::IModelConfig>();
@@ -150,7 +178,23 @@ TEST(IModelConfigTest, CreateModelPreservesFeatureTensorNamesFromConfig)
 }
 
 /**
- * @brief 在 logger 尚未初始化时设置日志级别，也应正确保存在模型内部
+ * @brief 通过 CreateModel 传入的 featureOnly 配置，应在模型实例中完整保留。
+ */
+TEST(IModelConfigTest, CreateModelPreservesFeatureOnlyFromConfig)
+{
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setFeatureTensorNames({"layer2"});
+    config->setFeatureOnly(true);
+
+    auto model = irt::model::CreateModel("resnet50", std::move(config));
+    ASSERT_NE(model, nullptr);
+
+    EXPECT_TRUE(model->modelConfig().featureOnly());
+    EXPECT_EQ(model->modelConfig().featureTensorNames(), (std::vector<std::string>{"layer2"}));
+}
+
+/**
+ * @brief 在 logger 尚未初始化时设置日志级别，也应正确保存在模型内部。
  */
 TEST(IModelLogLevelTest, SetLogLevelBeforeLoggerInitPersistsValue)
 {
@@ -162,7 +206,7 @@ TEST(IModelLogLevelTest, SetLogLevelBeforeLoggerInitPersistsValue)
 }
 
 /**
- * @brief 未构建 engine 时调用 save，应抛出 ERROR_INVALID_OPERATION
+ * @brief 未构建 engine 时调用 save，应抛出 ERROR_INVALID_OPERATION。
  */
 TEST(IModelSaveTest, SaveWithoutEngineThrowsInvalidOperation)
 {
@@ -183,7 +227,7 @@ TEST(IModelSaveTest, SaveWithoutEngineThrowsInvalidOperation)
 }
 
 /**
- * @brief 加载不存在的 engine 文件时，应抛出 ERROR_INVALID_ARGUMENT
+ * @brief 加载不存在的 engine 文件时，应抛出 ERROR_INVALID_ARGUMENT。
  */
 TEST(IModelLoadTest, LoadNonExistentFileThrowsInvalidArgument)
 {
@@ -204,7 +248,7 @@ TEST(IModelLoadTest, LoadNonExistentFileThrowsInvalidArgument)
 }
 
 /**
- * @brief 使用不存在的权重文件构建模型时，应抛出 ERROR_INVALID_ARGUMENT
+ * @brief 使用不存在的权重文件构建模型时，应抛出 ERROR_INVALID_ARGUMENT。
  */
 TEST(IModelBuildTest, BuildWithNonExistentWeightsThrowsInvalidArgument)
 {
@@ -225,7 +269,7 @@ TEST(IModelBuildTest, BuildWithNonExistentWeightsThrowsInvalidArgument)
 }
 
 /**
- * @brief 当输入张量名称列表为空时，build 应在配置校验阶段抛出 ERROR_INVALID_ARGUMENT
+ * @brief 当输入张量名称列表为空时，build 应在配置校验阶段抛出 ERROR_INVALID_ARGUMENT。
  */
 TEST(IModelBuildTest, BuildWithEmptyInputTensorNamesThrowsInvalidArgument)
 {
@@ -248,7 +292,7 @@ TEST(IModelBuildTest, BuildWithEmptyInputTensorNamesThrowsInvalidArgument)
 }
 
 /**
- * @brief 当输出张量名称列表为空时，build 应在配置校验阶段抛出 ERROR_INVALID_ARGUMENT
+ * @brief 当输出张量名称列表为空时，build 应在配置校验阶段抛出 ERROR_INVALID_ARGUMENT。
  */
 TEST(IModelBuildTest, BuildWithEmptyOutputTensorNamesThrowsInvalidArgument)
 {
@@ -271,7 +315,7 @@ TEST(IModelBuildTest, BuildWithEmptyOutputTensorNamesThrowsInvalidArgument)
 }
 
 /**
- * @brief 当输入张量名称中包含空字符串时，build 应拒绝该非法配置
+ * @brief 当输入张量名称中包含空字符串时，build 应拒绝该非法配置。
  */
 TEST(IModelBuildTest, BuildWithEmptyInputTensorNameThrowsInvalidArgument)
 {
@@ -294,7 +338,7 @@ TEST(IModelBuildTest, BuildWithEmptyInputTensorNameThrowsInvalidArgument)
 }
 
 /**
- * @brief 当输出张量名称中包含空字符串时，build 应拒绝该非法配置
+ * @brief 当输出张量名称中包含空字符串时，build 应拒绝该非法配置。
  */
 TEST(IModelBuildTest, BuildWithEmptyOutputTensorNameThrowsInvalidArgument)
 {
@@ -316,6 +360,9 @@ TEST(IModelBuildTest, BuildWithEmptyOutputTensorNameThrowsInvalidArgument)
     }
 }
 
+/**
+ * @brief 当特征张量名称中包含空字符串时，build 应拒绝该非法配置。
+ */
 TEST(IModelBuildTest, BuildWithEmptyFeatureTensorNameThrowsInvalidArgument)
 {
     auto model = irt::model::CreateModel("alexnet");
@@ -328,6 +375,9 @@ TEST(IModelBuildTest, BuildWithEmptyFeatureTensorNameThrowsInvalidArgument)
     EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
 }
 
+/**
+ * @brief 当特征张量名称与特征输出名称数量不一致时，build 应拒绝该非法配置。
+ */
 TEST(IModelBuildTest, BuildWithMismatchedFeatureOutputTensorNamesThrowsInvalidArgument)
 {
     auto model = irt::model::CreateModel("alexnet");
@@ -342,7 +392,32 @@ TEST(IModelBuildTest, BuildWithMismatchedFeatureOutputTensorNamesThrowsInvalidAr
 }
 
 /**
- * @brief buildOrLoad 在权重文件不存在时，也应沿用同样的错误码约定
+ * @brief 当启用 featureOnly 但未提供特征张量名称时，build 应拒绝该非法配置。
+ */
+TEST(IModelBuildTest, BuildWithFeatureOnlyAndNoFeatureTensorNamesThrowsInvalidArgument)
+{
+    auto model = irt::model::CreateModel("alexnet");
+    ASSERT_NE(model, nullptr);
+
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setFeatureOnly(true);
+    model->setModelConfig(std::move(config));
+
+    EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
+
+    try
+    {
+        model->build("/non/existent/path/model.wts");
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
+    }
+}
+
+/**
+ * @brief buildOrLoad 在权重文件不存在时，也应沿用同样的错误码约定。
  */
 TEST(IModelBuildOrLoadTest, BuildOrLoadNonExistentWeightsThrowsInvalidArgument)
 {
@@ -363,7 +438,7 @@ TEST(IModelBuildOrLoadTest, BuildOrLoadNonExistentWeightsThrowsInvalidArgument)
 }
 
 /**
- * @brief 当输入张量名称列表为空时，buildOrLoad 也应沿用相同的配置校验规则
+ * @brief 当输入张量名称列表为空时，buildOrLoad 也应沿用相同的配置校验规则。
  */
 TEST(IModelBuildOrLoadTest, BuildOrLoadWithEmptyInputTensorNamesThrowsInvalidArgument)
 {
@@ -386,7 +461,7 @@ TEST(IModelBuildOrLoadTest, BuildOrLoadWithEmptyInputTensorNamesThrowsInvalidArg
 }
 
 /**
- * @brief 当输出张量名称列表为空时，buildOrLoad 也应沿用相同的配置校验规则
+ * @brief 当输出张量名称列表为空时，buildOrLoad 也应沿用相同的配置校验规则。
  */
 TEST(IModelBuildOrLoadTest, BuildOrLoadWithEmptyOutputTensorNamesThrowsInvalidArgument)
 {
@@ -408,6 +483,9 @@ TEST(IModelBuildOrLoadTest, BuildOrLoadWithEmptyOutputTensorNamesThrowsInvalidAr
     }
 }
 
+/**
+ * @brief 当特征张量名称与特征输出名称数量不一致时，buildOrLoad 应拒绝该非法配置。
+ */
 TEST(IModelBuildOrLoadTest, BuildOrLoadWithMismatchedFeatureOutputTensorNamesThrowsInvalidArgument)
 {
     auto model = irt::model::CreateModel("alexnet");
@@ -419,4 +497,29 @@ TEST(IModelBuildOrLoadTest, BuildOrLoadWithMismatchedFeatureOutputTensorNamesThr
     model->setModelConfig(std::move(config));
 
     EXPECT_THROW({ model->buildOrLoad("/non/existent/path/model.wts"); }, irt::Exception);
+}
+
+/**
+ * @brief 当启用 featureOnly 但未提供特征张量名称时，buildOrLoad 应拒绝该非法配置。
+ */
+TEST(IModelBuildOrLoadTest, BuildOrLoadWithFeatureOnlyAndNoFeatureTensorNamesThrowsInvalidArgument)
+{
+    auto model = irt::model::CreateModel("alexnet");
+    ASSERT_NE(model, nullptr);
+
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setFeatureOnly(true);
+    model->setModelConfig(std::move(config));
+
+    EXPECT_THROW({ model->buildOrLoad("/non/existent/path/model.wts"); }, irt::Exception);
+
+    try
+    {
+        model->buildOrLoad("/non/existent/path/model.wts");
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
+    }
 }

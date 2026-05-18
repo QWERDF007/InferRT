@@ -149,6 +149,50 @@ TEST(ONNXModelLifecycleTest, BuildWithFeatureTensorSelectionThrowsInvalidOperati
     }
 }
 
+TEST(ONNXModelLifecycleTest, BuildWithFeatureOnlyThrowsInvalidOperation)
+{
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setFeatureTensorNames({"layer4"});
+    config->setFeatureOnly(true);
+
+    auto model = irt::model::CreateModel("onnx", std::move(config));
+    ASSERT_NE(model, nullptr);
+
+    EXPECT_THROW({ model->build("/non/existent/path/model.onnx"); }, irt::Exception);
+
+    try
+    {
+        model->build("/non/existent/path/model.onnx");
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
+    }
+}
+
+TEST(ONNXModelLifecycleTest, BuildOrLoadWithFeatureOnlyThrowsInvalidOperation)
+{
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setFeatureTensorNames({"layer4"});
+    config->setFeatureOnly(true);
+
+    auto model = irt::model::CreateModel("onnx", std::move(config));
+    ASSERT_NE(model, nullptr);
+
+    EXPECT_THROW({ model->buildOrLoad("/non/existent/path/model.onnx"); }, irt::Exception);
+
+    try
+    {
+        model->buildOrLoad("/non/existent/path/model.onnx");
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
+    }
+}
+
 /**
  * @brief context 未初始化时执行 ONNX 推理，应抛出非法操作异常。
  */
