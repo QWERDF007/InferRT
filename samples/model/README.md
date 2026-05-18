@@ -6,6 +6,7 @@ This directory contains the ImageNet-style classification sample assets provided
 
 - `classification/`: shared weight export and inference entry for all supported classification models
 - `features/`: feature dump sample plus a Python comparator for checking InferRT vs PyTorch feature consistency
+- `image_search/`: ResNet18 `layer4` feature extraction plus Faiss-based image retrieval sample
 - `onnx/`: ONNX export script and ONNX -> TensorRT inference sample
 
 ## Build
@@ -15,6 +16,7 @@ Build the shared sample from the project root:
 ```bash
 cmake --build build --config Debug --target inferrt_sample_classification
 cmake --build build --config Debug --target inferrt_sample_features
+cmake --build build --config Debug --target inferrt_sample_image_search
 ```
 
 ## Run
@@ -100,3 +102,24 @@ The dedicated feature sample always configures the model as `featureOnly=true`, 
 feature extractor directly.
 
 See [`features/README.md`](features/README.md) for the dump format and more usage examples.
+
+## Faiss Image Search Sample
+
+Use the dedicated image search sample to build an image retrieval index from a gallery directory and query top-k similar images:
+
+```bash
+build/bin/inferrt_sample_image_search.exe samples/model/classification/resnet18.wts assets/pics assets/pics/dog.jpg
+build/bin/inferrt_sample_image_search.exe samples/model/classification/resnet18.wts assets/pics assets/pics/dog.jpg --topk 5 --rebuild-index
+build/bin/inferrt_sample_image_search.exe samples/model/classification/resnet50.wts assets/pics assets/pics/dog.jpg --model resnet50 --feature layer3
+```
+
+Behavior:
+
+- default model: `resnet18`
+- default feature tensor: `layer4`
+- `--model` and `--feature` can be used to switch to other built-in classification models and feature tensors
+- default `top_k`: `5`
+- if the target Faiss index already exists, the sample reuses it by default
+- pass `--rebuild-index` to rescan the gallery and include newly added images
+
+See [`image_search/README.md`](image_search/README.md) for details.
