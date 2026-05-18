@@ -81,6 +81,12 @@ void ValidateConfig(const ONNXModel &model)
         throw irt::Exception(Status::ERROR_INVALID_OPERATION,
                              "ONNXModel does not support selecting intermediate feature tensors");
     }
+
+    if (config.featureOnly())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION,
+                             "ONNXModel does not support featureOnly configuration");
+    }
 }
 
 void SyncModelMetadataFromEngine(ONNXModel &model)
@@ -136,6 +142,7 @@ void SyncModelMetadataFromEngine(ONNXModel &model)
     config->setInputShapes(std::move(input_shapes));
     config->setInputTensorNames(std::move(input_names));
     config->setOutputTensorNames(std::move(output_names));
+    config->setFeatureOnly(current_config.featureOnly());
     model.setModelConfig(std::move(config));
 }
 
@@ -275,6 +282,7 @@ void ONNXModel::buildOrLoad(const std::string &onnx_file)
 
 void ONNXModel::infer(const std::vector<void *> &buffers)
 {
+    ensurePrimaryInferenceReady();
     auto &trt_params = trtParams();
     bindTensorAddresses(buffers);
 

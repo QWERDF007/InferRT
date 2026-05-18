@@ -101,6 +101,15 @@ public:
     }
 
     /**
+     * @brief 设置是否仅构建特征提取裁剪网络。
+     * @param feature_only 为 true 时，当前模型实例只构建到请求特征为止的网络。
+     */
+    virtual void setFeatureOnly(bool feature_only)
+    {
+        feature_only_ = feature_only;
+    }
+
+    /**
      * @brief 获取类别数。
      * @return 当前类别数。
      */
@@ -165,21 +174,38 @@ public:
         return feature_output_tensor_names_;
     }
 
+    /**
+     * @brief 当前配置是否仅用于特征提取。
+     * @return 为 true 时，主 engine 即为特征裁剪网络。
+     */
+    virtual bool featureOnly() const noexcept
+    {
+        return feature_only_;
+    }
+
 protected:
     /// 类别数，默认对应 ImageNet-1K。
-    int                          num_classes_{1000};
+    int num_classes_{1000};
+
     /// 输入张量尺寸列表，默认输入为 1x3x224x224。
     std::vector<nvinfer1::Dims4> input_shapes_{
         nvinfer1::Dims4{1, 3, 224, 224}
     };
+
     /// 输入张量名称列表。
     std::vector<std::string> input_tensor_names_{"input"};
+
     /// 输出张量名称列表。
     std::vector<std::string> output_tensor_names_{"output"};
+
     /// 请求导出的中间特征层 key 列表。
     std::vector<std::string> feature_tensor_names_{};
+
     /// 中间特征输出张量名称列表；为空时回退到 feature_tensor_names_。
     std::vector<std::string> feature_output_tensor_names_{};
+
+    /// 当前配置是否仅用于特征提取裁剪网络。
+    bool feature_only_{false};
 };
 
 } // namespace irt::model

@@ -36,12 +36,6 @@ public:
      */
     void infer(const std::vector<void *> &buffers) override;
 
-    /**
-     * @brief 构建 ResNet 特征提取裁剪网络。
-     * @param network TensorRT 网络定义。
-     * @param weights_map 权重映射表。
-     */
-    virtual void buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override = 0;
 };
 
 /**
@@ -85,7 +79,6 @@ public:
      * @param weights_map 权重映射表。
      */
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
-    void buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
 /**
@@ -129,7 +122,6 @@ public:
      * @param weights_map 权重映射表。
      */
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
-    void buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
 /**
@@ -173,7 +165,6 @@ public:
      * @param weights_map 权重映射表。
      */
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
-    void buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
 /**
@@ -217,7 +208,6 @@ public:
      * @param weights_map 权重映射表。
      */
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
-    void buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
 /**
@@ -261,7 +251,6 @@ public:
      * @param weights_map 权重映射表。
      */
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
-    void buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
 /**
@@ -305,7 +294,6 @@ public:
      * @param weights_map 权重映射表。
      */
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
-    void buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
 /**
@@ -349,7 +337,6 @@ public:
      * @param weights_map 权重映射表。
      */
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
-    void buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 };
 
 } // namespace irt::model

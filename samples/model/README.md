@@ -59,6 +59,7 @@ Example:
 auto config = std::make_unique<irt::model::IModelConfig>();
 config->setFeatureTensorNames({"layer1", "layer4"});
 config->setFeatureOutputTensorNames({"feat_low", "feat_high"});
+config->setFeatureOnly(true); // optional: build this model instance as a truncated feature extractor
 
 auto model = irt::model::CreateModel("resnet50", std::move(config));
 model->buildOrLoad("samples/model/classification/resnet50.wts");
@@ -67,8 +68,9 @@ model->forwardFeatures(feature_buffers);
 
 Behavior:
 
-- `buildOrLoad(...)` prepares the normal inference engine and, when feature tensors are requested, a separate truncated feature engine
-- `infer(...)` keeps using only `outputTensorNames()` and is unaffected by feature extraction configuration
+- default mode: `buildOrLoad(...)` prepares the normal inference engine and, when feature tensors are requested, a separate truncated feature engine
+- `config->setFeatureOnly(true)` builds the model instance itself as a truncated feature extractor and stores/loads the feature engine path directly
+- `infer(...)` rejects feature-only engines to prevent running classification on an incomplete network
 - `forwardFeatures(...)` uses the truncated feature engine and expects buffers ordered as inputs followed by requested feature outputs
 - if `featureOutputTensorNames()` is empty, the feature layer keys themselves are used as output tensor names
 
@@ -93,5 +95,8 @@ build/bin/inferrt_sample_features.exe resnet18 samples/model/classification/resn
 cd samples/model/features
 python compare_features.py --compare_dir ../../../build/feature_dump_cpp
 ```
+
+The dedicated feature sample always configures the model as `featureOnly=true`, so it builds/loads the truncated
+feature extractor directly.
 
 See [`features/README.md`](features/README.md) for the dump format and more usage examples.

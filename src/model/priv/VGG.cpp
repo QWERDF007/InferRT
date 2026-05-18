@@ -153,15 +153,7 @@ void VGG11::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap
     buildVGG(*this, network, weights_map, {{0, 3, 6, 8, 11, 13, 16, 18},
                                            {64, 128, 256, 256, 512, 512, 512, 512},
                                            {1, 1, 2, 2, 2},
-                                           {0, 3, 6}});
-}
-
-void VGG11::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
-{
-    buildVGG(*this, network, weights_map, {{0, 3, 6, 8, 11, 13, 16, 18},
-                                           {64, 128, 256, 256, 512, 512, 512, 512},
-                                           {1, 1, 2, 2, 2},
-                                           {0, 3, 6}}, true);
+                                           {0, 3, 6}}, isBuildingFeatureEngine());
 }
 
 void VGG13::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
@@ -169,15 +161,7 @@ void VGG13::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap
     buildVGG(*this, network, weights_map, {{0, 2, 5, 7, 10, 12, 15, 17, 20, 22},
                                            {64, 64, 128, 128, 256, 256, 512, 512, 512, 512},
                                            {2, 2, 2, 2, 2},
-                                           {0, 3, 6}});
-}
-
-void VGG13::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
-{
-    buildVGG(*this, network, weights_map, {{0, 2, 5, 7, 10, 12, 15, 17, 20, 22},
-                                           {64, 64, 128, 128, 256, 256, 512, 512, 512, 512},
-                                           {2, 2, 2, 2, 2},
-                                           {0, 3, 6}}, true);
+                                           {0, 3, 6}}, isBuildingFeatureEngine());
 }
 
 void VGG16::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
@@ -185,15 +169,7 @@ void VGG16::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap
     buildVGG(*this, network, weights_map, {{0, 2, 5, 7, 10, 12, 14, 17, 19, 21, 24, 26, 28},
                                            {64, 64, 128, 128, 256, 256, 256, 512, 512, 512, 512, 512, 512},
                                            {2, 2, 3, 3, 3},
-                                           {0, 3, 6}});
-}
-
-void VGG16::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
-{
-    buildVGG(*this, network, weights_map, {{0, 2, 5, 7, 10, 12, 14, 17, 19, 21, 24, 26, 28},
-                                           {64, 64, 128, 128, 256, 256, 256, 512, 512, 512, 512, 512, 512},
-                                           {2, 2, 3, 3, 3},
-                                           {0, 3, 6}}, true);
+                                           {0, 3, 6}}, isBuildingFeatureEngine());
 }
 
 void VGG19::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
@@ -202,20 +178,12 @@ void VGG19::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap
              {{0, 2, 5, 7, 10, 12, 14, 16, 19, 21, 23, 25, 28, 30, 32, 34},
               {64, 64, 128, 128, 256, 256, 256, 256, 512, 512, 512, 512, 512, 512, 512, 512},
               {2, 2, 4, 4, 4},
-              {0, 3, 6}});
-}
-
-void VGG19::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
-{
-    buildVGG(*this, network, weights_map,
-             {{0, 2, 5, 7, 10, 12, 14, 16, 19, 21, 23, 25, 28, 30, 32, 34},
-              {64, 64, 128, 128, 256, 256, 256, 256, 512, 512, 512, 512, 512, 512, 512, 512},
-              {2, 2, 4, 4, 4},
-              {0, 3, 6}}, true);
+              {0, 3, 6}}, isBuildingFeatureEngine());
 }
 
 void VGG::infer(const std::vector<void *> &buffers)
 {
+    ensurePrimaryInferenceReady();
     auto &trt_params = trtParams();
     bindTensorAddresses(buffers);
 

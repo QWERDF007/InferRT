@@ -23,6 +23,11 @@ class IModelImpl
 {
 public:
     using NamedTensorMap = std::unordered_map<std::string, nvinfer1::ITensor *>;
+    enum class BuildVariant
+    {
+        Primary,
+        Feature,
+    };
 
     /**
      * @brief 使用默认模型配置构造内部实现对象。
@@ -106,15 +111,6 @@ public:
      * @param weights_map 权重映射表。
      */
     virtual void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) = 0;
-
-    /**
-     * @brief 构建用于特征提取的裁剪网络定义。
-     * @param network TensorRT 网络定义。
-     * @param weights_map 权重映射表。
-     *
-     * 默认实现表示当前模型不支持特征提取裁剪构建。
-     */
-    virtual void buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map);
 
     /**
      * @brief 执行一次推理。
@@ -262,6 +258,26 @@ public:
         return feature_trt_params_;
     }
 
+    bool isBuildingFeatureEngine() const noexcept
+    {
+        return build_variant_ == BuildVariant::Feature;
+    }
+
+    bool isFeatureOnlyConfig() const noexcept
+    {
+        return modelConfig().featureOnly();
+    }
+
+    TRTParams &featureExecutionParams() noexcept
+    {
+        return isFeatureOnlyConfig() ? trt_params_ : feature_trt_params_;
+    }
+
+    const TRTParams &featureExecutionParams() const noexcept
+    {
+        return isFeatureOnlyConfig() ? trt_params_ : feature_trt_params_;
+    }
+
     /**
      * @brief 初始化日志对象。
      */
@@ -316,6 +332,9 @@ public:
      */
     std::string featureEngineFileName(const std::string &base_engine_file) const;
 
+    void ensurePrimaryInferenceReady() const;
+    void ensureFeatureExtractionReady() const;
+
 private:
     /// 模型配置对象。
     std::unique_ptr<IModelConfig> config_;
@@ -323,6 +342,8 @@ private:
     TRTParams trt_params_;
     /// 特征提取相关运行时对象。
     TRTParams feature_trt_params_;
+    /// 当前 buildNetwork 正在构建的 engine 类型。
+    BuildVariant build_variant_{BuildVariant::Primary};
 };
 
 } // namespace irt::model::priv

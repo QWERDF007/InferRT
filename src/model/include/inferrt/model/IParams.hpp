@@ -52,9 +52,11 @@ typedef struct TensorRTParams
     std::unique_ptr<cudaStream_t, decltype(StreamDeleter)> stream{nullptr};
 
     /// TensorRT 日志对象。
-    std::unique_ptr<Logger> logger{nullptr};
+    std::shared_ptr<Logger> logger{nullptr};
     /// 当前日志级别。
     nvinfer1::ILogger::Severity log_level{nvinfer1::ILogger::Severity::kWARNING};
+    /// 当前 engine 是否为仅特征提取的裁剪网络。
+    bool feature_only{false};
 } TRTParams;
 
 } // namespace irt::model

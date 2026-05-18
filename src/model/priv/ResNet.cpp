@@ -250,76 +250,49 @@ void buildResNet(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *net
 
 void ResNet18::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(*this, network, weights_map, {2, 2, 2, 2}, 1, 64, modelConfig().numClasses(), BasicBlock);
-}
-
-void ResNet18::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
-{
-    buildResNet(*this, network, weights_map, {2, 2, 2, 2}, 1, 64, modelConfig().numClasses(), BasicBlock, true);
+    buildResNet(*this, network, weights_map, {2, 2, 2, 2}, 1, 64, modelConfig().numClasses(), BasicBlock,
+                isBuildingFeatureEngine());
 }
 
 void ResNet34::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 1, 64, modelConfig().numClasses(), BasicBlock);
-}
-
-void ResNet34::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
-{
-    buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 1, 64, modelConfig().numClasses(), BasicBlock, true);
+    buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 1, 64, modelConfig().numClasses(), BasicBlock,
+                isBuildingFeatureEngine());
 }
 
 void ResNet50::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 4, 64, modelConfig().numClasses(), Bottleneck);
-}
-
-void ResNet50::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
-{
-    buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 4, 64, modelConfig().numClasses(), Bottleneck, true);
+    buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 4, 64, modelConfig().numClasses(), Bottleneck,
+                isBuildingFeatureEngine());
 }
 
 void ResNet101::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(*this, network, weights_map, {3, 4, 23, 3}, 4, 64, modelConfig().numClasses(), Bottleneck);
-}
-
-void ResNet101::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
-{
-    buildResNet(*this, network, weights_map, {3, 4, 23, 3}, 4, 64, modelConfig().numClasses(), Bottleneck, true);
+    buildResNet(*this, network, weights_map, {3, 4, 23, 3}, 4, 64, modelConfig().numClasses(), Bottleneck,
+                isBuildingFeatureEngine());
 }
 
 void ResNet152::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(*this, network, weights_map, {3, 8, 36, 3}, 4, 64, modelConfig().numClasses(), Bottleneck);
-}
-
-void ResNet152::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
-{
-    buildResNet(*this, network, weights_map, {3, 8, 36, 3}, 4, 64, modelConfig().numClasses(), Bottleneck, true);
+    buildResNet(*this, network, weights_map, {3, 8, 36, 3}, 4, 64, modelConfig().numClasses(), Bottleneck,
+                isBuildingFeatureEngine());
 }
 
 void WideResNet50_2::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 4, 128, modelConfig().numClasses(), Bottleneck);
-}
-
-void WideResNet50_2::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
-{
-    buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 4, 128, modelConfig().numClasses(), Bottleneck, true);
+    buildResNet(*this, network, weights_map, {3, 4, 6, 3}, 4, 128, modelConfig().numClasses(), Bottleneck,
+                isBuildingFeatureEngine());
 }
 
 void WideResNet101_2::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildResNet(*this, network, weights_map, {3, 4, 23, 3}, 4, 128, modelConfig().numClasses(), Bottleneck);
-}
-
-void WideResNet101_2::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
-{
-    buildResNet(*this, network, weights_map, {3, 4, 23, 3}, 4, 128, modelConfig().numClasses(), Bottleneck, true);
+    buildResNet(*this, network, weights_map, {3, 4, 23, 3}, 4, 128, modelConfig().numClasses(), Bottleneck,
+                isBuildingFeatureEngine());
 }
 
 void ResNet::infer(const std::vector<void *> &buffers)
 {
+    ensurePrimaryInferenceReady();
     auto &trt_params = trtParams();
     bindTensorAddresses(buffers);
 

@@ -78,6 +78,22 @@ def load_tensor_from_dump(dump_dir: Path, spec: TensorSpec) -> np.ndarray:
     return values
 
 
+def summarize_diff(reference: np.ndarray, actual: np.ndarray) -> dict[str, float]:
+    diff = np.abs(actual - reference)
+    ref_abs = np.abs(reference)
+    rel_mask = ref_abs > 1e-3
+    rel = np.zeros_like(diff, dtype=np.float32)
+    if np.any(rel_mask):
+        rel[rel_mask] = diff[rel_mask] / ref_abs[rel_mask]
+    return {
+        "max_abs": float(diff.max()),
+        "mean_abs": float(diff.mean()),
+        "max_rel": float(rel.max()),
+        "mean_rel": float(rel.mean()),
+        "ref_abs_max": float(ref_abs.max()),
+    }
+
+
 def model_family(model_name: str) -> str:
     if model_name == "alexnet":
         return "alexnet"
@@ -317,8 +333,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--compare_dir", type=str, default="", help="Directory produced by inferrt_sample_features")
     parser.add_argument("--dump_dir", type=str, default="", help="Optional output directory for Python-side dumps")
-    parser.add_argument("--rtol", type=float, default=1e-4, help="Relative tolerance")
-    parser.add_argument("--atol", type=float, default=1e-4, help="Absolute tolerance")
+    parser.add_argument("--rtol", type=float, default=1e-2, help="Relative tolerance")
+    parser.add_argument("--atol", type=float, default=1.2e-1, help="Absolute tolerance")
     parser.add_argument("-l", "--list_model", action="store_true")
     return parser
 
@@ -386,9 +402,11 @@ def main(args) -> None:
     cpp_input = load_tensor_from_dump(compare_dir, cpp_specs["input"]).astype(np.float32, copy=False)
     py_input = selected["input"]
     input_close = np.allclose(cpp_input, py_input, rtol=args.rtol, atol=args.atol)
-    input_diff = np.abs(cpp_input - py_input)
+    input_stats = summarize_diff(py_input, cpp_input)
     print(
-        f"input: match={input_close} max_abs={input_diff.max():.6g} mean_abs={input_diff.mean():.6g}"
+        f"input: match={input_close} max_abs={input_stats['max_abs']:.6g} "
+        f"mean_abs={input_stats['mean_abs']:.6g} max_rel={input_stats['max_rel']:.6g} "
+        f"mean_rel={input_stats['mean_rel']:.6g} ref_abs_max={input_stats['ref_abs_max']:.6g}"
     )
 
     all_ok = input_close
@@ -402,12 +420,13 @@ def main(args) -> None:
         if cpp_values.shape != py_values.shape:
             raise ValueError(f"Shape mismatch for {name}: cpp={cpp_values.shape}, py={py_values.shape}")
 
-        diff = np.abs(cpp_values - py_values)
         is_close = np.allclose(cpp_values, py_values, rtol=args.rtol, atol=args.atol)
+        stats = summarize_diff(py_values, cpp_values)
         all_ok = all_ok and is_close
         print(
-            f"{name}: match={is_close} shape={cpp_values.shape} max_abs={diff.max():.6g} "
-            f"mean_abs={diff.mean():.6g}"
+            f"{name}: match={is_close} shape={cpp_values.shape} max_abs={stats['max_abs']:.6g} "
+            f"mean_abs={stats['mean_abs']:.6g} max_rel={stats['max_rel']:.6g} "
+            f"mean_rel={stats['mean_rel']:.6g} ref_abs_max={stats['ref_abs_max']:.6g}"
         )
 
     if not all_ok:

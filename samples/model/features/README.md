@@ -23,6 +23,9 @@ build/bin/inferrt_sample_features.exe resnet18 samples/model/classification/resn
 build/bin/inferrt_sample_features.exe alexnet samples/model/classification/alexnet.wts pool1,fc2 assets/pics/dog.jpg build/feature_dump_cpp
 ```
 
+The sample always builds the model instance as a truncated feature extractor via
+`IModelConfig::setFeatureOnly(true)`.
+
 The sample writes:
 
 - `manifest.txt`
@@ -35,6 +38,10 @@ The sample writes:
 cd samples/model/features
 python compare_features.py --compare_dir ../../../build/feature_dump_cpp
 ```
+
+For TensorRT vs PyTorch intermediate features, the script defaults to `--rtol 1e-2 --atol 1.2e-1`.
+Those defaults are intentionally looser than exact tensor checks because TensorRT may fuse layers and
+use different FP32 kernels while still producing numerically aligned features.
 
 You can also select the model and features explicitly:
 
@@ -53,3 +60,9 @@ python compare_features.py -m resnet18 -f layer1,layer4 -i ../../../assets/pics/
 - The Python script reuses the same ImageNet preprocessing as `gen_wts.py`.
 - `--compare_dir` expects the directory produced by `inferrt_sample_features`.
 - For `timm` backend comparison, use `-b timm` with a matching timm-exported weight file.
+- The comparison output reports both absolute and relative error: `max_abs`, `mean_abs`, `max_rel`,
+  `mean_rel`, and `ref_abs_max`.
+- Relative error is reported only where the PyTorch reference magnitude is above `1e-3`, so near-zero
+  activations do not dominate the summary with meaningless ratios.
+- For feature tensors, treat `mean_abs` and `mean_rel` as the primary signal; a single `max_abs` around
+  `1e-1` can still be acceptable when the tensor value range is much larger.

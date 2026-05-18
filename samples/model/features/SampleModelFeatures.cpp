@@ -14,7 +14,6 @@
 #include <iostream>
 #include <numeric>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -158,7 +157,8 @@ std::vector<std::string> splitFeatureNames(const std::string &csv)
 void printUsage(const char *program_name)
 {
     std::cerr << "Usage: " << program_name
-              << " <model_name> <weights_file.wts> <feature_a,feature_b,...> [image_path] [output_dir]" << std::endl;
+              << " <model_name> <weights_file.wts> <feature_a,feature_b,...> [image_path] [output_dir]"
+              << std::endl;
     std::cerr << "Default image: " << kDefaultImagePath.generic_string() << std::endl;
     std::cerr << "Default output dir: " << kDefaultOutputDir.generic_string() << std::endl;
     std::cerr << "Supported models:";
@@ -197,10 +197,11 @@ cv::Mat preprocess(const cv::Mat &img)
     cv::Mat rgb;
     cv::cvtColor(img, rgb, cv::COLOR_BGR2RGB);
 
-    cv::Mat resized;
-    cv::resize(rgb, resized, cv::Size(224, 224), 0, 0, cv::INTER_LINEAR);
+    cv::Mat normalized;
+    rgb.convertTo(normalized, CV_32FC3, 1.0 / 255.0);
 
-    resized.convertTo(resized, CV_32FC3, 1.0 / 255.0);
+    cv::Mat resized;
+    cv::resize(normalized, resized, cv::Size(224, 224), 0, 0, cv::INTER_LINEAR);
 
     cv::Scalar mean(0.485, 0.456, 0.406);
     cv::Scalar std(0.229, 0.224, 0.225);
@@ -392,6 +393,7 @@ int main(int argc, char *argv[])
 
         auto config = std::make_unique<irt::model::IModelConfig>();
         config->setFeatureTensorNames(cli.feature_names);
+        config->setFeatureOnly(true);
         auto model = irt::model::CreateModel(cli.model_name, std::move(config));
         if (!model)
         {
@@ -400,7 +402,7 @@ int main(int argc, char *argv[])
         }
 
         model->setLogLevel(nvinfer1::ILogger::Severity::kINFO);
-        std::cout << "Building or loading feature-enabled model..." << std::endl;
+        std::cout << "Building or loading feature-only model..." << std::endl;
         model->buildOrLoad(cli.weights_file.string());
 
         cv::Mat img = cv::imread(image_path.string(), cv::IMREAD_COLOR);
@@ -469,6 +471,7 @@ int main(int argc, char *argv[])
         manifest << "model_name=" << cli.model_name << "\n";
         manifest << "weights_file=" << fs::absolute(cli.weights_file).generic_string() << "\n";
         manifest << "image_path=" << fs::absolute(image_path).generic_string() << "\n";
+        manifest << "feature_only=true\n";
         manifest << "feature_tensor_names=";
         for (size_t i = 0; i < cli.feature_names.size(); ++i)
         {

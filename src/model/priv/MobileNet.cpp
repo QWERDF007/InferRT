@@ -206,7 +206,8 @@ nvinfer1::ITensor *addMobileNetV3Block(nvinfer1::INetworkDefinition *network, co
     return tensor;
 }
 
-void buildMobileNetV2(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
+void buildMobileNetV2(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
+                      bool feature_only)
 {
     using namespace nvinfer1;
 
@@ -214,70 +215,7 @@ void buildMobileNetV2(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition
     priv::IModelImpl::NamedTensorMap named_tensors{{"input", x}};
     x = addConvBnAct(network, weights_map, *x, "features.0.", 32, {3, 2, 1, 1, Act::Relu6}, 1e-5f);
     named_tensors["stem"] = x;
-
-    const std::array<std::array<int, 4>, 7> cfg = {{{1, 16, 1, 1}, {6, 24, 2, 2}, {6, 32, 3, 2}, {6, 64, 4, 2},
-                                                   {6, 96, 3, 1}, {6, 160, 3, 2}, {6, 320, 1, 1}}};
-    int in_channels = 32;
-    int feature     = 1;
-    for (const auto &[expand, out_channels, repeats, stride] : cfg)
-    {
-        for (int i = 0; i < repeats; ++i)
-        {
-            x = addMobileNetV2Block(network, weights_map, *x, "features." + std::to_string(feature++) + ".",
-                                    in_channels, out_channels, i == 0 ? stride : 1, expand);
-            named_tensors["features." + std::to_string(feature - 1)] = x;
-            in_channels = out_channels;
-        }
-    }
-
-    x = addConvBnAct(network, weights_map, *x, "features.18.", 1280, {1, 1, 1, 0, Act::Relu6}, 1e-5f);
-    named_tensors["features.18"] = x;
-    auto *flatten = addAvgFlatten(network, *x);
-    named_tensors["flatten"] = flatten;
-    x = addLinear(network, *flatten, weights_map, "classifier.1", impl.modelConfig().numClasses(), 1280);
-    named_tensors["logits"] = x;
-    impl.markOutputTensors(network, {x});
-}
-
-void buildMobileNetV3(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
-                      const std::vector<V3Block> &blocks, int last_conv_channels, int last_channel)
-{
-    using namespace nvinfer1;
-
-    ITensor *x = impl.addInputTensor(network);
-    priv::IModelImpl::NamedTensorMap named_tensors{{"input", x}};
-    x = addConvBnAct(network, weights_map, *x, "features.0.", 16, {3, 2, 1, 1, Act::HSwish}, 1e-3f);
-    named_tensors["stem"] = x;
-
-    for (size_t i = 0; i < blocks.size(); ++i)
-    {
-        x = addMobileNetV3Block(network, weights_map, *x, "features." + std::to_string(i + 1) + ".", blocks[i]);
-        named_tensors["features." + std::to_string(i + 1)] = x;
-    }
-
-    x = addConvBnAct(network, weights_map, *x, "features." + std::to_string(blocks.size() + 1) + ".", last_conv_channels,
-                     {1, 1, 1, 0, Act::HSwish}, 1e-3f);
-    named_tensors["features." + std::to_string(blocks.size() + 1)] = x;
-    auto *flatten = addAvgFlatten(network, *x);
-    named_tensors["flatten"] = flatten;
-    x = addActivation(network, *addLinear(network, *flatten, weights_map, "classifier.0", last_channel,
-                                          last_conv_channels), Act::HSwish);
-    named_tensors["classifier.0"] = x;
-    x = addLinear(network, *x, weights_map, "classifier.3", impl.modelConfig().numClasses(), last_channel);
-    named_tensors["logits"] = x;
-    impl.markOutputTensors(network, {x});
-}
-
-void buildMobileNetV2Features(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *network,
-                              const WeightsMap &weights_map)
-{
-    using namespace nvinfer1;
-
-    ITensor *x = impl.addInputTensor(network);
-    priv::IModelImpl::NamedTensorMap named_tensors{{"input", x}};
-    x = addConvBnAct(network, weights_map, *x, "features.0.", 32, {3, 2, 1, 1, Act::Relu6}, 1e-5f);
-    named_tensors["stem"] = x;
-    if (impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
     }
@@ -294,7 +232,7 @@ void buildMobileNetV2Features(const priv::IModelImpl &impl, nvinfer1::INetworkDe
                                     in_channels, out_channels, i == 0 ? stride : 1, expand);
             named_tensors["features." + std::to_string(feature - 1)] = x;
             in_channels = out_channels;
-            if (impl.tryMarkFeatureOutputTensors(network, named_tensors))
+            if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
             {
                 return;
             }
@@ -303,26 +241,29 @@ void buildMobileNetV2Features(const priv::IModelImpl &impl, nvinfer1::INetworkDe
 
     x = addConvBnAct(network, weights_map, *x, "features.18.", 1280, {1, 1, 1, 0, Act::Relu6}, 1e-5f);
     named_tensors["features.18"] = x;
-    if (impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
     }
-
     auto *flatten = addAvgFlatten(network, *x);
     named_tensors["flatten"] = flatten;
-    if (impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
     }
-
     x = addLinear(network, *flatten, weights_map, "classifier.1", impl.modelConfig().numClasses(), 1280);
     named_tensors["logits"] = x;
-    impl.markFeatureOutputTensors(network, named_tensors);
+    if (feature_only)
+    {
+        impl.markFeatureOutputTensors(network, named_tensors);
+        return;
+    }
+
+    impl.markOutputTensors(network, {x});
 }
 
-void buildMobileNetV3Features(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *network,
-                              const WeightsMap &weights_map, const std::vector<V3Block> &blocks,
-                              int last_conv_channels, int last_channel)
+void buildMobileNetV3(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
+                      const std::vector<V3Block> &blocks, int last_conv_channels, int last_channel, bool feature_only)
 {
     using namespace nvinfer1;
 
@@ -330,7 +271,7 @@ void buildMobileNetV3Features(const priv::IModelImpl &impl, nvinfer1::INetworkDe
     priv::IModelImpl::NamedTensorMap named_tensors{{"input", x}};
     x = addConvBnAct(network, weights_map, *x, "features.0.", 16, {3, 2, 1, 1, Act::HSwish}, 1e-3f);
     named_tensors["stem"] = x;
-    if (impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
     }
@@ -339,7 +280,7 @@ void buildMobileNetV3Features(const priv::IModelImpl &impl, nvinfer1::INetworkDe
     {
         x = addMobileNetV3Block(network, weights_map, *x, "features." + std::to_string(i + 1) + ".", blocks[i]);
         named_tensors["features." + std::to_string(i + 1)] = x;
-        if (impl.tryMarkFeatureOutputTensors(network, named_tensors))
+        if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
         {
             return;
         }
@@ -348,33 +289,36 @@ void buildMobileNetV3Features(const priv::IModelImpl &impl, nvinfer1::INetworkDe
     x = addConvBnAct(network, weights_map, *x, "features." + std::to_string(blocks.size() + 1) + ".", last_conv_channels,
                      {1, 1, 1, 0, Act::HSwish}, 1e-3f);
     named_tensors["features." + std::to_string(blocks.size() + 1)] = x;
-    if (impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
     }
-
     auto *flatten = addAvgFlatten(network, *x);
     named_tensors["flatten"] = flatten;
-    if (impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
     }
-
     x = addActivation(network, *addLinear(network, *flatten, weights_map, "classifier.0", last_channel,
                                           last_conv_channels), Act::HSwish);
     named_tensors["classifier.0"] = x;
-    if (impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
     }
-
     x = addLinear(network, *x, weights_map, "classifier.3", impl.modelConfig().numClasses(), last_channel);
     named_tensors["logits"] = x;
-    impl.markFeatureOutputTensors(network, named_tensors);
+    if (feature_only)
+    {
+        impl.markFeatureOutputTensors(network, named_tensors);
+        return;
+    }
+    impl.markOutputTensors(network, {x});
 }
 
 void enqueue(priv::IModelImpl &impl, const std::vector<void *> &buffers)
 {
+    impl.ensurePrimaryInferenceReady();
     auto &trt_params = impl.trtParams();
     impl.bindTensorAddresses(buffers);
 
@@ -399,12 +343,7 @@ void enqueue(priv::IModelImpl &impl, const std::vector<void *> &buffers)
 
 void MobileNetV2::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
-    buildMobileNetV2(*this, network, weights_map);
-}
-
-void MobileNetV2::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
-{
-    buildMobileNetV2Features(*this, network, weights_map);
+    buildMobileNetV2(*this, network, weights_map, isBuildingFeatureEngine());
 }
 
 void MobileNetV3Large::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
@@ -420,33 +359,12 @@ void MobileNetV3Large::buildNetwork(nvinfer1::INetworkDefinition *network, const
                       {80, 3, 200, 80, false, Act::HSwish, 1},
                       {80, 3, 184, 80, false, Act::HSwish, 1},
                       {80, 3, 184, 80, false, Act::HSwish, 1},
-                      {80, 3, 480, 112, true, Act::HSwish, 1},
-                      {112, 3, 672, 112, true, Act::HSwish, 1},
-                      {112, 5, 672, 160, true, Act::HSwish, 2},
-                      {160, 5, 960, 160, true, Act::HSwish, 1},
-                      {160, 5, 960, 160, true, Act::HSwish, 1}},
-                     960, 1280);
-}
-
-void MobileNetV3Large::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
-{
-    buildMobileNetV3Features(*this, network, weights_map,
-                             {{16, 3, 16, 16, false, Act::Relu, 1},
-                              {16, 3, 64, 24, false, Act::Relu, 2},
-                              {24, 3, 72, 24, false, Act::Relu, 1},
-                              {24, 5, 72, 40, true, Act::Relu, 2},
-                              {40, 5, 120, 40, true, Act::Relu, 1},
-                              {40, 5, 120, 40, true, Act::Relu, 1},
-                              {40, 3, 240, 80, false, Act::HSwish, 2},
-                              {80, 3, 200, 80, false, Act::HSwish, 1},
-                              {80, 3, 184, 80, false, Act::HSwish, 1},
-                              {80, 3, 184, 80, false, Act::HSwish, 1},
                               {80, 3, 480, 112, true, Act::HSwish, 1},
                               {112, 3, 672, 112, true, Act::HSwish, 1},
                               {112, 5, 672, 160, true, Act::HSwish, 2},
                               {160, 5, 960, 160, true, Act::HSwish, 1},
                               {160, 5, 960, 160, true, Act::HSwish, 1}},
-                             960, 1280);
+                     960, 1280, isBuildingFeatureEngine());
 }
 
 void MobileNetV3Small::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
@@ -463,24 +381,7 @@ void MobileNetV3Small::buildNetwork(nvinfer1::INetworkDefinition *network, const
                       {48, 5, 288, 96, true, Act::HSwish, 2},
                       {96, 5, 576, 96, true, Act::HSwish, 1},
                       {96, 5, 576, 96, true, Act::HSwish, 1}},
-                     576, 1024);
-}
-
-void MobileNetV3Small::buildFeatureNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
-{
-    buildMobileNetV3Features(*this, network, weights_map,
-                             {{16, 3, 16, 16, true, Act::Relu, 2},
-                              {16, 3, 72, 24, false, Act::Relu, 2},
-                              {24, 3, 88, 24, false, Act::Relu, 1},
-                              {24, 5, 96, 40, true, Act::HSwish, 2},
-                              {40, 5, 240, 40, true, Act::HSwish, 1},
-                              {40, 5, 240, 40, true, Act::HSwish, 1},
-                              {40, 5, 120, 48, true, Act::HSwish, 1},
-                              {48, 5, 144, 48, true, Act::HSwish, 1},
-                              {48, 5, 288, 96, true, Act::HSwish, 2},
-                              {96, 5, 576, 96, true, Act::HSwish, 1},
-                              {96, 5, 576, 96, true, Act::HSwish, 1}},
-                             576, 1024);
+                     576, 1024, isBuildingFeatureEngine());
 }
 
 void MobileNet::infer(const std::vector<void *> &buffers)

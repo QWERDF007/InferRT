@@ -122,6 +122,12 @@ void ValidateModelConfig(const IModelImpl &impl)
         }
     }
 
+    if (config.featureOnly() && feature_tensor_names.empty())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                             "featureTensorNames must not be empty when featureOnly is enabled");
+    }
+
     std::unordered_set<std::string> unique_output_names;
     for (const auto &output_tensor_name : output_tensor_names)
     {
@@ -240,12 +246,14 @@ std::string IModelImpl::generateSuffix(const IModelConfig &config) const noexcep
 void IModelImpl::setModelConfig(std::unique_ptr<IModelConfig> config)
 {
     config_ = config ? std::move(config) : std::make_unique<IModelConfig>();
-    trt_params_.engine.reset();
     trt_params_.context.reset();
+    trt_params_.engine.reset();
     trt_params_.stream.reset();
-    feature_trt_params_.engine.reset();
+    trt_params_.feature_only = false;
     feature_trt_params_.context.reset();
+    feature_trt_params_.engine.reset();
     feature_trt_params_.stream.reset();
+    feature_trt_params_.feature_only = false;
 }
 
 const IModelConfig &IModelImpl::modelConfig() const noexcept
@@ -492,7 +500,7 @@ void IModelImpl::bindTensorAddresses(const std::vector<void *> &buffers)
 
 void IModelImpl::bindFeatureTensorAddresses(const std::vector<void *> &buffers)
 {
-    auto &trt_params = featureTrtParams();
+    auto &trt_params = featureExecutionParams();
     if (!trt_params.context)
     {
         throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Feature extraction context is not initialized");
@@ -530,7 +538,8 @@ void IModelImpl::bindFeatureTensorAddresses(const std::vector<void *> &buffers)
 
 void IModelImpl::initLogger()
 {
-    trt_params_.logger = std::make_unique<Logger>(name(), logLevel());
+    trt_params_.logger = std::make_shared<Logger>(name(), logLevel());
+    feature_trt_params_.logger = trt_params_.logger;
 }
 
 std::vector<std::string> IModelImpl::primaryOutputTensorNames() const
@@ -574,15 +583,10 @@ std::vector<nvinfer1::ITensor *> IModelImpl::resolveFeatureTensors(const NamedTe
     return outputs;
 }
 
-void IModelImpl::buildFeatureNetwork(nvinfer1::INetworkDefinition *, const WeightsMap &)
-{
-    throw irt::Exception(Status::ERROR_INVALID_OPERATION,
-                         "%s does not support building a truncated feature extraction network", name().c_str());
-}
-
 void IModelImpl::forwardFeatures(const std::vector<void *> &buffers)
 {
-    auto &trt_params = featureTrtParams();
+    ensureFeatureExtractionReady();
+    auto &trt_params = featureExecutionParams();
     bindFeatureTensorAddresses(buffers);
 
     if (!trt_params.stream)
@@ -610,7 +614,14 @@ void IModelImpl::buildRuntimeFromWeights(const std::string &weights_file, const 
 
     if (params.logger == nullptr)
     {
-        params.logger = std::make_unique<Logger>(name(), logLevel());
+        if (trt_params_.logger)
+        {
+            params.logger = trt_params_.logger;
+        }
+        else
+        {
+            params.logger = std::make_shared<Logger>(name(), logLevel());
+        }
     }
 
     auto builder = std::unique_ptr<IBuilder>(createInferBuilder(*params.logger));
@@ -663,9 +674,19 @@ void IModelImpl::buildRuntimeFromWeights(const std::string &weights_file, const 
 
 void IModelImpl::loadRuntimeFromFile(const std::string &engine_file, TRTParams &params)
 {
+    params.context.reset();
+    params.engine.reset();
+
     if (params.logger == nullptr)
     {
-        params.logger = std::make_unique<Logger>(name(), logLevel());
+        if (trt_params_.logger)
+        {
+            params.logger = trt_params_.logger;
+        }
+        else
+        {
+            params.logger = std::make_shared<Logger>(name(), logLevel());
+        }
     }
 
     LOG_INFO(*params.logger) << "Loading TensorRT engine from: " << engine_file << std::endl;
@@ -746,12 +767,40 @@ std::string IModelImpl::featureEngineFileName(const std::string &base_engine_fil
     return engine_file;
 }
 
+void IModelImpl::ensurePrimaryInferenceReady() const
+{
+    if (!trt_params_.context)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Inference engine is not initialized");
+    }
+    if (trt_params_.feature_only)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION,
+                             "Current engine is feature-only; use forwardFeatures instead of infer");
+    }
+}
+
+void IModelImpl::ensureFeatureExtractionReady() const
+{
+    const auto &params = featureExecutionParams();
+    if (!params.context)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Feature extraction engine is not initialized");
+    }
+    if (!params.feature_only)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION,
+                             "Current engine is not a feature-only network; feature extraction is unavailable");
+    }
+}
+
 void IModelImpl::build(const std::string &weights_file)
 {
     ValidateModelConfig(*this);
-    feature_trt_params_.engine.reset();
     feature_trt_params_.context.reset();
+    feature_trt_params_.engine.reset();
     feature_trt_params_.stream.reset();
+    feature_trt_params_.feature_only = false;
 
     if (trt_params_.logger == nullptr)
     {
@@ -760,16 +809,21 @@ void IModelImpl::build(const std::string &weights_file)
 
     LOG_INFO(*trt_params_.logger) << "Loading weights file: " << weights_file << std::endl;
     auto weights_map = loadWeights(weights_file);
+    build_variant_ = isFeatureOnlyConfig() ? BuildVariant::Feature : BuildVariant::Primary;
     buildRuntimeFromWeights(weights_file, weights_map, [&](nvinfer1::INetworkDefinition *network) {
         buildNetwork(network, weights_map);
     }, trt_params_);
+    trt_params_.feature_only = (build_variant_ == BuildVariant::Feature);
 
-    if (!modelConfig().featureTensorNames().empty())
+    if (!isFeatureOnlyConfig() && !modelConfig().featureTensorNames().empty())
     {
+        build_variant_ = BuildVariant::Feature;
         buildRuntimeFromWeights(weights_file, weights_map, [&](nvinfer1::INetworkDefinition *network) {
-            buildFeatureNetwork(network, weights_map);
+            buildNetwork(network, weights_map);
         }, feature_trt_params_);
+        feature_trt_params_.feature_only = true;
     }
+    build_variant_ = BuildVariant::Primary;
 
     for (auto &wt : weights_map)
     {
@@ -790,7 +844,7 @@ void IModelImpl::save(const std::string &engine_file)
     LOG_INFO(*trt_params_.logger) << "Saving TensorRT engine to: " << engine_file << std::endl;
     saveRuntimeToFile(engine_file, trt_params_);
 
-    if (feature_trt_params_.engine)
+    if (!isFeatureOnlyConfig() && feature_trt_params_.engine)
     {
         saveRuntimeToFile(featureEngineFileName(engine_file), feature_trt_params_);
     }
@@ -802,12 +856,14 @@ void IModelImpl::save(const std::string &engine_file)
  */
 void IModelImpl::load(const std::string &engine_file)
 {
-    feature_trt_params_.engine.reset();
     feature_trt_params_.context.reset();
+    feature_trt_params_.engine.reset();
     feature_trt_params_.stream.reset();
+    feature_trt_params_.feature_only = false;
     loadRuntimeFromFile(engine_file, trt_params_);
+    trt_params_.feature_only = isFeatureOnlyConfig();
 
-    if (!modelConfig().featureTensorNames().empty())
+    if (!isFeatureOnlyConfig() && !modelConfig().featureTensorNames().empty())
     {
         const auto feature_engine_file = featureEngineFileName(engine_file);
         std::ifstream feature_file(feature_engine_file, std::ios::binary);
@@ -815,6 +871,7 @@ void IModelImpl::load(const std::string &engine_file)
         {
             feature_file.close();
             loadRuntimeFromFile(feature_engine_file, feature_trt_params_);
+            feature_trt_params_.feature_only = true;
         }
     }
 }
@@ -833,11 +890,15 @@ void IModelImpl::buildOrLoad(const std::string &weights_file)
     }
 
     std::string engine_file = BuildEngineFileName(*this, weights_file);
+    if (isFeatureOnlyConfig())
+    {
+        engine_file = featureEngineFileName(engine_file);
+    }
 
     std::ifstream file(engine_file);
     bool          engine_exists = file.good();
     file.close();
-    const bool need_feature_engine = !modelConfig().featureTensorNames().empty();
+    const bool need_feature_engine = !isFeatureOnlyConfig() && !modelConfig().featureTensorNames().empty();
     const auto feature_engine_file = featureEngineFileName(engine_file);
     bool       feature_engine_loaded = false;
 
