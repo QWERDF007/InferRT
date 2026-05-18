@@ -1,10 +1,10 @@
 #include <cuda_runtime_api.h>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/IModel.h>
+#include <inferrt/util/Path.hpp>
 #include <opencv2/opencv.hpp>
 
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -20,11 +20,6 @@
 namespace fs = std::filesystem;
 
 namespace {
-
-struct ModelSampleSpec
-{
-    const char *name;
-};
 
 struct Arguments
 {
@@ -66,7 +61,8 @@ public:
     CudaBuffer &operator=(const CudaBuffer &) = delete;
 
     CudaBuffer(CudaBuffer &&other) noexcept
-        : ptr_(other.ptr_), num_bytes_(other.num_bytes_)
+        : ptr_(other.ptr_)
+        , num_bytes_(other.num_bytes_)
     {
         other.ptr_       = nullptr;
         other.num_bytes_ = 0;
@@ -124,66 +120,15 @@ private:
     size_t num_bytes_{0};
 };
 
-inline constexpr std::array<ModelSampleSpec, 15> kSupportedModels = {
-    {
-     {"alexnet"},
-     {"mobilenet_v2"},
-     {"mobilenet_v3_large"},
-     {"mobilenet_v3_small"},
-     {"vgg11"},
-     {"vgg13"},
-     {"vgg16"},
-     {"vgg19"},
-     {"resnet18"},
-     {"resnet34"},
-     {"resnet50"},
-     {"resnet101"},
-     {"resnet152"},
-     {"wide_resnet50_2"},
-     {"wide_resnet101_2"},
-     }
-};
-
 const fs::path kDefaultImagePath = "assets/pics/dog.jpg";
 const fs::path kDefaultOutputDir = "feature_dump_cpp";
 
-bool isSupportedModel(const std::string &model_name)
-{
-    return std::any_of(kSupportedModels.begin(), kSupportedModels.end(),
-                       [&model_name](const auto &item) { return item.name == model_name; });
-}
-
-fs::path findProjectRoot(const char *program_name)
-{
-    std::vector<fs::path> starts;
-    starts.push_back(fs::path(__FILE__).parent_path());
-    starts.push_back(fs::current_path());
-    if (program_name && *program_name)
-    {
-        starts.push_back(fs::absolute(program_name).parent_path());
-    }
-
-    for (auto start : starts)
-    {
-        for (fs::path path = fs::absolute(start); !path.empty(); path = path.parent_path())
-        {
-            if (fs::exists(path / kDefaultImagePath))
-            {
-                return path;
-            }
-            if (path == path.root_path())
-            {
-                break;
-            }
-        }
-    }
-
-    return fs::current_path();
-}
-
 std::string trim(std::string value)
 {
-    auto not_space = [](unsigned char ch) { return !std::isspace(ch); };
+    auto not_space = [](unsigned char ch)
+    {
+        return !std::isspace(ch);
+    };
     value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
     value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
     return value;
@@ -217,9 +162,9 @@ void printUsage(const char *program_name)
     std::cerr << "Default image: " << kDefaultImagePath.generic_string() << std::endl;
     std::cerr << "Default output dir: " << kDefaultOutputDir.generic_string() << std::endl;
     std::cerr << "Supported models:";
-    for (const auto &model : kSupportedModels)
+    for (const auto &model_name : irt::model::getRegisteredModelNames())
     {
-        std::cerr << ' ' << model.name;
+        std::cerr << ' ' << model_name;
     }
     std::cerr << std::endl;
     std::cerr << "Example: " << program_name
@@ -414,15 +359,15 @@ void printStats(const TensorDump &tensor)
 {
     if (tensor.data_type != nvinfer1::DataType::kFLOAT)
     {
-        std::cout << tensor.name << " dtype=" << dataTypeToString(tensor.data_type) << " dims=[" << dimsToCsv(tensor.dims)
-                  << "] bytes=" << tensor.host_bytes.size() << std::endl;
+        std::cout << tensor.name << " dtype=" << dataTypeToString(tensor.data_type) << " dims=["
+                  << dimsToCsv(tensor.dims) << "] bytes=" << tensor.host_bytes.size() << std::endl;
         return;
     }
 
-    const auto *values = reinterpret_cast<const float *>(tensor.host_bytes.data());
-    const auto  count  = tensor.host_bytes.size() / sizeof(float);
+    const auto *values          = reinterpret_cast<const float *>(tensor.host_bytes.data());
+    const auto  count           = tensor.host_bytes.size() / sizeof(float);
     const auto [min_it, max_it] = std::minmax_element(values, values + count);
-    const double sum = std::accumulate(values, values + count, 0.0);
+    const double sum            = std::accumulate(values, values + count, 0.0);
     std::cout << tensor.name << " dims=[" << dimsToCsv(tensor.dims) << "] min=" << *min_it << " max=" << *max_it
               << " mean=" << (sum / static_cast<double>(count)) << std::endl;
 }
@@ -434,16 +379,16 @@ int main(int argc, char *argv[])
     try
     {
         const Arguments cli = parseArguments(argc, argv);
-        if (!isSupportedModel(cli.model_name))
+        if (!irt::model::isSupportedModel(cli.model_name))
         {
             std::cerr << "Unsupported model: " << cli.model_name << std::endl;
             printUsage(argv[0]);
             return -1;
         }
 
-        const fs::path project_root = findProjectRoot(argv[0]);
+        const fs::path project_root = irt::util::findProjectRoot(argv[0], {kDefaultImagePath}, __FILE__);
         const fs::path image_path   = cli.image_path.empty() ? (project_root / kDefaultImagePath) : cli.image_path;
-        const fs::path output_dir   = cli.output_dir.empty() ? (fs::current_path() / kDefaultOutputDir) : cli.output_dir;
+        const fs::path output_dir = cli.output_dir.empty() ? (fs::current_path() / kDefaultOutputDir) : cli.output_dir;
 
         auto config = std::make_unique<irt::model::IModelConfig>();
         config->setFeatureTensorNames(cli.feature_names);
@@ -469,8 +414,9 @@ int main(int argc, char *argv[])
         const auto input_data   = makeInputTensor(preprocessed);
 
         CudaBuffer d_input(input_data.size() * sizeof(float));
-        checkCuda(cudaMemcpy(d_input.get(), input_data.data(), input_data.size() * sizeof(float), cudaMemcpyHostToDevice),
-                  "cudaMemcpy(H2D input)");
+        checkCuda(
+            cudaMemcpy(d_input.get(), input_data.data(), input_data.size() * sizeof(float), cudaMemcpyHostToDevice),
+            "cudaMemcpy(H2D input)");
 
         std::vector<std::string> output_names = featureOutputNames(model->modelConfig());
         std::vector<TensorDump>  dumps;

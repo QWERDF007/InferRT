@@ -1,9 +1,8 @@
 #include <cuda_runtime_api.h>
 #include <inferrt/model/IModel.h>
+#include <inferrt/util/Path.hpp>
 #include <opencv2/opencv.hpp>
 
-#include <algorithm>
-#include <array>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
@@ -14,67 +13,8 @@ namespace fs = std::filesystem;
 
 namespace {
 
-struct ModelSampleSpec
-{
-    const char *name;
-};
-
-inline constexpr std::array<ModelSampleSpec, 15> kSupportedModels = {
-    {
-     {"alexnet"},
-     {"mobilenet_v2"},
-     {"mobilenet_v3_large"},
-     {"mobilenet_v3_small"},
-     {"vgg11"},
-     {"vgg13"},
-     {"vgg16"},
-     {"vgg19"},
-     {"resnet18"},
-     {"resnet34"},
-     {"resnet50"},
-     {"resnet101"},
-     {"resnet152"},
-     {"wide_resnet50_2"},
-     {"wide_resnet101_2"},
-     }
-};
-
 const fs::path kDefaultImagePath = "assets/pics/dog.jpg";
 const fs::path kDefaultLabelPath = "assets/imagenet1000_clsidx_to_labels.txt";
-
-fs::path findProjectRoot(const char *program_name)
-{
-    std::vector<fs::path> starts;
-    starts.push_back(fs::path(__FILE__).parent_path());
-    starts.push_back(fs::current_path());
-    if (program_name && *program_name)
-    {
-        starts.push_back(fs::absolute(program_name).parent_path());
-    }
-
-    for (auto start : starts)
-    {
-        for (fs::path path = fs::absolute(start); !path.empty(); path = path.parent_path())
-        {
-            if (fs::exists(path / kDefaultImagePath) && fs::exists(path / kDefaultLabelPath))
-            {
-                return path;
-            }
-            if (path == path.root_path())
-            {
-                break;
-            }
-        }
-    }
-
-    return fs::current_path();
-}
-
-bool isSupportedModel(const std::string &model_name)
-{
-    return std::any_of(kSupportedModels.begin(), kSupportedModels.end(),
-                       [&model_name](const auto &item) { return item.name == model_name; });
-}
 
 void printUsage(const char *program_name)
 {
@@ -82,9 +22,9 @@ void printUsage(const char *program_name)
     std::cerr << "Default image: " << kDefaultImagePath.generic_string() << std::endl;
     std::cerr << "Default labels: " << kDefaultLabelPath.generic_string() << std::endl;
     std::cerr << "Supported models:";
-    for (const auto &model : kSupportedModels)
+    for (const auto &model_name : irt::model::getRegisteredModelNames())
     {
-        std::cerr << ' ' << model.name;
+        std::cerr << ' ' << model_name;
     }
     std::cerr << std::endl;
     std::cerr << "Example: " << program_name << " alexnet samples/model/alexnet/alexnet.wts assets/pics/dog.jpg"
@@ -134,14 +74,14 @@ int main(int argc, char *argv[])
         }
 
         const std::string model_name = argv[1];
-        if (!isSupportedModel(model_name))
+        if (!irt::model::isSupportedModel(model_name))
         {
             std::cerr << "Unsupported model: " << model_name << std::endl;
             printUsage(argv[0]);
             return -1;
         }
 
-        fs::path project_root = findProjectRoot(argv[0]);
+        fs::path project_root = irt::util::findProjectRoot(argv[0], {kDefaultImagePath, kDefaultLabelPath}, __FILE__);
         fs::path weights_file = fs::path(argv[2]);
         fs::path img_path     = (argc >= 4) ? fs::path(argv[3]) : project_root / kDefaultImagePath;
         fs::path label_file   = (argc >= 5) ? fs::path(argv[4]) : project_root / kDefaultLabelPath;
