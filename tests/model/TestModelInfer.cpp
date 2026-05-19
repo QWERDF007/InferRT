@@ -7,7 +7,7 @@
 #include <vector>
 
 /**
- * @brief AlexNet 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION
+ * @brief AlexNet 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION。
  */
 TEST(AlexNetInferTest, InferWithoutContextThrowsInvalidOperation)
 {
@@ -30,9 +30,9 @@ TEST(AlexNetInferTest, InferWithoutContextThrowsInvalidOperation)
 }
 
 /**
- * @brief 当前实现中，AlexNet 在 context 缺失时会先于 buffer 数量检查失败
+ * @brief 当前实现中，AlexNet 在 context 缺失时会先于 buffer 数量检查失败。
  *
- * 这条测试用于固定当前行为，避免后续重构时无意改掉异常顺序。
+ * 该测试用于固定当前异常顺序，避免后续重构时无意改变行为。
  */
 TEST(AlexNetInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
 {
@@ -44,7 +44,7 @@ TEST(AlexNetInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
 }
 
 /**
- * @brief ResNet 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION
+ * @brief ResNet 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION。
  */
 TEST(ResNetInferTest, InferWithoutContextThrowsInvalidOperation)
 {
@@ -67,7 +67,7 @@ TEST(ResNetInferTest, InferWithoutContextThrowsInvalidOperation)
 }
 
 /**
- * @brief 当前实现中，ResNet 在 context 缺失时同样会先于 buffer 数量检查失败
+ * @brief 当前实现中，ResNet 在 context 缺失时同样会先于 buffer 数量检查失败。
  */
 TEST(ResNetInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
 {
@@ -78,6 +78,9 @@ TEST(ResNetInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
     EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
 }
 
+/**
+ * @brief VGG11 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION。
+ */
 TEST(VGGInferTest, InferWithoutContextThrowsInvalidOperation)
 {
     auto model = irt::model::CreateModel("vgg11");
@@ -98,6 +101,9 @@ TEST(VGGInferTest, InferWithoutContextThrowsInvalidOperation)
     }
 }
 
+/**
+ * @brief 当前实现中，VGG11 在 context 缺失时也会先于 buffer 数量检查失败。
+ */
 TEST(VGGInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
 {
     auto model = irt::model::CreateModel("vgg11");
@@ -107,6 +113,9 @@ TEST(VGGInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
     EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
 }
 
+/**
+ * @brief VGG13 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION。
+ */
 TEST(VGGInferTest, VGG13InferWithoutContextThrowsInvalidOperation)
 {
     auto model = irt::model::CreateModel("vgg13");
@@ -127,6 +136,9 @@ TEST(VGGInferTest, VGG13InferWithoutContextThrowsInvalidOperation)
     }
 }
 
+/**
+ * @brief VGG16 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION。
+ */
 TEST(VGGInferTest, VGG16InferWithoutContextThrowsInvalidOperation)
 {
     auto model = irt::model::CreateModel("vgg16");
@@ -147,6 +159,9 @@ TEST(VGGInferTest, VGG16InferWithoutContextThrowsInvalidOperation)
     }
 }
 
+/**
+ * @brief VGG19 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION。
+ */
 TEST(VGGInferTest, VGG19InferWithoutContextThrowsInvalidOperation)
 {
     auto model = irt::model::CreateModel("vgg19");
@@ -167,6 +182,9 @@ TEST(VGGInferTest, VGG19InferWithoutContextThrowsInvalidOperation)
     }
 }
 
+/**
+ * @brief WideResNet50_2 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION。
+ */
 TEST(WideResNetInferTest, InferWithoutContextThrowsInvalidOperation)
 {
     auto model = irt::model::CreateModel("wide_resnet50_2");
@@ -187,6 +205,9 @@ TEST(WideResNetInferTest, InferWithoutContextThrowsInvalidOperation)
     }
 }
 
+/**
+ * @brief 当前实现中，WideResNet101_2 在 context 缺失时会先于 buffer 数量检查失败。
+ */
 TEST(WideResNetInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
 {
     auto model = irt::model::CreateModel("wide_resnet101_2");

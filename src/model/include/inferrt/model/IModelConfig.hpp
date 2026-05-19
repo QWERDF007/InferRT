@@ -11,7 +11,8 @@ namespace irt::model {
 /**
  * @brief 模型配置基类。
  *
- * 统一描述模型的类别数、输入张量尺寸、输入张量名称以及输出张量名称。
+ * 统一描述模型的类别数、输入张量尺寸、输入张量名称、主输出张量名称，
+ * 以及可选的中间特征提取配置。
  * 输入尺寸使用 NCHW 顺序的 nvinfer1::Dims4 表示，并与输入张量名称按索引一一对应。
  */
 class INFERRT_MODEL_API IModelConfig
@@ -78,6 +79,37 @@ public:
     }
 
     /**
+     * @brief 设置需要额外导出的中间特征层 key 列表。
+     * @param feature_tensor_names 特征层 key 列表，顺序即输出顺序。
+     *
+     * 这些 key 由具体模型实现定义，例如 `layer1`、`layer4`、`avgpool` 等。
+     */
+    virtual void setFeatureTensorNames(std::vector<std::string> feature_tensor_names)
+    {
+        feature_tensor_names_ = std::move(feature_tensor_names);
+    }
+
+    /**
+     * @brief 设置中间特征输出张量名称列表。
+     * @param feature_output_tensor_names 特征输出张量名称列表。
+     *
+     * 若为空，则默认直接使用 feature_tensor_names 作为输出张量名称。
+     */
+    virtual void setFeatureOutputTensorNames(std::vector<std::string> feature_output_tensor_names)
+    {
+        feature_output_tensor_names_ = std::move(feature_output_tensor_names);
+    }
+
+    /**
+     * @brief 设置是否仅构建特征提取裁剪网络。
+     * @param feature_only 为 true 时，当前模型实例只构建到请求特征为止的网络。
+     */
+    virtual void setFeatureOnly(bool feature_only)
+    {
+        feature_only_ = feature_only;
+    }
+
+    /**
      * @brief 获取类别数。
      * @return 当前类别数。
      */
@@ -124,17 +156,56 @@ public:
         return output_tensor_names_;
     }
 
+    /**
+     * @brief 获取请求导出的中间特征层 key 列表。
+     * @return 特征层 key 列表。
+     */
+    virtual const std::vector<std::string> &featureTensorNames() const noexcept
+    {
+        return feature_tensor_names_;
+    }
+
+    /**
+     * @brief 获取中间特征输出张量名称列表。
+     * @return 特征输出张量名称列表。
+     */
+    virtual const std::vector<std::string> &featureOutputTensorNames() const noexcept
+    {
+        return feature_output_tensor_names_;
+    }
+
+    /**
+     * @brief 当前配置是否仅用于特征提取。
+     * @return 为 true 时，主 engine 即为特征裁剪网络。
+     */
+    virtual bool featureOnly() const noexcept
+    {
+        return feature_only_;
+    }
+
 protected:
     /// 类别数，默认对应 ImageNet-1K。
-    int                          num_classes_{1000};
+    int num_classes_{1000};
+
     /// 输入张量尺寸列表，默认输入为 1x3x224x224。
     std::vector<nvinfer1::Dims4> input_shapes_{
         nvinfer1::Dims4{1, 3, 224, 224}
     };
+
     /// 输入张量名称列表。
     std::vector<std::string> input_tensor_names_{"input"};
+
     /// 输出张量名称列表。
     std::vector<std::string> output_tensor_names_{"output"};
+
+    /// 请求导出的中间特征层 key 列表。
+    std::vector<std::string> feature_tensor_names_{};
+
+    /// 中间特征输出张量名称列表；为空时回退到 feature_tensor_names_。
+    std::vector<std::string> feature_output_tensor_names_{};
+
+    /// 当前配置是否仅用于特征提取裁剪网络。
+    bool feature_only_{false};
 };
 
 } // namespace irt::model

@@ -1,10 +1,11 @@
-#include <inferrt/model/ModelFactory.h>
-
 #include "priv/IModelImpl.hpp"
+
+#include <inferrt/model/ModelFactory.h>
 
 #include <algorithm>
 #include <cctype>
 #include <map>
+#include <vector>
 
 namespace irt::model {
 
@@ -20,6 +21,19 @@ ModelRegistry &GetModelRegistry()
 {
     static ModelRegistry registry;
     return registry;
+}
+
+/**
+ * @brief 将模型名称归一化为小写形式。
+ * @param name 原始模型名称。
+ * @return 归一化后的模型名称，用于注册表查找与写入。
+ */
+std::string normalizeModelName(const std::string &name)
+{
+    std::string normalized_name = name;
+    std::transform(normalized_name.begin(), normalized_name.end(), normalized_name.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return normalized_name;
 }
 
 } // namespace
@@ -42,7 +56,33 @@ ModelRegistrar::ModelRegistrar(const std::string &name, ModelCreator creator)
  */
 bool RegisterModel(const std::string &name, ModelCreator creator)
 {
-    return GetModelRegistry().emplace(name, creator).second;
+    return GetModelRegistry().emplace(normalizeModelName(name), creator).second;
+}
+
+/**
+ * @brief 判断指定模型名称是否已注册。
+ * @param name 待查询的模型名称。
+ * @return 若名称存在于全局注册表中则返回 true，否则返回 false。
+ */
+bool isSupportedModel(const std::string &name)
+{
+    return GetModelRegistry().find(normalizeModelName(name)) != GetModelRegistry().end();
+}
+
+/**
+ * @brief 获取当前全局注册表中的全部模型名称。
+ * @return 按注册表遍历顺序返回模型名称列表。
+ */
+std::vector<std::string> getRegisteredModelNames()
+{
+    std::vector<std::string> names;
+    names.reserve(GetModelRegistry().size());
+    for (const auto &[name, creator] : GetModelRegistry())
+    {
+        (void)creator;
+        names.push_back(name);
+    }
+    return names;
 }
 
 /**
@@ -53,11 +93,7 @@ bool RegisterModel(const std::string &name, ModelCreator creator)
  */
 std::unique_ptr<IModel> CreateModel(const std::string &name, std::unique_ptr<IModelConfig> config)
 {
-    std::string normalized_name = name;
-    std::transform(normalized_name.begin(), normalized_name.end(), normalized_name.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-
-    const auto it = GetModelRegistry().find(normalized_name);
+    const auto it = GetModelRegistry().find(normalizeModelName(name));
     if (it == GetModelRegistry().end())
     {
         return nullptr;

@@ -42,13 +42,15 @@ nvinfer1::ITensor *addMaxPool(nvinfer1::INetworkDefinition *network, nvinfer1::I
 }
 
 void buildVGG(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
-              const VGGConfig &config)
+              const VGGConfig &config, bool feature_only = false)
 {
     using namespace nvinfer1;
 
     ITensor *tensor = impl.addInputTensor(network);
+    priv::IModelImpl::NamedTensorMap named_tensors{{"input", tensor}};
 
     int feature_index = 0;
+    int block_index   = 1;
     for (int block_depth : config.block_depths)
     {
         for (int i = 0; i < block_depth; ++i)
@@ -60,13 +62,28 @@ void buildVGG(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *networ
             ++feature_index;
         }
         tensor = addMaxPool(network, *tensor);
+        named_tensors["block" + std::to_string(block_index++)] = tensor;
+        if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
+        {
+            return;
+        }
     }
 
     IResizeLayer *adaptive_pool = network->addResize(*tensor);
     adaptive_pool->setOutputDimensions(Dims4{1, 512, 7, 7});
+    named_tensors["avgpool"] = adaptive_pool->getOutput(0);
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    {
+        return;
+    }
 
     IShuffleLayer *shuffle = network->addShuffle(*adaptive_pool->getOutput(0));
     shuffle->setReshapeDimensions(Dims2{1, -1});
+    named_tensors["flatten"] = shuffle->getOutput(0);
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    {
+        return;
+    }
 
     constexpr int fc1_in_features = 512 * 7 * 7;
 
@@ -100,15 +117,31 @@ void buildVGG(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *networ
                                                              MatrixOperation::kTRANSPOSE);
     IElementWiseLayer    *fc1_1 = network->addElementWise(*fc1_0->getOutput(0), *fc1b, ElementWiseOperation::kSUM);
     IActivationLayer     *fc1_2 = network->addActivation(*fc1_1->getOutput(0), ActivationType::kRELU);
+    named_tensors["fc1"] = fc1_2->getOutput(0);
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    {
+        return;
+    }
 
     IMatrixMultiplyLayer *fc2_0 = network->addMatrixMultiply(*fc1_2->getOutput(0), MatrixOperation::kNONE, *fc2w,
                                                              MatrixOperation::kTRANSPOSE);
     IElementWiseLayer    *fc2_1 = network->addElementWise(*fc2_0->getOutput(0), *fc2b, ElementWiseOperation::kSUM);
     IActivationLayer     *fc2_2 = network->addActivation(*fc2_1->getOutput(0), ActivationType::kRELU);
+    named_tensors["fc2"] = fc2_2->getOutput(0);
+    if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
+    {
+        return;
+    }
 
     IMatrixMultiplyLayer *fc3_0 = network->addMatrixMultiply(*fc2_2->getOutput(0), MatrixOperation::kNONE, *fc3w,
                                                              MatrixOperation::kTRANSPOSE);
     IElementWiseLayer *fc3_1 = network->addElementWise(*fc3_0->getOutput(0), *fc3b, ElementWiseOperation::kSUM);
+    named_tensors["logits"] = fc3_1->getOutput(0);
+    if (feature_only)
+    {
+        impl.markFeatureOutputTensors(network, named_tensors);
+        return;
+    }
 
     impl.markOutputTensors(network, {fc3_1->getOutput(0)});
 }
@@ -120,7 +153,7 @@ void VGG11::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap
     buildVGG(*this, network, weights_map, {{0, 3, 6, 8, 11, 13, 16, 18},
                                            {64, 128, 256, 256, 512, 512, 512, 512},
                                            {1, 1, 2, 2, 2},
-                                           {0, 3, 6}});
+                                           {0, 3, 6}}, isBuildingFeatureEngine());
 }
 
 void VGG13::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
@@ -128,7 +161,7 @@ void VGG13::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap
     buildVGG(*this, network, weights_map, {{0, 2, 5, 7, 10, 12, 15, 17, 20, 22},
                                            {64, 64, 128, 128, 256, 256, 512, 512, 512, 512},
                                            {2, 2, 2, 2, 2},
-                                           {0, 3, 6}});
+                                           {0, 3, 6}}, isBuildingFeatureEngine());
 }
 
 void VGG16::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
@@ -136,7 +169,7 @@ void VGG16::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap
     buildVGG(*this, network, weights_map, {{0, 2, 5, 7, 10, 12, 14, 17, 19, 21, 24, 26, 28},
                                            {64, 64, 128, 128, 256, 256, 256, 512, 512, 512, 512, 512, 512},
                                            {2, 2, 3, 3, 3},
-                                           {0, 3, 6}});
+                                           {0, 3, 6}}, isBuildingFeatureEngine());
 }
 
 void VGG19::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
@@ -145,11 +178,12 @@ void VGG19::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap
              {{0, 2, 5, 7, 10, 12, 14, 16, 19, 21, 23, 25, 28, 30, 32, 34},
               {64, 64, 128, 128, 256, 256, 256, 256, 512, 512, 512, 512, 512, 512, 512, 512},
               {2, 2, 4, 4, 4},
-              {0, 3, 6}});
+              {0, 3, 6}}, isBuildingFeatureEngine());
 }
 
 void VGG::infer(const std::vector<void *> &buffers)
 {
+    ensurePrimaryInferenceReady();
     auto &trt_params = trtParams();
     bindTensorAddresses(buffers);
 

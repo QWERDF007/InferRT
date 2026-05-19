@@ -37,6 +37,19 @@ public:
 INFERRT_MODEL_API bool RegisterModel(const std::string &name, ModelCreator creator);
 
 /**
+ * @brief 查询模型名称是否已注册。
+ * @param name 模型名称，查找时会进行大小写归一化。
+ * @return 已注册返回 true，否则返回 false。
+ */
+INFERRT_MODEL_API bool isSupportedModel(const std::string &name);
+
+/**
+ * @brief 获取当前全局模型注册表中的模型名称。
+ * @return 已注册模型名称列表。
+ */
+INFERRT_MODEL_API std::vector<std::string> getRegisteredModelNames();
+
+/**
  * @brief 根据名称创建模型对象。
  * @param name 模型名称，查找时会进行大小写归一化。
  * @param config 模型初始配置；为空时使用默认配置。

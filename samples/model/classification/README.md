@@ -56,7 +56,8 @@ python gen_wts.py -b timm -l
 ## Run
 
 ```bash
-build/bin/inferrt_sample_classification.exe <model_name> <weights_file.wts> <image_path> [label_file]
+build/bin/inferrt_sample_classification.exe <model_name> <weights_file.wts> [image_path] [label_file]
+build/bin/inferrt_sample_classification.exe --help
 ```
 
 Examples:
@@ -68,10 +69,15 @@ build/bin/inferrt_sample_classification.exe resnet50 samples/model/classificatio
 build/bin/inferrt_sample_classification.exe vgg16 samples/model/classification/vgg16.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
 ```
 
+Defaults:
+
+- `image_path`: `assets/pics/dog.jpg`
+- `label_file`: `assets/imagenet1000_clsidx_to_labels.txt`
+
 ## Extend
 
 When a new ImageNet-style classification model is added:
 
 1. register the model in `inferrt_model`
 2. add its name to `kSupportedModels` in `SampleModelClassification.cpp`
-3. add its builder to `TORCHVISION_MODEL_ZOO` or handle it in `create_model()` inside `gen_wts.py`
+3. add its builder to `TORCHVISION_MODEL_ZOO` or handle it in `create_model()` inside `model_zoo.py`

@@ -1,4 +1,4 @@
-add_inferrt_sample(classification
+add_inferrt_sample(features
     PRIVATE_LIBS
         inferrt_core
         inferrt_model

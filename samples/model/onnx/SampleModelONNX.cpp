@@ -1,7 +1,9 @@
+#include <cxxopts.hpp>
 #include <cuda_runtime_api.h>
 #include <cuda_fp16.h>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/IModel.h>
+#include <inferrt/model/Utils.hpp>
 #include <opencv2/opencv.hpp>
 
 #include <algorithm>
@@ -18,6 +20,16 @@ namespace fs = std::filesystem;
 
 namespace {
 
+/**
+ * @brief 用于在显示帮助后中断主流程。
+ */
+struct HelpRequested
+{
+};
+
+/**
+ * @brief ONNX sample 的命令行参数集合。
+ */
 struct Arguments
 {
     fs::path onnx_file;
@@ -25,6 +37,9 @@ struct Arguments
     fs::path label_file;
 };
 
+/**
+ * @brief 规范化后的图像输入张量形状描述。
+ */
 struct ImageTensorShape
 {
     int batch{1};
@@ -33,6 +48,9 @@ struct ImageTensorShape
     int width{224};
 };
 
+/**
+ * @brief 输出张量的设备侧与主机侧缓冲描述。
+ */
 struct OutputBuffer
 {
     std::string         name;
@@ -42,28 +60,57 @@ struct OutputBuffer
     std::vector<char>   host_bytes;
 };
 
-void printUsage(const char *program_name)
+/**
+ * @brief 构造命令行选项定义。
+ * @param program_name 可执行文件名。
+ * @return cxxopts 选项对象。
+ */
+cxxopts::Options makeOptions(const char *program_name)
 {
-    std::cerr << "Usage: " << program_name << " <model.onnx> <image_path> [label_file]" << std::endl;
-    std::cerr << "Example: " << program_name
-              << " samples/model/onnx/alexnet.onnx assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt"
-              << std::endl;
+    cxxopts::Options options(program_name, "Run ONNX models through the InferRT ONNX wrapper");
+    options.positional_help("<model.onnx> <image_path> [label_file]");
+    options.add_options()
+        ("onnx_file", "Input ONNX model path", cxxopts::value<std::string>())
+        ("image_path", "Input image path", cxxopts::value<std::string>())
+        ("label_file", "Optional label file", cxxopts::value<std::string>()->default_value(""))
+        ("h,help", "Show help");
+    options.parse_positional({"onnx_file", "image_path", "label_file"});
+    return options;
 }
 
+/**
+ * @brief 解析并校验命令行参数。
+ * @param argc 命令行参数个数。
+ * @param argv 命令行参数数组。
+ * @return 解析后的参数。
+ */
 Arguments parseArguments(int argc, char *argv[])
 {
-    if (argc < 3 || argc > 4)
+    auto options = makeOptions(argv[0]);
+    const auto result = options.parse(argc, argv);
+    if (result.count("help"))
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Expected 2 or 3 arguments after program name");
+        std::cout << options.help() << std::endl;
+        throw HelpRequested{};
+    }
+
+    if (!result.count("onnx_file") || !result.count("image_path"))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "onnx_file and image_path are required");
     }
 
     Arguments args;
-    args.onnx_file  = fs::path(argv[1]);
-    args.image_path = fs::path(argv[2]);
-    args.label_file = (argc == 4) ? fs::path(argv[3]) : fs::path();
+    args.onnx_file  = result["onnx_file"].as<std::string>();
+    args.image_path = result["image_path"].as<std::string>();
+    args.label_file = result["label_file"].as<std::string>();
     return args;
 }
 
+/**
+ * @brief 返回 TensorRT 数据类型的单元素字节数。
+ * @param data_type TensorRT 数据类型。
+ * @return 单元素字节数。
+ */
 size_t elementSize(nvinfer1::DataType data_type)
 {
     using nvinfer1::DataType;
@@ -86,6 +133,11 @@ size_t elementSize(nvinfer1::DataType data_type)
     }
 }
 
+/**
+ * @brief 将 TensorRT 数据类型转换为便于输出的字符串。
+ * @param data_type TensorRT 数据类型。
+ * @return 类型名字符串。
+ */
 std::string dataTypeToString(nvinfer1::DataType data_type)
 {
     using nvinfer1::DataType;
@@ -111,6 +163,11 @@ std::string dataTypeToString(nvinfer1::DataType data_type)
     }
 }
 
+/**
+ * @brief 将张量维度格式化为形如 `[a, b, c]` 的字符串。
+ * @param dims TensorRT 维度对象。
+ * @return 格式化后的维度文本。
+ */
 std::string dimsToString(const nvinfer1::Dims &dims)
 {
     std::string result = "[";
@@ -126,6 +183,11 @@ std::string dimsToString(const nvinfer1::Dims &dims)
     return result;
 }
 
+/**
+ * @brief 计算张量元素总数，并校验每一维均为正数。
+ * @param dims TensorRT 维度对象。
+ * @return 元素总数。
+ */
 size_t elementCount(const nvinfer1::Dims &dims)
 {
     size_t count = 1;
@@ -142,6 +204,11 @@ size_t elementCount(const nvinfer1::Dims &dims)
     return count;
 }
 
+/**
+ * @brief 将 3D/4D 输入张量维度解析为统一的图像形状描述。
+ * @param dims 输入张量维度。
+ * @return 规范化后的图像形状。
+ */
 ImageTensorShape parseImageTensorShape(const nvinfer1::Dims &dims)
 {
     if (dims.nbDims == 4)
@@ -159,6 +226,12 @@ ImageTensorShape parseImageTensorShape(const nvinfer1::Dims &dims)
                          dims.nbDims);
 }
 
+/**
+ * @brief 结合请求 batch 大小解析运行时输入形状。
+ * @param engine_dims 引擎中的输入维度。
+ * @param requested_batch 请求的 batch 大小。
+ * @return 实际运行时维度。
+ */
 nvinfer1::Dims resolveInputDims(const nvinfer1::Dims &engine_dims, size_t requested_batch)
 {
     nvinfer1::Dims resolved = engine_dims;
@@ -185,6 +258,12 @@ nvinfer1::Dims resolveInputDims(const nvinfer1::Dims &engine_dims, size_t reques
     return resolved;
 }
 
+/**
+ * @brief 将单张图片预处理为匹配模型输入的 CHW float 数据。
+ * @param img 输入图像。
+ * @param shape 目标张量形状。
+ * @return 单张图片的预处理结果。
+ */
 std::vector<float> preprocessOne(const cv::Mat &img, const ImageTensorShape &shape)
 {
     if (shape.channels != 1 && shape.channels != 3)
@@ -196,7 +275,8 @@ std::vector<float> preprocessOne(const cv::Mat &img, const ImageTensorShape &sha
     cv::Mat converted;
     if (shape.channels == 3)
     {
-        cv::cvtColor(img, converted, cv::COLOR_BGR2RGB);
+        converted = irt::model::ImageNetUtil::preprocess(img, cv::Size(shape.width, shape.height));
+        return irt::model::ImageNetUtil::imageToTensorCHW(converted);
     }
     else
     {
@@ -207,33 +287,18 @@ std::vector<float> preprocessOne(const cv::Mat &img, const ImageTensorShape &sha
     cv::resize(converted, resized, cv::Size(shape.width, shape.height), 0, 0, cv::INTER_LINEAR);
     resized.convertTo(resized, shape.channels == 3 ? CV_32FC3 : CV_32FC1, 1.0 / 255.0);
 
-    if (shape.channels == 3)
-    {
-        cv::Scalar mean(0.485, 0.456, 0.406);
-        cv::Scalar std(0.229, 0.224, 0.225);
-        cv::subtract(resized, mean, resized);
-        cv::divide(resized, std, resized);
-    }
-
     std::vector<float> tensor(static_cast<size_t>(shape.channels) * shape.height * shape.width);
-    if (shape.channels == 3)
-    {
-        std::vector<cv::Mat> channels(3);
-        cv::split(resized, channels);
-        for (int c = 0; c < 3; ++c)
-        {
-            std::memcpy(tensor.data() + static_cast<size_t>(c) * shape.height * shape.width, channels[c].data,
-                        static_cast<size_t>(shape.height) * shape.width * sizeof(float));
-        }
-    }
-    else
-    {
-        std::memcpy(tensor.data(), resized.data, static_cast<size_t>(shape.height) * shape.width * sizeof(float));
-    }
+    std::memcpy(tensor.data(), resized.data, static_cast<size_t>(shape.height) * shape.width * sizeof(float));
 
     return tensor;
 }
 
+/**
+ * @brief 批量加载并预处理输入图片。
+ * @param image_paths 图片路径列表。
+ * @param shape 目标张量形状。
+ * @return 连续存储的 batch 输入数据。
+ */
 std::vector<float> preprocessBatch(const std::vector<fs::path> &image_paths, const ImageTensorShape &shape)
 {
     const size_t image_elements = static_cast<size_t>(shape.channels) * shape.height * shape.width;
@@ -255,6 +320,12 @@ std::vector<float> preprocessBatch(const std::vector<fs::path> &image_paths, con
     return batch_data;
 }
 
+/**
+ * @brief 按输入数据类型将 float 输入编码为字节缓冲。
+ * @param input_data 预处理后的 float 数据。
+ * @param data_type 模型输入数据类型。
+ * @return 可直接拷贝到设备端的字节数组。
+ */
 std::vector<char> encodeInputBuffer(const std::vector<float> &input_data, nvinfer1::DataType data_type)
 {
     std::vector<char> bytes(input_data.size() * elementSize(data_type));
@@ -279,6 +350,12 @@ std::vector<char> encodeInputBuffer(const std::vector<float> &input_data, nvinfe
     }
 }
 
+/**
+ * @brief 将原始字节缓冲按目标类型转换为 double 数组，便于统一展示。
+ * @tparam T 原始元素类型。
+ * @param bytes 原始字节缓冲。
+ * @return double 数组。
+ */
 template<typename T>
 std::vector<double> castBufferToDouble(const std::vector<char> &bytes)
 {
@@ -292,6 +369,11 @@ std::vector<double> castBufferToDouble(const std::vector<char> &bytes)
     return values;
 }
 
+/**
+ * @brief 按输出张量数据类型解码主机缓冲。
+ * @param output 输出张量描述。
+ * @return 统一转为 double 的输出值数组。
+ */
 std::vector<double> decodeOutputBuffer(const OutputBuffer &output)
 {
     switch (output.data_type)
@@ -324,6 +406,13 @@ std::vector<double> decodeOutputBuffer(const OutputBuffer &output)
     }
 }
 
+/**
+ * @brief 打印单个输出向量的 Top-K 结果。
+ * @param tensor_name 输出张量名。
+ * @param data 输出数值。
+ * @param top_k 输出的前 K 个结果。
+ * @param labels 可选标签列表。
+ */
 void printTopK(const std::string &tensor_name, const std::vector<double> &data, size_t top_k,
                const std::vector<std::string> &labels)
 {
@@ -357,6 +446,12 @@ void printTopK(const std::string &tensor_name, const std::vector<double> &data, 
     }
 }
 
+/**
+ * @brief 打印输出张量摘要；若包含 batch 维则按样本拆分展示。
+ * @param output 输出张量描述。
+ * @param batch_size 本次推理的 batch 大小。
+ * @param labels 可选标签列表。
+ */
 void printOutputSummary(const OutputBuffer &output, size_t batch_size, const std::vector<std::string> &labels)
 {
     std::cout << "Output tensor shape: " << dimsToString(output.dims) << ", dtype=" << dataTypeToString(output.data_type)
@@ -389,16 +484,16 @@ void printOutputSummary(const OutputBuffer &output, size_t batch_size, const std
 
 } // namespace
 
+/**
+ * @brief 运行 ONNX 包装模型推理，并打印各输出张量摘要。
+ * @param argc 命令行参数个数。
+ * @param argv 命令行参数数组。
+ * @return 成功返回 0，失败返回非 0。
+ */
 int main(int argc, char *argv[])
 {
     try
     {
-        if (argc < 3)
-        {
-            printUsage(argv[0]);
-            return -1;
-        }
-
         const Arguments args = parseArguments(argc, argv);
 
         auto model = irt::model::CreateModel("onnx");
@@ -518,5 +613,9 @@ int main(int argc, char *argv[])
     {
         std::cerr << "Error: " << e.what() << std::endl;
         return -1;
+    }
+    catch (const HelpRequested &)
+    {
+        return 0;
     }
 }

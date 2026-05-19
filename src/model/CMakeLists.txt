@@ -4,6 +4,7 @@ add_plugin_library(model
     PUBLIC_LIBS
         # 在这里添加 PUBLIC 链接的库
         opencv_core
+        opencv_imgproc
         inferrt_core
         CUDA::cudart
         TensorRT::TensorRT
