@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <opencv2/opencv.hpp>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -210,4 +211,88 @@ TEST(ReadImagenetLabelsTest, NonExistentFileThrowsInvalidArgument)
     {
         EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
     }
+}
+
+/**
+ * @brief ImageNet 默认资源路径应保持稳定，供 samples 复用。
+ */
+TEST(ImageNetUtilTest, DefaultPathsMatchSampleAssets)
+{
+    EXPECT_EQ(irt::model::ImageNetUtil::kDefaultImagePath.generic_string(), "assets/pics/dog.jpg");
+    EXPECT_EQ(irt::model::ImageNetUtil::kDefaultLabelPath.generic_string(),
+              "assets/imagenet1000_clsidx_to_labels.txt");
+}
+
+/**
+ * @brief preprocess 应拒绝空图像输入。
+ */
+TEST(ImageNetUtilTest, PreprocessRejectsEmptyImage)
+{
+    EXPECT_THROW({ irt::model::ImageNetUtil::preprocess(cv::Mat()); }, irt::Exception);
+}
+
+/**
+ * @brief preprocess 应拒绝非法目标尺寸。
+ */
+TEST(ImageNetUtilTest, PreprocessRejectsInvalidTargetSize)
+{
+    cv::Mat image(2, 2, CV_8UC3, cv::Scalar(1, 2, 3));
+    EXPECT_THROW({ irt::model::ImageNetUtil::preprocess(image, cv::Size(0, 2)); }, irt::Exception);
+    EXPECT_THROW({ irt::model::ImageNetUtil::preprocess(image, cv::Size(2, -1)); }, irt::Exception);
+}
+
+/**
+ * @brief preprocess 应完成 BGR->RGB、缩放和 ImageNet 标准化。
+ */
+TEST(ImageNetUtilTest, PreprocessConvertsToRgbAndNormalizes)
+{
+    cv::Mat image(1, 1, CV_8UC3);
+    image.at<cv::Vec3b>(0, 0) = cv::Vec3b(10, 20, 30); // BGR
+
+    const cv::Mat processed = irt::model::ImageNetUtil::preprocess(image, cv::Size(1, 1));
+
+    ASSERT_EQ(processed.rows, 1);
+    ASSERT_EQ(processed.cols, 1);
+    ASSERT_EQ(processed.type(), CV_32FC3);
+
+    const cv::Vec3f pixel = processed.at<cv::Vec3f>(0, 0);
+    const float r = (30.0f / 255.0f - 0.485f) / 0.229f;
+    const float g = (20.0f / 255.0f - 0.456f) / 0.224f;
+    const float b = (10.0f / 255.0f - 0.406f) / 0.225f;
+
+    EXPECT_NEAR(pixel[0], r, 1e-5f);
+    EXPECT_NEAR(pixel[1], g, 1e-5f);
+    EXPECT_NEAR(pixel[2], b, 1e-5f);
+}
+
+/**
+ * @brief imageToTensorCHW 应拒绝空图像和非 CV_32FC3 输入。
+ */
+TEST(ImageNetUtilTest, ImageToTensorChwRejectsInvalidInput)
+{
+    EXPECT_THROW({ irt::model::ImageNetUtil::imageToTensorCHW(cv::Mat()); }, irt::Exception);
+
+    cv::Mat wrong_type(2, 2, CV_8UC3, cv::Scalar(1, 2, 3));
+    EXPECT_THROW({ irt::model::ImageNetUtil::imageToTensorCHW(wrong_type); }, irt::Exception);
+}
+
+/**
+ * @brief imageToTensorCHW 应按通道优先顺序输出连续数据。
+ */
+TEST(ImageNetUtilTest, ImageToTensorChwProducesChannelMajorLayout)
+{
+    cv::Mat image(2, 2, CV_32FC3);
+    image.at<cv::Vec3f>(0, 0) = cv::Vec3f(1.0f, 2.0f, 3.0f);
+    image.at<cv::Vec3f>(0, 1) = cv::Vec3f(4.0f, 5.0f, 6.0f);
+    image.at<cv::Vec3f>(1, 0) = cv::Vec3f(7.0f, 8.0f, 9.0f);
+    image.at<cv::Vec3f>(1, 1) = cv::Vec3f(10.0f, 11.0f, 12.0f);
+
+    const std::vector<float> tensor = irt::model::ImageNetUtil::imageToTensorCHW(image);
+
+    const std::vector<float> expected = {
+        1.0f, 4.0f, 7.0f, 10.0f,
+        2.0f, 5.0f, 8.0f, 11.0f,
+        3.0f, 6.0f, 9.0f, 12.0f,
+    };
+    EXPECT_EQ(tensor, expected);
 }
