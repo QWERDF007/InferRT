@@ -13,16 +13,19 @@ cmake --build build --config Debug --target inferrt_sample_image_search
 ## Run
 
 ```bash
-build/bin/inferrt_sample_image_search.exe <weights_file.wts> <gallery_dir> <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--rebuild-index]
+build/bin/inferrt_sample_image_search.exe --weights-file <weights_file.wts> --gallery-dir <gallery_dir> --query-image <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--rebuild-index]
+build/bin/inferrt_sample_image_search.exe -w <weights_file.wts> -g <gallery_dir> -q <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--rebuild-index]
+build/bin/inferrt_sample_image_search.exe --help
 ```
 
 Example:
 
 ```bash
-build/bin/inferrt_sample_image_search.exe samples/model/classification/resnet18.wts assets/pics assets/pics/dog.jpg
-build/bin/inferrt_sample_image_search.exe samples/model/classification/resnet18.wts assets/pics assets/pics/dog.jpg --topk 5 --rebuild-index
-build/bin/inferrt_sample_image_search.exe samples/model/classification/resnet18.wts assets/pics assets/pics/dog.jpg --index build/gallery/resnet18_layer4.faiss
-build/bin/inferrt_sample_image_search.exe samples/model/classification/resnet50.wts assets/pics assets/pics/dog.jpg --model resnet50 --feature layer3
+build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg
+build/bin/inferrt_sample_image_search.exe -w samples/model/classification/resnet18.wts -g assets/pics -q assets/pics/dog.jpg
+build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --topk 5 --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --index build/gallery/resnet18_layer4.faiss
+build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet50.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model resnet50 --feature layer3
 ```
 
 ## Index Reuse

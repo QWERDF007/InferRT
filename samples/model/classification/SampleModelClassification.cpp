@@ -1,9 +1,11 @@
+#include <cxxopts.hpp>
 #include <cuda_runtime_api.h>
+#include <inferrt/core/Exception.hpp>
 #include <inferrt/model/IModel.h>
+#include <inferrt/model/Utils.hpp>
 #include <inferrt/util/Path.hpp>
 #include <opencv2/opencv.hpp>
 
-#include <cstring>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -13,90 +15,118 @@ namespace fs = std::filesystem;
 
 namespace {
 
-const fs::path kDefaultImagePath = "assets/pics/dog.jpg";
-const fs::path kDefaultLabelPath = "assets/imagenet1000_clsidx_to_labels.txt";
-
-void printUsage(const char *program_name)
+/**
+ * @brief 用于在显示帮助后中断主流程。
+ */
+struct HelpRequested
 {
-    std::cerr << "Usage: " << program_name << " <model_name> <weights_file.wts> [image_path] [label_file]" << std::endl;
-    std::cerr << "Default image: " << kDefaultImagePath.generic_string() << std::endl;
-    std::cerr << "Default labels: " << kDefaultLabelPath.generic_string() << std::endl;
-    std::cerr << "Supported models:";
-    for (const auto &model_name : irt::model::getRegisteredModelNames())
-    {
-        std::cerr << ' ' << model_name;
-    }
-    std::cerr << std::endl;
-    std::cerr << "Example: " << program_name << " alexnet samples/model/alexnet/alexnet.wts assets/pics/dog.jpg"
-              << std::endl;
-    std::cerr << "         " << program_name
-              << " mobilenet_v2 samples/model/classification/mobilenet_v2.wts assets/pics/dog.jpg "
-                 "assets/imagenet1000_clsidx_to_labels.txt"
-              << std::endl;
-    std::cerr
-        << "         " << program_name
-        << " resnet50 samples/model/resnet/resnet50.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt"
-        << std::endl;
-    std::cerr << "         " << program_name
-              << " vgg16 samples/model/vgg/vgg16.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt"
-              << std::endl;
+};
+
+/**
+ * @brief 分类 sample 的命令行参数集合。
+ */
+struct Arguments
+{
+    std::string model_name;
+    fs::path    weights_file;
+    fs::path    image_path;
+    fs::path    label_file;
+};
+
+/**
+ * @brief 构造命令行选项定义。
+ * @param program_name 可执行文件名。
+ * @return cxxopts 选项对象。
+ */
+cxxopts::Options makeOptions(const char *program_name)
+{
+    cxxopts::Options options(program_name, "Run InferRT classification models on a single image");
+    options.positional_help("<model_name> <weights_file.wts> [image_path] [label_file]");
+    options.add_options()
+        ("model_name", "Built-in model name", cxxopts::value<std::string>())
+        ("weights_file", "Weights file (.wts)", cxxopts::value<std::string>())
+        ("image_path", "Input image path", cxxopts::value<std::string>()->default_value(""))
+        ("label_file", "Imagenet label file", cxxopts::value<std::string>()->default_value(""))
+        ("h,help", "Show help");
+    options.parse_positional({"model_name", "weights_file", "image_path", "label_file"});
+    return options;
 }
 
-cv::Mat preprocess(const cv::Mat &img)
+/**
+ * @brief 解析并校验命令行参数。
+ * @param argc 命令行参数个数。
+ * @param argv 命令行参数数组。
+ * @return 解析后的参数。
+ */
+Arguments parseArguments(int argc, char *argv[])
 {
-    cv::Mat rgb;
-    cv::cvtColor(img, rgb, cv::COLOR_BGR2RGB);
+    auto options = makeOptions(argv[0]);
+    const auto result = options.parse(argc, argv);
+    if (result.count("help"))
+    {
+        std::cout << options.help() << std::endl;
+        std::cout << "Default image: " << irt::model::ImageNetUtil::kDefaultImagePath.generic_string() << std::endl;
+        std::cout << "Default labels: " << irt::model::ImageNetUtil::kDefaultLabelPath.generic_string() << std::endl;
+        std::cout << "Supported models:";
+        for (const auto &model_name : irt::model::getRegisteredModelNames())
+        {
+            std::cout << ' ' << model_name;
+        }
+        std::cout << std::endl;
+        throw HelpRequested{};
+    }
 
-    cv::Mat resized;
-    cv::resize(rgb, resized, cv::Size(224, 224), 0, 0, cv::INTER_LINEAR);
+    if (!result.count("model_name") || !result.count("weights_file"))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "model_name and weights_file are required");
+    }
 
-    resized.convertTo(resized, CV_32FC3, 1.0 / 255.0);
-
-    cv::Scalar mean(0.485, 0.456, 0.406);
-    cv::Scalar std(0.229, 0.224, 0.225);
-
-    cv::subtract(resized, mean, resized);
-    cv::divide(resized, std, resized);
-
-    return resized;
+    Arguments args;
+    args.model_name   = result["model_name"].as<std::string>();
+    args.weights_file = result["weights_file"].as<std::string>();
+    args.image_path   = result["image_path"].as<std::string>();
+    args.label_file   = result["label_file"].as<std::string>();
+    return args;
 }
 
 } // namespace
 
+/**
+ * @brief 运行单张图片的 ImageNet 分类推理，并打印 Top-3 结果。
+ * @param argc 命令行参数个数。
+ * @param argv 命令行参数数组。
+ * @return 成功返回 0，失败返回非 0。
+ */
 int main(int argc, char *argv[])
 {
     try
     {
-        if (argc < 3 || argc > 5)
+        const Arguments args = parseArguments(argc, argv);
+        if (!irt::model::isSupportedModel(args.model_name))
         {
-            printUsage(argv[0]);
+            std::cerr << "Unsupported model: " << args.model_name << std::endl;
             return -1;
         }
 
-        const std::string model_name = argv[1];
-        if (!irt::model::isSupportedModel(model_name))
-        {
-            std::cerr << "Unsupported model: " << model_name << std::endl;
-            printUsage(argv[0]);
-            return -1;
-        }
+        fs::path project_root = irt::util::findProjectRoot(
+            argv[0], {irt::model::ImageNetUtil::kDefaultImagePath, irt::model::ImageNetUtil::kDefaultLabelPath},
+            __FILE__);
+        fs::path img_path = args.image_path.empty() ? project_root / irt::model::ImageNetUtil::kDefaultImagePath
+                                                    : args.image_path;
+        fs::path label_file = args.label_file.empty() ? project_root / irt::model::ImageNetUtil::kDefaultLabelPath
+                                                      : args.label_file;
 
-        fs::path project_root = irt::util::findProjectRoot(argv[0], {kDefaultImagePath, kDefaultLabelPath}, __FILE__);
-        fs::path weights_file = fs::path(argv[2]);
-        fs::path img_path     = (argc >= 4) ? fs::path(argv[3]) : project_root / kDefaultImagePath;
-        fs::path label_file   = (argc >= 5) ? fs::path(argv[4]) : project_root / kDefaultLabelPath;
-
-        auto model = irt::model::CreateModel(model_name);
+        auto model = irt::model::CreateModel(args.model_name);
         if (!model)
         {
-            std::cerr << "Failed to create model: " << model_name << std::endl;
+            std::cerr << "Failed to create model: " << args.model_name << std::endl;
             return -1;
         }
 
         model->setLogLevel(nvinfer1::ILogger::Severity::kINFO);
 
         std::cout << "Building or Loading model..." << std::endl;
-        model->buildOrLoad(weights_file.string());
+        model->buildOrLoad(args.weights_file.string());
         std::cout << "Model loaded successfully." << std::endl;
 
         std::cout << "Loading image: " << img_path.generic_string() << std::endl;
@@ -107,16 +137,8 @@ int main(int argc, char *argv[])
             return -1;
         }
 
-        cv::Mat preprocessed = preprocess(img);
-
-        std::vector<float>   input_data(1 * 3 * 224 * 224);
-        std::vector<cv::Mat> channels(3);
-        cv::split(preprocessed, channels);
-
-        for (int c = 0; c < 3; ++c)
-        {
-            std::memcpy(input_data.data() + c * 224 * 224, channels[c].data, 224 * 224 * sizeof(float));
-        }
+        const cv::Mat           preprocessed = irt::model::ImageNetUtil::preprocess(img);
+        const std::vector<float> input_data  = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
 
         void *d_input  = nullptr;
         void *d_output = nullptr;
@@ -180,5 +202,9 @@ int main(int argc, char *argv[])
     {
         std::cerr << "Error: " << e.what() << std::endl;
         return -1;
+    }
+    catch (const HelpRequested &)
+    {
+        return 0;
     }
 }

@@ -1,3 +1,4 @@
+#include <cxxopts.hpp>
 #include <cuda_runtime.h>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/cvcuda/OpResize.h>
@@ -37,11 +38,38 @@
 //     }
 // }
 
+/**
+ * @brief 比较 InferRT CUDA resize 与 OpenCV resize 的结果差异。
+ * @param argc 命令行参数个数。
+ * @param argv 命令行参数数组。
+ * @return 成功返回 0，失败返回非 0。
+ */
 int main(int argc, char *argv[])
 {
-    (void)argc;
-    (void)argv;
+    try
+    {
+        cxxopts::Options options(argv[0], "Compare InferRT CUDA resize against OpenCV resize");
+        options.add_options()("h,help", "Show help");
 
+        const auto result = options.parse(argc, argv);
+        if (result.count("help"))
+        {
+            std::cout << options.help() << std::endl;
+            return 0;
+        }
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return -1;
+    }
+
+    /**
+     * @brief 对单张图像执行 GPU resize，并与 OpenCV 结果进行逐像素比较。
+     * @param img 输入图像。
+     * @param scale 缩放比例。
+     * @param interpolation 插值方法。
+     */
     auto func = [](const cv::Mat &img, const double scale, const int interpolation)
     {
         std::cout << "img size: " << img.size << std::endl;

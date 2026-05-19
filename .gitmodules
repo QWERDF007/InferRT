@@ -10,3 +10,7 @@
 	path = 3rdparty/benchmark
 	url = https://github.com/google/benchmark.git
 	branch = main
+[submodule "3rdparty/cxxopts"]
+	path = 3rdparty/cxxopts
+	url = https://github.com/jarro2783/cxxopts.git
+	branch = master

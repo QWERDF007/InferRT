@@ -37,8 +37,10 @@ cmake --build build --config Debug --target inferrt_sample_onnx
 ## Run sample
 
 ```bash
+build/bin/inferrt_sample_onnx.exe <model.onnx> <image_path> [label_file]
 build/bin/inferrt_sample_onnx.exe samples/model/onnx/alexnet.onnx assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
 build/bin/inferrt_sample_onnx.exe samples/model/onnx/alexnet.onnx assets/pics/dog.jpg
+build/bin/inferrt_sample_onnx.exe --help
 ```
 
 Notes:

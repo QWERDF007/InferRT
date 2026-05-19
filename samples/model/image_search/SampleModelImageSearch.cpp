@@ -1,16 +1,21 @@
 #include <cuda_runtime_api.h>
+#include <cxxopts.hpp>
+#pragma warning(push)
+#pragma warning(disable : 4244)
 #include <faiss/IndexFlat.h>
 #include <faiss/index_io.h>
+#pragma warning(pop)
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/IModel.h>
+#include <inferrt/model/Utils.hpp>
 #include <inferrt/util/Path.hpp>
 #include <opencv2/opencv.hpp>
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -29,18 +34,31 @@ constexpr const char *kDefaultModelName   = "resnet18";
 constexpr const char *kDefaultFeatureName = "layer4";
 constexpr int         kDefaultTopK        = 5;
 
-struct Arguments
+/**
+ * @brief 用于在显示帮助后中断主流程。
+ */
+struct HelpRequested
 {
-    std::string model_name{ kDefaultModelName };
-    std::string feature_name{ kDefaultFeatureName };
-    fs::path weights_file;
-    fs::path gallery_dir;
-    fs::path query_image;
-    fs::path index_file;
-    int      top_k{ kDefaultTopK };
-    bool     rebuild_index{ false };
 };
 
+/**
+ * @brief 图像检索 sample 的命令行参数集合。
+ */
+struct Arguments
+{
+    std::string model_name{kDefaultModelName};
+    std::string feature_name{kDefaultFeatureName};
+    fs::path    weights_file;
+    fs::path    gallery_dir;
+    fs::path    query_image;
+    fs::path    index_file;
+    int         top_k{kDefaultTopK};
+    bool        rebuild_index{false};
+};
+
+/**
+ * @brief 简单的 CUDA 设备内存 RAII 封装。
+ */
 class CudaBuffer
 {
 public:
@@ -118,18 +136,27 @@ private:
         }
     }
 
-    void  *ptr_{ nullptr };
-    size_t num_bytes_{ 0 };
+    void  *ptr_{nullptr};
+    size_t num_bytes_{0};
 };
 
+/**
+ * @brief 将文件扩展名转换为小写，便于无大小写差异比较。
+ * @param value 原始字符串。
+ * @return 小写结果。
+ */
 std::string toLower(std::string value)
 {
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return value;
 }
 
+/**
+ * @brief 判断路径是否为支持的图片文件。
+ * @param path 待判断路径。
+ * @return 是图片返回 true，否则返回 false。
+ */
 bool isImageFile(const fs::path &path)
 {
     if (!path.has_extension())
@@ -141,6 +168,11 @@ bool isImageFile(const fs::path &path)
     return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp" || ext == ".webp";
 }
 
+/**
+ * @brief 包装 CUDA 调用，失败时抛出带上下文的异常。
+ * @param status CUDA 返回状态。
+ * @param op 当前操作名。
+ */
 void checkCuda(cudaError_t status, const char *op)
 {
     if (status != cudaSuccess)
@@ -149,6 +181,11 @@ void checkCuda(cudaError_t status, const char *op)
     }
 }
 
+/**
+ * @brief 计算张量元素总数，并校验维度均为正数。
+ * @param dims TensorRT 维度对象。
+ * @return 元素总数。
+ */
 size_t elementCount(const nvinfer1::Dims &dims)
 {
     size_t count = 1;
@@ -164,36 +201,10 @@ size_t elementCount(const nvinfer1::Dims &dims)
     return count;
 }
 
-cv::Mat preprocess(const cv::Mat &image)
-{
-    cv::Mat rgb;
-    cv::cvtColor(image, rgb, cv::COLOR_BGR2RGB);
-
-    cv::Mat normalized;
-    rgb.convertTo(normalized, CV_32FC3, 1.0 / 255.0);
-
-    cv::Mat resized;
-    cv::resize(normalized, resized, cv::Size(224, 224), 0, 0, cv::INTER_LINEAR);
-
-    cv::Scalar mean(0.485, 0.456, 0.406);
-    cv::Scalar std(0.229, 0.224, 0.225);
-    cv::subtract(resized, mean, resized);
-    cv::divide(resized, std, resized);
-    return resized;
-}
-
-std::vector<float> makeInputTensor(const cv::Mat &preprocessed)
-{
-    std::vector<float>   input_data(1 * 3 * 224 * 224);
-    std::vector<cv::Mat> channels(3);
-    cv::split(preprocessed, channels);
-    for (int c = 0; c < 3; ++c)
-    {
-        std::memcpy(input_data.data() + c * 224 * 224, channels[c].data, 224 * 224 * sizeof(float));
-    }
-    return input_data;
-}
-
+/**
+ * @brief 对特征向量执行 L2 归一化。
+ * @param values 待归一化的特征向量。
+ */
 void l2Normalize(std::vector<float> &values)
 {
     const float sum_sq = std::inner_product(values.begin(), values.end(), values.begin(), 0.0f);
@@ -209,97 +220,86 @@ void l2Normalize(std::vector<float> &values)
     }
 }
 
+/**
+ * @brief 根据索引文件路径生成配套的图片路径映射文件路径。
+ * @param index_path Faiss 索引文件路径。
+ * @return 路径映射文件路径。
+ */
 fs::path mappingPathFromIndex(const fs::path &index_path)
 {
     return index_path.string() + ".paths.txt";
 }
 
+/**
+ * @brief 根据索引文件路径生成配套的元数据文件路径。
+ * @param index_path Faiss 索引文件路径。
+ * @return 元数据文件路径。
+ */
 fs::path metadataPathFromIndex(const fs::path &index_path)
 {
     return index_path.string() + ".meta.txt";
 }
 
-void printUsage(const char *program_name)
+/**
+ * @brief 构造命令行选项定义。
+ * @param program_name 可执行文件名。
+ * @return cxxopts 选项对象。
+ */
+cxxopts::Options makeOptions(const char *program_name)
 {
-    std::cerr << "Usage: " << program_name
-              << " <weights_file.wts> <gallery_dir> <query_image>"
-              << " [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--rebuild-index]"
-              << std::endl;
-    std::cerr << "Default model: " << kDefaultModelName << std::endl;
-    std::cerr << "Default feature tensor: " << kDefaultFeatureName << std::endl;
-    std::cerr << "Default top-k: " << kDefaultTopK << std::endl;
-    std::cerr << "If --index is omitted, the sample uses <gallery_dir>/<model>_<feature>.faiss" << std::endl;
-    std::cerr << "Supported models:";
-    for (const auto &model_name : irt::model::getRegisteredModelNames())
-    {
-        std::cerr << ' ' << model_name;
-    }
-    std::cerr << std::endl;
+    cxxopts::Options options(program_name, "Build and query a Faiss image retrieval index from InferRT features");
+    options.add_options()("weights-file,w", "Weights file (.wts)", cxxopts::value<std::string>())(
+        "gallery-dir,g", "Gallery image directory", cxxopts::value<std::string>())("query-image,q", "Query image path",
+                                                                                   cxxopts::value<std::string>())(
+        "model", "Built-in model name", cxxopts::value<std::string>()->default_value(kDefaultModelName))(
+        "feature", "Feature tensor name", cxxopts::value<std::string>()->default_value(kDefaultFeatureName))(
+        "topk", "Top-k nearest results", cxxopts::value<int>()->default_value(std::to_string(kDefaultTopK)))(
+        "index", "Faiss index path", cxxopts::value<std::string>()->default_value(""))(
+        "rebuild-index", "Force rebuild of the Faiss index")("h,help", "Show help");
+    return options;
 }
 
+/**
+ * @brief 解析并校验命令行参数。
+ * @param argc 命令行参数个数。
+ * @param argv 命令行参数数组。
+ * @return 解析后的参数。
+ */
 Arguments parseArguments(int argc, char *argv[])
 {
-    if (argc < 4)
+    auto       options = makeOptions(argv[0]);
+    const auto result  = options.parse(argc, argv);
+    if (result.count("help"))
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Expected at least 3 positional arguments");
+        std::cout << options.help() << std::endl;
+        std::cout << "Default model: " << kDefaultModelName << std::endl;
+        std::cout << "Default feature tensor: " << kDefaultFeatureName << std::endl;
+        std::cout << "Default top-k: " << kDefaultTopK << std::endl;
+        std::cout << "If --index is omitted, the sample uses <gallery_dir>/<model>_<feature>.faiss" << std::endl;
+        std::cout << "Supported models:";
+        for (const auto &model_name : irt::model::getRegisteredModelNames())
+        {
+            std::cout << ' ' << model_name;
+        }
+        std::cout << std::endl;
+        throw HelpRequested{};
+    }
+
+    if (!result.count("weights-file") || !result.count("gallery-dir") || !result.count("query-image"))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "--weights-file, --gallery-dir and --query-image are required");
     }
 
     Arguments args;
-    args.weights_file = argv[1];
-    args.gallery_dir  = argv[2];
-    args.query_image  = argv[3];
-
-    for (int i = 4; i < argc; ++i)
-    {
-        const std::string option = argv[i];
-        if (option == "--rebuild-index")
-        {
-            args.rebuild_index = true;
-            continue;
-        }
-
-        if (option == "--model")
-        {
-            if (i + 1 >= argc)
-            {
-                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--model requires a value");
-            }
-            args.model_name = argv[++i];
-            continue;
-        }
-
-        if (option == "--feature")
-        {
-            if (i + 1 >= argc)
-            {
-                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--feature requires a value");
-            }
-            args.feature_name = argv[++i];
-            continue;
-        }
-
-        if (option == "--topk")
-        {
-            if (i + 1 >= argc)
-            {
-                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--topk requires a value");
-            }
-            args.top_k = std::stoi(argv[++i]);
-            continue;
-        }
-
-        if (option == "--index")
-        {
-            if (i + 1 >= argc)
-            {
-                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--index requires a value");
-            }
-            args.index_file = argv[++i];
-            continue;
-        }
-
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unknown argument: %s", option.c_str());
-    }
+    args.model_name    = result["model"].as<std::string>();
+    args.feature_name  = result["feature"].as<std::string>();
+    args.weights_file  = result["weights-file"].as<std::string>();
+    args.gallery_dir   = result["gallery-dir"].as<std::string>();
+    args.query_image   = result["query-image"].as<std::string>();
+    args.index_file    = result["index"].as<std::string>();
+    args.top_k         = result["topk"].as<int>();
+    args.rebuild_index = result.count("rebuild-index") > 0;
 
     if (args.top_k <= 0)
     {
@@ -314,6 +314,11 @@ Arguments parseArguments(int argc, char *argv[])
     return args;
 }
 
+/**
+ * @brief 将模型名或特征名转换为适合文件名使用的安全字符串。
+ * @param value 原始名称。
+ * @return 处理后的文件名 stem。
+ */
 std::string sanitizeFileStem(std::string_view value)
 {
     std::string stem;
@@ -332,11 +337,23 @@ std::string sanitizeFileStem(std::string_view value)
     return stem;
 }
 
+/**
+ * @brief 生成默认 Faiss 索引文件路径。
+ * @param gallery_dir 图库目录。
+ * @param model_name 模型名。
+ * @param feature_name 特征张量名。
+ * @return 默认索引文件路径。
+ */
 fs::path defaultIndexPath(const fs::path &gallery_dir, const std::string &model_name, const std::string &feature_name)
 {
     return gallery_dir / (sanitizeFileStem(model_name) + "_" + sanitizeFileStem(feature_name) + ".faiss");
 }
 
+/**
+ * @brief 递归收集图库目录下的所有图片。
+ * @param gallery_dir 图库根目录。
+ * @return 排序后的图片路径列表。
+ */
 std::vector<fs::path> collectGalleryImages(const fs::path &gallery_dir)
 {
     if (!fs::exists(gallery_dir) || !fs::is_directory(gallery_dir))
@@ -367,6 +384,11 @@ std::vector<fs::path> collectGalleryImages(const fs::path &gallery_dir)
     return images;
 }
 
+/**
+ * @brief 保存向量 id 到图片路径的映射文件。
+ * @param mapping_path 输出映射文件路径。
+ * @param image_paths 图片路径列表。
+ */
 void savePathMapping(const fs::path &mapping_path, const std::vector<fs::path> &image_paths)
 {
     std::ofstream output(mapping_path);
@@ -382,6 +404,11 @@ void savePathMapping(const fs::path &mapping_path, const std::vector<fs::path> &
     }
 }
 
+/**
+ * @brief 加载向量 id 到图片路径的映射文件。
+ * @param mapping_path 映射文件路径。
+ * @return 图片路径列表。
+ */
 std::vector<fs::path> loadPathMapping(const fs::path &mapping_path)
 {
     std::ifstream input(mapping_path);
@@ -403,6 +430,13 @@ std::vector<fs::path> loadPathMapping(const fs::path &mapping_path)
     return image_paths;
 }
 
+/**
+ * @brief 保存索引构建元数据。
+ * @param metadata_path 元数据文件路径。
+ * @param gallery_dir 图库目录。
+ * @param model_name 模型名。
+ * @param feature_name 特征张量名。
+ */
 void saveMetadata(const fs::path &metadata_path, const fs::path &gallery_dir, const std::string &model_name,
                   const std::string &feature_name)
 {
@@ -418,9 +452,18 @@ void saveMetadata(const fs::path &metadata_path, const fs::path &gallery_dir, co
     output << "gallery_dir=" << fs::absolute(gallery_dir).generic_string() << "\n";
 }
 
+/**
+ * @brief 基于分类模型中间特征提取向量的辅助类。
+ */
 class FeatureExtractor
 {
 public:
+    /**
+     * @brief 构造特征提取器并加载 feature-only 模型。
+     * @param model_name 模型名。
+     * @param feature_name 特征张量名。
+     * @param weights_file 权重文件路径。
+     */
     FeatureExtractor(std::string model_name, std::string feature_name, const fs::path &weights_file)
         : model_name_(std::move(model_name))
         , feature_name_(std::move(feature_name))
@@ -454,17 +497,29 @@ public:
         device_output_.allocate(sizeof(float) * feature_dim_);
     }
 
+    /**
+     * @brief 析构时优先释放模型，再释放 CUDA buffer。
+     */
     ~FeatureExtractor()
     {
         // Ensure TensorRT context/engine are torn down before CUDA buffers they reference.
         model_.reset();
     }
 
+    /**
+     * @brief 返回单张图片对应的特征维度。
+     * @return 特征维度。
+     */
     int featureDim() const noexcept
     {
         return static_cast<int>(feature_dim_);
     }
 
+    /**
+     * @brief 提取单张图片的归一化特征向量。
+     * @param image_path 输入图片路径。
+     * @return L2 归一化后的特征。
+     */
     std::vector<float> extract(const fs::path &image_path)
     {
         cv::Mat image = cv::imread(image_path.string(), cv::IMREAD_COLOR);
@@ -474,17 +529,18 @@ public:
                                  image_path.string().c_str());
         }
 
-        const auto preprocessed = preprocess(image);
-        const auto input_data   = makeInputTensor(preprocessed);
-        std::vector<float> feature(feature_dim_);
+        const auto          preprocessed = irt::model::ImageNetUtil::preprocess(image);
+        const auto          input_data   = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
+        std::vector<float>  feature(feature_dim_);
         std::vector<void *> buffers{device_input_.get(), device_output_.get()};
 
         checkCuda(cudaMemcpy(device_input_.get(), input_data.data(), input_data.size() * sizeof(float),
                              cudaMemcpyHostToDevice),
                   "cudaMemcpy(H2D input)");
         model_->forwardFeatures(buffers);
-        checkCuda(cudaMemcpy(feature.data(), device_output_.get(), feature.size() * sizeof(float), cudaMemcpyDeviceToHost),
-                  "cudaMemcpy(D2H feature)");
+        checkCuda(
+            cudaMemcpy(feature.data(), device_output_.get(), feature.size() * sizeof(float), cudaMemcpyDeviceToHost),
+            "cudaMemcpy(D2H feature)");
         l2Normalize(feature);
         return feature;
     }
@@ -501,6 +557,13 @@ private:
     CudaBuffer                          device_output_;
 };
 
+/**
+ * @brief 基于图库图片构建 Faiss 内积索引并持久化到磁盘。
+ * @param gallery_images 图库图片列表。
+ * @param extractor 特征提取器。
+ * @param index_path 索引输出路径。
+ * @return 构建完成的 Faiss 索引。
+ */
 std::unique_ptr<faiss::Index> buildIndex(const std::vector<fs::path> &gallery_images, FeatureExtractor &extractor,
                                          const fs::path &index_path)
 {
@@ -520,6 +583,11 @@ std::unique_ptr<faiss::Index> buildIndex(const std::vector<fs::path> &gallery_im
     return index;
 }
 
+/**
+ * @brief 从磁盘加载 Faiss 索引及其图片路径映射。
+ * @param index_path Faiss 索引文件路径。
+ * @return 索引对象与图片路径列表。
+ */
 std::pair<std::unique_ptr<faiss::Index>, std::vector<fs::path>> loadIndex(const fs::path &index_path)
 {
     auto index = std::unique_ptr<faiss::Index>(faiss::read_index(index_path.string().c_str()));
@@ -542,15 +610,21 @@ std::pair<std::unique_ptr<faiss::Index>, std::vector<fs::path>> loadIndex(const 
 
 } // namespace
 
+/**
+ * @brief 构建或加载图像检索索引，并返回查询图片的 Top-K 相似结果。
+ * @param argc 命令行参数个数。
+ * @param argv 命令行参数数组。
+ * @return 成功返回 0，失败返回非 0。
+ */
 int main(int argc, char *argv[])
 {
     try
     {
-        const auto args = parseArguments(argc, argv);
-        const fs::path index_path = args.index_file.empty()
-                                        ? defaultIndexPath(args.gallery_dir, args.model_name, args.feature_name)
-                                        : args.index_file;
-        const fs::path mapping_path = mappingPathFromIndex(index_path);
+        const auto     args          = parseArguments(argc, argv);
+        const fs::path index_path    = args.index_file.empty()
+                                         ? defaultIndexPath(args.gallery_dir, args.model_name, args.feature_name)
+                                         : args.index_file;
+        const fs::path mapping_path  = mappingPathFromIndex(index_path);
         const fs::path metadata_path = metadataPathFromIndex(index_path);
 
         std::unique_ptr<faiss::Index> index;
@@ -559,8 +633,8 @@ int main(int argc, char *argv[])
         if (!args.rebuild_index && fs::exists(index_path) && fs::exists(mapping_path))
         {
             std::cout << "Loading existing Faiss index: " << fs::absolute(index_path).string() << std::endl;
-            auto loaded = loadIndex(index_path);
-            index = std::move(loaded.first);
+            auto loaded    = loadIndex(index_path);
+            index          = std::move(loaded.first);
             gallery_images = std::move(loaded.second);
         }
         else
@@ -577,9 +651,9 @@ int main(int argc, char *argv[])
         }
 
         FeatureExtractor extractor(args.model_name, args.feature_name, args.weights_file);
-        const auto query_feature = extractor.extract(args.query_image);
+        const auto       query_feature = extractor.extract(args.query_image);
 
-        const int top_k = std::min(args.top_k, static_cast<int>(index->ntotal));
+        const int                 top_k = std::min(args.top_k, static_cast<int>(index->ntotal));
         std::vector<faiss::idx_t> indices(top_k);
         std::vector<float>        distances(top_k);
         index->search(1, query_feature.data(), top_k, distances.data(), indices.data());
@@ -604,7 +678,10 @@ int main(int argc, char *argv[])
     catch (const std::exception &e)
     {
         std::cerr << "Error: " << e.what() << std::endl;
-        printUsage(argv[0]);
         return -1;
+    }
+    catch (const HelpRequested &)
+    {
+        return 0;
     }
 }

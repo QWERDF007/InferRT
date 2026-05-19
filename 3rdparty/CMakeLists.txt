@@ -8,6 +8,13 @@ if(INFERRT_BUILD_TESTS)
     add_subdirectory(googletest)
 endif()
 
+# cxxopts -----------------------------
+set(CXXOPTS_BUILD_EXAMPLES OFF CACHE BOOL "Disable cxxopts examples" FORCE)
+set(CXXOPTS_BUILD_TESTS OFF CACHE BOOL "Disable cxxopts tests" FORCE)
+set(CXXOPTS_ENABLE_INSTALL OFF CACHE BOOL "Disable cxxopts install" FORCE)
+set(CXXOPTS_ENABLE_WARNINGS OFF CACHE BOOL "Disable cxxopts warnings" FORCE)
+add_subdirectory(cxxopts)
+
 # vtest -----------------------------
 # 父项目使用了 EXCLUDE_FROM_ALL，会导致该子目录中的所有目标不会被默认构建，
 # 除非它们被其他目标依赖。

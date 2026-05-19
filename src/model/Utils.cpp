@@ -1,9 +1,14 @@
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/Utils.hpp>
+#include <opencv2/imgproc.hpp>
 
+#include <cstring>
 #include <fstream>
 
 namespace irt::model {
+
+const std::filesystem::path ImageNetUtil::kDefaultImagePath = "assets/pics/dog.jpg";
+const std::filesystem::path ImageNetUtil::kDefaultLabelPath = "assets/imagenet1000_clsidx_to_labels.txt";
 
 /**
  * @brief 解析文本格式的 `.wts` 权重文件。
@@ -83,6 +88,54 @@ std::vector<std::string> readImagenetLabels(const std::string &label_file)
     }
 
     return labels;
+}
+
+cv::Mat ImageNetUtil::preprocess(const cv::Mat &bgr_image, cv::Size target_size)
+{
+    if (bgr_image.empty())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Input image is empty");
+    }
+    if (target_size.width <= 0 || target_size.height <= 0)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Invalid target size: %dx%d", target_size.width,
+                             target_size.height);
+    }
+
+    cv::Mat rgb;
+    cv::cvtColor(bgr_image, rgb, cv::COLOR_BGR2RGB);
+
+    cv::Mat resized;
+    cv::resize(rgb, resized, target_size, 0, 0, cv::INTER_LINEAR);
+    resized.convertTo(resized, CV_32FC3, 1.0 / 255.0);
+
+    const cv::Scalar mean(0.485, 0.456, 0.406);
+    const cv::Scalar std(0.229, 0.224, 0.225);
+    cv::subtract(resized, mean, resized);
+    cv::divide(resized, std, resized);
+    return resized;
+}
+
+std::vector<float> ImageNetUtil::imageToTensorCHW(const cv::Mat &image)
+{
+    if (image.empty())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Input image is empty");
+    }
+    if (image.type() != CV_32FC3)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Expected CV_32FC3 image, got type=%d", image.type());
+    }
+
+    const size_t plane_size = static_cast<size_t>(image.rows) * static_cast<size_t>(image.cols);
+    std::vector<float> tensor(static_cast<size_t>(image.channels()) * plane_size);
+    std::vector<cv::Mat> channels(3);
+    cv::split(image, channels);
+    for (int c = 0; c < 3; ++c)
+    {
+        std::memcpy(tensor.data() + static_cast<size_t>(c) * plane_size, channels[c].data, plane_size * sizeof(float));
+    }
+    return tensor;
 }
 
 } // namespace irt::model

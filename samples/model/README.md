@@ -22,7 +22,8 @@ cmake --build build --config Debug --target inferrt_sample_image_search
 ## Run
 
 ```bash
-build/bin/inferrt_sample_classification.exe <model_name> <weights_file.wts> <image_path> [label_file]
+build/bin/inferrt_sample_classification.exe <model_name> <weights_file.wts> [image_path] [label_file]
+build/bin/inferrt_sample_classification.exe --help
 ```
 
 Examples:
@@ -94,6 +95,7 @@ Use the dedicated feature sample to dump InferRT tensors and compare them with a
 
 ```bash
 build/bin/inferrt_sample_features.exe resnet18 samples/model/classification/resnet18.wts layer1,layer4 assets/pics/dog.jpg build/feature_dump_cpp
+build/bin/inferrt_sample_features.exe --help
 cd samples/model/features
 python compare_features.py --compare_dir ../../../build/feature_dump_cpp
 ```
@@ -108,9 +110,11 @@ See [`features/README.md`](features/README.md) for the dump format and more usag
 Use the dedicated image search sample to build an image retrieval index from a gallery directory and query top-k similar images:
 
 ```bash
-build/bin/inferrt_sample_image_search.exe samples/model/classification/resnet18.wts assets/pics assets/pics/dog.jpg
-build/bin/inferrt_sample_image_search.exe samples/model/classification/resnet18.wts assets/pics assets/pics/dog.jpg --topk 5 --rebuild-index
-build/bin/inferrt_sample_image_search.exe samples/model/classification/resnet50.wts assets/pics assets/pics/dog.jpg --model resnet50 --feature layer3
+build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg
+build/bin/inferrt_sample_image_search.exe -w samples/model/classification/resnet18.wts -g assets/pics -q assets/pics/dog.jpg
+build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --topk 5 --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet50.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model resnet50 --feature layer3
+build/bin/inferrt_sample_image_search.exe --help
 ```
 
 Behavior:

@@ -14,6 +14,7 @@ cmake --build build --config Debug --target inferrt_sample_features
 
 ```bash
 build/bin/inferrt_sample_features.exe <model_name> <weights_file.wts> <feature_a,feature_b,...> [image_path] [output_dir]
+build/bin/inferrt_sample_features.exe --help
 ```
 
 Example:
@@ -25,6 +26,11 @@ build/bin/inferrt_sample_features.exe alexnet samples/model/classification/alexn
 
 The sample always builds the model instance as a truncated feature extractor via
 `IModelConfig::setFeatureOnly(true)`.
+
+Defaults:
+
+- `image_path`: `assets/pics/dog.jpg`
+- `output_dir`: `feature_dump_cpp`
 
 The sample writes:
 

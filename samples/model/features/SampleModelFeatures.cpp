@@ -1,6 +1,8 @@
+#include <cxxopts.hpp>
 #include <cuda_runtime_api.h>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/IModel.h>
+#include <inferrt/model/Utils.hpp>
 #include <inferrt/util/Path.hpp>
 #include <opencv2/opencv.hpp>
 
@@ -20,6 +22,9 @@ namespace fs = std::filesystem;
 
 namespace {
 
+/**
+ * @brief 特征导出 sample 的命令行参数集合。
+ */
 struct Arguments
 {
     std::string              model_name;
@@ -29,6 +34,9 @@ struct Arguments
     fs::path                 output_dir;
 };
 
+/**
+ * @brief 单个输出特征张量的主机侧描述。
+ */
 struct TensorDump
 {
     std::string        name;
@@ -38,6 +46,9 @@ struct TensorDump
     std::string        file_name;
 };
 
+/**
+ * @brief 简单的 CUDA 设备内存 RAII 封装。
+ */
 class CudaBuffer
 {
 public:
@@ -119,9 +130,20 @@ private:
     size_t num_bytes_{0};
 };
 
-const fs::path kDefaultImagePath = "assets/pics/dog.jpg";
 const fs::path kDefaultOutputDir = "feature_dump_cpp";
 
+/**
+ * @brief 用于在显示帮助后中断主流程。
+ */
+struct HelpRequested
+{
+};
+
+/**
+ * @brief 去除字符串首尾空白字符。
+ * @param value 待处理字符串。
+ * @return 去除空白后的结果。
+ */
 std::string trim(std::string value)
 {
     auto not_space = [](unsigned char ch)
@@ -133,6 +155,11 @@ std::string trim(std::string value)
     return value;
 }
 
+/**
+ * @brief 按逗号分割特征名列表，并去除每项首尾空白。
+ * @param csv 逗号分隔字符串。
+ * @return 特征名数组。
+ */
 std::vector<std::string> splitFeatureNames(const std::string &csv)
 {
     std::vector<std::string> feature_names;
@@ -154,74 +181,74 @@ std::vector<std::string> splitFeatureNames(const std::string &csv)
     return feature_names;
 }
 
-void printUsage(const char *program_name)
+/**
+ * @brief 构造命令行选项定义。
+ * @param program_name 可执行文件名。
+ * @return cxxopts 选项对象。
+ */
+cxxopts::Options makeOptions(const char *program_name)
 {
-    std::cerr << "Usage: " << program_name
-              << " <model_name> <weights_file.wts> <feature_a,feature_b,...> [image_path] [output_dir]"
-              << std::endl;
-    std::cerr << "Default image: " << kDefaultImagePath.generic_string() << std::endl;
-    std::cerr << "Default output dir: " << kDefaultOutputDir.generic_string() << std::endl;
-    std::cerr << "Supported models:";
-    for (const auto &model_name : irt::model::getRegisteredModelNames())
-    {
-        std::cerr << ' ' << model_name;
-    }
-    std::cerr << std::endl;
-    std::cerr << "Example: " << program_name
-              << " resnet18 samples/model/classification/resnet18.wts layer1,layer4 assets/pics/dog.jpg"
-              << " build/feature_dump_cpp" << std::endl;
+    cxxopts::Options options(program_name, "Dump intermediate feature tensors from InferRT models");
+    options.positional_help("<model_name> <weights_file.wts> <feature_a,feature_b,...> [image_path] [output_dir]");
+    options.add_options()
+        ("model_name", "Built-in model name", cxxopts::value<std::string>())
+        ("weights_file", "Weights file (.wts)", cxxopts::value<std::string>())
+        ("feature_names", "Comma-separated feature tensor names", cxxopts::value<std::string>())
+        ("image_path", "Input image path", cxxopts::value<std::string>()->default_value(""))
+        ("output_dir", "Output directory", cxxopts::value<std::string>()->default_value(""))
+        ("h,help", "Show help");
+    options.parse_positional({"model_name", "weights_file", "feature_names", "image_path", "output_dir"});
+    return options;
 }
 
+/**
+ * @brief 解析并校验命令行参数。
+ * @param argc 命令行参数个数。
+ * @param argv 命令行参数数组。
+ * @return 解析后的参数。
+ */
 Arguments parseArguments(int argc, char *argv[])
 {
-    if (argc < 4 || argc > 6)
+    auto options = makeOptions(argv[0]);
+    const auto result = options.parse(argc, argv);
+    if (result.count("help"))
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Expected 3 to 5 arguments after program name");
+        std::cout << options.help() << std::endl;
+        std::cout << "Default image: " << irt::model::ImageNetUtil::kDefaultImagePath.generic_string() << std::endl;
+        std::cout << "Default output dir: " << kDefaultOutputDir.generic_string() << std::endl;
+        std::cout << "Supported models:";
+        for (const auto &model_name : irt::model::getRegisteredModelNames())
+        {
+            std::cout << ' ' << model_name;
+        }
+        std::cout << std::endl;
+        throw HelpRequested{};
+    }
+
+    if (!result.count("model_name") || !result.count("weights_file") || !result.count("feature_names"))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "model_name, weights_file and feature_names are required");
     }
 
     Arguments args;
-    args.model_name    = argv[1];
-    args.weights_file  = fs::path(argv[2]);
-    args.feature_names = splitFeatureNames(argv[3]);
+    args.model_name    = result["model_name"].as<std::string>();
+    args.weights_file  = result["weights_file"].as<std::string>();
+    args.feature_names = splitFeatureNames(result["feature_names"].as<std::string>());
     if (args.feature_names.empty())
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "At least one feature name is required");
     }
-    args.image_path = (argc >= 5) ? fs::path(argv[4]) : fs::path();
-    args.output_dir = (argc >= 6) ? fs::path(argv[5]) : fs::path();
+    args.image_path = result["image_path"].as<std::string>();
+    args.output_dir = result["output_dir"].as<std::string>();
     return args;
 }
 
-cv::Mat preprocess(const cv::Mat &img)
-{
-    cv::Mat rgb;
-    cv::cvtColor(img, rgb, cv::COLOR_BGR2RGB);
-
-    cv::Mat normalized;
-    rgb.convertTo(normalized, CV_32FC3, 1.0 / 255.0);
-
-    cv::Mat resized;
-    cv::resize(normalized, resized, cv::Size(224, 224), 0, 0, cv::INTER_LINEAR);
-
-    cv::Scalar mean(0.485, 0.456, 0.406);
-    cv::Scalar std(0.229, 0.224, 0.225);
-    cv::subtract(resized, mean, resized);
-    cv::divide(resized, std, resized);
-    return resized;
-}
-
-std::vector<float> makeInputTensor(const cv::Mat &preprocessed)
-{
-    std::vector<float>   input_data(1 * 3 * 224 * 224);
-    std::vector<cv::Mat> channels(3);
-    cv::split(preprocessed, channels);
-    for (int c = 0; c < 3; ++c)
-    {
-        std::memcpy(input_data.data() + c * 224 * 224, channels[c].data, 224 * 224 * sizeof(float));
-    }
-    return input_data;
-}
-
+/**
+ * @brief 返回 TensorRT 数据类型的单元素字节数。
+ * @param data_type TensorRT 数据类型。
+ * @return 单元素字节数。
+ */
 size_t elementSize(nvinfer1::DataType data_type)
 {
     using nvinfer1::DataType;
@@ -244,6 +271,11 @@ size_t elementSize(nvinfer1::DataType data_type)
     }
 }
 
+/**
+ * @brief 将 TensorRT 数据类型转换为便于写入 manifest 的字符串。
+ * @param data_type TensorRT 数据类型。
+ * @return 类型名字符串。
+ */
 std::string dataTypeToString(nvinfer1::DataType data_type)
 {
     using nvinfer1::DataType;
@@ -269,6 +301,11 @@ std::string dataTypeToString(nvinfer1::DataType data_type)
     }
 }
 
+/**
+ * @brief 将张量维度序列格式化为逗号分隔字符串。
+ * @param dims TensorRT 维度对象。
+ * @return 逗号分隔后的维度文本。
+ */
 std::string dimsToCsv(const nvinfer1::Dims &dims)
 {
     std::string result;
@@ -283,6 +320,11 @@ std::string dimsToCsv(const nvinfer1::Dims &dims)
     return result;
 }
 
+/**
+ * @brief 计算张量元素总数，并校验每一维均为正数。
+ * @param dims TensorRT 维度对象。
+ * @return 元素总数。
+ */
 size_t elementCount(const nvinfer1::Dims &dims)
 {
     size_t count = 1;
@@ -298,6 +340,11 @@ size_t elementCount(const nvinfer1::Dims &dims)
     return count;
 }
 
+/**
+ * @brief 将张量名转换为适合文件名使用的安全字符串。
+ * @param value 原始名称。
+ * @return 处理后的文件名 stem。
+ */
 std::string sanitizeFileStem(std::string_view value)
 {
     std::string stem;
@@ -316,6 +363,11 @@ std::string sanitizeFileStem(std::string_view value)
     return stem;
 }
 
+/**
+ * @brief 获取特征输出张量名。
+ * @param config 模型配置。
+ * @return 输出张量名列表。
+ */
 std::vector<std::string> featureOutputNames(const irt::model::IModelConfig &config)
 {
     if (!config.featureOutputTensorNames().empty())
@@ -325,6 +377,11 @@ std::vector<std::string> featureOutputNames(const irt::model::IModelConfig &conf
     return config.featureTensorNames();
 }
 
+/**
+ * @brief 包装 CUDA 调用，失败时抛出带上下文的异常。
+ * @param status CUDA 返回状态。
+ * @param op 当前操作名。
+ */
 void checkCuda(cudaError_t status, const char *op)
 {
     if (status != cudaSuccess)
@@ -333,6 +390,11 @@ void checkCuda(cudaError_t status, const char *op)
     }
 }
 
+/**
+ * @brief 将原始字节写入二进制文件。
+ * @param file_path 输出文件路径。
+ * @param bytes 原始字节数据。
+ */
 void writeBinaryFile(const fs::path &file_path, const std::vector<char> &bytes)
 {
     std::ofstream output(file_path, std::ios::binary);
@@ -344,6 +406,11 @@ void writeBinaryFile(const fs::path &file_path, const std::vector<char> &bytes)
     output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
 }
 
+/**
+ * @brief 将 float 向量写入二进制文件。
+ * @param file_path 输出文件路径。
+ * @param values float 数据。
+ */
 void writeFloatBinaryFile(const fs::path &file_path, const std::vector<float> &values)
 {
     std::ofstream output(file_path, std::ios::binary);
@@ -356,6 +423,10 @@ void writeFloatBinaryFile(const fs::path &file_path, const std::vector<float> &v
                  static_cast<std::streamsize>(values.size() * sizeof(float)));
 }
 
+/**
+ * @brief 打印单个张量的基本统计信息。
+ * @param tensor 张量导出结果。
+ */
 void printStats(const TensorDump &tensor)
 {
     if (tensor.data_type != nvinfer1::DataType::kFLOAT)
@@ -375,6 +446,12 @@ void printStats(const TensorDump &tensor)
 
 } // namespace
 
+/**
+ * @brief 运行特征导出 sample，并将输入与中间张量保存到输出目录。
+ * @param argc 命令行参数个数。
+ * @param argv 命令行参数数组。
+ * @return 成功返回 0，失败返回非 0。
+ */
 int main(int argc, char *argv[])
 {
     try
@@ -383,12 +460,13 @@ int main(int argc, char *argv[])
         if (!irt::model::isSupportedModel(cli.model_name))
         {
             std::cerr << "Unsupported model: " << cli.model_name << std::endl;
-            printUsage(argv[0]);
             return -1;
         }
 
-        const fs::path project_root = irt::util::findProjectRoot(argv[0], {kDefaultImagePath}, __FILE__);
-        const fs::path image_path   = cli.image_path.empty() ? (project_root / kDefaultImagePath) : cli.image_path;
+        const fs::path project_root
+            = irt::util::findProjectRoot(argv[0], {irt::model::ImageNetUtil::kDefaultImagePath}, __FILE__);
+        const fs::path image_path = cli.image_path.empty() ? (project_root / irt::model::ImageNetUtil::kDefaultImagePath)
+                                                           : cli.image_path;
         const fs::path output_dir = cli.output_dir.empty() ? (fs::current_path() / kDefaultOutputDir) : cli.output_dir;
 
         auto config = std::make_unique<irt::model::IModelConfig>();
@@ -412,8 +490,8 @@ int main(int argc, char *argv[])
                                  image_path.string().c_str());
         }
 
-        const auto preprocessed = preprocess(img);
-        const auto input_data   = makeInputTensor(preprocessed);
+        const auto preprocessed = irt::model::ImageNetUtil::preprocess(img);
+        const auto input_data   = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
 
         CudaBuffer d_input(input_data.size() * sizeof(float));
         checkCuda(
@@ -502,7 +580,10 @@ int main(int argc, char *argv[])
     catch (const std::exception &e)
     {
         std::cerr << "Error: " << e.what() << std::endl;
-        printUsage(argv[0]);
         return -1;
+    }
+    catch (const HelpRequested &)
+    {
+        return 0;
     }
 }
