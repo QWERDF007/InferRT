@@ -46,7 +46,10 @@ def main() -> int:
 
     input_tensor = preprocess_image(image_path)
     print(f"Running inference for image: {image_path}")
-    output = model.infer(input_tensor)
+    output_shape = model.tensor_shape(model.output_tensor_names()[0])
+    output_dtype = np.dtype(model.tensor_dtype(model.output_tensor_names()[0]))
+    output = np.empty(output_shape, dtype=output_dtype)
+    model.infer(input_tensor, output)
 
     if not isinstance(output, np.ndarray):
         first_output_name = model.output_tensor_names()[0]

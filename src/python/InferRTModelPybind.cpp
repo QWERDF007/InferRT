@@ -186,6 +186,11 @@ py::array asContiguousArray(const py::handle &input, nvinfer1::DataType data_typ
     return py::array(numpy.attr("ascontiguousarray")(input, dataTypeToPyDType(data_type)));
 }
 
+bool isCContiguous(const py::array &array)
+{
+    return (array.flags() & py::array::c_style) != 0;
+}
+
 /**
  * @brief 管理一次推理所需的设备端缓冲区。
  */
@@ -468,9 +473,9 @@ public:
      * @param inputs 输入张量；单输入可直接传 `numpy.ndarray`，多输入可传 `list/tuple/dict`。
      * @return 单输出返回 `numpy.ndarray`，多输出返回 `dict[str, numpy.ndarray]`。
      */
-    py::object infer(const py::object &inputs)
+    py::object infer(const py::object &inputs, const py::object &outputs)
     {
-        return execute(inputs, outputTensorNames(),
+        return execute(inputs, outputs, outputTensorNames(),
                        [this](const std::vector<void *> &buffers) { model_->infer(buffers); });
     }
 
@@ -487,7 +492,7 @@ public:
             throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "No feature tensors are configured");
         }
 
-        return execute(inputs, feature_names,
+        return execute(inputs, py::none(), feature_names,
                        [this](const std::vector<void *> &buffers) { model_->forwardFeatures(buffers); });
     }
 
@@ -497,47 +502,47 @@ private:
      * @param inputs Python 输入对象。
      * @return 与配置输入顺序一致的数组列表。
      */
-    std::vector<py::handle> normalizeInputs(const py::object &inputs) const
+    std::vector<py::handle> normalizeTensorObjects(const py::object &tensors, const std::vector<std::string> &tensor_names,
+                                                   const char *tensor_kind) const
     {
-        const auto input_names = inputTensorNames();
-        if (input_names.empty())
+        if (tensor_names.empty())
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Model has no configured inputs");
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Model has no configured %s", tensor_kind);
         }
 
-        if (input_names.size() == 1 && py::isinstance<py::array>(inputs))
+        if (tensor_names.size() == 1 && py::isinstance<py::array>(tensors))
         {
-            return {inputs};
+            return {tensors};
         }
 
-        if (py::isinstance<py::dict>(inputs))
+        if (py::isinstance<py::dict>(tensors))
         {
-            py::dict                mapping = py::reinterpret_borrow<py::dict>(inputs);
+            py::dict                mapping = py::reinterpret_borrow<py::dict>(tensors);
             std::vector<py::handle> values;
-            values.reserve(input_names.size());
-            for (const auto &input_name : input_names)
+            values.reserve(tensor_names.size());
+            for (const auto &tensor_name : tensor_names)
             {
-                if (!mapping.contains(py::str(input_name)))
+                if (!mapping.contains(py::str(tensor_name)))
                 {
-                    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Missing input tensor: %s",
-                                         input_name.c_str());
+                    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Missing %s tensor: %s", tensor_kind,
+                                         tensor_name.c_str());
                 }
-                values.push_back(mapping[py::str(input_name)]);
+                values.push_back(mapping[py::str(tensor_name)]);
             }
             return values;
         }
 
-        if (py::isinstance<py::sequence>(inputs))
+        if (py::isinstance<py::sequence>(tensors))
         {
-            py::sequence sequence = py::reinterpret_borrow<py::sequence>(inputs);
-            if (static_cast<size_t>(py::len(sequence)) != input_names.size())
+            py::sequence sequence = py::reinterpret_borrow<py::sequence>(tensors);
+            if (static_cast<size_t>(py::len(sequence)) != tensor_names.size())
             {
-                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Expected %zu input tensors, got %zd",
-                                     input_names.size(), py::len(sequence));
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Expected %zu %s tensors, got %zd",
+                                     tensor_names.size(), tensor_kind, py::len(sequence));
             }
 
             std::vector<py::handle> values;
-            values.reserve(input_names.size());
+            values.reserve(tensor_names.size());
             for (const auto &item : sequence)
             {
                 values.push_back(item);
@@ -546,7 +551,18 @@ private:
         }
 
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "Inputs must be numpy.ndarray, sequence, or dict[str, numpy.ndarray]");
+                             "%s tensors must be numpy.ndarray, sequence, or dict[str, numpy.ndarray]", tensor_kind);
+    }
+
+    std::vector<py::handle> normalizeInputs(const py::object &inputs) const
+    {
+        return normalizeTensorObjects(inputs, inputTensorNames(), "input");
+    }
+
+    std::vector<py::handle> normalizeOutputs(const py::object &outputs,
+                                             const std::vector<std::string> &output_names) const
+    {
+        return normalizeTensorObjects(outputs, output_names, "output");
     }
 
     /**
@@ -587,25 +603,90 @@ private:
      * @param tensor_names 待创建的输出张量名称列表。
      * @return 输出张量绑定列表。
      */
-    std::vector<TensorBinding> prepareOutputBindings(const std::vector<std::string> &tensor_names)
+    std::vector<TensorBinding> prepareOutputBindings(const py::object &outputs, const std::vector<std::string> &tensor_names)
     {
+        if (outputs.is_none())
+        {
+            std::vector<TensorBinding> bindings;
+            bindings.reserve(tensor_names.size());
+
+            for (const auto &tensor_name : tensor_names)
+            {
+                const auto dims        = model_->tensorShape(tensor_name);
+                const auto data_type   = model_->tensorDataType(tensor_name);
+                const auto element_num = tensorElementCount(dims, tensor_name);
+                const auto dtype       = dataTypeToPyDType(data_type);
+                const auto shape       = dimsToVector(dims);
+
+                std::vector<py::ssize_t> py_shape(shape.begin(), shape.end());
+                py::array                array(dtype, py_shape);
+
+                if (static_cast<size_t>(array.nbytes()) != element_num * dataTypeSize(data_type))
+                {
+                    throw irt::Exception(irt::Status::ERROR_INTERNAL, "Unexpected numpy buffer size for tensor: %s",
+                                         tensor_name.c_str());
+                }
+
+                bindings.emplace_back(tensor_name, std::move(array));
+            }
+
+            return bindings;
+        }
+
+        const auto output_values = normalizeOutputs(outputs, tensor_names);
         std::vector<TensorBinding> bindings;
         bindings.reserve(tensor_names.size());
 
-        for (const auto &tensor_name : tensor_names)
+        for (size_t i = 0; i < tensor_names.size(); ++i)
         {
+            const auto &tensor_name = tensor_names[i];
             const auto dims        = model_->tensorShape(tensor_name);
             const auto data_type   = model_->tensorDataType(tensor_name);
             const auto element_num = tensorElementCount(dims, tensor_name);
             const auto dtype       = dataTypeToPyDType(data_type);
             const auto shape       = dimsToVector(dims);
+            if (!py::isinstance<py::array>(output_values[i]))
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Output tensor must be numpy.ndarray: %s",
+                                     tensor_name.c_str());
+            }
 
-            std::vector<py::ssize_t> py_shape(shape.begin(), shape.end());
-            py::array                array(dtype, py_shape);
-
+            py::array array = py::reinterpret_borrow<py::array>(output_values[i]);
+            if (!array.writeable())
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Output tensor is not writable: %s",
+                                     tensor_name.c_str());
+            }
+            if (!isCContiguous(array))
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                     "Output tensor must be C-contiguous: %s", tensor_name.c_str());
+            }
+            if (!array.dtype().equal(dtype))
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                     "Output tensor dtype mismatch: %s, expected=%s", tensor_name.c_str(),
+                                     dataTypeToString(data_type).c_str());
+            }
+            if (static_cast<size_t>(array.ndim()) != shape.size())
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                     "Output tensor rank mismatch: %s, expected=%zu, got=%zd", tensor_name.c_str(),
+                                     shape.size(), array.ndim());
+            }
+            for (size_t dim_index = 0; dim_index < shape.size(); ++dim_index)
+            {
+                if (array.shape(static_cast<py::ssize_t>(dim_index)) != shape[dim_index])
+                {
+                    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                         "Output tensor shape mismatch: %s, dim[%zu] expected=%lld, got=%zd",
+                                         tensor_name.c_str(), dim_index, static_cast<long long>(shape[dim_index]),
+                                         array.shape(static_cast<py::ssize_t>(dim_index)));
+                }
+            }
             if (static_cast<size_t>(array.nbytes()) != element_num * dataTypeSize(data_type))
             {
-                throw irt::Exception(irt::Status::ERROR_INTERNAL, "Unexpected numpy buffer size for tensor: %s",
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected numpy buffer size for tensor: %s",
                                      tensor_name.c_str());
             }
 
@@ -672,11 +753,11 @@ private:
      * @param forward_fn 真正执行前向的函数。
      * @return Python 返回值。
      */
-    py::object execute(const py::object &inputs, const std::vector<std::string> &output_names,
+    py::object execute(const py::object &inputs, const py::object &outputs, const std::vector<std::string> &output_names,
                        const std::function<void(const std::vector<void *> &)> &forward_fn)
     {
         auto input_bindings  = prepareInputBindings(inputs);
-        auto output_bindings = prepareOutputBindings(output_names);
+        auto output_bindings = prepareOutputBindings(outputs, output_names);
         auto buffers         = buildBufferList(input_bindings, output_bindings);
 
         {
@@ -777,7 +858,8 @@ PYBIND11_MODULE(inferrt_model_py, m)
         .def("save", &PyModel::save, py::arg("engine_file"), "将当前 engine 序列化到磁盘。")
         .def("build_or_load", &PyModel::buildOrLoad, py::arg("weights_file"),
              "优先加载已有 engine，不存在时从权重文件构建。")
-        .def("infer", &PyModel::infer, py::arg("inputs"), "执行一次主推理，输入支持 ndarray、sequence 或 dict。")
+        .def("infer", &PyModel::infer, py::arg("inputs"), py::arg("outputs"),
+             "执行一次主推理，由 Python 传入输入和输出 ndarray、sequence 或 dict。")
         .def("forward_features", &PyModel::forwardFeatures, py::arg("inputs"),
              "执行一次特征前向，输入支持 ndarray、sequence 或 dict。")
         .def("input_tensor_names", &PyModel::inputTensorNames, "返回输入张量名称列表。")
