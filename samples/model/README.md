@@ -5,9 +5,10 @@ This directory contains the ImageNet-style classification sample assets provided
 ## Layout
 
 - `classification/`: shared weight export and inference entry for all supported classification models
-- `features/`: feature dump sample plus a Python comparator for checking InferRT vs PyTorch feature consistency
+- `feature_extract/`: feature dump sample plus a Python comparator for checking InferRT vs PyTorch feature consistency
 - `image_search/`: ResNet18 `layer4` feature extraction plus Faiss-based image retrieval sample
 - `onnx/`: ONNX export script and ONNX -> TensorRT inference sample
+- `python/`: pybind11 Python binding sample for model creation and inference
 
 ## Build
 
@@ -17,6 +18,7 @@ Build the shared sample from the project root:
 cmake --build build --config Debug --target inferrt_sample_classification
 cmake --build build --config Debug --target inferrt_sample_features
 cmake --build build --config Debug --target inferrt_sample_image_search
+cmake --build build --config Debug --target inferrt_model_py
 ```
 
 ## Run
@@ -127,3 +129,23 @@ Behavior:
 - pass `--rebuild-index` to rescan the gallery and include newly added images
 
 See [`image_search/README.md`](image_search/README.md) for details.
+
+## Python Binding Sample
+
+The pybind11-based Python samples show how to create an InferRT model, run NumPy inference, and dump intermediate features directly from Python:
+
+```bash
+cmake -S . -B build -DINFERRT_BUILD_PYTHON=ON -DINFERRT_PYTHON_ROOT=D:/Software/anaconda3/envs/py312
+cmake --build build --config Debug --target inferrt_model_py
+D:/Software/anaconda3/envs/py312/python.exe samples/model/python/SamplePythonClassification.py
+```
+
+The Python extension is generated under `build/lib`, and the dependent InferRT DLLs remain under `build/bin`.
+
+Feature extraction from Python:
+
+```bash
+D:/Software/anaconda3/envs/py312/python.exe samples/model/python/python_feature_extract.py --build-dir build_py312_final --model resnet18 --weights samples/model/classification/resnet18.wts --features layer1,layer4 --output-dir build/feature_dump_py
+```
+
+See [`python/README.md`](python/README.md) for details.

@@ -97,6 +97,11 @@ message(STATUS "    CUDAToolkit lib dir     : ${CUDAToolkit_LIBRARY_DIR}")
 message(STATUS "    cudnn lib               : ${CUDNN_LIB}")
 message(STATUS "")
 
+# 显示 Python 配置信息
 message(STATUS "Python")
-message(STATUS "    PYTHON_EXECUTABLE   : ${PYTHON_EXECUTABLE}")
+message(STATUS "    Python root: ${Python_ROOT_DIR}")
+message(STATUS "    Python executable: ${Python_EXECUTABLE}")
+message(STATUS "    Python version: ${Python_VERSION}")
+message(STATUS "    Python include dir: ${Python_INCLUDE_DIRS}")
+message(STATUS "    Python libs: ${Python_LIBRARIES}")
 message(STATUS "")
