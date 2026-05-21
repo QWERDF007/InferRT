@@ -6,6 +6,7 @@
 #include <inferrt/util/Path.hpp>
 #include <opencv2/opencv.hpp>
 
+#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -14,6 +15,13 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+using Clock = std::chrono::steady_clock;
+
+double elapsedMs(Clock::time_point start, Clock::time_point end)
+{
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
 
 /**
  * @brief 用于在显示帮助后中断主流程。
@@ -41,14 +49,11 @@ struct Arguments
 cxxopts::Options makeOptions(const char *program_name)
 {
     cxxopts::Options options(program_name, "Run InferRT classification models on a single image");
-    options.positional_help("<model_name> <weights_file.wts> [image_path] [label_file]");
-    options.add_options()
-        ("model_name", "Built-in model name", cxxopts::value<std::string>())
-        ("weights_file", "Weights file (.wts)", cxxopts::value<std::string>())
-        ("image_path", "Input image path", cxxopts::value<std::string>()->default_value(""))
-        ("label_file", "Imagenet label file", cxxopts::value<std::string>()->default_value(""))
-        ("h,help", "Show help");
-    options.parse_positional({"model_name", "weights_file", "image_path", "label_file"});
+    options.add_options()("model,m", "Built-in model name (required)", cxxopts::value<std::string>())(
+        "weights-file,w", "Weights file (.wts) (required)", cxxopts::value<std::string>())(
+        "image-path,i", "Input image path", cxxopts::value<std::string>()->default_value(""))(
+        "label-file,l", "ImageNet label file", cxxopts::value<std::string>()->default_value(""))("h,help",
+                                                                                                "Show help");
     return options;
 }
 
@@ -76,16 +81,16 @@ Arguments parseArguments(int argc, char *argv[])
         throw HelpRequested{};
     }
 
-    if (!result.count("model_name") || !result.count("weights_file"))
+    if (!result.count("model") || !result.count("weights-file"))
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "model_name and weights_file are required");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--model and --weights-file are required");
     }
 
     Arguments args;
-    args.model_name   = result["model_name"].as<std::string>();
-    args.weights_file = result["weights_file"].as<std::string>();
-    args.image_path   = result["image_path"].as<std::string>();
-    args.label_file   = result["label_file"].as<std::string>();
+    args.model_name   = result["model"].as<std::string>();
+    args.weights_file = result["weights-file"].as<std::string>();
+    args.image_path   = result["image-path"].as<std::string>();
+    args.label_file   = result["label-file"].as<std::string>();
     return args;
 }
 
@@ -137,8 +142,10 @@ int main(int argc, char *argv[])
             return -1;
         }
 
-        const cv::Mat           preprocessed = irt::model::ImageNetUtil::preprocess(img);
-        const std::vector<float> input_data  = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
+        const auto preprocess_start = Clock::now();
+        const cv::Mat preprocessed = irt::model::ImageNetUtil::preprocess(img);
+        const std::vector<float> input_data = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
+        const auto preprocess_end = Clock::now();
 
         void *d_input  = nullptr;
         void *d_output = nullptr;
@@ -153,11 +160,14 @@ int main(int argc, char *argv[])
 
         std::vector<void *> buffers = {d_input, d_output};
         std::cout << "Running inference..." << std::endl;
+        const auto infer_start = Clock::now();
         model->infer(buffers);
+        const auto infer_end = Clock::now();
 
         std::vector<float> output_data(1000);
         cudaMemcpy(output_data.data(), d_output, output_size, cudaMemcpyDeviceToHost);
 
+        const auto postprocess_start = Clock::now();
         std::vector<std::string> labels;
         bool                     has_labels = false;
         if (!label_file.empty() && fs::exists(label_file))
@@ -174,6 +184,11 @@ int main(int argc, char *argv[])
         }
         std::partial_sort(scores.begin(), scores.begin() + 3, scores.end(),
                           [](const auto &a, const auto &b) { return a.first > b.first; });
+        const auto postprocess_end = Clock::now();
+
+        std::cout << "Timing: preprocess=" << elapsedMs(preprocess_start, preprocess_end)
+                  << " ms, inference=" << elapsedMs(infer_start, infer_end)
+                  << " ms, postprocess=" << elapsedMs(postprocess_start, postprocess_end) << " ms" << std::endl;
 
         std::cout << "\nTop-3 predictions:" << std::endl;
         for (int i = 0; i < 3; ++i)

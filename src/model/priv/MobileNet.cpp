@@ -316,27 +316,12 @@ void buildMobileNetV3(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition
     impl.markOutputTensors(network, {x});
 }
 
-void enqueue(priv::IModelImpl &impl, const std::vector<void *> &buffers)
+void enqueue(priv::IModelImpl &impl, const std::vector<void *> &buffers, cudaStream_t stream, bool non_blocking)
 {
     impl.ensurePrimaryInferenceReady();
     auto &trt_params = impl.trtParams();
     impl.bindTensorAddresses(buffers);
-
-    if (!trt_params.stream)
-    {
-        trt_params.stream = MakeCudaStream();
-        if (!trt_params.stream)
-        {
-            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create CUDA stream");
-        }
-    }
-
-    if (!trt_params.context->enqueueV3(*trt_params.stream))
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to execute inference");
-    }
-
-    cudaStreamSynchronize(*trt_params.stream);
+    impl.executeContext(trt_params, "Failed to execute inference", stream, non_blocking);
 }
 
 } // namespace
@@ -384,9 +369,9 @@ void MobileNetV3Small::buildNetwork(nvinfer1::INetworkDefinition *network, const
                      576, 1024, isBuildingFeatureEngine());
 }
 
-void MobileNet::infer(const std::vector<void *> &buffers)
+void MobileNet::infer(const std::vector<void *> &buffers, cudaStream_t stream, bool non_blocking)
 {
-    enqueue(*this, buffers);
+    enqueue(*this, buffers, stream, non_blocking);
 }
 
 } // namespace irt::model

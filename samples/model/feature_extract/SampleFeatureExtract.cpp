@@ -7,6 +7,7 @@
 #include <opencv2/opencv.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -21,6 +22,13 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+using Clock = std::chrono::steady_clock;
+
+double elapsedMs(Clock::time_point start, Clock::time_point end)
+{
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
 
 /**
  * @brief 特征导出 sample 的命令行参数集合。
@@ -189,15 +197,12 @@ std::vector<std::string> splitFeatureNames(const std::string &csv)
 cxxopts::Options makeOptions(const char *program_name)
 {
     cxxopts::Options options(program_name, "Dump intermediate feature tensors from InferRT models");
-    options.positional_help("<model_name> <weights_file.wts> <feature_a,feature_b,...> [image_path] [output_dir]");
-    options.add_options()
-        ("model_name", "Built-in model name", cxxopts::value<std::string>())
-        ("weights_file", "Weights file (.wts)", cxxopts::value<std::string>())
-        ("feature_names", "Comma-separated feature tensor names", cxxopts::value<std::string>())
-        ("image_path", "Input image path", cxxopts::value<std::string>()->default_value(""))
-        ("output_dir", "Output directory", cxxopts::value<std::string>()->default_value(""))
-        ("h,help", "Show help");
-    options.parse_positional({"model_name", "weights_file", "feature_names", "image_path", "output_dir"});
+    options.add_options()("model,m", "Built-in model name (required)", cxxopts::value<std::string>())(
+        "weights-file,w", "Weights file (.wts) (required)", cxxopts::value<std::string>())(
+        "features,f", "Comma-separated feature tensor names (required)", cxxopts::value<std::string>())(
+        "image-path,i", "Input image path", cxxopts::value<std::string>()->default_value(""))(
+        "output-dir,o", "Output directory", cxxopts::value<std::string>()->default_value(""))("h,help",
+                                                                                            "Show help");
     return options;
 }
 
@@ -225,22 +230,23 @@ Arguments parseArguments(int argc, char *argv[])
         throw HelpRequested{};
     }
 
-    if (!result.count("model_name") || !result.count("weights_file") || !result.count("feature_names"))
+    if (!result.count("model") || !result.count("weights-file") || !result.count("features"))
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "model_name, weights_file and feature_names are required");
+                             "--model, --weights-file and --features are required");
     }
 
     Arguments args;
-    args.model_name    = result["model_name"].as<std::string>();
-    args.weights_file  = result["weights_file"].as<std::string>();
-    args.feature_names = splitFeatureNames(result["feature_names"].as<std::string>());
+    args.model_name    = result["model"].as<std::string>();
+    args.weights_file  = result["weights-file"].as<std::string>();
+    args.feature_names = splitFeatureNames(result["features"].as<std::string>());
     if (args.feature_names.empty())
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "At least one feature name is required");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "At least one feature name is required in --features");
     }
-    args.image_path = result["image_path"].as<std::string>();
-    args.output_dir = result["output_dir"].as<std::string>();
+    args.image_path = result["image-path"].as<std::string>();
+    args.output_dir = result["output-dir"].as<std::string>();
     return args;
 }
 
@@ -490,8 +496,10 @@ int main(int argc, char *argv[])
                                  image_path.string().c_str());
         }
 
+        const auto preprocess_start = Clock::now();
         const auto preprocessed = irt::model::ImageNetUtil::preprocess(img);
-        const auto input_data   = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
+        const auto input_data = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
+        const auto preprocess_end = Clock::now();
 
         CudaBuffer d_input(input_data.size() * sizeof(float));
         checkCuda(
@@ -526,8 +534,11 @@ int main(int argc, char *argv[])
         }
 
         std::cout << "Running feature forward..." << std::endl;
+        const auto infer_start = Clock::now();
         model->forwardFeatures(buffers);
+        const auto infer_end = Clock::now();
 
+        const auto postprocess_start = Clock::now();
         for (size_t i = 0; i < dumps.size(); ++i)
         {
             checkCuda(cudaMemcpy(dumps[i].host_bytes.data(), device_outputs[i].get(), dumps[i].host_bytes.size(),
@@ -568,8 +579,12 @@ int main(int argc, char *argv[])
             manifest << "tensor|" << tensor.name << "|" << dataTypeToString(tensor.data_type) << "|"
                      << dimsToCsv(tensor.dims) << "|" << tensor.file_name << "\n";
         }
+        const auto postprocess_end = Clock::now();
 
         std::cout << "Saved feature dump to: " << fs::absolute(output_dir).string() << std::endl;
+        std::cout << "Timing: preprocess=" << elapsedMs(preprocess_start, preprocess_end)
+                  << " ms, inference=" << elapsedMs(infer_start, infer_end)
+                  << " ms, postprocess=" << elapsedMs(postprocess_start, postprocess_end) << " ms" << std::endl;
         std::cout << "Input dims=[1,3,224,224]" << std::endl;
         for (const auto &tensor : dumps)
         {

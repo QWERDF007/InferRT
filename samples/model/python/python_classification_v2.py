@@ -1,4 +1,4 @@
-"""InferRT Python binding classification sample."""
+"""InferRT DLPack-based classification sample using infer_v2."""
 
 from __future__ import annotations
 
@@ -7,31 +7,45 @@ import time
 
 import numpy as np
 
-from util import allocate_output_tensors, ensure_module_path, load_labels, preprocess_image, resolve_project_root
+from util import ensure_module_path, load_labels, preprocess_image, resolve_project_root
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments."""
-
-    parser = argparse.ArgumentParser(description="Run InferRT classification from Python bindings")
+    parser = argparse.ArgumentParser(description="Run InferRT classification with infer_v2 and DLPack tensors")
     parser.add_argument("-m", "--model", default="resnet18", help="Built-in model name")
     parser.add_argument("-w", "--weights", default="samples/model/classification/resnet18.wts", help="Path to .wts file")
     parser.add_argument("-i", "--image", default="assets/pics/dog.jpg", help="Input image path")
     parser.add_argument("-l", "--labels", default="assets/imagenet1000_clsidx_to_labels.txt", help="Label file path")
     parser.add_argument("-k", "--topk", type=int, default=3, help="Number of top results to print")
     parser.add_argument("-b", "--build-dir", default="build", help="CMake build directory used to locate .pyd and DLLs")
+    parser.add_argument("--device", default="cuda", choices=["cuda"], help="Tensor device for DLPack tensors")
     return parser.parse_args()
 
 
-def main() -> int:
-    """Run the classification sample."""
+def torch_dtype_from_numpy_name(dtype_name: str) -> str:
+    mapping = {
+        "float32": "float32",
+        "float16": "float16",
+        "int8": "int8",
+        "int32": "int32",
+        "bool": "bool",
+    }
+    if dtype_name not in mapping:
+        raise ValueError(f"Unsupported output dtype for torch allocation: {dtype_name}")
+    return mapping[dtype_name]
 
+
+def main() -> int:
     args = parse_args()
     project_root = resolve_project_root()
     build_dir = project_root / args.build_dir
     ensure_module_path(build_dir)
 
+    import torch
     import inferrt_model_py as irt
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is required for the infer_v2 DLPack sample")
 
     model_name = args.model
     weights_path = project_root / args.weights
@@ -50,32 +64,37 @@ def main() -> int:
     print(f"Input tensors: {input_tensor_names}")
     print(f"Output tensors: {output_tensor_names}")
 
-    if not input_tensor_names:
-        raise RuntimeError("Model has no configured input tensors")
+    if len(input_tensor_names) != 1:
+        raise RuntimeError(f"This sample expects exactly one input tensor, got: {input_tensor_names}")
     if not output_tensor_names:
         raise RuntimeError("Model has no configured output tensors")
 
     preprocess_start = time.perf_counter()
-    input_tensor = preprocess_image(image_path)
+    input_array = preprocess_image(image_path)
+    input_tensor = torch.from_numpy(np.ascontiguousarray(input_array)).to(device=args.device, non_blocking=False).contiguous()
     preprocess_ms = (time.perf_counter() - preprocess_start) * 1000.0
-    print(f"Running inference for image: {image_path}")
-    if len(input_tensor_names) != 1:
-        raise RuntimeError(
-            f"This classification sample expects exactly one input tensor, got: {input_tensor_names}"
-        )
 
-    input_tensors = {name: input_tensor for name in input_tensor_names}
-    output_tensors = allocate_output_tensors(model, output_tensor_names)
+    output_tensors: dict[str, torch.Tensor] = {}
+    for output_name in output_tensor_names:
+        output_shape = model.tensor_shape(output_name)
+        output_dtype = getattr(torch, torch_dtype_from_numpy_name(model.tensor_dtype(output_name)))
+        output_tensors[output_name] = torch.empty(output_shape, dtype=output_dtype, device=args.device)
 
+    stream = torch.cuda.Stream()
+    input_tensors = {input_tensor_names[0]: input_tensor}
+
+    print(f"Running infer_v2 for image: {image_path}")
     infer_start = time.perf_counter()
-    model.infer(input_tensors, output_tensors)
+    with torch.cuda.stream(stream):
+        model.infer_v2(input_tensors, output_tensors, stream_ptr=stream.cuda_stream, non_blocking=True)
+    stream.synchronize()
     infer_ms = (time.perf_counter() - infer_start) * 1000.0
 
+    postprocess_start = time.perf_counter()
     output_name = output_tensor_names[0]
-    output = output_tensors[output_name]
+    output = output_tensors[output_name].detach().cpu().numpy()
     print(f"Using output tensor for classification scores: {output_name}")
 
-    postprocess_start = time.perf_counter()
     scores = output.reshape(-1)
     topk = min(args.topk, scores.shape[0])
     indices = np.argsort(scores)[::-1][:topk]

@@ -47,10 +47,12 @@ public:
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 
     /**
-     * @brief 执行 AlexNet 推理。
+     * @brief 在指定 CUDA stream 上执行 AlexNet 推理。
      * @param buffers 输入输出缓冲区地址列表。
+     * @param stream 调用方提供的 CUDA stream；为空时使用模型当前默认 stream。
      */
-    void infer(const std::vector<void *> &buffers) override;
+    void infer(const std::vector<void *> &buffers, cudaStream_t stream = nullptr,
+               bool non_blocking = false) override;
 };
 
 } // namespace irt::model

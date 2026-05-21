@@ -113,16 +113,22 @@ public:
     virtual void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) = 0;
 
     /**
-     * @brief 执行一次推理。
+     * @brief 在指定 CUDA stream 上执行一次推理。
      * @param buffers 输入输出缓冲区地址列表。
+     * @param stream 调用方提供的 CUDA stream；为空时使用模型当前默认 stream。
+     * @param non_blocking 为 true 时仅提交执行，不在函数内等待 stream 完成。
      */
-    virtual void infer(const std::vector<void *> &buffers) = 0;
+    virtual void infer(const std::vector<void *> &buffers, cudaStream_t stream = nullptr,
+                       bool non_blocking = false) = 0;
 
     /**
-     * @brief 执行一次特征提取前向。
+     * @brief 在指定 CUDA stream 上执行一次特征提取前向。
      * @param buffers 输入与特征输出缓冲区地址列表。
+     * @param stream 调用方提供的 CUDA stream；为空时使用模型当前默认 stream。
+     * @param non_blocking 为 true 时仅提交执行，不在函数内等待 stream 完成。
      */
-    virtual void forwardFeatures(const std::vector<void *> &buffers);
+    virtual void forwardFeatures(const std::vector<void *> &buffers, cudaStream_t stream = nullptr,
+                                 bool non_blocking = false);
 
     /**
      * @brief 设置完整模型配置。
@@ -163,6 +169,19 @@ public:
      * @param dims 运行时维度。
      */
     void setTensorShape(const std::string &tensor_name, const nvinfer1::Dims &dims);
+
+    /**
+     * @brief 设置模型默认使用的外部 CUDA stream。
+     * @param stream 调用方提供的 CUDA stream。
+     */
+    void setStream(cudaStream_t stream);
+
+    /**
+     * @brief 清除模型默认外部 CUDA stream，恢复为内部自建 stream。
+     */
+    void clearStream();
+
+    cudaStream_t executionStream();
 
     /**
      * @brief 设置日志级别。
@@ -334,6 +353,8 @@ public:
 
     void ensurePrimaryInferenceReady() const;
     void ensureFeatureExtractionReady() const;
+    cudaStream_t resolveExecutionStream(TRTParams &params, cudaStream_t stream_override);
+    void executeContext(TRTParams &params, const char *error_message, cudaStream_t stream_override, bool non_blocking);
 
 private:
     /// 模型配置对象。

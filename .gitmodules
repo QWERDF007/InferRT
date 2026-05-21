@@ -18,3 +18,7 @@
 	path = 3rdparty/pybind11
 	url = https://github.com/pybind/pybind11.git
 	branch = master
+[submodule "3rdparty/dlpack"]
+	path = 3rdparty/dlpack
+	url = https://github.com/dmlc/dlpack.git
+	branch = main

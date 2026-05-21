@@ -1,4 +1,4 @@
-"""Shared helpers for InferRT Python samples."""
+"""InferRT Python 示例脚本共用的辅助函数。"""
 
 from __future__ import annotations
 
@@ -14,13 +14,24 @@ _DLL_DIRECTORY_HANDLES: list[object] = []
 
 
 def resolve_project_root() -> Path:
-    """Return the repository root resolved from this file location."""
+    """根据当前文件位置解析仓库根目录。
+
+    Returns:
+        Path: 当前仓库的根目录路径。
+    """
 
     return Path(__file__).resolve().parents[3]
 
 
 def read_cmake_cache(cache_path: Path) -> dict[str, str]:
-    """Read `CMakeCache.txt` and return a key-value mapping."""
+    """读取 `CMakeCache.txt` 并返回键值映射。
+
+    Args:
+        cache_path: `CMakeCache.txt` 文件路径。
+
+    Returns:
+        dict[str, str]: 从缓存文件中解析出的配置项；若文件不存在则返回空字典。
+    """
 
     if not cache_path.exists():
         return {}
@@ -36,7 +47,14 @@ def read_cmake_cache(cache_path: Path) -> dict[str, str]:
 
 
 def collect_dll_dirs(build_dir: Path) -> list[Path]:
-    """Collect DLL search directories needed by the Python bindings."""
+    """收集 Python 绑定运行时需要加入搜索路径的 DLL 目录。
+
+    Args:
+        build_dir: CMake 构建目录。
+
+    Returns:
+        list[Path]: 需要加入 DLL 搜索路径的目录列表。
+    """
 
     dll_dirs: list[Path] = []
 
@@ -80,7 +98,14 @@ def collect_dll_dirs(build_dir: Path) -> list[Path]:
 
 
 def ensure_module_path(build_dir: Path) -> None:
-    """Add Python module and runtime DLL directories for InferRT bindings."""
+    """配置 InferRT Python 绑定所需的模块路径和 DLL 搜索路径。
+
+    该函数会把构建产物目录加入 `sys.path`，并在 Windows 上尽量通过
+    `os.add_dll_directory` 注册依赖 DLL 所在目录。
+
+    Args:
+        build_dir: CMake 构建目录。
+    """
 
     build_bin = build_dir / "bin"
     build_lib = build_dir / "lib"
@@ -103,7 +128,20 @@ def ensure_module_path(build_dir: Path) -> None:
 
 
 def preprocess_image(image_path: Path) -> np.ndarray:
-    """Preprocess an image using the repo's ImageNet classification convention."""
+    """按仓库中的 ImageNet 分类预处理约定处理输入图片。
+
+    处理流程包括读取图片、BGR 转 RGB、缩放到 `224x224`、归一化，
+    再转换为 `NCHW` 布局并补齐 batch 维度。
+
+    Args:
+        image_path: 输入图片路径。
+
+    Returns:
+        np.ndarray: 预处理后的四维浮点张量，形状为 `(1, 3, 224, 224)`。
+
+    Raises:
+        FileNotFoundError: 图片读取失败时抛出。
+    """
 
     image = cv2.imread(str(image_path))
     if image is None:
@@ -122,20 +160,63 @@ def preprocess_image(image_path: Path) -> np.ndarray:
 
 
 def load_labels(label_path: Path) -> list[str]:
-    """Load ImageNet labels from a text file."""
+    """从文本文件加载标签列表。
+
+    Args:
+        label_path: 标签文件路径。
+
+    Returns:
+        list[str]: 去除空行后的标签字符串列表。
+    """
 
     with label_path.open("r", encoding="utf-8") as handle:
         return [line.strip() for line in handle if line.strip()]
 
 
+def allocate_output_tensors(model: object, output_names: list[str]) -> dict[str, np.ndarray]:
+    """根据模型运行时张量信息分配输出数组。
+
+    Args:
+        model: 已加载好的模型对象，需要提供 `tensor_shape` 和 `tensor_dtype`
+            接口。
+        output_names: 待分配的输出张量名称列表。
+
+    Returns:
+        dict[str, np.ndarray]: 以张量名称为键、预分配 NumPy 数组为值的字典。
+    """
+
+    output_tensors: dict[str, np.ndarray] = {}
+    for output_name in output_names:
+        output_shape = model.tensor_shape(output_name)
+        output_dtype = np.dtype(model.tensor_dtype(output_name))
+        output_tensors[output_name] = np.empty(output_shape, dtype=output_dtype)
+    return output_tensors
+
+
 def split_csv_names(csv: str) -> list[str]:
-    """Split a comma-separated name list and drop empty entries."""
+    """拆分逗号分隔的名称字符串，并移除空项。
+
+    Args:
+        csv: 逗号分隔的名称字符串。
+
+    Returns:
+        list[str]: 去除首尾空白和空项后的名称列表。
+    """
 
     return [token.strip() for token in csv.split(",") if token.strip()]
 
 
 def sanitize_file_stem(name: str) -> str:
-    """Convert a tensor name into a filesystem-safe file stem."""
+    """将张量名称转换为适合文件名的安全 stem。
+
+    仅保留字母、数字、连字符和下划线，其余字符会被替换为下划线。
+
+    Args:
+        name: 原始张量名称。
+
+    Returns:
+        str: 可安全用于文件名的 stem；若结果为空则返回 `"tensor"`。
+    """
 
     sanitized = []
     for ch in name:
@@ -147,12 +228,26 @@ def sanitize_file_stem(name: str) -> str:
 
 
 def dims_to_csv(shape: tuple[int, ...] | list[int]) -> str:
-    """Encode a tensor shape as a comma-separated string."""
+    """将张量形状编码为逗号分隔字符串。
+
+    Args:
+        shape: 张量形状，可为元组或列表。
+
+    Returns:
+        str: 逗号分隔的维度字符串，例如 `"1,3,224,224"`。
+    """
 
     return ",".join(str(dim) for dim in shape)
 
 
 def numpy_dtype_name(array: np.ndarray) -> str:
-    """Return the manifest-friendly NumPy dtype name."""
+    """返回适合写入 manifest 的 NumPy 数据类型名称。
+
+    Args:
+        array: 输入 NumPy 数组。
+
+    Returns:
+        str: 数组的 dtype 名称字符串。
+    """
 
     return str(array.dtype)

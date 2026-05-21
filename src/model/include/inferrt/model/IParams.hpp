@@ -50,6 +50,8 @@ typedef struct TensorRTParams
 
     /// 推理阶段使用的 CUDA stream。
     std::unique_ptr<cudaStream_t, decltype(StreamDeleter)> stream{nullptr};
+    /// 调用方显式指定的外部 CUDA stream；为空时回退到内部 stream。
+    cudaStream_t external_stream{nullptr};
 
     /// TensorRT 日志对象。
     std::shared_ptr<Logger> logger{nullptr};

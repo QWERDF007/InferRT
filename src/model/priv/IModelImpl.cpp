@@ -312,10 +312,12 @@ void IModelImpl::setModelConfig(std::unique_ptr<IModelConfig> config)
     trt_params_.context.reset();
     trt_params_.engine.reset();
     trt_params_.stream.reset();
+    trt_params_.external_stream = nullptr;
     trt_params_.feature_only = false;
     feature_trt_params_.context.reset();
     feature_trt_params_.engine.reset();
     feature_trt_params_.stream.reset();
+    feature_trt_params_.external_stream = nullptr;
     feature_trt_params_.feature_only = false;
 }
 
@@ -414,6 +416,28 @@ void IModelImpl::setTensorShape(const std::string &tensor_name, const nvinfer1::
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Failed to set feature input tensor shape: %s",
                              tensor_name.c_str());
     }
+}
+
+void IModelImpl::setStream(cudaStream_t stream)
+{
+    if (!stream)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "stream must not be null; use clearStream to reset");
+    }
+
+    trt_params_.external_stream = stream;
+    feature_trt_params_.external_stream = stream;
+}
+
+void IModelImpl::clearStream()
+{
+    trt_params_.external_stream = nullptr;
+    feature_trt_params_.external_stream = nullptr;
+}
+
+cudaStream_t IModelImpl::executionStream()
+{
+    return resolveExecutionStream(trt_params_, nullptr);
 }
 
 void IModelImpl::setLogLevel(nvinfer1::ILogger::Severity severity)
@@ -646,27 +670,12 @@ std::vector<nvinfer1::ITensor *> IModelImpl::resolveFeatureTensors(const NamedTe
     return outputs;
 }
 
-void IModelImpl::forwardFeatures(const std::vector<void *> &buffers)
+void IModelImpl::forwardFeatures(const std::vector<void *> &buffers, cudaStream_t stream, bool non_blocking)
 {
     ensureFeatureExtractionReady();
     auto &trt_params = featureExecutionParams();
     bindFeatureTensorAddresses(buffers);
-
-    if (!trt_params.stream)
-    {
-        trt_params.stream = MakeCudaStream();
-        if (!trt_params.stream)
-        {
-            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create CUDA stream");
-        }
-    }
-
-    if (!trt_params.context->enqueueV3(*trt_params.stream))
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to execute feature extraction");
-    }
-
-    cudaStreamSynchronize(*trt_params.stream);
+    executeContext(trt_params, "Failed to execute feature extraction", stream, non_blocking);
 }
 
 void IModelImpl::buildRuntimeFromWeights(const std::string &weights_file, const WeightsMap &,
@@ -854,6 +863,43 @@ void IModelImpl::ensureFeatureExtractionReady() const
     {
         throw irt::Exception(Status::ERROR_INVALID_OPERATION,
                              "Current engine is not a feature-only network; feature extraction is unavailable");
+    }
+}
+
+cudaStream_t IModelImpl::resolveExecutionStream(TRTParams &params, cudaStream_t stream_override)
+{
+    if (stream_override)
+    {
+        return stream_override;
+    }
+
+    if (params.external_stream)
+    {
+        return params.external_stream;
+    }
+
+    return nullptr;
+}
+
+void IModelImpl::executeContext(TRTParams &params, const char *error_message, cudaStream_t stream_override,
+                                bool non_blocking)
+{
+    const auto stream = resolveExecutionStream(params, stream_override);
+    if (!params.context->enqueueV3(stream))
+    {
+        throw irt::Exception(Status::ERROR_INTERNAL, "%s", error_message);
+    }
+
+    if (non_blocking)
+    {
+        return;
+    }
+
+    const auto status = cudaStreamSynchronize(stream);
+    if (status != cudaSuccess)
+    {
+        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to synchronize CUDA stream: %s",
+                             cudaGetErrorString(status));
     }
 }
 

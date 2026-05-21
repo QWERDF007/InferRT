@@ -96,7 +96,7 @@ Current limitation:
 Use the dedicated feature sample to dump InferRT tensors and compare them with a PyTorch reference:
 
 ```bash
-build/bin/inferrt_sample_features.exe resnet18 samples/model/classification/resnet18.wts layer1,layer4 assets/pics/dog.jpg build/feature_dump_cpp
+build/bin/inferrt_sample_features.exe -m resnet18 -w samples/model/classification/resnet18.wts -f layer1,layer4 -i assets/pics/dog.jpg -o build/feature_dump_cpp
 build/bin/inferrt_sample_features.exe --help
 cd samples/model/features
 python compare_features.py --compare_dir ../../../build/feature_dump_cpp

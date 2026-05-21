@@ -290,28 +290,12 @@ void WideResNet101_2::buildNetwork(nvinfer1::INetworkDefinition *network, const 
                 isBuildingFeatureEngine());
 }
 
-void ResNet::infer(const std::vector<void *> &buffers)
+void ResNet::infer(const std::vector<void *> &buffers, cudaStream_t stream, bool non_blocking)
 {
     ensurePrimaryInferenceReady();
     auto &trt_params = trtParams();
     bindTensorAddresses(buffers);
-
-    if (!trt_params.stream)
-    {
-        trt_params.stream = MakeCudaStream();
-        if (!trt_params.stream)
-        {
-            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create CUDA stream");
-        }
-    }
-
-    bool status = trt_params.context->enqueueV3(*trt_params.stream);
-    if (!status)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to execute inference");
-    }
-
-    cudaStreamSynchronize(*trt_params.stream);
+    executeContext(trt_params, "Failed to execute inference", stream, non_blocking);
 }
 
 } // namespace irt::model
