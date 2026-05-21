@@ -52,4 +52,14 @@ if(${PROJECT_NAME_UPPER}_BUILD_PYTHON)
     
     # 添加 pybind11 子目录
     add_subdirectory(pybind11)
+
+    # dlpack - DLPack C API（INTERFACE 库，供 Python 绑定使用）
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/dlpack/CMakeLists.txt")
+        message(FATAL_ERROR
+            "dlpack submodule not found at 3rdparty/dlpack. "
+            "Run: git submodule update --init 3rdparty/dlpack")
+    endif()
+    set(BUILD_DOCS OFF CACHE BOOL "Disable dlpack docs" FORCE)
+    set(BUILD_MOCK OFF CACHE BOOL "Disable dlpack mock executable" FORCE)
+    add_subdirectory(dlpack)
 endif()

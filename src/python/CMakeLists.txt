@@ -11,12 +11,12 @@ target_link_libraries(inferrt_model_py
         inferrt_util
         CUDA::cudart
         Python::NumPy
+        dlpack::dlpack
 )
 
 target_include_directories(inferrt_model_py
     PRIVATE
         ${Python_INCLUDE_DIRS}
-        ${CMAKE_SOURCE_DIR}/3rdparty/dlpack/include
 )
 
 install(
