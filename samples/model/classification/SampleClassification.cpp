@@ -6,8 +6,13 @@
 #include <inferrt/util/Path.hpp>
 #include <opencv2/opencv.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <cctype>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -39,7 +44,121 @@ struct Arguments
     fs::path    weights_file;
     fs::path    image_path;
     fs::path    label_file;
+    fs::path    dump_dir;
 };
+
+size_t elementSize(nvinfer1::DataType data_type)
+{
+    using nvinfer1::DataType;
+
+    switch (data_type)
+    {
+    case DataType::kFLOAT:
+    case DataType::kINT32:
+        return 4;
+    case DataType::kHALF:
+        return 2;
+    case DataType::kINT8:
+    case DataType::kBOOL:
+    case DataType::kUINT8:
+        return 1;
+    case DataType::kINT64:
+        return 8;
+    default:
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported TensorRT data type");
+    }
+}
+
+std::string dataTypeToString(nvinfer1::DataType data_type)
+{
+    using nvinfer1::DataType;
+
+    switch (data_type)
+    {
+    case DataType::kFLOAT:
+        return "float32";
+    case DataType::kHALF:
+        return "float16";
+    case DataType::kINT8:
+        return "int8";
+    case DataType::kUINT8:
+        return "uint8";
+    case DataType::kINT32:
+        return "int32";
+    case DataType::kINT64:
+        return "int64";
+    case DataType::kBOOL:
+        return "bool";
+    default:
+        return "unknown";
+    }
+}
+
+std::string dimsToCsv(const nvinfer1::Dims &dims)
+{
+    std::string result;
+    for (int i = 0; i < dims.nbDims; ++i)
+    {
+        if (i > 0)
+        {
+            result += ",";
+        }
+        result += std::to_string(dims.d[i]);
+    }
+    return result;
+}
+
+size_t elementCount(const nvinfer1::Dims &dims)
+{
+    size_t count = 1;
+    for (int i = 0; i < dims.nbDims; ++i)
+    {
+        if (dims.d[i] <= 0)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "Tensor shape contains non-positive dimension: %d", dims.d[i]);
+        }
+        count *= static_cast<size_t>(dims.d[i]);
+    }
+    return count;
+}
+
+std::string sanitizeFileStem(std::string_view value)
+{
+    std::string stem;
+    stem.reserve(value.size());
+    for (unsigned char ch : value)
+    {
+        if (std::isalnum(ch))
+        {
+            stem.push_back(static_cast<char>(ch));
+        }
+        else
+        {
+            stem.push_back('_');
+        }
+    }
+    return stem.empty() ? "tensor" : stem;
+}
+
+void writeBinaryFile(const fs::path &file_path, const void *data, size_t num_bytes)
+{
+    std::ofstream output(file_path, std::ios::binary);
+    if (!output)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to open output file: %s",
+                             file_path.string().c_str());
+    }
+    output.write(static_cast<const char *>(data), static_cast<std::streamsize>(num_bytes));
+}
+
+void checkCuda(cudaError_t status, const char *op)
+{
+    if (status != cudaSuccess)
+    {
+        throw irt::Exception(irt::Status::ERROR_INTERNAL, "%s failed: %s", op, cudaGetErrorString(status));
+    }
+}
 
 /**
  * @brief 构造命令行选项定义。
@@ -52,8 +171,9 @@ cxxopts::Options makeOptions(const char *program_name)
     options.add_options()("model,m", "Built-in model name (required)", cxxopts::value<std::string>())(
         "weights-file,w", "Weights file (.wts) (required)", cxxopts::value<std::string>())(
         "image-path,i", "Input image path", cxxopts::value<std::string>()->default_value(""))(
-        "label-file,l", "ImageNet label file", cxxopts::value<std::string>()->default_value(""))("h,help",
-                                                                                                "Show help");
+        "label-file,l", "ImageNet label file", cxxopts::value<std::string>()->default_value(""))(
+        "dump-dir,o", "Optional directory to dump input/output tensors for parity tests",
+        cxxopts::value<std::string>()->default_value(""))("h,help", "Show help");
     return options;
 }
 
@@ -91,6 +211,7 @@ Arguments parseArguments(int argc, char *argv[])
     args.weights_file = result["weights-file"].as<std::string>();
     args.image_path   = result["image-path"].as<std::string>();
     args.label_file   = result["label-file"].as<std::string>();
+    args.dump_dir     = result["dump-dir"].as<std::string>();
     return args;
 }
 
@@ -147,25 +268,75 @@ int main(int argc, char *argv[])
         const std::vector<float> input_data = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
         const auto preprocess_end = Clock::now();
 
-        void *d_input  = nullptr;
-        void *d_output = nullptr;
+        const auto &input_tensor_names  = model->modelConfig().inputTensorNames();
+        const auto &output_tensor_names = model->modelConfig().outputTensorNames();
+        if (input_tensor_names.empty() || output_tensor_names.empty())
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "Model must expose at least one input and one output tensor");
+        }
 
-        size_t input_size  = 1 * 3 * 224 * 224 * sizeof(float);
-        size_t output_size = 1 * 1000 * sizeof(float);
+        const std::string &input_tensor_name = input_tensor_names.front();
+        const nvinfer1::Dims input_dims      = model->tensorShape(input_tensor_name);
+        const size_t         input_num_bytes = elementCount(input_dims) * elementSize(nvinfer1::DataType::kFLOAT);
+        if (input_num_bytes != input_data.size() * sizeof(float))
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "Preprocessed input byte size does not match model input tensor");
+        }
 
-        cudaMalloc(&d_input, input_size);
-        cudaMalloc(&d_output, output_size);
+        void *d_input = nullptr;
+        checkCuda(cudaMalloc(&d_input, input_num_bytes), "cudaMalloc(input)");
+        checkCuda(cudaMemcpy(d_input, input_data.data(), input_num_bytes, cudaMemcpyHostToDevice),
+                  "cudaMemcpy(H2D input)");
 
-        cudaMemcpy(d_input, input_data.data(), input_size, cudaMemcpyHostToDevice);
+        std::vector<std::string> output_names;
+        std::vector<nvinfer1::Dims> output_dims;
+        std::vector<nvinfer1::DataType> output_types;
+        std::vector<size_t> output_num_bytes;
+        std::vector<void *> device_outputs;
+        std::vector<std::vector<char>> host_outputs;
 
-        std::vector<void *> buffers = {d_input, d_output};
+        output_names.reserve(output_tensor_names.size());
+        output_dims.reserve(output_tensor_names.size());
+        output_types.reserve(output_tensor_names.size());
+        output_num_bytes.reserve(output_tensor_names.size());
+        device_outputs.reserve(output_tensor_names.size());
+        host_outputs.reserve(output_tensor_names.size());
+
+        for (const auto &output_name : output_tensor_names)
+        {
+            const nvinfer1::Dims     dims      = model->tensorShape(output_name);
+            const nvinfer1::DataType data_type = model->tensorDataType(output_name);
+            const size_t             num_bytes = elementCount(dims) * elementSize(data_type);
+
+            void *device_ptr = nullptr;
+            checkCuda(cudaMalloc(&device_ptr, num_bytes), "cudaMalloc(output)");
+
+            output_names.push_back(output_name);
+            output_dims.push_back(dims);
+            output_types.push_back(data_type);
+            output_num_bytes.push_back(num_bytes);
+            device_outputs.push_back(device_ptr);
+            host_outputs.emplace_back(num_bytes);
+        }
+
+        std::vector<void *> buffers;
+        buffers.reserve(1 + device_outputs.size());
+        buffers.push_back(d_input);
+        buffers.insert(buffers.end(), device_outputs.begin(), device_outputs.end());
+
         std::cout << "Running inference..." << std::endl;
         const auto infer_start = Clock::now();
         model->infer(buffers);
         const auto infer_end = Clock::now();
 
-        std::vector<float> output_data(1000);
-        cudaMemcpy(output_data.data(), d_output, output_size, cudaMemcpyDeviceToHost);
+        for (size_t i = 0; i < host_outputs.size(); ++i)
+        {
+            checkCuda(cudaMemcpy(host_outputs[i].data(), device_outputs[i], output_num_bytes[i],
+                                 cudaMemcpyDeviceToHost),
+                      "cudaMemcpy(D2H output)");
+        }
 
         const auto postprocess_start = Clock::now();
         std::vector<std::string> labels;
@@ -176,22 +347,64 @@ int main(int argc, char *argv[])
             has_labels = true;
         }
 
-        std::vector<std::pair<float, int>> scores;
-        scores.reserve(1000);
-        for (int i = 0; i < 1000; ++i)
+        const std::string &primary_output_name = output_names.front();
+        const size_t       primary_index       = 0;
+        if (output_types[primary_index] != nvinfer1::DataType::kFLOAT)
         {
-            scores.push_back({output_data[i], i});
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "Classification sample expects float32 logits output");
         }
-        std::partial_sort(scores.begin(), scores.begin() + 3, scores.end(),
+
+        const size_t num_scores = elementCount(output_dims[primary_index]);
+        const auto  *output_data = reinterpret_cast<const float *>(host_outputs[primary_index].data());
+
+        std::vector<std::pair<float, int>> scores;
+        scores.reserve(num_scores);
+        for (size_t i = 0; i < num_scores; ++i)
+        {
+            scores.push_back({output_data[i], static_cast<int>(i)});
+        }
+        const size_t topk = std::min<size_t>(3, scores.size());
+        std::partial_sort(scores.begin(), scores.begin() + static_cast<std::ptrdiff_t>(topk), scores.end(),
                           [](const auto &a, const auto &b) { return a.first > b.first; });
         const auto postprocess_end = Clock::now();
+
+        if (!args.dump_dir.empty())
+        {
+            fs::create_directories(args.dump_dir);
+            writeBinaryFile(args.dump_dir / "input.bin", input_data.data(), input_num_bytes);
+
+            std::ofstream manifest(args.dump_dir / "manifest.txt");
+            if (!manifest)
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to open manifest file");
+            }
+
+            manifest << "version=1\n";
+            manifest << "backend=inferrt_cpp\n";
+            manifest << "model_name=" << args.model_name << "\n";
+            manifest << "weights_file=" << fs::absolute(args.weights_file).generic_string() << "\n";
+            manifest << "image_path=" << fs::absolute(img_path).generic_string() << "\n";
+            manifest << "tensor|input|float32|" << dimsToCsv(input_dims) << "|input.bin\n";
+
+            for (size_t i = 0; i < output_names.size(); ++i)
+            {
+                const std::string file_name = sanitizeFileStem(output_names[i]) + ".bin";
+                writeBinaryFile(args.dump_dir / file_name, host_outputs[i].data(), output_num_bytes[i]);
+                manifest << "tensor|" << output_names[i] << "|" << dataTypeToString(output_types[i]) << "|"
+                         << dimsToCsv(output_dims[i]) << "|" << file_name << "\n";
+            }
+
+            std::cout << "Saved classification dump to: " << fs::absolute(args.dump_dir).string() << std::endl;
+            std::cout << "Primary output tensor: " << primary_output_name << std::endl;
+        }
 
         std::cout << "Timing: preprocess=" << elapsedMs(preprocess_start, preprocess_end)
                   << " ms, inference=" << elapsedMs(infer_start, infer_end)
                   << " ms, postprocess=" << elapsedMs(postprocess_start, postprocess_end) << " ms" << std::endl;
 
-        std::cout << "\nTop-3 predictions:" << std::endl;
-        for (int i = 0; i < 3; ++i)
+        std::cout << "\nTop-" << topk << " predictions:" << std::endl;
+        for (size_t i = 0; i < topk; ++i)
         {
             int   idx        = scores[i].second;
             float confidence = scores[i].first;
@@ -207,8 +420,11 @@ int main(int argc, char *argv[])
             }
         }
 
-        cudaFree(d_input);
-        cudaFree(d_output);
+        checkCuda(cudaFree(d_input), "cudaFree(input)");
+        for (void *device_ptr : device_outputs)
+        {
+            checkCuda(cudaFree(device_ptr), "cudaFree(output)");
+        }
 
         std::cout << "\nDone!" << std::endl;
         return 0;
