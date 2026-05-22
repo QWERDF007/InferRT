@@ -1,14 +1,17 @@
 #include <gtest/gtest.h>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/core/Status.h>
+#include <inferrt/model/Buffers.hpp>
 #include <inferrt/model/Utils.hpp>
 
 #include <atomic>
 #include <cstdio>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <opencv2/opencv.hpp>
 #include <string>
+#include <utility>
 
 namespace fs = std::filesystem;
 
@@ -211,6 +214,196 @@ TEST(ReadImagenetLabelsTest, NonExistentFileThrowsInvalidArgument)
     {
         EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
     }
+}
+
+/**
+ * @brief elementSize 应返回 TensorRT 常用数据类型的单元素字节数。
+ */
+TEST(ModelUtilTest, ElementSizeMatchesTensorRTTypes)
+{
+    EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kFLOAT), 4U);
+    EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kHALF), 2U);
+    EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kINT8), 1U);
+    EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kINT32), 4U);
+    EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kBOOL), 1U);
+    EXPECT_EQ(irt::model::dataTypeSize(nvinfer1::DataType::kFLOAT), irt::model::elementSize(nvinfer1::DataType::kFLOAT));
+}
+
+/**
+ * @brief elementCount 应计算维度乘积，并拒绝未解析或非法维度。
+ */
+TEST(ModelUtilTest, ElementCountValidatesTensorDims)
+{
+    nvinfer1::Dims dims{};
+    dims.nbDims = 4;
+    dims.d[0] = 1;
+    dims.d[1] = 3;
+    dims.d[2] = 224;
+    dims.d[3] = 224;
+    EXPECT_EQ(irt::model::elementCount(dims), 150528U);
+
+    dims.d[2] = 0;
+    EXPECT_THROW({ irt::model::elementCount(dims); }, irt::Exception);
+}
+
+/**
+ * @brief dtype 与维度格式化工具应输出稳定文本，供日志和 manifest 复用。
+ */
+TEST(ModelUtilTest, FormatsDataTypeAndDims)
+{
+    nvinfer1::Dims dims{};
+    dims.nbDims = 3;
+    dims.d[0] = 3;
+    dims.d[1] = 224;
+    dims.d[2] = 224;
+
+    EXPECT_EQ(irt::model::dataTypeToString(nvinfer1::DataType::kFLOAT), "float32");
+    EXPECT_EQ(irt::model::dataTypeToString(nvinfer1::DataType::kINT8), "int8");
+    EXPECT_EQ(irt::model::dimsToCsv(dims), "3,224,224");
+    EXPECT_EQ(irt::model::dimsToString(dims), "[3, 224, 224]");
+}
+
+/**
+ * @brief checkCuda 应允许成功状态并将失败状态转换为 InferRT 异常。
+ */
+TEST(ModelUtilTest, CheckCudaConvertsErrorStatus)
+{
+    EXPECT_NO_THROW({ irt::model::checkCuda(cudaSuccess, "cudaSuccess"); });
+    EXPECT_THROW({ irt::model::checkCuda(cudaErrorInvalidValue, "invalid"); }, irt::Exception);
+
+    try
+    {
+        irt::model::checkCuda(cudaErrorInvalidValue, "invalid");
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INTERNAL);
+    }
+}
+
+/**
+ * @brief DeviceBuffer 默认构造时不持有设备内存。
+ */
+TEST(DeviceBufferTest, DefaultConstructsEmptyBuffer)
+{
+    const irt::model::DeviceBuffer buffer;
+
+    EXPECT_TRUE(buffer.empty());
+    EXPECT_EQ(buffer.data(), nullptr);
+    EXPECT_EQ(buffer.size(), 0U);
+    EXPECT_EQ(buffer.sizeBytes(), 0U);
+}
+
+/**
+ * @brief DeviceBuffer 调整为 0 个元素时应保持为空，便于调用方统一处理动态尺寸。
+ */
+TEST(DeviceBufferTest, ResizeZeroKeepsBufferEmpty)
+{
+    irt::model::DeviceBuffer buffer;
+
+    buffer.resize(0);
+
+    EXPECT_TRUE(buffer.empty());
+    EXPECT_EQ(buffer.data(), nullptr);
+    EXPECT_EQ(buffer.size(), 0U);
+    EXPECT_EQ(buffer.sizeBytes(), 0U);
+}
+
+/**
+ * @brief DeviceBuffer 移动空缓冲区后，源对象和目标对象都应处于有效空状态。
+ */
+TEST(DeviceBufferTest, MoveEmptyBufferKeepsValidState)
+{
+    irt::model::DeviceBuffer source;
+    irt::model::DeviceBuffer target(std::move(source));
+
+    EXPECT_TRUE(source.empty());
+    EXPECT_TRUE(target.empty());
+    EXPECT_EQ(source.size(), 0U);
+    EXPECT_EQ(target.size(), 0U);
+
+    irt::model::DeviceBuffer assigned;
+    assigned = std::move(target);
+    EXPECT_TRUE(target.empty());
+    EXPECT_TRUE(assigned.empty());
+}
+
+/**
+ * @brief HostBuffer 应按元素数量和数据类型计算字节数，并分配主机内存。
+ */
+TEST(HostBufferTest, AllocatesHostMemoryByElementCountAndType)
+{
+    irt::model::HostBuffer buffer(4, nvinfer1::DataType::kFLOAT);
+
+    ASSERT_FALSE(buffer.empty());
+    ASSERT_NE(buffer.data(), nullptr);
+    EXPECT_EQ(buffer.size(), 4U);
+    EXPECT_EQ(buffer.sizeBytes(), 4U * sizeof(float));
+    EXPECT_EQ(buffer.nbBytes(), buffer.sizeBytes());
+    EXPECT_GE(buffer.capacity(), buffer.size());
+
+    auto *values = static_cast<float *>(buffer.data());
+    values[0] = 1.0f;
+    values[1] = 2.0f;
+    EXPECT_FLOAT_EQ(values[0], 1.0f);
+    EXPECT_FLOAT_EQ(values[1], 2.0f);
+}
+
+/**
+ * @brief HostBuffer resize 小于当前容量时应只更新逻辑大小，不释放已有内存。
+ */
+TEST(HostBufferTest, ResizeWithinCapacityKeepsAllocation)
+{
+    irt::model::HostBuffer buffer(8, nvinfer1::DataType::kINT32);
+    void                  *original = buffer.data();
+
+    buffer.resize(2);
+
+    EXPECT_EQ(buffer.data(), original);
+    EXPECT_EQ(buffer.size(), 2U);
+    EXPECT_EQ(buffer.sizeBytes(), 2U * sizeof(int32_t));
+    EXPECT_GE(buffer.capacity(), 8U);
+}
+
+/**
+ * @brief HostBuffer 在 0 元素状态切换类型时应丢弃旧容量，避免按错误元素大小复用内存。
+ */
+TEST(HostBufferTest, ResizeZeroWithDifferentTypeDropsOldCapacity)
+{
+    irt::model::HostBuffer buffer(4, nvinfer1::DataType::kINT8);
+
+    buffer.resize(0, nvinfer1::DataType::kFLOAT);
+
+    EXPECT_TRUE(buffer.empty());
+    EXPECT_EQ(buffer.data(), nullptr);
+    EXPECT_EQ(buffer.capacity(), 0U);
+    EXPECT_EQ(buffer.dataType(), nvinfer1::DataType::kFLOAT);
+
+    buffer.resize(4);
+
+    ASSERT_NE(buffer.data(), nullptr);
+    EXPECT_EQ(buffer.size(), 4U);
+    EXPECT_EQ(buffer.sizeBytes(), 4U * sizeof(float));
+    static_cast<float *>(buffer.data())[3] = 4.0F;
+    EXPECT_FLOAT_EQ(static_cast<float *>(buffer.data())[3], 4.0F);
+}
+
+/**
+ * @brief HostBuffer 移动后应转移内存所有权并清空源对象。
+ */
+TEST(HostBufferTest, MoveTransfersOwnership)
+{
+    irt::model::HostBuffer source(3, nvinfer1::DataType::kINT8);
+    void                  *original = source.data();
+
+    irt::model::HostBuffer target(std::move(source));
+
+    EXPECT_TRUE(source.empty());
+    EXPECT_EQ(source.data(), nullptr);
+    EXPECT_EQ(target.data(), original);
+    EXPECT_EQ(target.size(), 3U);
+    EXPECT_EQ(target.sizeBytes(), 3U);
 }
 
 /**
