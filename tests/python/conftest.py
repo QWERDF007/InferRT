@@ -3,8 +3,10 @@
 命令行参数（由 ``pytest_addoption`` 注册）:
     --inferrt-build-dir: CMake 构建目录，含 ``inferrt_model_py`` 与 sample 可执行文件。
         默认空字符串，表示使用 ``INFERRT_BUILD_DIR`` 或 ``<repo>/build``。
-    --inferrt-rtol: 张量比对相对容差，对应 ``numpy.allclose`` 的 ``rtol``。默认 ``1e-6``。
-    --inferrt-atol: 张量比对绝对容差，对应 ``numpy.allclose`` 的 ``atol``。默认 ``5e-2``。
+    --inferrt-rtol: 分类/infer_v2 张量比对相对容差。默认 ``1e-6``。
+    --inferrt-atol: 分类/infer_v2 张量比对绝对容差。默认 ``5e-2``。
+    --inferrt-feature-rtol: 特征提取张量比对相对容差。默认 ``1e-4``。
+    --inferrt-feature-atol: 特征提取张量比对绝对容差。默认 ``1.5e-1``。
 
 环境变量:
     INFERRT_BUILD_DIR: 未传 ``--inferrt-build-dir`` 时使用的构建目录路径。
@@ -60,7 +62,21 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store",
         type=float,
         default=5e-2,
-        help="张量比对的绝对容差（numpy.allclose 的 atol）",
+        help="分类/infer_v2 张量比对的绝对容差（numpy.allclose 的 atol）",
+    )
+    parser.addoption(
+        "--inferrt-feature-rtol",
+        action="store",
+        type=float,
+        default=1e-4,
+        help="特征提取张量比对的相对容差（numpy.allclose 的 rtol）",
+    )
+    parser.addoption(
+        "--inferrt-feature-atol",
+        action="store",
+        type=float,
+        default=1.5e-1,
+        help="特征提取张量比对的绝对容差（numpy.allclose 的 atol）",
     )
 
 
@@ -148,7 +164,7 @@ def input_tensor(default_image: Path):
 
 @pytest.fixture(scope="session")
 def tolerances(pytestconfig: pytest.Config) -> tuple[float, float]:
-    """张量数值比对的容差对。
+    """分类/infer_v2 张量数值比对的容差对。
 
     Args:
         pytestconfig: pytest 配置对象，读取 ``--inferrt-rtol`` 与 ``--inferrt-atol``。
@@ -158,6 +174,21 @@ def tolerances(pytestconfig: pytest.Config) -> tuple[float, float]:
     """
 
     return pytestconfig.getoption("--inferrt-rtol"), pytestconfig.getoption("--inferrt-atol")
+
+
+@pytest.fixture(scope="session")
+def feature_tolerances(pytestconfig: pytest.Config) -> tuple[float, float]:
+    """特征提取张量数值比对的容差对（比分类更宽松，因跨框架中间层差异更大）。
+
+    Args:
+        pytestconfig: pytest 配置对象，读取 ``--inferrt-feature-rtol`` 与
+            ``--inferrt-feature-atol``。
+
+    Returns:
+        tuple[float, float]: ``(rtol, atol)``。
+    """
+
+    return pytestconfig.getoption("--inferrt-feature-rtol"), pytestconfig.getoption("--inferrt-feature-atol")
 
 
 @pytest.fixture

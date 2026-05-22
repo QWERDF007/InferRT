@@ -52,7 +52,7 @@ def test_forward_features_matches_pytorch(
     irt_module: object,
     input_tensor,
     weights_path,
-    tolerances: tuple[float, float],
+    feature_tolerances: tuple[float, float],
 ) -> None:
     """PyTorch 参考特征应与 InferRT Python ``forward_features()`` 在容差内一致。
 
@@ -65,7 +65,7 @@ def test_forward_features_matches_pytorch(
         input_tensor: ImageNet 预处理后的 NumPy 输入，形状 ``(1, 3, 224, 224)``；
             同时作为 PyTorch 与 InferRT 的输入，保证同图同预处理。
         weights_path: 将 ``weights_rel`` 解析为绝对 ``.wts`` 路径的 callable。
-        tolerances: ``(rtol, atol)``，TensorRT 与 PyTorch 对比宜略宽，默认见 ``conftest``。
+        feature_tolerances: ``(rtol, atol)``，跨框架中间层差异较大，默认较分类宽松。
 
     参考侧为 ``torchvision`` 预训练模型（与 ``gen_wts.py`` 一致），通过 forward hook
     捕获中间层输出；待测侧为加载对应 ``.wts`` 的 TensorRT engine，经 pybind11
@@ -75,7 +75,7 @@ def test_forward_features_matches_pytorch(
     pytest.importorskip("torch")
     pytest.importorskip("torchvision")
 
-    rtol, atol = tolerances
+    rtol, atol = feature_tolerances
     weights = weights_path(weights_rel)
     names = list(feature_names)
 
