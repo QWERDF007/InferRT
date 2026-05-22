@@ -281,7 +281,7 @@ def run_torch_features(model_name: str, input_tensor: np.ndarray, feature_names:
     from model_zoo import create_model
 
     # InferRT 特征名 -> PyTorch ``named_modules`` 键的映射。
-    # 同名直接命中的不需要列在这里。
+    # 同名直接命中的不需要列在这里；不同模型族同名特征需单独处理。
     _NAME_MAP: dict[str, str] = {
         # MobileNetV2/V3: stem 指 features 的第一个子模块
         "stem": "features.0",
@@ -298,6 +298,13 @@ def run_torch_features(model_name: str, input_tensor: np.ndarray, feature_names:
         # AlexNet fc2: classifier[4] Linear 的输出（不含后续 ReLU）
         "fc2": "classifier.4",
     }
+    if model_name == "googlenet":
+        _NAME_MAP = {
+            "pool1": "maxpool1",
+            "pool2": "maxpool2",
+            "pool3": "maxpool3",
+            "pool4": "maxpool4",
+        }
 
     model = create_model(model_name, "torchvision")
     model.eval()

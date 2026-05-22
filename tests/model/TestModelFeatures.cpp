@@ -87,6 +87,86 @@ TEST(AlexNetFeatureInferTest, InferWithFeatureOnlyConfigWithoutContextStillThrow
 }
 
 /**
+ * @brief GoogLeNet 配置特征张量但未初始化特征执行上下文时，forwardFeatures 应抛出 ERROR_INVALID_OPERATION。
+ */
+TEST(GoogLeNetFeatureInferTest, ForwardFeaturesWithoutFeatureContextThrowsInvalidOperation)
+{
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setFeatureTensorNames({"inception3a"});
+
+    auto model = irt::model::CreateModel("googlenet", std::move(config));
+    ASSERT_NE(model, nullptr);
+
+    std::vector<void *> buffers(2, nullptr);
+
+    EXPECT_THROW({ model->forwardFeatures(buffers); }, irt::Exception);
+
+    try
+    {
+        model->forwardFeatures(buffers);
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
+    }
+}
+
+/**
+ * @brief GoogLeNet 处于 featureOnly 模式但未初始化执行上下文时，forwardFeatures 应抛出 ERROR_INVALID_OPERATION。
+ */
+TEST(GoogLeNetFeatureInferTest, ForwardFeaturesWithFeatureOnlyConfigWithoutContextThrowsInvalidOperation)
+{
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setFeatureTensorNames({"inception3a"});
+    config->setFeatureOnly(true);
+
+    auto model = irt::model::CreateModel("googlenet", std::move(config));
+    ASSERT_NE(model, nullptr);
+
+    std::vector<void *> buffers(2, nullptr);
+
+    EXPECT_THROW({ model->forwardFeatures(buffers); }, irt::Exception);
+
+    try
+    {
+        model->forwardFeatures(buffers);
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
+    }
+}
+
+/**
+ * @brief GoogLeNet 处于 featureOnly 模式但未初始化执行上下文时，infer 也应被运行时保护拦下。
+ */
+TEST(GoogLeNetFeatureInferTest, InferWithFeatureOnlyConfigWithoutContextStillThrowsInvalidOperation)
+{
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setFeatureTensorNames({"inception3a"});
+    config->setFeatureOnly(true);
+
+    auto model = irt::model::CreateModel("googlenet", std::move(config));
+    ASSERT_NE(model, nullptr);
+
+    std::vector<void *> buffers(2, nullptr);
+
+    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
+
+    try
+    {
+        model->infer(buffers);
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
+    }
+}
+
+/**
  * @brief ResNet 配置特征张量但未初始化特征执行上下文时，forwardFeatures 应抛出 ERROR_INVALID_OPERATION。
  */
 TEST(ResNetFeatureInferTest, ForwardFeaturesWithoutFeatureContextThrowsInvalidOperation)

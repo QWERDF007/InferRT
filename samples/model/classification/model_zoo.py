@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from torchvision.models import (
     AlexNet_Weights,
+    GoogLeNet_Weights,
     MobileNet_V2_Weights,
     MobileNet_V3_Large_Weights,
     MobileNet_V3_Small_Weights,
@@ -18,6 +19,7 @@ from torchvision.models import (
     Wide_ResNet50_2_Weights,
     Wide_ResNet101_2_Weights,
     alexnet,
+    googlenet,
     mobilenet_v2,
     mobilenet_v3_large,
     mobilenet_v3_small,
@@ -37,6 +39,7 @@ from torchvision.models import (
 
 TORCHVISION_MODEL_ZOO = {
     "alexnet": (alexnet, AlexNet_Weights.IMAGENET1K_V1),
+    "googlenet": (googlenet, GoogLeNet_Weights.IMAGENET1K_V1),
     "mobilenet_v2": (mobilenet_v2, MobileNet_V2_Weights.IMAGENET1K_V2),
     "mobilenet_v3_large": (mobilenet_v3_large, MobileNet_V3_Large_Weights.IMAGENET1K_V2),
     "mobilenet_v3_small": (mobilenet_v3_small, MobileNet_V3_Small_Weights.IMAGENET1K_V1),
@@ -90,6 +93,8 @@ def create_model(model_name: str, backend: str) -> torch.nn.Module:
             raise ValueError(f"Unsupported torchvision model: {model_name}. Available: {available}")
 
         model_fn, weights = TORCHVISION_MODEL_ZOO[model_name]
+        if model_name == "googlenet":
+            return model_fn(weights=weights, transform_input=False)
         return model_fn(weights=weights)
 
     if backend == "timm":

@@ -79,6 +79,41 @@ TEST(ResNetInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
 }
 
 /**
+ * @brief GoogLeNet 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION。
+ */
+TEST(GoogLeNetInferTest, InferWithoutContextThrowsInvalidOperation)
+{
+    auto model = irt::model::CreateModel("googlenet");
+    ASSERT_NE(model, nullptr);
+
+    std::vector<void *> buffers(2, nullptr);
+
+    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
+
+    try
+    {
+        model->infer(buffers);
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
+    }
+}
+
+/**
+ * @brief 当前实现中，GoogLeNet 在 context 缺失时也会先于 buffer 数量检查失败。
+ */
+TEST(GoogLeNetInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
+{
+    auto model = irt::model::CreateModel("googlenet");
+    ASSERT_NE(model, nullptr);
+
+    std::vector<void *> buffers(1, nullptr);
+    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
+}
+
+/**
  * @brief VGG11 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION。
  */
 TEST(VGGInferTest, InferWithoutContextThrowsInvalidOperation)

@@ -14,6 +14,7 @@ from util import allocate_output_tensors, preprocess_image
 INFER_V2_CASES = [
     pytest.param("resnet18", "samples/model/classification/resnet18.wts", id="resnet18"),
     pytest.param("alexnet", "samples/model/classification/alexnet.wts", id="alexnet"),
+    pytest.param("googlenet", "samples/model/classification/googlenet.wts", id="googlenet"),
 ]
 
 

@@ -12,6 +12,7 @@ from helpers.runtime import run_python_classification, run_torch_classification
 # parametrize 参数说明见 ``test_classification_matches_pytorch`` 的 Args
 CLASSIFICATION_CASES = [
     pytest.param("alexnet", "samples/model/classification/alexnet.wts", id="alexnet"),
+    pytest.param("googlenet", "samples/model/classification/googlenet.wts", id="googlenet"),
     pytest.param("resnet18", "samples/model/classification/resnet18.wts", id="resnet18"),
     pytest.param("resnet50", "samples/model/classification/resnet50.wts", id="resnet50"),
     pytest.param("vgg11", "samples/model/classification/vgg11.wts", id="vgg11"),

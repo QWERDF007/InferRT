@@ -13,7 +13,9 @@ def test_registered_models(irt_module: object) -> None:
     names = irt_module.get_registered_model_names()
     assert "resnet18" in names
     assert "alexnet" in names
+    assert "googlenet" in names
     assert irt_module.is_supported_model("ResNet18")
+    assert irt_module.is_supported_model("GoogLeNet")
     assert not irt_module.is_supported_model("not_a_model")
 
 
@@ -40,5 +42,18 @@ def test_create_model_without_build(irt_module: object) -> None:
 
     model = irt_module.create_model("vgg11")
     assert model.name() == "VGG11"
+    assert model.input_tensor_names()
+    assert model.output_tensor_names()
+
+
+def test_create_googlenet_without_build(irt_module: object) -> None:
+    """GoogLeNet 应可通过 Python 绑定按大小写混合名称创建，且不依赖权重文件。
+
+    Args:
+        irt_module: ``inferrt_model_py`` 模块。
+    """
+
+    model = irt_module.create_model("GoogLeNet")
+    assert model.name() == "GoogLeNet"
     assert model.input_tensor_names()
     assert model.output_tensor_names()

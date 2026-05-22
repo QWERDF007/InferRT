@@ -18,6 +18,12 @@ FEATURE_CASES = [
         id="alexnet",
     ),
     pytest.param(
+        "googlenet",
+        "samples/model/classification/googlenet.wts",
+        ("inception3a", "inception5b"),
+        id="googlenet",
+    ),
+    pytest.param(
         "resnet18",
         "samples/model/classification/resnet18.wts",
         ("layer1", "layer4"),
