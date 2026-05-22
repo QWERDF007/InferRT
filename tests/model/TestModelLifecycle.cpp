@@ -24,7 +24,6 @@ void SetModelTensorNames(irt::model::IModel &model, std::vector<std::string> inp
     new_config->setInputTensorNames(std::move(input_names));
     new_config->setOutputTensorNames(std::move(output_names));
     new_config->setFeatureTensorNames(config.featureTensorNames());
-    new_config->setFeatureOutputTensorNames(config.featureOutputTensorNames());
     new_config->setFeatureOnly(config.featureOnly());
     model.setModelConfig(std::move(new_config));
 }
@@ -119,78 +118,36 @@ TEST(IModelConfigTest, CreateModelPreservesCustomTensorNamesFromConfig)
 }
 
 /**
- * @brief 通过 IModel 接口设置特征张量名称及其导出名称后，应能正确保留配置。
+ * @brief featureOnly 配置应保留层 key、导出张量名及 featureOnly 标志（层 key 与导出名可不同）。
  */
-TEST(IModelConfigTest, FeatureTensorNamesCanBeConfiguredThroughModelApi)
+TEST(IModelConfigTest, FeatureOnlyConfigPreservesLayerKeysAndOutputNames)
 {
-    auto model = irt::model::CreateModel("resnet18");
-    ASSERT_NE(model, nullptr);
+    auto via_model_api = irt::model::CreateModel("resnet18");
+    ASSERT_NE(via_model_api, nullptr);
 
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setNumClasses(model->modelConfig().numClasses());
-    config->setInputShapes(model->modelConfig().inputShapes());
-    config->setInputTensorNames(model->modelConfig().inputTensorNames());
-    config->setOutputTensorNames(model->modelConfig().outputTensorNames());
+    config->setNumClasses(via_model_api->modelConfig().numClasses());
+    config->setInputShapes(via_model_api->modelConfig().inputShapes());
+    config->setInputTensorNames(via_model_api->modelConfig().inputTensorNames());
     config->setFeatureTensorNames({"layer1", "layer4"});
-    config->setFeatureOutputTensorNames({"feat_low", "feat_high"});
-    model->setModelConfig(std::move(config));
-
-    EXPECT_EQ(model->modelConfig().featureTensorNames(), (std::vector<std::string>{"layer1", "layer4"}));
-    EXPECT_EQ(model->modelConfig().featureOutputTensorNames(), (std::vector<std::string>{"feat_low", "feat_high"}));
-}
-
-/**
- * @brief 通过 IModel 接口启用 featureOnly 后，应能在模型配置中正确读回。
- */
-TEST(IModelConfigTest, FeatureOnlyCanBeConfiguredThroughModelApi)
-{
-    auto model = irt::model::CreateModel("resnet18");
-    ASSERT_NE(model, nullptr);
-
-    auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setNumClasses(model->modelConfig().numClasses());
-    config->setInputShapes(model->modelConfig().inputShapes());
-    config->setInputTensorNames(model->modelConfig().inputTensorNames());
-    config->setOutputTensorNames(model->modelConfig().outputTensorNames());
-    config->setFeatureTensorNames({"layer1"});
+    config->setOutputTensorNames({"feat_low", "feat_high"});
     config->setFeatureOnly(true);
-    model->setModelConfig(std::move(config));
+    via_model_api->setModelConfig(std::move(config));
 
-    EXPECT_TRUE(model->modelConfig().featureOnly());
-    EXPECT_EQ(model->modelConfig().featureTensorNames(), (std::vector<std::string>{"layer1"}));
-}
+    EXPECT_TRUE(via_model_api->modelConfig().featureOnly());
+    EXPECT_EQ(via_model_api->modelConfig().featureTensorNames(), (std::vector<std::string>{"layer1", "layer4"}));
+    EXPECT_EQ(via_model_api->modelConfig().outputTensorNames(), (std::vector<std::string>{"feat_low", "feat_high"}));
 
-/**
- * @brief 通过 CreateModel 传入的特征张量配置，应在模型实例中完整保留。
- */
-TEST(IModelConfigTest, CreateModelPreservesFeatureTensorNamesFromConfig)
-{
-    auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setFeatureTensorNames({"layer2", "avgpool"});
-    config->setFeatureOutputTensorNames({"feat_stage2", "feat_pool"});
+    auto create_config = std::make_unique<irt::model::IModelConfig>();
+    create_config->setFeatureTensorNames({"layer2"});
+    create_config->setOutputTensorNames({"layer2"});
+    create_config->setFeatureOnly(true);
 
-    auto model = irt::model::CreateModel("resnet50", std::move(config));
-    ASSERT_NE(model, nullptr);
-
-    EXPECT_EQ(model->modelConfig().featureTensorNames(), (std::vector<std::string>{"layer2", "avgpool"}));
-    EXPECT_EQ(model->modelConfig().featureOutputTensorNames(),
-              (std::vector<std::string>{"feat_stage2", "feat_pool"}));
-}
-
-/**
- * @brief 通过 CreateModel 传入的 featureOnly 配置，应在模型实例中完整保留。
- */
-TEST(IModelConfigTest, CreateModelPreservesFeatureOnlyFromConfig)
-{
-    auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setFeatureTensorNames({"layer2"});
-    config->setFeatureOnly(true);
-
-    auto model = irt::model::CreateModel("resnet50", std::move(config));
-    ASSERT_NE(model, nullptr);
-
-    EXPECT_TRUE(model->modelConfig().featureOnly());
-    EXPECT_EQ(model->modelConfig().featureTensorNames(), (std::vector<std::string>{"layer2"}));
+    auto via_create = irt::model::CreateModel("resnet50", std::move(create_config));
+    ASSERT_NE(via_create, nullptr);
+    EXPECT_TRUE(via_create->modelConfig().featureOnly());
+    EXPECT_EQ(via_create->modelConfig().featureTensorNames(), (std::vector<std::string>{"layer2"}));
+    EXPECT_EQ(via_create->modelConfig().outputTensorNames(), (std::vector<std::string>{"layer2"}));
 }
 
 /**
@@ -376,16 +333,17 @@ TEST(IModelBuildTest, BuildWithEmptyFeatureTensorNameThrowsInvalidArgument)
 }
 
 /**
- * @brief 当特征张量名称与特征输出名称数量不一致时，build 应拒绝该非法配置。
+ * @brief featureOnly 时若输出张量名数量与特征层 key 不一致，build 应拒绝该非法配置。
  */
-TEST(IModelBuildTest, BuildWithMismatchedFeatureOutputTensorNamesThrowsInvalidArgument)
+TEST(IModelBuildTest, BuildWithMismatchedOutputTensorCountInFeatureOnlyModeThrowsInvalidArgument)
 {
     auto model = irt::model::CreateModel("alexnet");
     ASSERT_NE(model, nullptr);
 
     auto config = std::make_unique<irt::model::IModelConfig>();
     config->setFeatureTensorNames({"pool1", "pool3"});
-    config->setFeatureOutputTensorNames({"feat_only_one"});
+    config->setOutputTensorNames({"feat_only_one"});
+    config->setFeatureOnly(true);
     model->setModelConfig(std::move(config));
 
     EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
@@ -401,6 +359,7 @@ TEST(IModelBuildTest, BuildWithFeatureOnlyAndNoFeatureTensorNamesThrowsInvalidAr
 
     auto config = std::make_unique<irt::model::IModelConfig>();
     config->setFeatureOnly(true);
+    config->setOutputTensorNames({"layer1"});
     model->setModelConfig(std::move(config));
 
     EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
@@ -484,16 +443,17 @@ TEST(IModelBuildOrLoadTest, BuildOrLoadWithEmptyOutputTensorNamesThrowsInvalidAr
 }
 
 /**
- * @brief 当特征张量名称与特征输出名称数量不一致时，buildOrLoad 应拒绝该非法配置。
+ * @brief featureOnly 时若输出张量名数量与特征层 key 不一致，buildOrLoad 应拒绝该非法配置。
  */
-TEST(IModelBuildOrLoadTest, BuildOrLoadWithMismatchedFeatureOutputTensorNamesThrowsInvalidArgument)
+TEST(IModelBuildOrLoadTest, BuildOrLoadWithMismatchedOutputTensorCountInFeatureOnlyModeThrowsInvalidArgument)
 {
     auto model = irt::model::CreateModel("alexnet");
     ASSERT_NE(model, nullptr);
 
     auto config = std::make_unique<irt::model::IModelConfig>();
     config->setFeatureTensorNames({"pool1", "pool3"});
-    config->setFeatureOutputTensorNames({"feat_only_one"});
+    config->setOutputTensorNames({"feat_only_one"});
+    config->setFeatureOnly(true);
     model->setModelConfig(std::move(config));
 
     EXPECT_THROW({ model->buildOrLoad("/non/existent/path/model.wts"); }, irt::Exception);
@@ -509,6 +469,7 @@ TEST(IModelBuildOrLoadTest, BuildOrLoadWithFeatureOnlyAndNoFeatureTensorNamesThr
 
     auto config = std::make_unique<irt::model::IModelConfig>();
     config->setFeatureOnly(true);
+    config->setOutputTensorNames({"layer1"});
     model->setModelConfig(std::move(config));
 
     EXPECT_THROW({ model->buildOrLoad("/non/existent/path/model.wts"); }, irt::Exception);

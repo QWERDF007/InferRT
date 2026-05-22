@@ -1,5 +1,5 @@
-#include <cxxopts.hpp>
 #include <cuda_runtime_api.h>
+#include <cxxopts.hpp>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/IModel.h>
 #include <inferrt/model/Utils.hpp>
@@ -7,8 +7,8 @@
 #include <opencv2/opencv.hpp>
 
 #include <algorithm>
-#include <chrono>
 #include <cctype>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -201,8 +201,7 @@ cxxopts::Options makeOptions(const char *program_name)
         "weights-file,w", "Weights file (.wts) (required)", cxxopts::value<std::string>())(
         "features,f", "Comma-separated feature tensor names (required)", cxxopts::value<std::string>())(
         "image-path,i", "Input image path", cxxopts::value<std::string>()->default_value(""))(
-        "output-dir,o", "Output directory", cxxopts::value<std::string>()->default_value(""))("h,help",
-                                                                                            "Show help");
+        "output-dir,o", "Output directory", cxxopts::value<std::string>()->default_value(""))("h,help", "Show help");
     return options;
 }
 
@@ -214,8 +213,8 @@ cxxopts::Options makeOptions(const char *program_name)
  */
 Arguments parseArguments(int argc, char *argv[])
 {
-    auto options = makeOptions(argv[0]);
-    const auto result = options.parse(argc, argv);
+    auto       options = makeOptions(argv[0]);
+    const auto result  = options.parse(argc, argv);
     if (result.count("help"))
     {
         std::cout << options.help() << std::endl;
@@ -370,20 +369,6 @@ std::string sanitizeFileStem(std::string_view value)
 }
 
 /**
- * @brief 获取特征输出张量名。
- * @param config 模型配置。
- * @return 输出张量名列表。
- */
-std::vector<std::string> featureOutputNames(const irt::model::IModelConfig &config)
-{
-    if (!config.featureOutputTensorNames().empty())
-    {
-        return config.featureOutputTensorNames();
-    }
-    return config.featureTensorNames();
-}
-
-/**
  * @brief 包装 CUDA 调用，失败时抛出带上下文的异常。
  * @param status CUDA 返回状态。
  * @param op 当前操作名。
@@ -471,12 +456,13 @@ int main(int argc, char *argv[])
 
         const fs::path project_root
             = irt::util::findProjectRoot(argv[0], {irt::model::ImageNetUtil::kDefaultImagePath}, __FILE__);
-        const fs::path image_path = cli.image_path.empty() ? (project_root / irt::model::ImageNetUtil::kDefaultImagePath)
-                                                           : cli.image_path;
+        const fs::path image_path
+            = cli.image_path.empty() ? (project_root / irt::model::ImageNetUtil::kDefaultImagePath) : cli.image_path;
         const fs::path output_dir = cli.output_dir.empty() ? (fs::current_path() / kDefaultOutputDir) : cli.output_dir;
 
         auto config = std::make_unique<irt::model::IModelConfig>();
         config->setFeatureTensorNames(cli.feature_names);
+        config->setOutputTensorNames(cli.feature_names);
         config->setFeatureOnly(true);
         auto model = irt::model::CreateModel(cli.model_name, std::move(config));
         if (!model)
@@ -497,9 +483,9 @@ int main(int argc, char *argv[])
         }
 
         const auto preprocess_start = Clock::now();
-        const auto preprocessed = irt::model::ImageNetUtil::preprocess(img);
-        const auto input_data = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
-        const auto preprocess_end = Clock::now();
+        const auto preprocessed     = irt::model::ImageNetUtil::preprocess(img);
+        const auto input_data       = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
+        const auto preprocess_end   = Clock::now();
 
         const auto stream = model->resolveExecutionStream();
 
@@ -508,8 +494,8 @@ int main(int argc, char *argv[])
                                   cudaMemcpyHostToDevice, stream),
                   "cudaMemcpyAsync(H2D input)");
 
-        std::vector<std::string> output_names = featureOutputNames(model->modelConfig());
-        std::vector<TensorDump>  dumps;
+        const std::vector<std::string> &output_names = model->modelConfig().outputTensorNames();
+        std::vector<TensorDump>         dumps;
         dumps.reserve(output_names.size());
 
         std::vector<CudaBuffer> device_outputs;

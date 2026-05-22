@@ -259,6 +259,79 @@ def run_python_classification(
     raise RuntimeError(f"Unexpected infer() return type for outputs: {output_names}")
 
 
+def run_torch_features(model_name: str, input_tensor: np.ndarray, feature_names: list[str]) -> dict[str, np.ndarray]:
+    """使用 PyTorch 预训练模型提取中间层特征。
+
+    通过 forward hook 捕获指定子模块的输出，实现与 InferRT ``forward_features()``
+    的逐层对比。
+
+    Args:
+        model_name: ``model_zoo.TORCHVISION_MODEL_ZOO`` 中的模型名。
+        input_tensor: 形状 ``(1, 3, 224, 224)`` 的 ``float32`` NCHW 张量。
+        feature_names: 要捕获的 InferRT 特征名列表。
+
+    Returns:
+        dict[str, np.ndarray]: 特征名 -> 对应 PyTorch 子模块输出（已转为 NumPy）。
+
+    Raises:
+        ValueError: 无法在 PyTorch 模型中定位某个特征名对应的子模块。
+    """
+
+    import torch
+    from model_zoo import create_model
+
+    # InferRT 特征名 -> PyTorch ``named_modules`` 键的映射。
+    # 同名直接命中的不需要列在这里。
+    _NAME_MAP: dict[str, str] = {
+        # MobileNetV2/V3: stem 指 features 的第一个子模块
+        "stem": "features.0",
+        # VGG: blockN 为第 N 个 MaxPool2d 之后的输出
+        "block1": "features.2",
+        "block2": "features.5",
+        "block3": "features.10",
+        "block4": "features.15",
+        "block5": "features.20",
+        # AlexNet: poolN 为第 N 个 MaxPool2d 之后的输出
+        "pool1": "features.2",
+        "pool2": "features.5",
+        "pool3": "features.12",
+        # AlexNet fc2: classifier[4] Linear 的输出（不含后续 ReLU）
+        "fc2": "classifier.4",
+    }
+
+    model = create_model(model_name, "torchvision")
+    model.eval()
+    named_modules = dict(model.named_modules())
+
+    outputs: dict[str, np.ndarray] = {}
+    hooks: list = []
+
+    def _make_hook(name: str):
+        def _hook(_module, _input, _output):
+            outputs[name] = _output.detach().cpu().numpy()
+
+        return _hook
+
+    for feature_name in feature_names:
+        module_name = _NAME_MAP.get(feature_name, feature_name)
+        if module_name not in named_modules:
+            available = sorted(named_modules.keys())
+            raise ValueError(
+                f"Cannot resolve feature '{feature_name}' → '{module_name}' "
+                f"in model '{model_name}'. Available modules: {available}"
+            )
+        hooks.append(named_modules[module_name].register_forward_hook(_make_hook(feature_name)))
+
+    batch = torch.from_numpy(np.ascontiguousarray(input_tensor, dtype=np.float32))
+    with torch.inference_mode():
+        model(batch)
+
+    for h in hooks:
+        h.remove()
+
+    return outputs
+
+
 def run_python_features(
     irt_module: object,
     *,
@@ -274,10 +347,10 @@ def run_python_features(
         model_name: ``create_model`` 使用的模型名。
         weights_path: 权重文件路径。
         input_tensor: 预处理后的输入张量。
-        feature_names: ``ModelConfig.feature_tensor_names``；``feature_only=True``。
+        feature_names: 建网层 key；同时写入 ``output_tensor_names``（与 C++ sample 一致）。
 
     Returns:
-        dict[str, np.ndarray]: 键 ``input`` 加各特征输出；若绑定返回单向量则包装为单键字典。
+        dict[str, np.ndarray]: 以 ``output_tensor_names`` 为键的特征张量；单向量时包装为单键字典。
 
     Raises:
         RuntimeError: 输入张量数量不为 1 时。
@@ -285,6 +358,7 @@ def run_python_features(
 
     config = irt_module.ModelConfig()
     config.feature_tensor_names = feature_names
+    config.output_tensor_names = feature_names
     config.feature_only = True
 
     model = irt_module.create_model(model_name, config)
@@ -294,12 +368,12 @@ def run_python_features(
     if len(input_names) != 1:
         raise RuntimeError(f"Expected one input tensor, got: {input_names}")
 
+    output_names = list(model.output_tensor_names())
     outputs = model.forward_features({input_names[0]: input_tensor})
     if isinstance(outputs, np.ndarray):
-        feature_output_names = model.feature_output_tensor_names()
-        output_name = feature_output_names[0] if feature_output_names else feature_names[0]
+        output_name = output_names[0] if output_names else feature_names[0]
         output_dict = {output_name: outputs}
     else:
         output_dict = dict(outputs)
 
-    return {"input": input_tensor, **output_dict}
+    return output_dict

@@ -71,7 +71,9 @@ public:
 
     /**
      * @brief 设置输出张量名称列表。
-     * @param output_tensor_names 输出张量名称列表。
+     *
+     * 分类时为 logits 等主输出；``featureOnly`` 时为各特征面的 TRT 张量名，
+     * 数量须与 ``feature_tensor_names`` 一致。
      */
     virtual void setOutputTensorNames(std::vector<std::string> output_tensor_names)
     {
@@ -87,17 +89,6 @@ public:
     virtual void setFeatureTensorNames(std::vector<std::string> feature_tensor_names)
     {
         feature_tensor_names_ = std::move(feature_tensor_names);
-    }
-
-    /**
-     * @brief 设置中间特征输出张量名称列表。
-     * @param feature_output_tensor_names 特征输出张量名称列表。
-     *
-     * 若为空，则默认直接使用 feature_tensor_names 作为输出张量名称。
-     */
-    virtual void setFeatureOutputTensorNames(std::vector<std::string> feature_output_tensor_names)
-    {
-        feature_output_tensor_names_ = std::move(feature_output_tensor_names);
     }
 
     /**
@@ -165,19 +156,6 @@ public:
         return feature_tensor_names_;
     }
 
-    /**
-     * @brief 获取中间特征输出张量名称列表。
-     * @return 特征输出张量名称列表。
-     */
-    virtual const std::vector<std::string> &featureOutputTensorNames() const noexcept
-    {
-        return feature_output_tensor_names_;
-    }
-
-    /**
-     * @brief 当前配置是否仅用于特征提取。
-     * @return 为 true 时，主 engine 即为特征裁剪网络。
-     */
     virtual bool featureOnly() const noexcept
     {
         return feature_only_;
@@ -192,19 +170,14 @@ protected:
         nvinfer1::Dims4{1, 3, 224, 224}
     };
 
-    /// 输入张量名称列表。
     std::vector<std::string> input_tensor_names_{"input"};
 
     /// 输出张量名称列表。
     std::vector<std::string> output_tensor_names_{"output"};
 
-    /// 请求导出的中间特征层 key 列表。
+    /// 仅用于建网：在 NamedTensorMap 中选取的中间层 key。
     std::vector<std::string> feature_tensor_names_{};
 
-    /// 中间特征输出张量名称列表；为空时回退到 feature_tensor_names_。
-    std::vector<std::string> feature_output_tensor_names_{};
-
-    /// 当前配置是否仅用于特征提取裁剪网络。
     bool feature_only_{false};
 };
 

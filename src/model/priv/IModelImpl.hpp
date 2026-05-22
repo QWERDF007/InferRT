@@ -4,10 +4,10 @@
 #include <inferrt/model/IParams.hpp>
 #include <inferrt/model/Utils.hpp>
 
-#include <memory>
 #include <functional>
-#include <unordered_map>
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace irt::model::priv {
@@ -123,8 +123,7 @@ public:
      * @param stream 调用方提供的 CUDA stream；为空时使用模型当前默认 stream。
      * @param non_blocking 为 true 时仅提交执行，不在函数内等待 stream 完成。
      */
-    virtual void infer(const std::vector<void *> &buffers, cudaStream_t stream = nullptr,
-                       bool non_blocking = false);
+    virtual void infer(const std::vector<void *> &buffers, cudaStream_t stream = nullptr, bool non_blocking = false);
 
     /**
      * @brief 在指定 CUDA stream 上执行一次特征提取前向。
@@ -293,7 +292,7 @@ public:
      * @param weights_file 权重文件路径，仅用于日志。
      * @param build_fn 网络构建回调。
      */
-    void buildRuntimeFromWeights(const std::string &weights_file,
+    void buildRuntimeFromWeights(const std::string                                         &weights_file,
                                  const std::function<void(nvinfer1::INetworkDefinition *)> &build_fn);
 
     /**
@@ -319,29 +318,21 @@ public:
 
 private:
     /**
-     * @brief 获取当前 runtime 对应的输出张量名称列表。
-     */
-    const std::vector<std::string> &activeOutputTensorNames() const;
-
-    /**
-     * @brief 校验当前 engine/context 是否可用于指定执行模式。
-     */
-    void ensureExecutionReady(bool feature_mode) const;
-
-    /**
      * @brief 将输入与当前 runtime 的输出张量地址绑定到执行上下文。
      */
     void bindTensorAddresses(const std::vector<void *> &buffers);
 
     /**
-     * @brief 绑定当前 runtime 的张量地址并执行。
+     * @brief 绑定当前 runtime 的张量地址并执行 enqueue。
      */
-    void execute(const std::vector<void *> &buffers, bool feature_mode, cudaStream_t stream, bool non_blocking);
+    void execute(const std::vector<void *> &buffers, cudaStream_t stream, bool non_blocking);
 
     /// 模型配置对象。
     std::unique_ptr<IModelConfig> config_;
+
     /// TensorRT 相关运行时对象。
     TRTParams trt_params_;
+
     /// 当前 buildNetwork 正在构建的 engine 类型。
     BuildVariant build_variant_{BuildVariant::Primary};
 };

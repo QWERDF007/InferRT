@@ -87,7 +87,6 @@ std::unique_ptr<irt::model::IModelConfig> cloneModelConfig(const irt::model::IMo
     cloned->setInputTensorNames(config.inputTensorNames());
     cloned->setOutputTensorNames(config.outputTensorNames());
     cloned->setFeatureTensorNames(config.featureTensorNames());
-    cloned->setFeatureOutputTensorNames(config.featureOutputTensorNames());
     cloned->setFeatureOnly(config.featureOnly());
     return cloned;
 }
@@ -667,20 +666,6 @@ public:
     }
 
     /**
-     * @brief 返回特征输出张量名称列表。
-     * @return 特征输出张量名称列表。
-     */
-    std::vector<std::string> featureOutputTensorNames() const
-    {
-        const auto &config_names = model_->modelConfig().featureOutputTensorNames();
-        if (!config_names.empty())
-        {
-            return config_names;
-        }
-        return model_->modelConfig().featureTensorNames();
-    }
-
-    /**
      * @brief 构建 TensorRT engine。
      * @param weights_file 权重文件路径。
      */
@@ -804,15 +789,15 @@ public:
      */
     py::object forwardFeatures(const py::object &inputs, bool non_blocking = false)
     {
-        const auto feature_names = featureOutputTensorNames();
-        if (feature_names.empty())
+        const auto output_names = outputTensorNames();
+        if (output_names.empty())
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "No feature tensors are configured");
+            throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "No output tensors are configured");
         }
 
         const auto stream = model_->resolveExecutionStream();
         return execute(
-            inputs, py::none(), feature_names, [this, stream, non_blocking](const std::vector<void *> &buffers)
+            inputs, py::none(), output_names, [this, stream, non_blocking](const std::vector<void *> &buffers)
             { model_->forwardFeatures(buffers, stream, non_blocking); }, stream);
     }
 
@@ -1557,8 +1542,6 @@ PYBIND11_MODULE(inferrt_model_py, m)
                       &irt::model::IModelConfig::setOutputTensorNames, "主输出张量名称列表。")
         .def_property("feature_tensor_names", &irt::model::IModelConfig::featureTensorNames,
                       &irt::model::IModelConfig::setFeatureTensorNames, "中间特征层 key 列表。")
-        .def_property("feature_output_tensor_names", &irt::model::IModelConfig::featureOutputTensorNames,
-                      &irt::model::IModelConfig::setFeatureOutputTensorNames, "特征输出张量名称列表。")
         .def_property("feature_only", &irt::model::IModelConfig::featureOnly, &irt::model::IModelConfig::setFeatureOnly,
                       "是否仅构建特征提取网络。");
 
@@ -1577,8 +1560,7 @@ PYBIND11_MODULE(inferrt_model_py, m)
         .def("forward_features", &PyModel::forwardFeatures, py::arg("inputs"), py::arg("non_blocking") = false,
              "执行一次特征前向，输入支持 ndarray、sequence 或 dict。")
         .def("input_tensor_names", &PyModel::inputTensorNames, "返回输入张量名称列表。")
-        .def("output_tensor_names", &PyModel::outputTensorNames, "返回主输出张量名称列表。")
-        .def("feature_output_tensor_names", &PyModel::featureOutputTensorNames, "返回特征输出张量名称列表。")
+        .def("output_tensor_names", &PyModel::outputTensorNames, "返回输出张量名称列表（分类 logits 或特征导出名）。")
         .def("tensor_shape", &PyModel::tensorShape, py::arg("tensor_name"), "返回指定张量的运行时形状。")
         .def("tensor_dtype", &PyModel::tensorDType, py::arg("tensor_name"), "返回指定张量的数据类型名称。")
         .def("set_tensor_shape", &PyModel::setTensorShape, py::arg("tensor_name"), py::arg("shape"),

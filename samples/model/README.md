@@ -62,9 +62,9 @@ Example:
 
 ```cpp
 auto config = std::make_unique<irt::model::IModelConfig>();
-config->setFeatureTensorNames({"layer1", "layer4"});
-config->setFeatureOutputTensorNames({"feat_low", "feat_high"});
-config->setFeatureOnly(true); // build this model instance as a truncated feature extractor
+config->setFeatureTensorNames({"layer1", "layer4"});   // layer keys used while building the network
+config->setOutputTensorNames({"feat_low", "feat_high"}); // TRT output tensor names (same count as above)
+config->setFeatureOnly(true);
 
 auto model = irt::model::CreateModel("resnet50", std::move(config));
 model->buildOrLoad("samples/model/classification/resnet50.wts");
@@ -73,11 +73,9 @@ model->forwardFeatures(feature_buffers);
 
 Behavior:
 
-- default mode: `buildOrLoad(...)` prepares one normal inference engine for `infer(...)`
-- `config->setFeatureOnly(true)` prepares one truncated feature extraction engine for `forwardFeatures(...)`
-- `infer(...)` rejects feature-only engines to prevent running classification on an incomplete network
-- `forwardFeatures(...)` rejects normal inference engines and expects buffers ordered as inputs followed by requested feature outputs
-- if `featureOutputTensorNames()` is empty, the feature layer keys themselves are used as output tensor names
+- default mode: `output_tensor_names` is typically `{"output"}`; `buildOrLoad` builds a full classifier for `infer(...)`
+- `featureOnly`: set `feature_tensor_names` and `output_tensor_names` with the same length; runtime binding always uses `output_tensor_names`
+- `forwardFeatures(...)` expects buffers ordered as inputs followed by feature outputs listed in `output_tensor_names`
 
 Common feature keys exposed by built-in models:
 

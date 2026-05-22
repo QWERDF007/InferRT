@@ -92,6 +92,7 @@ def main() -> int:
 
     config = irt.ModelConfig()
     config.feature_tensor_names = feature_names
+    config.output_tensor_names = feature_names
     config.feature_only = True
 
     print(f"Creating feature-only model: {model_name}")
@@ -102,9 +103,9 @@ def main() -> int:
     model.build_or_load(str(weights_path))
 
     input_tensor_names = model.input_tensor_names()
-    feature_output_tensor_names = model.feature_output_tensor_names()
+    output_tensor_names = model.output_tensor_names()
     print(f"Input tensors: {input_tensor_names}")
-    print(f"Feature output tensors: {feature_output_tensor_names}")
+    print(f"Output tensors: {output_tensor_names}")
 
     if not input_tensor_names:
         raise RuntimeError("Model has no configured input tensors")
@@ -125,7 +126,7 @@ def main() -> int:
 
     postprocess_start = time.perf_counter()
     if isinstance(output, np.ndarray):
-        output_name = feature_output_tensor_names[0] if feature_output_tensor_names else feature_names[0]
+        output_name = output_tensor_names[0] if output_tensor_names else feature_names[0]
         output_dict = {output_name: output}
     else:
         output_dict = dict(output)
