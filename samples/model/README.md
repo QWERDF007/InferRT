@@ -64,7 +64,7 @@ Example:
 auto config = std::make_unique<irt::model::IModelConfig>();
 config->setFeatureTensorNames({"layer1", "layer4"});
 config->setFeatureOutputTensorNames({"feat_low", "feat_high"});
-config->setFeatureOnly(true); // optional: build this model instance as a truncated feature extractor
+config->setFeatureOnly(true); // build this model instance as a truncated feature extractor
 
 auto model = irt::model::CreateModel("resnet50", std::move(config));
 model->buildOrLoad("samples/model/classification/resnet50.wts");
@@ -73,10 +73,10 @@ model->forwardFeatures(feature_buffers);
 
 Behavior:
 
-- default mode: `buildOrLoad(...)` prepares the normal inference engine and, when feature tensors are requested, a separate truncated feature engine
-- `config->setFeatureOnly(true)` builds the model instance itself as a truncated feature extractor and stores/loads the feature engine path directly
+- default mode: `buildOrLoad(...)` prepares one normal inference engine for `infer(...)`
+- `config->setFeatureOnly(true)` prepares one truncated feature extraction engine for `forwardFeatures(...)`
 - `infer(...)` rejects feature-only engines to prevent running classification on an incomplete network
-- `forwardFeatures(...)` uses the truncated feature engine and expects buffers ordered as inputs followed by requested feature outputs
+- `forwardFeatures(...)` rejects normal inference engines and expects buffers ordered as inputs followed by requested feature outputs
 - if `featureOutputTensorNames()` is empty, the feature layer keys themselves are used as output tensor names
 
 Common feature keys exposed by built-in models:

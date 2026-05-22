@@ -22,11 +22,16 @@ namespace irt::model::priv {
 class IModelImpl
 {
 public:
+    /// 构建期网络名称到 TensorRT 张量指针的映射表。
     using NamedTensorMap = std::unordered_map<std::string, nvinfer1::ITensor *>;
+
+    /**
+     * @brief 标识 buildNetwork 当前正在构建的网络类型。
+     */
     enum class BuildVariant
     {
-        Primary,
-        Feature,
+        Primary, ///< 主分类（或完整）推理网络。
+        Feature, ///< 仅导出配置中选定中间特征的裁剪网络。
     };
 
     /**
@@ -119,7 +124,7 @@ public:
      * @param non_blocking 为 true 时仅提交执行，不在函数内等待 stream 完成。
      */
     virtual void infer(const std::vector<void *> &buffers, cudaStream_t stream = nullptr,
-                       bool non_blocking = false) = 0;
+                       bool non_blocking = false);
 
     /**
      * @brief 在指定 CUDA stream 上执行一次特征提取前向。
@@ -180,8 +185,6 @@ public:
      * @brief 清除模型默认外部 CUDA stream，恢复为内部自建 stream。
      */
     void clearStream();
-
-    cudaStream_t executionStream();
 
     /**
      * @brief 设置日志级别。
@@ -267,34 +270,22 @@ public:
         return trt_params_;
     }
 
-    TRTParams &featureTrtParams() noexcept
-    {
-        return feature_trt_params_;
-    }
-
-    const TRTParams &featureTrtParams() const noexcept
-    {
-        return feature_trt_params_;
-    }
-
+    /**
+     * @brief 判断 buildNetwork 是否正在为特征裁剪网络构建。
+     * @return 为 true 时表示当前应只标记配置中的特征输出。
+     */
     bool isBuildingFeatureEngine() const noexcept
     {
         return build_variant_ == BuildVariant::Feature;
     }
 
+    /**
+     * @brief 判断模型配置是否处于仅特征提取模式。
+     * @return 为 true 时当前 engine 构建为 feature-only 网络。
+     */
     bool isFeatureOnlyConfig() const noexcept
     {
         return modelConfig().featureOnly();
-    }
-
-    TRTParams &featureExecutionParams() noexcept
-    {
-        return isFeatureOnlyConfig() ? trt_params_ : feature_trt_params_;
-    }
-
-    const TRTParams &featureExecutionParams() const noexcept
-    {
-        return isFeatureOnlyConfig() ? trt_params_ : feature_trt_params_;
     }
 
     /**
@@ -345,24 +336,55 @@ public:
     void saveRuntimeToFile(const std::string &engine_file, const TRTParams &params);
 
     /**
-     * @brief 创建特征提取 sidecar engine 文件路径。
-     * @param base_engine_file 主 engine 文件路径。
-     * @return 特征 engine 文件路径。
+     * @brief 校验主推理 engine 与执行上下文已初始化且可用于 enqueue。
+     * @throws irt::Exception runtime 未就绪或当前为 feature-only engine 时。
      */
-    std::string featureEngineFileName(const std::string &base_engine_file) const;
-
     void ensurePrimaryInferenceReady() const;
+
+    /**
+     * @brief 校验特征提取 engine 与执行上下文已初始化且可用于 enqueue。
+     * @throws irt::Exception runtime 未就绪或当前 engine 不支持特征提取时。
+     */
     void ensureFeatureExtractionReady() const;
+
+    /**
+     * @brief 解析本次 enqueue 应使用的 CUDA stream。
+     * @param params 目标运行时参数集合。
+     * @param stream_override 单次调用覆盖；非空时优先级最高。
+     * @return 生效的 stream；runtime 未就绪且尚无内部 stream 时返回 nullptr。
+     *
+     * 优先级：stream_override > external_stream > 惰性创建的内部 stream。
+     */
     cudaStream_t resolveExecutionStream(TRTParams &params, cudaStream_t stream_override);
+
+    /**
+     * @brief 在指定 stream 上调用 enqueueV3，并按需同步。
+     * @param params 目标运行时参数集合。
+     * @param error_message enqueue 失败时写入异常信息的前缀。
+     * @param stream_override 单次调用覆盖的 CUDA stream。
+     * @param non_blocking 为 true 时不调用 cudaStreamSynchronize。
+     */
     void executeContext(TRTParams &params, const char *error_message, cudaStream_t stream_override, bool non_blocking);
+
+    /**
+     * @brief 将输入与指定输出张量地址绑定到当前执行上下文。
+     */
+    void bindTensorAddressesForOutputs(const std::vector<void *> &buffers,
+                                       const std::vector<std::string> &output_names,
+                                       const char *output_description);
+
+    /**
+     * @brief 绑定指定输出集合并执行当前上下文。
+     */
+    void executeWithOutputs(const std::vector<void *> &buffers, const std::vector<std::string> &output_names,
+                            const char *output_description, const char *error_message, cudaStream_t stream,
+                            bool non_blocking);
 
 private:
     /// 模型配置对象。
     std::unique_ptr<IModelConfig> config_;
     /// TensorRT 相关运行时对象。
     TRTParams trt_params_;
-    /// 特征提取相关运行时对象。
-    TRTParams feature_trt_params_;
     /// 当前 buildNetwork 正在构建的 engine 类型。
     BuildVariant build_variant_{BuildVariant::Primary};
 };

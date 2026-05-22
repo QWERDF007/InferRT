@@ -280,14 +280,6 @@ void ONNXModel::buildOrLoad(const std::string &onnx_file)
     }
 }
 
-void ONNXModel::infer(const std::vector<void *> &buffers, cudaStream_t stream, bool non_blocking)
-{
-    ensurePrimaryInferenceReady();
-    auto &trt_params = trtParams();
-    bindTensorAddresses(buffers);
-    executeContext(trt_params, "Failed to execute inference", stream, non_blocking);
-}
-
 } // namespace irt::model
 
 INFERRT_REGISTER_MODEL(ONNXModel)

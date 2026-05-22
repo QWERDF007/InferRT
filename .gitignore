@@ -55,3 +55,6 @@ inferrt-*
 *.bin
 *.log
 __pycache__/
+.pytest_cache/
+.claude/
+.vscode/

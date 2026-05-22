@@ -114,9 +114,9 @@ void IModel::clearStream()
     impl_->clearStream();
 }
 
-cudaStream_t IModel::executionStream()
+cudaStream_t IModel::resolveExecutionStream(cudaStream_t stream_override) const
 {
-    return impl_->executionStream();
+    return impl_->resolveExecutionStream(impl_->trtParams(), stream_override);
 }
 
 void IModel::setLogLevel(nvinfer1::ILogger::Severity severity)

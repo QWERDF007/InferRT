@@ -290,14 +290,6 @@ void WideResNet101_2::buildNetwork(nvinfer1::INetworkDefinition *network, const 
                 isBuildingFeatureEngine());
 }
 
-void ResNet::infer(const std::vector<void *> &buffers, cudaStream_t stream, bool non_blocking)
-{
-    ensurePrimaryInferenceReady();
-    auto &trt_params = trtParams();
-    bindTensorAddresses(buffers);
-    executeContext(trt_params, "Failed to execute inference", stream, non_blocking);
-}
-
 } // namespace irt::model
 
 INFERRT_REGISTER_MODEL(ResNet18)

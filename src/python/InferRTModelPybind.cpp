@@ -773,7 +773,7 @@ public:
      */
     py::object infer(const py::object &inputs, const py::object &outputs, bool non_blocking = false)
     {
-        const auto stream = model_->executionStream();
+        const auto stream = model_->resolveExecutionStream();
         return execute(
             inputs, outputs, outputTensorNames(), [this, stream, non_blocking](const std::vector<void *> &buffers)
             { model_->infer(buffers, stream, non_blocking); }, stream);
@@ -810,7 +810,7 @@ public:
             throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "No feature tensors are configured");
         }
 
-        const auto stream = model_->executionStream();
+        const auto stream = model_->resolveExecutionStream();
         return execute(
             inputs, py::none(), feature_names, [this, stream, non_blocking](const std::vector<void *> &buffers)
             { model_->forwardFeatures(buffers, stream, non_blocking); }, stream);

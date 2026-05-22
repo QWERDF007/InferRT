@@ -71,14 +71,6 @@ public:
     void buildOrLoad(const std::string &onnx_file) override;
 
     /**
-     * @brief 在指定 CUDA stream 上执行 ONNX 模型推理。
-     * @param buffers 输入输出缓冲区地址列表。
-     * @param stream 调用方提供的 CUDA stream；为空时使用模型当前默认 stream。
-     */
-    void infer(const std::vector<void *> &buffers, cudaStream_t stream = nullptr,
-               bool non_blocking = false) override;
-
-    /**
      * @brief ONNX 模型不支持手工构建网络。
      * @param network TensorRT 网络定义。
      * @param weights_map 权重映射表。

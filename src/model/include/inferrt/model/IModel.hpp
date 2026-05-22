@@ -182,7 +182,12 @@ public:
      */
     virtual void clearStream();
 
-    virtual cudaStream_t executionStream();
+    /**
+     * @brief 解析本次执行应使用的 CUDA stream。
+     * @param stream_override 单次调用覆盖；非空时优先级最高。
+     * @return 生效的 stream；runtime 未就绪时返回 nullptr。
+     */
+    cudaStream_t resolveExecutionStream(cudaStream_t stream_override = nullptr) const;
 
     /**
      * @brief 设置日志级别。
