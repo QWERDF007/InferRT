@@ -64,14 +64,14 @@ void IModel::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMa
     impl_->buildNetwork(network, weights_map);
 }
 
-void IModel::infer(const std::vector<void *> &buffers)
+void IModel::infer(const std::vector<void *> &buffers, cudaStream_t stream, bool non_blocking)
 {
-    impl_->infer(buffers);
+    impl_->infer(buffers, stream, non_blocking);
 }
 
-void IModel::forwardFeatures(const std::vector<void *> &buffers)
+void IModel::forwardFeatures(const std::vector<void *> &buffers, cudaStream_t stream, bool non_blocking)
 {
-    impl_->forwardFeatures(buffers);
+    impl_->forwardFeatures(buffers, stream, non_blocking);
 }
 
 void IModel::setModelConfig(std::unique_ptr<IModelConfig> config)
@@ -102,6 +102,21 @@ nvinfer1::DataType IModel::tensorDataType(const std::string &tensor_name) const
 void IModel::setTensorShape(const std::string &tensor_name, const nvinfer1::Dims &dims)
 {
     impl_->setTensorShape(tensor_name, dims);
+}
+
+void IModel::setStream(cudaStream_t stream)
+{
+    impl_->setStream(stream);
+}
+
+void IModel::clearStream()
+{
+    impl_->clearStream();
+}
+
+cudaStream_t IModel::resolveExecutionStream(cudaStream_t stream_override) const
+{
+    return impl_->resolveExecutionStream(stream_override);
 }
 
 void IModel::setLogLevel(nvinfer1::ILogger::Severity severity)

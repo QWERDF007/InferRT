@@ -111,18 +111,21 @@ public:
     virtual void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map);
 
     /**
-     * @brief 执行一次推理。
+     * @brief 在指定 CUDA stream 上执行一次推理。
      * @param buffers 输入输出缓冲区地址列表。
+     * @param stream 调用方提供的 CUDA stream；为空时使用模型当前默认 stream。
+     * @param non_blocking 为 true 时仅提交执行，不在函数内等待 stream 完成。
      */
-    virtual void infer(const std::vector<void *> &buffers);
+    virtual void infer(const std::vector<void *> &buffers, cudaStream_t stream = nullptr, bool non_blocking = false);
 
     /**
-     * @brief 执行一次特征提取前向。
+     * @brief 在指定 CUDA stream 上执行一次特征提取前向。
      * @param buffers 输入与特征输出缓冲区地址列表。
-     *
-     * 缓冲区顺序为所有输入张量，随后是 featureTensorNames() 对应的特征输出。
+     * @param stream 调用方提供的 CUDA stream；为空时使用模型当前默认 stream。
+     * @param non_blocking 为 true 时仅提交执行，不在函数内等待 stream 完成。
      */
-    virtual void forwardFeatures(const std::vector<void *> &buffers);
+    virtual void forwardFeatures(const std::vector<void *> &buffers, cudaStream_t stream = nullptr,
+                                 bool non_blocking = false);
 
     /**
      * @brief 设置模型配置。
@@ -163,6 +166,28 @@ public:
      * @param dims 运行时维度。
      */
     virtual void setTensorShape(const std::string &tensor_name, const nvinfer1::Dims &dims);
+
+    /**
+     * @brief 设置模型默认使用的外部 CUDA stream。
+     * @param stream 调用方提供的 CUDA stream；为空时行为未定义，请改用 clearStream。
+     *
+     * 该设置会同时作用于主推理与特征提取执行路径。
+     */
+    virtual void setStream(cudaStream_t stream);
+
+    /**
+     * @brief 清除模型默认外部 CUDA stream，恢复为内部自建 stream。
+     *
+     * 该设置会同时作用于主推理与特征提取执行路径。
+     */
+    virtual void clearStream();
+
+    /**
+     * @brief 解析本次执行应使用的 CUDA stream。
+     * @param stream_override 单次调用覆盖；非空时优先级最高。
+     * @return 生效的 stream；runtime 未就绪时返回 nullptr。
+     */
+    cudaStream_t resolveExecutionStream(cudaStream_t stream_override = nullptr) const;
 
     /**
      * @brief 设置日志级别。

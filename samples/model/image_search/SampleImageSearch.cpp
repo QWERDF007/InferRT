@@ -533,14 +533,16 @@ public:
         const auto          input_data   = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
         std::vector<float>  feature(feature_dim_);
         std::vector<void *> buffers{device_input_.get(), device_output_.get()};
+        const auto          stream = model_->resolveExecutionStream();
 
-        checkCuda(cudaMemcpy(device_input_.get(), input_data.data(), input_data.size() * sizeof(float),
-                             cudaMemcpyHostToDevice),
-                  "cudaMemcpy(H2D input)");
-        model_->forwardFeatures(buffers);
-        checkCuda(
-            cudaMemcpy(feature.data(), device_output_.get(), feature.size() * sizeof(float), cudaMemcpyDeviceToHost),
-            "cudaMemcpy(D2H feature)");
+        checkCuda(cudaMemcpyAsync(device_input_.get(), input_data.data(), input_data.size() * sizeof(float),
+                                  cudaMemcpyHostToDevice, stream),
+                  "cudaMemcpyAsync(H2D input)");
+        model_->forwardFeatures(buffers, stream, true);
+        checkCuda(cudaMemcpyAsync(feature.data(), device_output_.get(), feature.size() * sizeof(float),
+                                  cudaMemcpyDeviceToHost, stream),
+                  "cudaMemcpyAsync(D2H feature)");
+        checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(feature extraction)");
         l2Normalize(feature);
         return feature;
     }

@@ -316,29 +316,6 @@ void buildMobileNetV3(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition
     impl.markOutputTensors(network, {x});
 }
 
-void enqueue(priv::IModelImpl &impl, const std::vector<void *> &buffers)
-{
-    impl.ensurePrimaryInferenceReady();
-    auto &trt_params = impl.trtParams();
-    impl.bindTensorAddresses(buffers);
-
-    if (!trt_params.stream)
-    {
-        trt_params.stream = MakeCudaStream();
-        if (!trt_params.stream)
-        {
-            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create CUDA stream");
-        }
-    }
-
-    if (!trt_params.context->enqueueV3(*trt_params.stream))
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to execute inference");
-    }
-
-    cudaStreamSynchronize(*trt_params.stream);
-}
-
 } // namespace
 
 void MobileNetV2::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
@@ -382,11 +359,6 @@ void MobileNetV3Small::buildNetwork(nvinfer1::INetworkDefinition *network, const
                       {96, 5, 576, 96, true, Act::HSwish, 1},
                       {96, 5, 576, 96, true, Act::HSwish, 1}},
                      576, 1024, isBuildingFeatureEngine());
-}
-
-void MobileNet::infer(const std::vector<void *> &buffers)
-{
-    enqueue(*this, buffers);
 }
 
 } // namespace irt::model

@@ -13,15 +13,15 @@ cmake --build build --config Debug --target inferrt_sample_features
 ## Run the C++ sample
 
 ```bash
-build/bin/inferrt_sample_features.exe <model_name> <weights_file.wts> <feature_a,feature_b,...> [image_path] [output_dir]
+build/bin/inferrt_sample_features.exe --model <name> --weights-file <weights.wts> --features <feature_a,feature_b,...> [--image-path PATH] [--output-dir DIR]
 build/bin/inferrt_sample_features.exe --help
 ```
 
 Example:
 
 ```bash
-build/bin/inferrt_sample_features.exe resnet18 samples/model/classification/resnet18.wts layer1,layer4 assets/pics/dog.jpg build/feature_dump_cpp
-build/bin/inferrt_sample_features.exe alexnet samples/model/classification/alexnet.wts pool1,fc2 assets/pics/dog.jpg build/feature_dump_cpp
+build/bin/inferrt_sample_features.exe -m resnet18 -w samples/model/classification/resnet18.wts -f layer1,layer4 -i assets/pics/dog.jpg -o build/feature_dump_cpp
+build/bin/inferrt_sample_features.exe --model alexnet --weights-file samples/model/classification/alexnet.wts --features pool1,fc2
 ```
 
 The sample always builds the model instance as a truncated feature extractor via
@@ -29,8 +29,8 @@ The sample always builds the model instance as a truncated feature extractor via
 
 Defaults:
 
-- `image_path`: `assets/pics/dog.jpg`
-- `output_dir`: `feature_dump_cpp`
+- `--image-path`: `assets/pics/dog.jpg`
+- `--output-dir`: `feature_dump_cpp`
 
 The sample writes:
 

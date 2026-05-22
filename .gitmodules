@@ -14,3 +14,11 @@
 	path = 3rdparty/cxxopts
 	url = https://github.com/jarro2783/cxxopts.git
 	branch = master
+[submodule "3rdparty/pybind11"]
+	path = 3rdparty/pybind11
+	url = https://github.com/pybind/pybind11.git
+	branch = master
+[submodule "3rdparty/dlpack"]
+	path = 3rdparty/dlpack
+	url = https://github.com/dmlc/dlpack.git
+	branch = main

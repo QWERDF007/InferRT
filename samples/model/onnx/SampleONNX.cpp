@@ -7,6 +7,7 @@
 #include <opencv2/opencv.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
@@ -19,6 +20,13 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+using Clock = std::chrono::steady_clock;
+
+double elapsedMs(Clock::time_point start, Clock::time_point end)
+{
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
 
 /**
  * @brief 用于在显示帮助后中断主流程。
@@ -68,13 +76,10 @@ struct OutputBuffer
 cxxopts::Options makeOptions(const char *program_name)
 {
     cxxopts::Options options(program_name, "Run ONNX models through the InferRT ONNX wrapper");
-    options.positional_help("<model.onnx> <image_path> [label_file]");
-    options.add_options()
-        ("onnx_file", "Input ONNX model path", cxxopts::value<std::string>())
-        ("image_path", "Input image path", cxxopts::value<std::string>())
-        ("label_file", "Optional label file", cxxopts::value<std::string>()->default_value(""))
-        ("h,help", "Show help");
-    options.parse_positional({"onnx_file", "image_path", "label_file"});
+    options.add_options()("onnx-file,n", "Input ONNX model path (required)", cxxopts::value<std::string>())(
+        "image-path,i", "Input image path (required)", cxxopts::value<std::string>())(
+        "label-file,l", "ImageNet label file", cxxopts::value<std::string>()->default_value(""))("h,help",
+                                                                                                 "Show help");
     return options;
 }
 
@@ -94,15 +99,15 @@ Arguments parseArguments(int argc, char *argv[])
         throw HelpRequested{};
     }
 
-    if (!result.count("onnx_file") || !result.count("image_path"))
+    if (!result.count("onnx-file") || !result.count("image-path"))
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "onnx_file and image_path are required");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--onnx-file and --image-path are required");
     }
 
     Arguments args;
-    args.onnx_file  = result["onnx_file"].as<std::string>();
-    args.image_path = result["image_path"].as<std::string>();
-    args.label_file = result["label_file"].as<std::string>();
+    args.onnx_file  = result["onnx-file"].as<std::string>();
+    args.image_path = result["image-path"].as<std::string>();
+    args.label_file = result["label-file"].as<std::string>();
     return args;
 }
 
@@ -548,17 +553,20 @@ int main(int argc, char *argv[])
                       << std::endl;
         }
 
-        const std::vector<fs::path> image_paths   = {args.image_path};
-        const std::vector<float>    input_data    = preprocessBatch(image_paths, image_shape);
-        const std::vector<char>  input_host_bytes = encodeInputBuffer(input_data, input_type);
+        const auto preprocess_start = Clock::now();
+        const std::vector<fs::path> image_paths = {args.image_path};
+        const std::vector<float> input_data = preprocessBatch(image_paths, image_shape);
+        const std::vector<char> input_host_bytes = encodeInputBuffer(input_data, input_type);
+        const auto preprocess_end = Clock::now();
 
         std::vector<void *> device_buffers;
         device_buffers.reserve(input_names.size() + output_names.size());
 
         void *d_input      = nullptr;
         size_t input_bytes = input_host_bytes.size();
+        const auto stream = model->resolveExecutionStream();
         cudaMalloc(&d_input, input_bytes);
-        cudaMemcpy(d_input, input_host_bytes.data(), input_bytes, cudaMemcpyHostToDevice);
+        cudaMemcpyAsync(d_input, input_host_bytes.data(), input_bytes, cudaMemcpyHostToDevice, stream);
         device_buffers.push_back(d_input);
 
         std::vector<OutputBuffer> outputs;
@@ -582,19 +590,28 @@ int main(int argc, char *argv[])
         }
 
         std::cout << "Running inference with batch size 1..." << std::endl;
-        model->infer(device_buffers);
+        const auto infer_start = Clock::now();
+        model->infer(device_buffers, stream, true);
 
+        const auto postprocess_start = Clock::now();
         for (auto &output : outputs)
         {
-            cudaMemcpy(output.host_bytes.data(), output.device_ptr, output.host_bytes.size(), cudaMemcpyDeviceToHost);
+            cudaMemcpyAsync(output.host_bytes.data(), output.device_ptr, output.host_bytes.size(),
+                            cudaMemcpyDeviceToHost, stream);
         }
+        cudaStreamSynchronize(stream);
+        const auto infer_end = Clock::now();
 
         std::vector<std::string> labels;
         if (!args.label_file.empty() && fs::exists(args.label_file))
         {
             labels = irt::model::readImagenetLabels(args.label_file.string());
         }
+        const auto postprocess_end = Clock::now();
 
+        std::cout << "Timing: preprocess=" << elapsedMs(preprocess_start, preprocess_end)
+                  << " ms, inference=" << elapsedMs(infer_start, infer_end)
+                  << " ms, postprocess=" << elapsedMs(postprocess_start, postprocess_end) << " ms" << std::endl;
         std::cout << "\nInference summary:" << std::endl;
         for (const auto &output : outputs)
         {

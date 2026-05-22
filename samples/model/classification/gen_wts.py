@@ -1,6 +1,7 @@
 import argparse
 import os
 import struct
+from pathlib import Path
 
 import cv2
 
@@ -45,7 +46,8 @@ def main(args):
     print(model)
 
     output = model(img)
-    labels = read_imagenet_labels("../../../assets/imagenet1000_clsidx_to_labels.txt")
+    label_path = Path(__file__).resolve().parents[3] / "assets" / "imagenet1000_clsidx_to_labels.txt"
+    labels = read_imagenet_labels(label_path)
     print("\nPyTorch inference results:")
     for batch in torch.topk(output, k=3).indices:
         for i, j in enumerate(batch, 1):

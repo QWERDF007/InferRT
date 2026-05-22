@@ -31,3 +31,35 @@ if (${PROJECT_NAME_UPPER}_BUILD_BENCHMARK)
     set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "Disable benchmark install to avoid overwriting vendor install.")
     add_subdirectory(benchmark)
 endif()
+
+# pybind11 - Python 绑定库
+if(${PROJECT_NAME_UPPER}_BUILD_PYTHON)
+    # 配置 Python 根目录（如果尚未设置）
+    if(NOT Python_ROOT_DIR AND EXISTS "${INFERRT_PYTHON_ROOT}")
+        set(Python_ROOT_DIR "${INFERRT_PYTHON_ROOT}" CACHE PATH "Python root used by InferRT bindings" FORCE)
+    endif()
+    
+    # 配置 Python 可执行文件路径（如果尚未设置）
+    if(NOT Python_EXECUTABLE AND EXISTS "${INFERRT_PYTHON_ROOT}/python.exe")
+        set(Python_EXECUTABLE "${INFERRT_PYTHON_ROOT}/python.exe" CACHE FILEPATH
+            "Python executable used by InferRT bindings" FORCE)
+    endif()
+    
+    # 配置 pybind11 选项
+    set(PYBIND11_INSTALL OFF CACHE BOOL "Disable pybind11 install" FORCE)
+    set(PYBIND11_TEST OFF CACHE BOOL "Disable pybind11 tests" FORCE)
+    set(PYBIND11_FINDPYTHON ON CACHE BOOL "Use FindPython for pybind11" FORCE)
+    
+    # 添加 pybind11 子目录
+    add_subdirectory(pybind11)
+
+    # dlpack - DLPack C API（INTERFACE 库，供 Python 绑定使用）
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/dlpack/CMakeLists.txt")
+        message(FATAL_ERROR
+            "dlpack submodule not found at 3rdparty/dlpack. "
+            "Run: git submodule update --init 3rdparty/dlpack")
+    endif()
+    set(BUILD_DOCS OFF CACHE BOOL "Disable dlpack docs" FORCE)
+    set(BUILD_MOCK OFF CACHE BOOL "Disable dlpack mock executable" FORCE)
+    add_subdirectory(dlpack)
+endif()

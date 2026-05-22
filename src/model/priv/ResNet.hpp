@@ -30,12 +30,6 @@ public:
         return "ResNet";
     }
 
-    /**
-     * @brief 执行 ResNet 推理。
-     * @param buffers 输入输出缓冲区地址列表。
-     */
-    void infer(const std::vector<void *> &buffers) override;
-
 };
 
 /**

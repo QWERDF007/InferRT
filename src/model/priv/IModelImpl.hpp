@@ -4,10 +4,10 @@
 #include <inferrt/model/IParams.hpp>
 #include <inferrt/model/Utils.hpp>
 
-#include <memory>
 #include <functional>
-#include <unordered_map>
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace irt::model::priv {
@@ -22,11 +22,16 @@ namespace irt::model::priv {
 class IModelImpl
 {
 public:
+    /// 构建期网络名称到 TensorRT 张量指针的映射表。
     using NamedTensorMap = std::unordered_map<std::string, nvinfer1::ITensor *>;
+
+    /**
+     * @brief 标识 buildNetwork 当前正在构建的网络类型。
+     */
     enum class BuildVariant
     {
-        Primary,
-        Feature,
+        Primary, ///< 主分类（或完整）推理网络。
+        Feature, ///< 仅导出配置中选定中间特征的裁剪网络。
     };
 
     /**
@@ -113,16 +118,21 @@ public:
     virtual void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) = 0;
 
     /**
-     * @brief 执行一次推理。
+     * @brief 在指定 CUDA stream 上执行一次推理。
      * @param buffers 输入输出缓冲区地址列表。
+     * @param stream 调用方提供的 CUDA stream；为空时使用模型当前默认 stream。
+     * @param non_blocking 为 true 时仅提交执行，不在函数内等待 stream 完成。
      */
-    virtual void infer(const std::vector<void *> &buffers) = 0;
+    virtual void infer(const std::vector<void *> &buffers, cudaStream_t stream = nullptr, bool non_blocking = false);
 
     /**
-     * @brief 执行一次特征提取前向。
+     * @brief 在指定 CUDA stream 上执行一次特征提取前向。
      * @param buffers 输入与特征输出缓冲区地址列表。
+     * @param stream 调用方提供的 CUDA stream；为空时使用模型当前默认 stream。
+     * @param non_blocking 为 true 时仅提交执行，不在函数内等待 stream 完成。
      */
-    virtual void forwardFeatures(const std::vector<void *> &buffers);
+    virtual void forwardFeatures(const std::vector<void *> &buffers, cudaStream_t stream = nullptr,
+                                 bool non_blocking = false);
 
     /**
      * @brief 设置完整模型配置。
@@ -163,6 +173,17 @@ public:
      * @param dims 运行时维度。
      */
     void setTensorShape(const std::string &tensor_name, const nvinfer1::Dims &dims);
+
+    /**
+     * @brief 设置模型默认使用的外部 CUDA stream。
+     * @param stream 调用方提供的 CUDA stream。
+     */
+    void setStream(cudaStream_t stream);
+
+    /**
+     * @brief 清除模型默认外部 CUDA stream，恢复为内部自建 stream。
+     */
+    void clearStream();
 
     /**
      * @brief 设置日志级别。
@@ -219,18 +240,6 @@ public:
     bool tryMarkFeatureOutputTensors(nvinfer1::INetworkDefinition *network, const NamedTensorMap &named_tensors) const;
 
     /**
-     * @brief 将用户缓冲区地址绑定到 TensorRT 执行上下文。
-     * @param buffers 输入输出缓冲区地址列表。
-     */
-    void bindTensorAddresses(const std::vector<void *> &buffers);
-
-    /**
-     * @brief 将用户缓冲区地址绑定到特征提取执行上下文。
-     * @param buffers 输入与特征输出缓冲区地址列表。
-     */
-    void bindFeatureTensorAddresses(const std::vector<void *> &buffers);
-
-    /**
      * @brief 获取可写 TensorRT 运行时参数。
      * @return 运行时参数引用。
      */
@@ -248,50 +257,28 @@ public:
         return trt_params_;
     }
 
-    TRTParams &featureTrtParams() noexcept
-    {
-        return feature_trt_params_;
-    }
-
-    const TRTParams &featureTrtParams() const noexcept
-    {
-        return feature_trt_params_;
-    }
-
+    /**
+     * @brief 判断 buildNetwork 是否正在为特征裁剪网络构建。
+     * @return 为 true 时表示当前应只标记配置中的特征输出。
+     */
     bool isBuildingFeatureEngine() const noexcept
     {
         return build_variant_ == BuildVariant::Feature;
     }
 
+    /**
+     * @brief 判断模型配置是否处于仅特征提取模式。
+     * @return 为 true 时当前 engine 构建为 feature-only 网络。
+     */
     bool isFeatureOnlyConfig() const noexcept
     {
         return modelConfig().featureOnly();
-    }
-
-    TRTParams &featureExecutionParams() noexcept
-    {
-        return isFeatureOnlyConfig() ? trt_params_ : feature_trt_params_;
-    }
-
-    const TRTParams &featureExecutionParams() const noexcept
-    {
-        return isFeatureOnlyConfig() ? trt_params_ : feature_trt_params_;
     }
 
     /**
      * @brief 初始化日志对象。
      */
     void initLogger();
-
-    /**
-     * @brief 获取主推理输出张量名称列表。
-     */
-    std::vector<std::string> primaryOutputTensorNames() const;
-
-    /**
-     * @brief 获取特征提取输出张量名称列表。
-     */
-    std::vector<std::string> featureOutputTensorNames() const;
 
     /**
      * @brief 从可用命名张量表中解析用户请求的特征输出张量。
@@ -301,47 +288,51 @@ public:
     std::vector<nvinfer1::ITensor *> resolveFeatureTensors(const NamedTensorMap &named_tensors) const;
 
     /**
-     * @brief 创建并缓存一套 TensorRT 运行时对象。
+     * @brief 创建并缓存当前 TensorRT 运行时对象。
      * @param weights_file 权重文件路径，仅用于日志。
-     * @param weights_map 权重映射表。
      * @param build_fn 网络构建回调。
-     * @param params 目标运行时对象集合。
      */
-    void buildRuntimeFromWeights(const std::string &weights_file, const WeightsMap &weights_map,
-                                 const std::function<void(nvinfer1::INetworkDefinition *)> &build_fn,
-                                 TRTParams &params);
+    void buildRuntimeFromWeights(const std::string                                         &weights_file,
+                                 const std::function<void(nvinfer1::INetworkDefinition *)> &build_fn);
 
     /**
-     * @brief 从序列化 engine 文件加载一套运行时对象。
+     * @brief 从序列化 engine 文件加载当前运行时对象。
      * @param engine_file engine 文件路径。
-     * @param params 目标运行时对象集合。
      */
-    void loadRuntimeFromFile(const std::string &engine_file, TRTParams &params);
+    void loadRuntimeFromFile(const std::string &engine_file);
 
     /**
      * @brief 将当前 engine 序列化保存到文件。
      * @param engine_file 目标文件路径。
-     * @param params 目标运行时对象集合。
      */
-    void saveRuntimeToFile(const std::string &engine_file, const TRTParams &params);
+    void saveRuntimeToFile(const std::string &engine_file) const;
 
     /**
-     * @brief 创建特征提取 sidecar engine 文件路径。
-     * @param base_engine_file 主 engine 文件路径。
-     * @return 特征 engine 文件路径。
+     * @brief 解析本次 enqueue 应使用的 CUDA stream。
+     * @param stream_override 单次调用覆盖；非空时优先级最高。
+     * @return 生效的 stream；runtime 未就绪且尚无内部 stream 时返回 nullptr。
+     *
+     * 优先级：stream_override > external_stream > 惰性创建的内部 stream。
      */
-    std::string featureEngineFileName(const std::string &base_engine_file) const;
-
-    void ensurePrimaryInferenceReady() const;
-    void ensureFeatureExtractionReady() const;
+    cudaStream_t resolveExecutionStream(cudaStream_t stream_override = nullptr);
 
 private:
+    /**
+     * @brief 将输入与当前 runtime 的输出张量地址绑定到执行上下文。
+     */
+    void bindTensorAddresses(const std::vector<void *> &buffers);
+
+    /**
+     * @brief 绑定当前 runtime 的张量地址并执行 enqueue。
+     */
+    void execute(const std::vector<void *> &buffers, cudaStream_t stream, bool non_blocking);
+
     /// 模型配置对象。
     std::unique_ptr<IModelConfig> config_;
+
     /// TensorRT 相关运行时对象。
     TRTParams trt_params_;
-    /// 特征提取相关运行时对象。
-    TRTParams feature_trt_params_;
+
     /// 当前 buildNetwork 正在构建的 engine 类型。
     BuildVariant build_variant_{BuildVariant::Primary};
 };

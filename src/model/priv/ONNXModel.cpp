@@ -280,29 +280,6 @@ void ONNXModel::buildOrLoad(const std::string &onnx_file)
     }
 }
 
-void ONNXModel::infer(const std::vector<void *> &buffers)
-{
-    ensurePrimaryInferenceReady();
-    auto &trt_params = trtParams();
-    bindTensorAddresses(buffers);
-
-    if (!trt_params.stream)
-    {
-        trt_params.stream = MakeCudaStream();
-        if (!trt_params.stream)
-        {
-            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create CUDA stream");
-        }
-    }
-
-    if (!trt_params.context->enqueueV3(*trt_params.stream))
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to execute inference");
-    }
-
-    cudaStreamSynchronize(*trt_params.stream);
-}
-
 } // namespace irt::model
 
 INFERRT_REGISTER_MODEL(ONNXModel)

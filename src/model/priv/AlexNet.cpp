@@ -154,36 +154,32 @@ void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsM
         = network->addConstant(DimsHW{num_classes, 4096}, weights_map.at("classifier.6.weight"))->getOutput(0);
     ITensor *fc3b = network->addConstant(DimsHW{1, num_classes}, weights_map.at("classifier.6.bias"))->getOutput(0);
 
-    // IFullyConnectedLayer* fc1 = network->addFullyConnected(*pool3->getOutput(0), 4096, weightMap["classifier.1.weight"], weightMap["classifier.1.bias"]);
     IMatrixMultiplyLayer *fc1_0 = network->addMatrixMultiply(*shuffle->getOutput(0), MatrixOperation::kNONE, *fc1w,
                                                              MatrixOperation::kTRANSPOSE);
-    IElementWiseLayer    *fc1_1 = network->addElementWise(*fc1_0->getOutput(0), *fc1b, ElementWiseOperation::kSUM);
-    IActivationLayer     *relu6 = network->addActivation(*fc1_1->getOutput(0), ActivationType::kRELU);
-    named_tensors["fc1"] = fc1_1->getOutput(0);
-    named_tensors["relu6"] = relu6->getOutput(0);
+    IElementWiseLayer *fc1_1 = network->addElementWise(*fc1_0->getOutput(0), *fc1b, ElementWiseOperation::kSUM);
+    IActivationLayer  *relu6 = network->addActivation(*fc1_1->getOutput(0), ActivationType::kRELU);
+    named_tensors["fc1"]     = fc1_1->getOutput(0);
+    named_tensors["relu6"]   = relu6->getOutput(0);
     if (feature_only && tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
     }
-    // fc1_0->setName("fc1_0");  // set name here, only for debug purpose
 
     IMatrixMultiplyLayer *fc2_0
         = network->addMatrixMultiply(*relu6->getOutput(0), MatrixOperation::kNONE, *fc2w, MatrixOperation::kTRANSPOSE);
     IElementWiseLayer *fc2_1 = network->addElementWise(*fc2_0->getOutput(0), *fc2b, ElementWiseOperation::kSUM);
     IActivationLayer  *relu7 = network->addActivation(*fc2_1->getOutput(0), ActivationType::kRELU);
-    named_tensors["fc2"] = fc2_1->getOutput(0);
-    named_tensors["relu7"] = relu7->getOutput(0);
+    named_tensors["fc2"]     = fc2_1->getOutput(0);
+    named_tensors["relu7"]   = relu7->getOutput(0);
     if (feature_only && tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
     }
-    // fc2_0->setName("fc2_0");
 
     IMatrixMultiplyLayer *fc3_0
         = network->addMatrixMultiply(*relu7->getOutput(0), MatrixOperation::kNONE, *fc3w, MatrixOperation::kTRANSPOSE);
     IElementWiseLayer *fc3_1 = network->addElementWise(*fc3_0->getOutput(0), *fc3b, ElementWiseOperation::kSUM);
-    named_tensors["logits"] = fc3_1->getOutput(0);
-    // fc3_0->setName("fc3_0");
+    named_tensors["logits"]  = fc3_1->getOutput(0);
     if (feature_only)
     {
         markFeatureOutputTensors(network, named_tensors);
@@ -191,32 +187,6 @@ void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsM
     }
 
     markOutputTensors(network, {fc3_1->getOutput(0)});
-}
-
-void AlexNet::infer(const std::vector<void *> &buffers)
-{
-    ensurePrimaryInferenceReady();
-    auto &trt_params = trtParams();
-    bindTensorAddresses(buffers);
-
-    if (!trt_params.stream)
-    {
-        trt_params.stream = MakeCudaStream();
-
-        if (!trt_params.stream)
-        {
-            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create CUDA stream");
-        }
-    }
-
-    bool status = trt_params.context->enqueueV3(*trt_params.stream);
-    if (!status)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to execute inference");
-    }
-
-    // 同步等待执行完成
-    cudaStreamSynchronize(*trt_params.stream);
 }
 
 } // namespace irt::model

@@ -181,30 +181,6 @@ void VGG19::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap
               {0, 3, 6}}, isBuildingFeatureEngine());
 }
 
-void VGG::infer(const std::vector<void *> &buffers)
-{
-    ensurePrimaryInferenceReady();
-    auto &trt_params = trtParams();
-    bindTensorAddresses(buffers);
-
-    if (!trt_params.stream)
-    {
-        trt_params.stream = MakeCudaStream();
-        if (!trt_params.stream)
-        {
-            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create CUDA stream");
-        }
-    }
-
-    bool status = trt_params.context->enqueueV3(*trt_params.stream);
-    if (!status)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to execute inference");
-    }
-
-    cudaStreamSynchronize(*trt_params.stream);
-}
-
 } // namespace irt::model
 
 INFERRT_REGISTER_MODEL(VGG11)
