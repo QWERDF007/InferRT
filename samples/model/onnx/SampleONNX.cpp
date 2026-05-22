@@ -22,6 +22,10 @@ namespace fs = std::filesystem;
 namespace {
 
 using Clock = std::chrono::steady_clock;
+using irt::model::dataTypeToString;
+using irt::model::dimsToString;
+using irt::model::elementCount;
+using irt::model::elementSize;
 
 double elapsedMs(Clock::time_point start, Clock::time_point end)
 {
@@ -109,104 +113,6 @@ Arguments parseArguments(int argc, char *argv[])
     args.image_path = result["image-path"].as<std::string>();
     args.label_file = result["label-file"].as<std::string>();
     return args;
-}
-
-/**
- * @brief 返回 TensorRT 数据类型的单元素字节数。
- * @param data_type TensorRT 数据类型。
- * @return 单元素字节数。
- */
-size_t elementSize(nvinfer1::DataType data_type)
-{
-    using nvinfer1::DataType;
-
-    switch (data_type)
-    {
-    case DataType::kFLOAT:
-    case DataType::kINT32:
-        return 4;
-    case DataType::kHALF:
-        return 2;
-    case DataType::kINT8:
-    case DataType::kBOOL:
-    case DataType::kUINT8:
-        return 1;
-    case DataType::kINT64:
-        return 8;
-    default:
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported TensorRT data type");
-    }
-}
-
-/**
- * @brief 将 TensorRT 数据类型转换为便于输出的字符串。
- * @param data_type TensorRT 数据类型。
- * @return 类型名字符串。
- */
-std::string dataTypeToString(nvinfer1::DataType data_type)
-{
-    using nvinfer1::DataType;
-
-    switch (data_type)
-    {
-    case DataType::kFLOAT:
-        return "float32";
-    case DataType::kHALF:
-        return "float16";
-    case DataType::kINT8:
-        return "int8";
-    case DataType::kUINT8:
-        return "uint8";
-    case DataType::kINT32:
-        return "int32";
-    case DataType::kINT64:
-        return "int64";
-    case DataType::kBOOL:
-        return "bool";
-    default:
-        return "unknown";
-    }
-}
-
-/**
- * @brief 将张量维度格式化为形如 `[a, b, c]` 的字符串。
- * @param dims TensorRT 维度对象。
- * @return 格式化后的维度文本。
- */
-std::string dimsToString(const nvinfer1::Dims &dims)
-{
-    std::string result = "[";
-    for (int i = 0; i < dims.nbDims; ++i)
-    {
-        if (i > 0)
-        {
-            result += ", ";
-        }
-        result += std::to_string(dims.d[i]);
-    }
-    result += "]";
-    return result;
-}
-
-/**
- * @brief 计算张量元素总数，并校验每一维均为正数。
- * @param dims TensorRT 维度对象。
- * @return 元素总数。
- */
-size_t elementCount(const nvinfer1::Dims &dims)
-{
-    size_t count = 1;
-    for (int i = 0; i < dims.nbDims; ++i)
-    {
-        if (dims.d[i] <= 0)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "Tensor shape contains non-positive dimension: %d",
-                                 dims.d[i]);
-        }
-        count *= static_cast<size_t>(dims.d[i]);
-    }
-    return count;
 }
 
 /**

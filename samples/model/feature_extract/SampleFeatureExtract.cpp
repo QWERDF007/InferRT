@@ -2,6 +2,7 @@
 #include <cxxopts.hpp>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/IModel.h>
+#include <inferrt/model/Buffers.hpp>
 #include <inferrt/model/Utils.hpp>
 #include <inferrt/util/Path.hpp>
 #include <opencv2/opencv.hpp>
@@ -24,6 +25,12 @@ namespace fs = std::filesystem;
 namespace {
 
 using Clock = std::chrono::steady_clock;
+using DeviceBuffer = irt::model::DeviceBuffer;
+using irt::model::checkCuda;
+using irt::model::dataTypeToString;
+using irt::model::dimsToCsv;
+using irt::model::elementCount;
+using irt::model::elementSize;
 
 double elapsedMs(Clock::time_point start, Clock::time_point end)
 {
@@ -52,90 +59,6 @@ struct TensorDump
     nvinfer1::DataType data_type;
     std::vector<char>  host_bytes;
     std::string        file_name;
-};
-
-/**
- * @brief 简单的 CUDA 设备内存 RAII 封装。
- */
-class CudaBuffer
-{
-public:
-    CudaBuffer() = default;
-
-    explicit CudaBuffer(size_t num_bytes)
-    {
-        allocate(num_bytes);
-    }
-
-    ~CudaBuffer()
-    {
-        if (ptr_)
-        {
-            cudaFree(ptr_);
-        }
-    }
-
-    CudaBuffer(const CudaBuffer &)            = delete;
-    CudaBuffer &operator=(const CudaBuffer &) = delete;
-
-    CudaBuffer(CudaBuffer &&other) noexcept
-        : ptr_(other.ptr_)
-        , num_bytes_(other.num_bytes_)
-    {
-        other.ptr_       = nullptr;
-        other.num_bytes_ = 0;
-    }
-
-    CudaBuffer &operator=(CudaBuffer &&other) noexcept
-    {
-        if (this != &other)
-        {
-            if (ptr_)
-            {
-                cudaFree(ptr_);
-            }
-            ptr_             = other.ptr_;
-            num_bytes_       = other.num_bytes_;
-            other.ptr_       = nullptr;
-            other.num_bytes_ = 0;
-        }
-        return *this;
-    }
-
-    void allocate(size_t num_bytes)
-    {
-        if (ptr_)
-        {
-            cudaFree(ptr_);
-            ptr_       = nullptr;
-            num_bytes_ = 0;
-        }
-
-        if (num_bytes == 0)
-        {
-            return;
-        }
-
-        checkCuda(cudaMalloc(&ptr_, num_bytes), "cudaMalloc");
-        num_bytes_ = num_bytes;
-    }
-
-    void *get() const noexcept
-    {
-        return ptr_;
-    }
-
-private:
-    static void checkCuda(cudaError_t status, const char *op)
-    {
-        if (status != cudaSuccess)
-        {
-            throw irt::Exception(irt::Status::ERROR_INTERNAL, "%s failed: %s", op, cudaGetErrorString(status));
-        }
-    }
-
-    void  *ptr_{nullptr};
-    size_t num_bytes_{0};
 };
 
 const fs::path kDefaultOutputDir = "feature_dump_cpp";
@@ -250,102 +173,6 @@ Arguments parseArguments(int argc, char *argv[])
 }
 
 /**
- * @brief 返回 TensorRT 数据类型的单元素字节数。
- * @param data_type TensorRT 数据类型。
- * @return 单元素字节数。
- */
-size_t elementSize(nvinfer1::DataType data_type)
-{
-    using nvinfer1::DataType;
-
-    switch (data_type)
-    {
-    case DataType::kFLOAT:
-    case DataType::kINT32:
-        return 4;
-    case DataType::kHALF:
-        return 2;
-    case DataType::kINT8:
-    case DataType::kBOOL:
-    case DataType::kUINT8:
-        return 1;
-    case DataType::kINT64:
-        return 8;
-    default:
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported TensorRT data type");
-    }
-}
-
-/**
- * @brief 将 TensorRT 数据类型转换为便于写入 manifest 的字符串。
- * @param data_type TensorRT 数据类型。
- * @return 类型名字符串。
- */
-std::string dataTypeToString(nvinfer1::DataType data_type)
-{
-    using nvinfer1::DataType;
-
-    switch (data_type)
-    {
-    case DataType::kFLOAT:
-        return "float32";
-    case DataType::kHALF:
-        return "float16";
-    case DataType::kINT8:
-        return "int8";
-    case DataType::kUINT8:
-        return "uint8";
-    case DataType::kINT32:
-        return "int32";
-    case DataType::kINT64:
-        return "int64";
-    case DataType::kBOOL:
-        return "bool";
-    default:
-        return "unknown";
-    }
-}
-
-/**
- * @brief 将张量维度序列格式化为逗号分隔字符串。
- * @param dims TensorRT 维度对象。
- * @return 逗号分隔后的维度文本。
- */
-std::string dimsToCsv(const nvinfer1::Dims &dims)
-{
-    std::string result;
-    for (int i = 0; i < dims.nbDims; ++i)
-    {
-        if (i > 0)
-        {
-            result += ",";
-        }
-        result += std::to_string(dims.d[i]);
-    }
-    return result;
-}
-
-/**
- * @brief 计算张量元素总数，并校验每一维均为正数。
- * @param dims TensorRT 维度对象。
- * @return 元素总数。
- */
-size_t elementCount(const nvinfer1::Dims &dims)
-{
-    size_t count = 1;
-    for (int i = 0; i < dims.nbDims; ++i)
-    {
-        if (dims.d[i] <= 0)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "Tensor shape contains non-positive dimension: %d", dims.d[i]);
-        }
-        count *= static_cast<size_t>(dims.d[i]);
-    }
-    return count;
-}
-
-/**
  * @brief 将张量名转换为适合文件名使用的安全字符串。
  * @param value 原始名称。
  * @return 处理后的文件名 stem。
@@ -366,19 +193,6 @@ std::string sanitizeFileStem(std::string_view value)
         }
     }
     return stem;
-}
-
-/**
- * @brief 包装 CUDA 调用，失败时抛出带上下文的异常。
- * @param status CUDA 返回状态。
- * @param op 当前操作名。
- */
-void checkCuda(cudaError_t status, const char *op)
-{
-    if (status != cudaSuccess)
-    {
-        throw irt::Exception(irt::Status::ERROR_INTERNAL, "%s failed: %s", op, cudaGetErrorString(status));
-    }
 }
 
 /**
@@ -489,8 +303,8 @@ int main(int argc, char *argv[])
 
         const auto stream = model->resolveExecutionStream();
 
-        CudaBuffer d_input(input_data.size() * sizeof(float));
-        checkCuda(cudaMemcpyAsync(d_input.get(), input_data.data(), input_data.size() * sizeof(float),
+        DeviceBuffer d_input(input_data.size(), nvinfer1::DataType::kFLOAT);
+        checkCuda(cudaMemcpyAsync(d_input.data(), input_data.data(), input_data.size() * sizeof(float),
                                   cudaMemcpyHostToDevice, stream),
                   "cudaMemcpyAsync(H2D input)");
 
@@ -498,12 +312,12 @@ int main(int argc, char *argv[])
         std::vector<TensorDump>         dumps;
         dumps.reserve(output_names.size());
 
-        std::vector<CudaBuffer> device_outputs;
+        std::vector<DeviceBuffer> device_outputs;
         device_outputs.reserve(output_names.size());
 
         std::vector<void *> buffers;
         buffers.reserve(1 + output_names.size());
-        buffers.push_back(d_input.get());
+        buffers.push_back(d_input.data());
 
         for (const auto &output_name : output_names)
         {
@@ -513,11 +327,12 @@ int main(int argc, char *argv[])
             tensor.data_type = model->tensorDataType(output_name);
             tensor.file_name = sanitizeFileStem(output_name) + ".bin";
 
-            const size_t num_bytes = elementCount(tensor.dims) * elementSize(tensor.data_type);
+            const size_t element_count = elementCount(tensor.dims);
+            const size_t num_bytes     = element_count * elementSize(tensor.data_type);
             tensor.host_bytes.resize(num_bytes);
 
-            device_outputs.emplace_back(num_bytes);
-            buffers.push_back(device_outputs.back().get());
+            device_outputs.emplace_back(element_count, tensor.data_type);
+            buffers.push_back(device_outputs.back().data());
             dumps.push_back(std::move(tensor));
         }
 
@@ -528,7 +343,7 @@ int main(int argc, char *argv[])
         const auto postprocess_start = Clock::now();
         for (size_t i = 0; i < dumps.size(); ++i)
         {
-            checkCuda(cudaMemcpyAsync(dumps[i].host_bytes.data(), device_outputs[i].get(), dumps[i].host_bytes.size(),
+            checkCuda(cudaMemcpyAsync(dumps[i].host_bytes.data(), device_outputs[i].data(), dumps[i].host_bytes.size(),
                                       cudaMemcpyDeviceToHost, stream),
                       "cudaMemcpyAsync(D2H feature)");
         }

@@ -22,6 +22,11 @@ namespace fs = std::filesystem;
 namespace {
 
 using Clock = std::chrono::steady_clock;
+using irt::model::checkCuda;
+using irt::model::dataTypeToString;
+using irt::model::dimsToCsv;
+using irt::model::elementCount;
+using irt::model::elementSize;
 
 double elapsedMs(Clock::time_point start, Clock::time_point end)
 {
@@ -46,82 +51,6 @@ struct Arguments
     fs::path    label_file;
     fs::path    dump_dir;
 };
-
-size_t elementSize(nvinfer1::DataType data_type)
-{
-    using nvinfer1::DataType;
-
-    switch (data_type)
-    {
-    case DataType::kFLOAT:
-    case DataType::kINT32:
-        return 4;
-    case DataType::kHALF:
-        return 2;
-    case DataType::kINT8:
-    case DataType::kBOOL:
-    case DataType::kUINT8:
-        return 1;
-    case DataType::kINT64:
-        return 8;
-    default:
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported TensorRT data type");
-    }
-}
-
-std::string dataTypeToString(nvinfer1::DataType data_type)
-{
-    using nvinfer1::DataType;
-
-    switch (data_type)
-    {
-    case DataType::kFLOAT:
-        return "float32";
-    case DataType::kHALF:
-        return "float16";
-    case DataType::kINT8:
-        return "int8";
-    case DataType::kUINT8:
-        return "uint8";
-    case DataType::kINT32:
-        return "int32";
-    case DataType::kINT64:
-        return "int64";
-    case DataType::kBOOL:
-        return "bool";
-    default:
-        return "unknown";
-    }
-}
-
-std::string dimsToCsv(const nvinfer1::Dims &dims)
-{
-    std::string result;
-    for (int i = 0; i < dims.nbDims; ++i)
-    {
-        if (i > 0)
-        {
-            result += ",";
-        }
-        result += std::to_string(dims.d[i]);
-    }
-    return result;
-}
-
-size_t elementCount(const nvinfer1::Dims &dims)
-{
-    size_t count = 1;
-    for (int i = 0; i < dims.nbDims; ++i)
-    {
-        if (dims.d[i] <= 0)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "Tensor shape contains non-positive dimension: %d", dims.d[i]);
-        }
-        count *= static_cast<size_t>(dims.d[i]);
-    }
-    return count;
-}
 
 std::string sanitizeFileStem(std::string_view value)
 {
@@ -150,14 +79,6 @@ void writeBinaryFile(const fs::path &file_path, const void *data, size_t num_byt
                              file_path.string().c_str());
     }
     output.write(static_cast<const char *>(data), static_cast<std::streamsize>(num_bytes));
-}
-
-void checkCuda(cudaError_t status, const char *op)
-{
-    if (status != cudaSuccess)
-    {
-        throw irt::Exception(irt::Status::ERROR_INTERNAL, "%s failed: %s", op, cudaGetErrorString(status));
-    }
 }
 
 /**

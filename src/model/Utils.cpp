@@ -1,5 +1,6 @@
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/Utils.hpp>
+#include <cuda_runtime_api.h>
 #include <opencv2/imgproc.hpp>
 
 #include <cstring>
@@ -88,6 +89,106 @@ std::vector<std::string> readImagenetLabels(const std::string &label_file)
     }
 
     return labels;
+}
+
+size_t elementCount(const nvinfer1::Dims &dims)
+{
+    size_t count = 1;
+    for (int i = 0; i < dims.nbDims; ++i)
+    {
+        if (dims.d[i] <= 0)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "Tensor shape contains non-positive dimension: %d", dims.d[i]);
+        }
+        count *= static_cast<size_t>(dims.d[i]);
+    }
+    return count;
+}
+
+size_t elementSize(nvinfer1::DataType data_type)
+{
+    switch (data_type)
+    {
+    case nvinfer1::DataType::kFLOAT:
+    case nvinfer1::DataType::kINT32:
+        return 4;
+    case nvinfer1::DataType::kHALF:
+        return 2;
+    case nvinfer1::DataType::kINT8:
+    case nvinfer1::DataType::kBOOL:
+    case nvinfer1::DataType::kUINT8:
+        return 1;
+    case nvinfer1::DataType::kINT64:
+        return 8;
+    default:
+        throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED, "Unsupported TensorRT data type");
+    }
+}
+
+size_t dataTypeSize(nvinfer1::DataType data_type)
+{
+    return elementSize(data_type);
+}
+
+std::string dataTypeToString(nvinfer1::DataType data_type)
+{
+    switch (data_type)
+    {
+    case nvinfer1::DataType::kFLOAT:
+        return "float32";
+    case nvinfer1::DataType::kHALF:
+        return "float16";
+    case nvinfer1::DataType::kINT8:
+        return "int8";
+    case nvinfer1::DataType::kUINT8:
+        return "uint8";
+    case nvinfer1::DataType::kINT32:
+        return "int32";
+    case nvinfer1::DataType::kINT64:
+        return "int64";
+    case nvinfer1::DataType::kBOOL:
+        return "bool";
+    default:
+        return "unknown";
+    }
+}
+
+std::string dimsToCsv(const nvinfer1::Dims &dims)
+{
+    std::string result;
+    for (int i = 0; i < dims.nbDims; ++i)
+    {
+        if (i > 0)
+        {
+            result += ",";
+        }
+        result += std::to_string(dims.d[i]);
+    }
+    return result;
+}
+
+std::string dimsToString(const nvinfer1::Dims &dims)
+{
+    std::string result = "[";
+    for (int i = 0; i < dims.nbDims; ++i)
+    {
+        if (i > 0)
+        {
+            result += ", ";
+        }
+        result += std::to_string(dims.d[i]);
+    }
+    result += "]";
+    return result;
+}
+
+void checkCuda(cudaError_t status, const char *op)
+{
+    if (status != cudaSuccess)
+    {
+        throw irt::Exception(irt::Status::ERROR_INTERNAL, "%s failed: %s", op, cudaGetErrorString(status));
+    }
 }
 
 cv::Mat ImageNetUtil::preprocess(const cv::Mat &bgr_image, cv::Size target_size)

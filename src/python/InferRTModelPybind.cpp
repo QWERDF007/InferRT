@@ -10,6 +10,7 @@
 #include <dlpack/dlpack.h>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/ModelFactory.hpp>
+#include <inferrt/model/Utils.hpp>
 #include <inferrt/util/CheckError.hpp>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
@@ -30,6 +31,9 @@ namespace py = pybind11;
 
 /** @brief 匿名命名空间，封装仅在本翻译单元内使用的绑定辅助逻辑。 */
 namespace {
+
+using irt::model::dataTypeSize;
+using irt::model::dataTypeToString;
 
 /**
  * @brief 将 TensorRT 维度对象转换为 Python 友好的整型数组。
@@ -89,54 +93,6 @@ std::unique_ptr<irt::model::IModelConfig> cloneModelConfig(const irt::model::IMo
     cloned->setFeatureTensorNames(config.featureTensorNames());
     cloned->setFeatureOnly(config.featureOnly());
     return cloned;
-}
-
-/**
- * @brief 返回 TensorRT 数据类型对应的字节数。
- * @param data_type TensorRT 数据类型。
- * @return 单个元素字节数。
- */
-size_t dataTypeSize(nvinfer1::DataType data_type)
-{
-    switch (data_type)
-    {
-    case nvinfer1::DataType::kFLOAT:
-        return sizeof(float);
-    case nvinfer1::DataType::kHALF:
-        return sizeof(uint16_t);
-    case nvinfer1::DataType::kINT8:
-        return sizeof(int8_t);
-    case nvinfer1::DataType::kINT32:
-        return sizeof(int32_t);
-    case nvinfer1::DataType::kBOOL:
-        return sizeof(bool);
-    default:
-        throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED, "Unsupported TensorRT data type");
-    }
-}
-
-/**
- * @brief 将 TensorRT 数据类型转换为可读字符串。
- * @param data_type TensorRT 数据类型。
- * @return 类型名称。
- */
-std::string dataTypeToString(nvinfer1::DataType data_type)
-{
-    switch (data_type)
-    {
-    case nvinfer1::DataType::kFLOAT:
-        return "float32";
-    case nvinfer1::DataType::kHALF:
-        return "float16";
-    case nvinfer1::DataType::kINT8:
-        return "int8";
-    case nvinfer1::DataType::kINT32:
-        return "int32";
-    case nvinfer1::DataType::kBOOL:
-        return "bool";
-    default:
-        return "unknown";
-    }
 }
 
 /**
