@@ -219,6 +219,17 @@ void ValidateUniqueOutputTensorNames(const IModelConfig &config)
     }
 }
 
+const std::vector<std::string> &ResolveFeatureExportTensorNames(const IModelConfig &config)
+{
+    const auto &feature_output_tensor_names = config.featureOutputTensorNames();
+    if (!feature_output_tensor_names.empty())
+    {
+        return feature_output_tensor_names;
+    }
+
+    return config.featureTensorNames();
+}
+
 /**
  * @brief 校验特征输出张量名称不存在重复项。
  *
@@ -228,10 +239,7 @@ void ValidateUniqueOutputTensorNames(const IModelConfig &config)
  */
 void ValidateUniqueFeatureOutputTensorNames(const IModelConfig &config)
 {
-    const auto &feature_tensor_names        = config.featureTensorNames();
-    const auto &feature_output_tensor_names = config.featureOutputTensorNames();
-    const auto &feature_export_names =
-        feature_output_tensor_names.empty() ? feature_tensor_names : feature_output_tensor_names;
+    const auto &feature_export_names = ResolveFeatureExportTensorNames(config);
 
     std::unordered_set<std::string> unique_feature_output_names;
     for (const auto &feature_export_name : feature_export_names)
@@ -480,7 +488,7 @@ nvinfer1::ITensor *IModelImpl::addInputTensor(nvinfer1::INetworkDefinition *netw
 void IModelImpl::markOutputTensors(nvinfer1::INetworkDefinition *network,
                                    const std::vector<nvinfer1::ITensor *> &outputs) const
 {
-    const auto tensor_names = primaryOutputTensorNames();
+    const auto &tensor_names = modelConfig().outputTensorNames();
     if (outputs.size() != tensor_names.size())
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
@@ -503,7 +511,7 @@ void IModelImpl::markOutputTensors(nvinfer1::INetworkDefinition *network,
 void IModelImpl::markFeatureOutputTensors(nvinfer1::INetworkDefinition *network, const NamedTensorMap &named_tensors) const
 {
     const auto feature_outputs = resolveFeatureTensors(named_tensors);
-    const auto tensor_names    = featureOutputTensorNames();
+    const auto &tensor_names   = ResolveFeatureExportTensorNames(modelConfig());
     if (feature_outputs.size() != tensor_names.size())
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
@@ -543,35 +551,19 @@ bool IModelImpl::tryMarkFeatureOutputTensors(nvinfer1::INetworkDefinition *netwo
     return true;
 }
 
-void IModelImpl::bindTensorAddresses(const std::vector<void *> &buffers)
-{
-    bindTensorAddressesForOutputs(buffers, primaryOutputTensorNames(), "outputs");
-}
-
-void IModelImpl::bindFeatureTensorAddresses(const std::vector<void *> &buffers)
-{
-    bindTensorAddressesForOutputs(buffers, featureOutputTensorNames(), "feature outputs");
-}
-
 void IModelImpl::initLogger()
 {
     trt_params_.logger = std::make_shared<Logger>(name(), logLevel());
 }
 
-std::vector<std::string> IModelImpl::primaryOutputTensorNames() const
+const std::vector<std::string> &IModelImpl::activeOutputTensorNames() const
 {
-    return modelConfig().outputTensorNames();
-}
-
-std::vector<std::string> IModelImpl::featureOutputTensorNames() const
-{
-    const auto &feature_output_names = modelConfig().featureOutputTensorNames();
-    if (!feature_output_names.empty())
+    if (trt_params_.feature_only)
     {
-        return feature_output_names;
+        return ResolveFeatureExportTensorNames(modelConfig());
     }
 
-    return modelConfig().featureTensorNames();
+    return modelConfig().outputTensorNames();
 }
 
 std::vector<nvinfer1::ITensor *> IModelImpl::resolveFeatureTensors(const NamedTensorMap &named_tensors) const
@@ -601,23 +593,19 @@ std::vector<nvinfer1::ITensor *> IModelImpl::resolveFeatureTensors(const NamedTe
 
 void IModelImpl::infer(const std::vector<void *> &buffers, cudaStream_t stream, bool non_blocking)
 {
-    ensurePrimaryInferenceReady();
-    executeWithOutputs(buffers, primaryOutputTensorNames(), "outputs", "Failed to execute inference", stream,
-                       non_blocking);
+    execute(buffers, false, stream, non_blocking);
 }
 
 void IModelImpl::forwardFeatures(const std::vector<void *> &buffers, cudaStream_t stream, bool non_blocking)
 {
-    ensureFeatureExtractionReady();
-    executeWithOutputs(buffers, featureOutputTensorNames(), "feature outputs", "Failed to execute feature extraction",
-                       stream, non_blocking);
+    execute(buffers, true, stream, non_blocking);
 }
 
-void IModelImpl::buildRuntimeFromWeights(const std::string &weights_file, const WeightsMap &,
-                                         const std::function<void(nvinfer1::INetworkDefinition *)> &build_fn,
-                                         TRTParams &params)
+void IModelImpl::buildRuntimeFromWeights(const std::string &weights_file,
+                                         const std::function<void(nvinfer1::INetworkDefinition *)> &build_fn)
 {
     using namespace nvinfer1;
+    auto &params = trt_params_;
 
     if (params.logger == nullptr)
     {
@@ -679,8 +667,9 @@ void IModelImpl::buildRuntimeFromWeights(const std::string &weights_file, const 
     }
 }
 
-void IModelImpl::loadRuntimeFromFile(const std::string &engine_file, TRTParams &params)
+void IModelImpl::loadRuntimeFromFile(const std::string &engine_file)
 {
+    auto &params = trt_params_;
     params.context.reset();
     params.engine.reset();
 
@@ -732,96 +721,69 @@ void IModelImpl::loadRuntimeFromFile(const std::string &engine_file, TRTParams &
     }
 }
 
-void IModelImpl::saveRuntimeToFile(const std::string &engine_file, const TRTParams &params)
+void IModelImpl::saveRuntimeToFile(const std::string &engine_file) const
 {
-    SaveEngineToFile(engine_file, params.engine);
+    SaveEngineToFile(engine_file, trt_params_.engine);
 }
 
-void IModelImpl::ensurePrimaryInferenceReady() const
+void IModelImpl::ensureExecutionReady(bool feature_mode) const
 {
     if (!trt_params_.context)
     {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Inference engine is not initialized");
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "%s engine is not initialized",
+                             feature_mode ? "Feature extraction" : "Inference");
     }
-    if (trt_params_.feature_only)
+    if (feature_mode == trt_params_.feature_only)
     {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION,
-                             "Current engine is feature-only; use forwardFeatures instead of infer");
+        return;
     }
-}
-
-void IModelImpl::ensureFeatureExtractionReady() const
-{
-    if (!trt_params_.context)
-    {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Feature extraction engine is not initialized");
-    }
-    if (!trt_params_.feature_only)
+    if (feature_mode)
     {
         throw irt::Exception(Status::ERROR_INVALID_OPERATION,
                              "Current engine is not a feature-only network; feature extraction is unavailable");
     }
+
+    throw irt::Exception(Status::ERROR_INVALID_OPERATION,
+                         "Current engine is feature-only; use forwardFeatures instead of infer");
 }
 
-cudaStream_t IModelImpl::resolveExecutionStream(TRTParams &params, cudaStream_t stream_override)
+cudaStream_t IModelImpl::resolveExecutionStream(cudaStream_t stream_override)
 {
     if (stream_override)
     {
         return stream_override;
     }
 
-    if (params.external_stream)
+    if (trt_params_.external_stream)
     {
-        return params.external_stream;
+        return trt_params_.external_stream;
     }
 
-    if (params.stream)
+    if (trt_params_.stream)
     {
-        return *params.stream;
+        return *trt_params_.stream;
     }
 
-    if (params.context)
+    if (trt_params_.context)
     {
-        EnsureInternalStream(params);
-        return *params.stream;
+        EnsureInternalStream(trt_params_);
+        return *trt_params_.stream;
     }
 
     return nullptr;
 }
 
-void IModelImpl::executeContext(TRTParams &params, const char *error_message, cudaStream_t stream_override,
-                                bool non_blocking)
-{
-    const auto stream = resolveExecutionStream(params, stream_override);
-    if (!params.context->enqueueV3(stream))
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "%s", error_message);
-    }
-
-    if (non_blocking)
-    {
-        return;
-    }
-
-    const auto status = cudaStreamSynchronize(stream);
-    if (status != cudaSuccess)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to synchronize CUDA stream: %s",
-                             cudaGetErrorString(status));
-    }
-}
-
-void IModelImpl::bindTensorAddressesForOutputs(const std::vector<void *> &buffers,
-                                               const std::vector<std::string> &output_names,
-                                               const char *output_description)
+void IModelImpl::bindTensorAddresses(const std::vector<void *> &buffers)
 {
     if (!trt_params_.context)
     {
         throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Execution context is not initialized");
     }
 
-    const auto &input_names = modelConfig().inputTensorNames();
-    const auto  expected    = input_names.size() + output_names.size();
+    const auto &input_names        = modelConfig().inputTensorNames();
+    const auto &output_names       = activeOutputTensorNames();
+    const auto *output_description = trt_params_.feature_only ? "feature outputs" : "outputs";
+    const auto  expected           = input_names.size() + output_names.size();
     if (buffers.size() != expected)
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
@@ -848,12 +810,31 @@ void IModelImpl::bindTensorAddressesForOutputs(const std::vector<void *> &buffer
     }
 }
 
-void IModelImpl::executeWithOutputs(const std::vector<void *> &buffers, const std::vector<std::string> &output_names,
-                                    const char *output_description, const char *error_message, cudaStream_t stream,
-                                    bool non_blocking)
+void IModelImpl::execute(const std::vector<void *> &buffers, bool feature_mode, cudaStream_t stream_override,
+                         bool non_blocking)
 {
-    bindTensorAddressesForOutputs(buffers, output_names, output_description);
-    executeContext(trt_params_, error_message, stream, non_blocking);
+    ensureExecutionReady(feature_mode);
+    bindTensorAddresses(buffers);
+
+    const auto stream = resolveExecutionStream(stream_override);
+    if (!trt_params_.context->enqueueV3(stream))
+    {
+        const auto *error_message =
+            feature_mode ? "Failed to execute feature extraction" : "Failed to execute inference";
+        throw irt::Exception(Status::ERROR_INTERNAL, "%s", error_message);
+    }
+
+    if (non_blocking)
+    {
+        return;
+    }
+
+    const auto status = cudaStreamSynchronize(stream);
+    if (status != cudaSuccess)
+    {
+        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to synchronize CUDA stream: %s",
+                             cudaGetErrorString(status));
+    }
 }
 
 void IModelImpl::build(const std::string &weights_file)
@@ -868,9 +849,9 @@ void IModelImpl::build(const std::string &weights_file)
     LOG_INFO(*trt_params_.logger) << "Loading weights file: " << weights_file << std::endl;
     auto weights_map = loadWeights(weights_file);
     build_variant_ = isFeatureOnlyConfig() ? BuildVariant::Feature : BuildVariant::Primary;
-    buildRuntimeFromWeights(weights_file, weights_map, [&](nvinfer1::INetworkDefinition *network) {
+    buildRuntimeFromWeights(weights_file, [&](nvinfer1::INetworkDefinition *network) {
         buildNetwork(network, weights_map);
-    }, trt_params_);
+    });
     trt_params_.feature_only = (build_variant_ == BuildVariant::Feature);
     build_variant_ = BuildVariant::Primary;
 
@@ -891,7 +872,7 @@ void IModelImpl::save(const std::string &engine_file)
         initLogger();
     }
     LOG_INFO(*trt_params_.logger) << "Saving TensorRT engine to: " << engine_file << std::endl;
-    saveRuntimeToFile(engine_file, trt_params_);
+    saveRuntimeToFile(engine_file);
 }
 
 /**
@@ -900,7 +881,7 @@ void IModelImpl::save(const std::string &engine_file)
  */
 void IModelImpl::load(const std::string &engine_file)
 {
-    loadRuntimeFromFile(engine_file, trt_params_);
+    loadRuntimeFromFile(engine_file);
     trt_params_.feature_only = isFeatureOnlyConfig();
 }
 

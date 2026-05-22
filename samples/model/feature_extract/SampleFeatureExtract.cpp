@@ -501,10 +501,12 @@ int main(int argc, char *argv[])
         const auto input_data = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
         const auto preprocess_end = Clock::now();
 
+        const auto stream = model->resolveExecutionStream();
+
         CudaBuffer d_input(input_data.size() * sizeof(float));
-        checkCuda(
-            cudaMemcpy(d_input.get(), input_data.data(), input_data.size() * sizeof(float), cudaMemcpyHostToDevice),
-            "cudaMemcpy(H2D input)");
+        checkCuda(cudaMemcpyAsync(d_input.get(), input_data.data(), input_data.size() * sizeof(float),
+                                  cudaMemcpyHostToDevice, stream),
+                  "cudaMemcpyAsync(H2D input)");
 
         std::vector<std::string> output_names = featureOutputNames(model->modelConfig());
         std::vector<TensorDump>  dumps;
@@ -535,16 +537,17 @@ int main(int argc, char *argv[])
 
         std::cout << "Running feature forward..." << std::endl;
         const auto infer_start = Clock::now();
-        model->forwardFeatures(buffers);
-        const auto infer_end = Clock::now();
+        model->forwardFeatures(buffers, stream, true);
 
         const auto postprocess_start = Clock::now();
         for (size_t i = 0; i < dumps.size(); ++i)
         {
-            checkCuda(cudaMemcpy(dumps[i].host_bytes.data(), device_outputs[i].get(), dumps[i].host_bytes.size(),
-                                 cudaMemcpyDeviceToHost),
-                      "cudaMemcpy(D2H feature)");
+            checkCuda(cudaMemcpyAsync(dumps[i].host_bytes.data(), device_outputs[i].get(), dumps[i].host_bytes.size(),
+                                      cudaMemcpyDeviceToHost, stream),
+                      "cudaMemcpyAsync(D2H feature)");
         }
+        checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(feature forward)");
+        const auto infer_end = Clock::now();
 
         fs::create_directories(output_dir);
         writeFloatBinaryFile(output_dir / "input.bin", input_data);

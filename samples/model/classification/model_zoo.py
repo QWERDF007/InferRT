@@ -64,11 +64,11 @@ def read_imagenet_labels(labels_path: str) -> dict[int, str]:
 
 
 def preprocess(img: np.ndarray) -> torch.Tensor:
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     img = cv2.resize(img, (224, 224), interpolation=cv2.INTER_LINEAR)
-    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-    std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-    img = (img - mean) / std
+    img = img.astype(np.float32) * (1.0 / 255.0)
+    img = cv2.subtract(img, (0.485, 0.456, 0.406, 0.0))
+    img = cv2.divide(img, (0.229, 0.224, 0.225, 1.0))
     img = img.transpose(2, 0, 1)[None, ...]
     return torch.from_numpy(img)
 

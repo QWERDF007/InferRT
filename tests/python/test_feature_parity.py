@@ -1,4 +1,4 @@
-"""Parity tests between C++ feature sample and pybind11 forward_features API."""
+"""特征提取：C++ sample 与 pybind11 ``forward_features()`` 输出一致性测试。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ pytestmark = pytest.mark.integration
 from helpers.manifest import assert_tensors_close, load_tensor_from_dump, parse_manifest
 from helpers.runtime import run_cpp_feature_dump, run_python_features
 
-
+# parametrize 参数说明见 ``test_forward_features_matches_cpp_sample`` 的 Args
 FEATURE_CASES = [
     pytest.param(
         "alexnet",
@@ -59,6 +59,24 @@ def test_forward_features_matches_cpp_sample(
     tolerances: tuple[float, float],
     tmp_path: Path,
 ) -> None:
+    """C++ 特征 sample dump 应与 Python ``forward_features()`` 在容差内一致。
+
+    Args:
+        model_name: 内置模型名，如 ``resnet18``。
+        weights_rel: 相对 ``repo_root`` 的 ``.wts`` 路径。
+        feature_names: 要导出的中间层张量名元组，传给 C++ ``--features`` 与
+            ``ModelConfig.feature_tensor_names``（逗号连接）。
+        build_dir: 构建目录，定位 ``inferrt_sample_feature_extract``。
+        repo_root: 仓库根目录。
+        irt_module: ``inferrt_model_py`` 模块。
+        input_tensor: 预处理后的 NumPy 输入张量。
+        weights_path: 权重路径解析 callable。
+        tolerances: ``(rtol, atol)`` 数值容差。
+        tmp_path: 临时目录，C++ 特征 dump 写入 ``cpp_features/``。
+
+    ``feature_only=True`` 时仅导出指定中间层，避免完整分类头干扰比对。
+    """
+
     rtol, atol = tolerances
     weights = weights_path(weights_rel)
     image_path = repo_root / "assets" / "pics" / "dog.jpg"

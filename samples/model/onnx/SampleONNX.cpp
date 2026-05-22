@@ -564,8 +564,9 @@ int main(int argc, char *argv[])
 
         void *d_input      = nullptr;
         size_t input_bytes = input_host_bytes.size();
+        const auto stream = model->resolveExecutionStream();
         cudaMalloc(&d_input, input_bytes);
-        cudaMemcpy(d_input, input_host_bytes.data(), input_bytes, cudaMemcpyHostToDevice);
+        cudaMemcpyAsync(d_input, input_host_bytes.data(), input_bytes, cudaMemcpyHostToDevice, stream);
         device_buffers.push_back(d_input);
 
         std::vector<OutputBuffer> outputs;
@@ -590,14 +591,16 @@ int main(int argc, char *argv[])
 
         std::cout << "Running inference with batch size 1..." << std::endl;
         const auto infer_start = Clock::now();
-        model->infer(device_buffers);
-        const auto infer_end = Clock::now();
+        model->infer(device_buffers, stream, true);
 
         const auto postprocess_start = Clock::now();
         for (auto &output : outputs)
         {
-            cudaMemcpy(output.host_bytes.data(), output.device_ptr, output.host_bytes.size(), cudaMemcpyDeviceToHost);
+            cudaMemcpyAsync(output.host_bytes.data(), output.device_ptr, output.host_bytes.size(),
+                            cudaMemcpyDeviceToHost, stream);
         }
+        cudaStreamSynchronize(stream);
+        const auto infer_end = Clock::now();
 
         std::vector<std::string> labels;
         if (!args.label_file.empty() && fs::exists(args.label_file))

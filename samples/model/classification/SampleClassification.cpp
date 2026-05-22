@@ -285,10 +285,12 @@ int main(int argc, char *argv[])
                                  "Preprocessed input byte size does not match model input tensor");
         }
 
+        const auto stream = model->resolveExecutionStream();
+
         void *d_input = nullptr;
         checkCuda(cudaMalloc(&d_input, input_num_bytes), "cudaMalloc(input)");
-        checkCuda(cudaMemcpy(d_input, input_data.data(), input_num_bytes, cudaMemcpyHostToDevice),
-                  "cudaMemcpy(H2D input)");
+        checkCuda(cudaMemcpyAsync(d_input, input_data.data(), input_num_bytes, cudaMemcpyHostToDevice, stream),
+                  "cudaMemcpyAsync(H2D input)");
 
         std::vector<std::string> output_names;
         std::vector<nvinfer1::Dims> output_dims;
@@ -328,15 +330,16 @@ int main(int argc, char *argv[])
 
         std::cout << "Running inference..." << std::endl;
         const auto infer_start = Clock::now();
-        model->infer(buffers);
-        const auto infer_end = Clock::now();
+        model->infer(buffers, stream, true);
 
         for (size_t i = 0; i < host_outputs.size(); ++i)
         {
-            checkCuda(cudaMemcpy(host_outputs[i].data(), device_outputs[i], output_num_bytes[i],
-                                 cudaMemcpyDeviceToHost),
-                      "cudaMemcpy(D2H output)");
+            checkCuda(cudaMemcpyAsync(host_outputs[i].data(), device_outputs[i], output_num_bytes[i],
+                                      cudaMemcpyDeviceToHost, stream),
+                      "cudaMemcpyAsync(D2H output)");
         }
+        checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(inference)");
+        const auto infer_end = Clock::now();
 
         const auto postprocess_start = Clock::now();
         std::vector<std::string> labels;
