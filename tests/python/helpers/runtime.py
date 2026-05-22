@@ -191,6 +191,33 @@ def run_cpp_feature_dump(
     run_process(command, cwd=cwd)
 
 
+def run_torch_classification(model_name: str, input_tensor: np.ndarray) -> np.ndarray:
+    """使用 torchvision 预训练模型执行分类前向（与 ``gen_wts.py`` 一致）。
+
+    Args:
+        model_name: ``model_zoo.TORCHVISION_MODEL_ZOO`` 中的模型名。
+        input_tensor: 形状 ``(1, 3, 224, 224)`` 的 ``float32`` NCHW 张量。
+
+    Returns:
+        np.ndarray: PyTorch logits，形状通常为 ``(1, num_classes)``。
+
+    Raises:
+        ImportError: 未安装 ``torch`` / ``torchvision`` 时由调用方 ``importorskip`` 处理。
+        ValueError: 不支持的模型名。
+    """
+
+    import torch
+    from model_zoo import create_model
+
+    model = create_model(model_name, "torchvision")
+    model.eval()
+
+    batch = torch.from_numpy(np.ascontiguousarray(input_tensor, dtype=np.float32))
+    with torch.inference_mode():
+        logits = model(batch)
+    return logits.detach().cpu().numpy()
+
+
 def run_python_classification(
     irt_module: object,
     *,
@@ -198,7 +225,7 @@ def run_python_classification(
     weights_path: Path,
     input_tensor: np.ndarray,
 ) -> dict[str, np.ndarray]:
-    """Python 绑定执行分类 ``infer()``。
+    """InferRT pybind11 绑定执行分类 ``infer()``。
 
     Args:
         irt_module: ``inferrt_model_py`` 模块。
@@ -207,7 +234,7 @@ def run_python_classification(
         input_tensor: 单输入模型的 NCHW 张量。
 
     Returns:
-        dict[str, np.ndarray]: 键 ``input`` 加各 ``output_tensor_names()`` 输出。
+        dict[str, np.ndarray]: 各 ``output_tensor_names()`` 输出张量（不含 ``input``）。
 
     Raises:
         RuntimeError: 模型输入张量数量不为 1 时。
@@ -223,8 +250,13 @@ def run_python_classification(
 
     inputs = {input_names[0]: input_tensor}
     outputs = allocate_output_tensors(model, output_names)
-    model.infer(inputs, outputs)
-    return {"input": input_tensor, **outputs}
+    infer_result = model.infer(inputs, outputs)
+
+    if isinstance(infer_result, dict):
+        return {name: np.asarray(array) for name, array in infer_result.items()}
+    if len(output_names) == 1:
+        return {output_names[0]: np.asarray(infer_result)}
+    raise RuntimeError(f"Unexpected infer() return type for outputs: {output_names}")
 
 
 def run_python_features(

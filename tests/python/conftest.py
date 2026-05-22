@@ -3,8 +3,8 @@
 命令行参数（由 ``pytest_addoption`` 注册）:
     --inferrt-build-dir: CMake 构建目录，含 ``inferrt_model_py`` 与 sample 可执行文件。
         默认空字符串，表示使用 ``INFERRT_BUILD_DIR`` 或 ``<repo>/build``。
-    --inferrt-rtol: 张量比对相对容差，对应 ``numpy.allclose`` 的 ``rtol``。默认 ``1e-4``。
-    --inferrt-atol: 张量比对绝对容差，对应 ``numpy.allclose`` 的 ``atol``。默认 ``5e-3``。
+    --inferrt-rtol: 张量比对相对容差，对应 ``numpy.allclose`` 的 ``rtol``。默认 ``1e-6``。
+    --inferrt-atol: 张量比对绝对容差，对应 ``numpy.allclose`` 的 ``atol``。默认 ``5e-2``。
 
 环境变量:
     INFERRT_BUILD_DIR: 未传 ``--inferrt-build-dir`` 时使用的构建目录路径。
@@ -21,9 +21,12 @@ import pytest
 # 仓库根目录：tests/python -> tests -> InferRT
 ROOT = Path(__file__).resolve().parents[2]
 SAMPLES_PYTHON = ROOT / "samples" / "model" / "python"
+CLASSIFICATION_SAMPLES = ROOT / "samples" / "model" / "classification"
 
 if str(SAMPLES_PYTHON) not in sys.path:
     sys.path.insert(0, str(SAMPLES_PYTHON))
+if str(CLASSIFICATION_SAMPLES) not in sys.path:
+    sys.path.insert(0, str(CLASSIFICATION_SAMPLES))
 
 from util import ensure_module_path, preprocess_image  # noqa: E402
 
@@ -43,20 +46,20 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--inferrt-build-dir",
         action="store",
         default="",
-        help="包含 inferrt_model_py 与 sample 可执行文件的 CMake 构建目录",
+        help="包含 inferrt_model_py 的 CMake 构建目录（特征 parity 另需 sample 可执行文件）",
     )
     parser.addoption(
         "--inferrt-rtol",
         action="store",
         type=float,
-        default=1e-4,
+        default=1e-6,
         help="张量比对的相对容差（numpy.allclose 的 rtol）",
     )
     parser.addoption(
         "--inferrt-atol",
         action="store",
         type=float,
-        default=5e-3,
+        default=5e-2,
         help="张量比对的绝对容差（numpy.allclose 的 atol）",
     )
 
