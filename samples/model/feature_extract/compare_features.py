@@ -15,7 +15,7 @@ CLASSIFICATION_DIR = THIS_DIR.parent / "classification"
 if str(CLASSIFICATION_DIR) not in sys.path:
     sys.path.insert(0, str(CLASSIFICATION_DIR))
 
-from model_zoo import create_model, list_supported_models, preprocess
+from model_zoo import create_model, list_supported_models, preprocess, resolve_input_size
 
 
 @dataclass
@@ -95,6 +95,9 @@ def summarize_diff(reference: np.ndarray, actual: np.ndarray) -> dict[str, float
 
 
 def model_family(model_name: str) -> str:
+    lower_name = model_name.lower()
+    if "dinov2" in lower_name or "dinov3" in lower_name:
+        return "dino"
     if model_name == "alexnet":
         return "alexnet"
     if model_name.startswith("resnet") or model_name.startswith("wide_resnet"):
@@ -106,6 +109,36 @@ def model_family(model_name: str) -> str:
     if model_name in {"mobilenet_v3_large", "mobilenet_v3_small"}:
         return "mobilenet_v3"
     raise ValueError(f"Unsupported model for feature comparison: {model_name}")
+
+
+def default_backend_for_model(model_name: str, backend: str) -> str:
+    """@brief 根据模型名推断 PyTorch 参考后端。
+    @param model_name InferRT 模型注册名。
+    @param backend 命令行显式传入的后端；非空时直接返回。
+    @return 可传给 ``model_zoo.create_model`` 的后端名称。
+    """
+
+    if backend:
+        return backend
+
+    lower_name = model_name.lower()
+    if "dinov3" in lower_name:
+        return "transformers"
+    if "dinov2" in lower_name:
+        return "torchhub"
+    return "torchvision"
+
+
+def image_size_from_manifest(tensors: dict[str, TensorSpec]) -> tuple[int, int] | None:
+    """@brief 从 C++ dump manifest 的 input 张量形状中解析预处理尺寸。
+    @param tensors ``parse_manifest`` 返回的张量描述表。
+    @return ``(height, width)``；manifest 缺少 input 或形状不完整时返回 ``None``。
+    """
+
+    input_spec = tensors.get("input")
+    if input_spec is None or len(input_spec.dims) != 4:
+        return None
+    return input_spec.dims[2], input_spec.dims[3]
 
 
 def capture_resnet_features(model: torch.nn.Module, x: torch.Tensor) -> dict[str, torch.Tensor]:
@@ -281,6 +314,20 @@ def capture_mobilenet_v3_features(model: torch.nn.Module, x: torch.Tensor) -> di
     return features
 
 
+def capture_dino_features(model: torch.nn.Module, x: torch.Tensor) -> dict[str, torch.Tensor]:
+    """@brief 调用官方 DINO ``forward_features`` 并转换为 CPU 张量字典。
+    @param model DINOv2 torch.hub 模型或 DINOv3 Transformers 适配器。
+    @param x 预处理后的 NCHW 输入张量。
+    @return 特征名到 PyTorch 张量的映射。
+    @exception TypeError 当官方模型未返回字典时抛出，避免静默比较错误张量。
+    """
+
+    outputs = model.forward_features(x)
+    if not isinstance(outputs, dict):
+        raise TypeError(f"DINO forward_features() must return a dict, got {type(outputs)!r}")
+    return {name: value.detach().cpu() for name, value in outputs.items()}
+
+
 @torch.no_grad()
 def extract_features(model_name: str, model: torch.nn.Module, x: torch.Tensor) -> dict[str, torch.Tensor]:
     family = model_family(model_name)
@@ -294,6 +341,8 @@ def extract_features(model_name: str, model: torch.nn.Module, x: torch.Tensor) -
         return capture_mobilenet_v2_features(model, x)
     if family == "mobilenet_v3":
         return capture_mobilenet_v3_features(model, x)
+    if family == "dino":
+        return capture_dino_features(model, x)
     raise ValueError(f"Unsupported model family: {family}")
 
 
@@ -319,9 +368,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "-b",
         "--backend",
         type=str,
-        choices=("torchvision", "timm"),
-        default="torchvision",
-        help="Model provider backend",
+        choices=("torchvision", "timm", "torchhub", "transformers"),
+        default="",
+        help="Model provider backend. If omitted, DINOv2 uses torchhub and DINOv3 uses transformers.",
     )
     parser.add_argument("-i", "--img_path", type=str, default="", help="Path to the input image")
     parser.add_argument(
@@ -331,19 +380,62 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="",
         help="Comma-separated feature names. If omitted, use names from --compare_dir when available.",
     )
-    parser.add_argument("--compare_dir", type=str, default="", help="Directory produced by inferrt_sample_features")
+    parser.add_argument(
+        "--hub-repo",
+        type=str,
+        default=None,
+        help="torch.hub repo or local directory, used when --backend torchhub",
+    )
+    parser.add_argument(
+        "--hub-source",
+        type=str,
+        choices=("github", "local"),
+        default="github",
+        help="torch.hub source, used when --backend torchhub",
+    )
+    parser.add_argument(
+        "--hub-weights",
+        type=str,
+        default=None,
+        help="Optional DINO torch.hub weights path or URL, used when --backend torchhub",
+    )
+    parser.add_argument(
+        "--hf-model-id",
+        type=str,
+        default=None,
+        help="Optional Hugging Face model id, used when --backend transformers",
+    )
+    parser.add_argument(
+        "--local-files-only",
+        action="store_true",
+        help="Load Hugging Face models from the local cache only, used when --backend transformers",
+    )
+    parser.add_argument(
+        "--no-pretrained",
+        dest="pretrained",
+        action="store_false",
+        help="Create model without pretrained weights when the selected backend supports it",
+    )
+    parser.add_argument(
+        "--compare_dir",
+        type=str,
+        default="",
+        help="Directory produced by inferrt_sample_feature_extract",
+    )
     parser.add_argument("--dump_dir", type=str, default="", help="Optional output directory for Python-side dumps")
     parser.add_argument("--rtol", type=float, default=1e-2, help="Relative tolerance")
     parser.add_argument("--atol", type=float, default=1.2e-1, help="Absolute tolerance")
     parser.add_argument("-l", "--list_model", action="store_true")
+    parser.set_defaults(pretrained=True)
     return parser
 
 
 @torch.no_grad()
 def main(args) -> None:
     if args.list_model:
-        models = list_supported_models(args.backend)
-        print(f"{args.backend} models:", len(models))
+        backend = args.backend or "torchvision"
+        models = list_supported_models(backend)
+        print(f"{backend} models:", len(models))
         print(models)
         return
 
@@ -367,15 +459,27 @@ def main(args) -> None:
         Path(manifest_metadata["image_path"]).resolve() if "image_path" in manifest_metadata else default_image_path()
     )
 
+    backend = default_backend_for_model(model_name, args.backend)
+    model = create_model(
+        model_name,
+        backend,
+        hub_repo=args.hub_repo,
+        hub_source=args.hub_source,
+        pretrained=args.pretrained,
+        hub_weights=args.hub_weights,
+        hf_model_id=args.hf_model_id,
+        local_files_only=args.local_files_only,
+    )
+    model.eval()
+
+    image_size = image_size_from_manifest(cpp_specs) or resolve_input_size(model)
     print(f"Loading image: {image_path}")
+    print(f"Reference backend: {backend}, input size: {image_size[0]}x{image_size[1]}")
     image = cv2.imread(os.fspath(image_path), cv2.IMREAD_COLOR)
     if image is None:
         raise FileNotFoundError(f"Image not found: {image_path}")
 
-    input_tensor = preprocess(image).float()
-    model = create_model(model_name, args.backend)
-    model.eval()
-
+    input_tensor = preprocess(image, image_size=image_size).float()
     all_features = extract_features(model_name, model, input_tensor)
     selected = {name: all_features[name].numpy().astype(np.float32, copy=False) for name in feature_names}
     selected["input"] = input_tensor.numpy().astype(np.float32, copy=False)
@@ -387,7 +491,7 @@ def main(args) -> None:
             dump_dir,
             {
                 "version": "1",
-                "backend": f"pytorch:{args.backend}",
+                "backend": f"pytorch:{backend}",
                 "model_name": model_name,
                 "image_path": image_path.as_posix(),
                 "feature_tensor_names": ",".join(feature_names),

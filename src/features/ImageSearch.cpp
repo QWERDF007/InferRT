@@ -34,6 +34,7 @@ namespace {
 
 using DeviceBuffer = irt::model::DeviceBuffer;
 using irt::model::checkCuda;
+using irt::model::dimsToCsv;
 using irt::model::elementCount;
 
 /**
@@ -179,7 +180,7 @@ void saveMetadata(const fs::path &metadata_path, const fs::path &gallery_dir, co
 }
 
 /**
- * @brief 基于分类模型中间特征提取向量的辅助类。
+ * @brief 基于分类、ViT 或 DINO 模型中间特征提取向量的辅助类。
  */
 class FeatureExtractor
 {
@@ -219,20 +220,26 @@ public:
                                  output_name_.c_str());
         }
 
-        const auto &input_shape = model_->modelConfig().inputShape();
-        if (input_shape.d[0] != 1 || input_shape.d[1] != 3 || input_shape.d[2] <= 0 || input_shape.d[3] <= 0)
+        const auto &input_tensor_names = model_->modelConfig().inputTensorNames();
+        if (input_tensor_names.empty())
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "ImageSearch expects input shape 1x3xHxW, got %dx%dx%dx%d", input_shape.d[0],
-                                 input_shape.d[1], input_shape.d[2], input_shape.d[3]);
+                                 "ImageSearch model must expose at least one input tensor");
+        }
+
+        const auto input_shape = model_->tensorShape(input_tensor_names.front());
+        if (input_shape.nbDims != 4 || input_shape.d[0] != 1 || input_shape.d[1] != 3 || input_shape.d[2] <= 0
+            || input_shape.d[3] <= 0)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "ImageSearch expects input shape 1x3xHxW, got %s",
+                                 dimsToCsv(input_shape).c_str());
         }
 
         input_height_ = static_cast<int>(input_shape.d[2]);
         input_width_  = static_cast<int>(input_shape.d[3]);
         feature_dim_  = elementCount(output_dims_);
-        device_input_.resize(static_cast<size_t>(input_shape.d[0]) * static_cast<size_t>(input_shape.d[1])
-                             * static_cast<size_t>(input_shape.d[2]) * static_cast<size_t>(input_shape.d[3]),
-                             nvinfer1::DataType::kFLOAT);
+        device_input_.resize(elementCount(input_shape), nvinfer1::DataType::kFLOAT);
         device_output_.resize(feature_dim_, nvinfer1::DataType::kFLOAT);
     }
 

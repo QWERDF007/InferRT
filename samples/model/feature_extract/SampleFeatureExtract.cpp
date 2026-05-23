@@ -143,6 +143,8 @@ Arguments parseArguments(int argc, char *argv[])
         std::cout << options.help() << std::endl;
         std::cout << "Default image: " << irt::model::ImageNetUtil::kDefaultImagePath.generic_string() << std::endl;
         std::cout << "Default output dir: " << kDefaultOutputDir.generic_string() << std::endl;
+        std::cout << "DINO feature hint: use x_norm_clstoken for global retrieval, x_norm_patchtokens for patch tokens"
+                  << std::endl;
         std::cout << "Supported models:";
         for (const auto &model_name : irt::model::getRegisteredModelNames())
         {
@@ -391,7 +393,7 @@ int main(int argc, char *argv[])
             manifest << cli.feature_names[i];
         }
         manifest << "\n";
-        manifest << "tensor|input|float32|1,3,224,224|input.bin\n";
+        manifest << "tensor|input|float32|" << dimsToCsv(input_dims) << "|input.bin\n";
 
         for (const auto &tensor : dumps)
         {
@@ -405,7 +407,7 @@ int main(int argc, char *argv[])
         std::cout << "Timing: preprocess=" << elapsedMs(preprocess_start, preprocess_end)
                   << " ms, inference=" << elapsedMs(infer_start, infer_end)
                   << " ms, postprocess=" << elapsedMs(postprocess_start, postprocess_end) << " ms" << std::endl;
-        std::cout << "Input dims=[1,3,224,224]" << std::endl;
+        std::cout << "Input dims=[" << dimsToCsv(input_dims) << "]" << std::endl;
         for (const auto &tensor : dumps)
         {
             printStats(tensor);

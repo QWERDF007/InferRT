@@ -1,6 +1,7 @@
 # Faiss Image Search Sample
 
-This sample uses InferRT built-in classification models for image retrieval. By default it uses `resnet18` and the `layer4` feature tensor.
+This sample uses InferRT built-in classification and DINO feature models for image retrieval.
+By default it uses `resnet18` and the `layer4` feature tensor.
 
 It builds a Faiss index from all images under a gallery directory, then extracts the query image feature and returns the top-k most similar gallery images.
 
@@ -26,7 +27,13 @@ build/bin/inferrt_sample_image_search.exe -w samples/model/classification/resnet
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --topk 5 --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --index build/gallery/resnet18_layer4.faiss
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet50.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model resnet50 --feature layer3
+build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/dinov2_vits14.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --index build/gallery/dinov2_vits14_x_norm_clstoken.faiss
+build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/dinov3_vitb16.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov3_vitb16 --feature x_norm_clstoken --index build/gallery/dinov3_vitb16_x_norm_clstoken.faiss
 ```
+
+DINO weights can be exported from `samples/model/classification` with
+`python gen_wts.py -m dinov2_vits14 -b torchhub -o dinov2_vits14.wts` and
+`python gen_wts.py -m dinov3_vitb16 -b transformers -o dinov3_vitb16.wts`.
 
 ## Index Reuse
 
@@ -39,6 +46,7 @@ Use `--rebuild-index` when the gallery directory has changed and you want to inc
 - `--model`: selects the built-in classification model, default is `resnet18`
 - `--feature`: selects the feature tensor name used for retrieval, default is `layer4`
 - if `--index` is omitted, the sample writes `<gallery_dir>/<model>_<feature>.faiss`
+- DINO models use the engine input size during preprocessing, so `dinov2_vits14` runs at its registered `518x518` default and `dinov3_*` official keys run at `224x224` unless the model config is overridden.
 
 Common feature keys:
 
@@ -47,6 +55,12 @@ Common feature keys:
 - `mobilenet_v2`: `stem`, `features.1` ... `features.18`, `flatten`, `logits`
 - `mobilenet_v3_large` / `mobilenet_v3_small`: `stem`, `features.1` ... final feature block, `flatten`, `classifier.0`, `logits`
 - `vgg*`: `block1`, `block2`, `block3`, `block4`, `block5`, `avgpool`, `flatten`, `fc1`, `fc2`, `logits`
+- `vit*`: `patch_embed`, `tokens`, `blockN` / `blocks.N`, `norm`, `cls`, `pre_logits`, `logits`
+- `dinov2*`: `patch_embed`, `tokens`, `blockN` / `blocks.N`, `x_prenorm`, `norm`, `cls`, `pre_logits`, `x_norm_clstoken`, `x_norm_regtokens`, `x_norm_patchtokens`
+- `dinov3*`: `patch_embed`, `tokens`, `blockN` / `blocks.N`, `x_prenorm`, `norm`, `cls`, `pre_logits`, `x_norm_clstoken`, `x_storage_tokens`, `x_norm_patchtokens`
+
+For DINO image retrieval, prefer `x_norm_clstoken` as the compact global vector.
+Patch-token features can also be indexed, but they flatten to much larger vectors.
 
 Generated files:
 

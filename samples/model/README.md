@@ -7,7 +7,7 @@ This directory contains the ImageNet-style classification sample assets provided
 - `classification/`: shared weight export and inference entry for all supported classification models
 - `detection/`: YOLOv5/YOLOv8 weight export and single-image detection sample with decode + NMS
 - `feature_extract/`: feature dump sample plus a Python comparator for checking InferRT vs PyTorch feature consistency
-- `image_search/`: ResNet18 `layer4` feature extraction plus Faiss-based image retrieval sample
+- `image_search/`: Faiss-based image retrieval sample, including CNN and DINO feature tensors
 - `onnx/`: ONNX export script and ONNX -> TensorRT inference sample
 - `python/`: pybind11 Python binding sample for model creation and inference
 
@@ -18,7 +18,7 @@ Build the shared sample from the project root:
 ```bash
 cmake --build build --config Debug --target inferrt_sample_classification
 cmake --build build --config Debug --target inferrt_sample_detection
-cmake --build build --config Debug --target inferrt_sample_features
+cmake --build build --config Debug --target inferrt_sample_feature_extract
 cmake --build build --config Debug --target inferrt_sample_image_search
 cmake --build build --config Debug --target inferrt_model_py
 ```
@@ -48,6 +48,8 @@ cd samples/model/classification
 python gen_wts.py -m alexnet
 python gen_wts.py -m resnet50
 python gen_wts.py -m vgg16
+python gen_wts.py -m dinov2_vits14 -b torchhub -o dinov2_vits14.wts
+python gen_wts.py -m dinov3_vitb16 -b transformers -o dinov3_vitb16.wts
 ```
 
 ## Notes
@@ -101,16 +103,18 @@ Current limitation:
 Use the dedicated feature sample to dump InferRT tensors and compare them with a PyTorch reference:
 
 ```bash
-build/bin/inferrt_sample_features.exe -m resnet18 -w samples/model/classification/resnet18.wts -f layer1,layer4 -i assets/pics/dog.jpg -o build/feature_dump_cpp
-build/bin/inferrt_sample_features.exe --help
-cd samples/model/features
+build/bin/inferrt_sample_feature_extract.exe -m resnet18 -w samples/model/classification/resnet18.wts -f layer1,layer4 -i assets/pics/dog.jpg -o build/feature_dump_cpp
+build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w samples/model/classification/dinov2_vits14.wts -f x_norm_clstoken,x_norm_patchtokens -i assets/pics/dog.jpg -o build/dinov2_feature_dump_cpp
+build/bin/inferrt_sample_feature_extract.exe -m dinov3_vitb16 -w samples/model/classification/dinov3_vitb16.wts -f x_norm_clstoken,x_storage_tokens,x_norm_patchtokens -i assets/pics/dog.jpg -o build/dinov3_feature_dump_cpp
+build/bin/inferrt_sample_feature_extract.exe --help
+cd samples/model/feature_extract
 python compare_features.py --compare_dir ../../../build/feature_dump_cpp
 ```
 
 The dedicated feature sample always configures the model as `featureOnly=true`, so it builds/loads the truncated
 feature extractor directly.
 
-See [`features/README.md`](features/README.md) for the dump format and more usage examples.
+See [`feature_extract/README.md`](feature_extract/README.md) for the dump format and more usage examples.
 
 ## Faiss Image Search Sample
 
@@ -121,6 +125,8 @@ build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classific
 build/bin/inferrt_sample_image_search.exe -w samples/model/classification/resnet18.wts -g assets/pics -q assets/pics/dog.jpg
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --topk 5 --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet50.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model resnet50 --feature layer3
+build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/dinov2_vits14.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --index build/gallery/dinov2_vits14_x_norm_clstoken.faiss
+build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/dinov3_vitb16.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov3_vitb16 --feature x_norm_clstoken --index build/gallery/dinov3_vitb16_x_norm_clstoken.faiss
 build/bin/inferrt_sample_image_search.exe --help
 ```
 
@@ -128,7 +134,7 @@ Behavior:
 
 - default model: `resnet18`
 - default feature tensor: `layer4`
-- `--model` and `--feature` can be used to switch to other built-in classification models and feature tensors
+- `--model` and `--feature` can be used to switch to other built-in classification, ViT, and DINO feature tensors
 - default `top_k`: `5`
 - if the target Faiss index already exists, the sample reuses it by default
 - pass `--rebuild-index` to rescan the gallery and include newly added images

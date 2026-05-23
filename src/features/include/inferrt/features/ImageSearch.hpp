@@ -24,7 +24,7 @@ struct ImageSearchResult
 /**
  * @brief 基于 InferRT 中间特征与 Faiss 的图像检索器。
  *
- * 该类负责从分类模型的指定中间层提取 L2 归一化特征，构建或加载 Faiss
+ * 该类负责从分类、ViT 或 DINO 模型的指定中间层提取 L2 归一化特征，构建或加载 Faiss
  * 内积索引，并对查询图片返回 Top-K 相似图片。索引会伴随保存路径映射文件，
  * 因此后续运行可直接加载已有索引。
  */
@@ -42,7 +42,7 @@ public:
 
     /**
      * @brief 构造图像检索器。
-     * @param model_name 内置分类模型名称。
+     * @param model_name 内置分类、ViT 或 DINO 模型名称。
      * @param feature_name 用作检索向量的中间特征名。
      */
     explicit ImageSearch(std::string model_name = kDefaultModelName,

@@ -107,6 +107,23 @@ TEST(ImageSearchTest, DefaultConstructsNotReadySearcher)
 }
 
 /**
+ * @brief DINOv2/DINOv3 可直接使用归一化 CLS token 作为图像检索向量。
+ */
+TEST(ImageSearchTest, ConstructorAcceptsDinoBackbonesForClsTokenSearch)
+{
+    const irt::features::ImageSearch dinov2("dinov2_vits14", "x_norm_clstoken");
+    const irt::features::ImageSearch dinov3("dinov3_vitb16", "x_norm_clstoken");
+
+    EXPECT_EQ(dinov2.modelName(), "dinov2_vits14");
+    EXPECT_EQ(dinov2.featureName(), "x_norm_clstoken");
+    EXPECT_FALSE(dinov2.isReady());
+
+    EXPECT_EQ(dinov3.modelName(), "dinov3_vitb16");
+    EXPECT_EQ(dinov3.featureName(), "x_norm_clstoken");
+    EXPECT_FALSE(dinov3.isReady());
+}
+
+/**
  * @brief ImageSearch 应识别常见图片扩展名，并忽略大小写。
  */
 TEST(ImageSearchTest, IsImageFileAcceptsKnownExtensions)
@@ -129,6 +146,19 @@ TEST(ImageSearchTest, DefaultIndexPathSanitizesModelAndFeatureNames)
 {
     const auto path = irt::features::ImageSearch::defaultIndexPath("gallery", "wide_resnet50_2", "layer/4.out");
     EXPECT_EQ(path.generic_string(), "gallery/wide_resnet50_2_layer_4_out.faiss");
+}
+
+/**
+ * @brief DINO 特征名包含下划线或点号时，也应生成稳定的索引文件名。
+ */
+TEST(ImageSearchTest, DefaultIndexPathHandlesDinoFeatureNames)
+{
+    const auto cls_path
+        = irt::features::ImageSearch::defaultIndexPath("gallery", "dinov3_vitb16", "x_norm_clstoken");
+    const auto block_path = irt::features::ImageSearch::defaultIndexPath("gallery", "dinov2_vits14", "blocks.11");
+
+    EXPECT_EQ(cls_path.generic_string(), "gallery/dinov3_vitb16_x_norm_clstoken.faiss");
+    EXPECT_EQ(block_path.generic_string(), "gallery/dinov2_vits14_blocks_11.faiss");
 }
 
 /**

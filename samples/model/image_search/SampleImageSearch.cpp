@@ -72,6 +72,7 @@ Arguments parseArguments(int argc, char *argv[])
         std::cout << "Default feature tensor: " << irt::features::ImageSearch::kDefaultFeatureName << std::endl;
         std::cout << "Default top-k: " << irt::features::ImageSearch::kDefaultTopK << std::endl;
         std::cout << "If --index is omitted, the sample uses <gallery_dir>/<model>_<feature>.faiss" << std::endl;
+        std::cout << "DINO feature hint: use x_norm_clstoken for compact image-level retrieval" << std::endl;
         std::cout << "Supported models:";
         for (const auto &model_name : irt::model::getRegisteredModelNames())
         {
