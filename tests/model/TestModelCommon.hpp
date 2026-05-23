@@ -32,7 +32,7 @@ struct RegisteredModelCase
 /**
  * @brief 当前仓库中内置注册的模型清单。
  */
-inline constexpr std::array<RegisteredModelCase, 76> kRegisteredModels = {{
+inline constexpr std::array<RegisteredModelCase, 88> kRegisteredModels = {{
     {"onnx", "ONNX", "ONNX"},
     {"alexnet", "AlexNet", "AlexNet"},
     {"googlenet", "GoogLeNet", "GoogLeNet"},
@@ -109,6 +109,18 @@ inline constexpr std::array<RegisteredModelCase, 76> kRegisteredModels = {{
     {"vit_huge_plus_patch16_dinov3", "ViT_Huge_Plus_Patch16_DINOv3", "DINOv3ViTH16Plus"},
     {"vit_huge_plus_patch16_dinov3_qkvb", "ViT_Huge_Plus_Patch16_DINOv3_QKVB", "DINOv3ViTH16Plus"},
     {"vit_7b_patch16_dinov3", "ViT_7B_Patch16_DINOv3", "DINOv3ViT7B16"},
+    {"yolov5", "YOLOv5", "YOLOv5s"},
+    {"yolov5n", "YOLOv5N", "YOLOv5n"},
+    {"yolov5s", "YOLOv5S", "YOLOv5s"},
+    {"yolov5m", "YOLOv5M", "YOLOv5m"},
+    {"yolov5l", "YOLOv5L", "YOLOv5l"},
+    {"yolov5x", "YOLOv5X", "YOLOv5x"},
+    {"yolov8", "YOLOv8", "YOLOv8n"},
+    {"yolov8n", "YOLOv8N", "YOLOv8n"},
+    {"yolov8s", "YOLOv8S", "YOLOv8s"},
+    {"yolov8m", "YOLOv8M", "YOLOv8m"},
+    {"yolov8l", "YOLOv8L", "YOLOv8l"},
+    {"yolov8x", "YOLOv8X", "YOLOv8x"},
 }};
 
 /**

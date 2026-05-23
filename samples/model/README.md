@@ -5,6 +5,7 @@ This directory contains the ImageNet-style classification sample assets provided
 ## Layout
 
 - `classification/`: shared weight export and inference entry for all supported classification models
+- `detection/`: YOLOv5/YOLOv8 weight export and single-image detection sample with decode + NMS
 - `feature_extract/`: feature dump sample plus a Python comparator for checking InferRT vs PyTorch feature consistency
 - `image_search/`: ResNet18 `layer4` feature extraction plus Faiss-based image retrieval sample
 - `onnx/`: ONNX export script and ONNX -> TensorRT inference sample
@@ -16,6 +17,7 @@ Build the shared sample from the project root:
 
 ```bash
 cmake --build build --config Debug --target inferrt_sample_classification
+cmake --build build --config Debug --target inferrt_sample_detection
 cmake --build build --config Debug --target inferrt_sample_features
 cmake --build build --config Debug --target inferrt_sample_image_search
 cmake --build build --config Debug --target inferrt_model_py
@@ -34,6 +36,7 @@ Examples:
 build/bin/inferrt_sample_classification.exe alexnet samples/model/classification/alexnet.wts assets/pics/dog.jpg
 build/bin/inferrt_sample_classification.exe resnet50 samples/model/classification/resnet50.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
 build/bin/inferrt_sample_classification.exe vgg16 samples/model/classification/vgg16.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
+build/bin/inferrt_sample_detection.exe -m yolov8n -w samples/model/detection/yolov8n.wts -i assets/pics/dog.jpg -l assets/coco80.names -o build/yolov8n_result.jpg
 ```
 
 ## Weight export

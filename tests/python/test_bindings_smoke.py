@@ -22,6 +22,8 @@ def test_registered_models(irt_module: object) -> None:
     assert "vit_small_patch14_dinov2" in names
     assert "dinov3_vitb16" in names
     assert "vit_base_patch16_dinov3" in names
+    assert "yolov5n" in names
+    assert "yolov8n" in names
     assert irt_module.is_supported_model("ResNet18")
     assert irt_module.is_supported_model("GoogLeNet")
     assert irt_module.is_supported_model("ViT_Base_Patch16_224")
@@ -31,6 +33,8 @@ def test_registered_models(irt_module: object) -> None:
     assert irt_module.is_supported_model("ViT_Small_Patch14_DINOv2")
     assert irt_module.is_supported_model("DINOv3_ViTB16")
     assert irt_module.is_supported_model("ViT_Base_Patch16_DINOv3")
+    assert irt_module.is_supported_model("YOLOv5N")
+    assert irt_module.is_supported_model("YOLOv8N")
     assert not irt_module.is_supported_model("not_a_model")
 
 
@@ -163,6 +167,23 @@ def test_create_dino_without_build(irt_module: object) -> None:
 
     dinov3_alias = irt_module.create_model("vit_base_patch16_dinov3_qkvb")
     assert dinov3_alias.name() == "DINOv3ViTB16"
+
+
+def test_create_yolo_without_build(irt_module: object) -> None:
+    """YOLOv5/YOLOv8 检测模型应可通过 Python 绑定创建，并自动使用检测默认配置。
+    Args:
+        irt_module: ``inferrt_model_py`` 模块。
+    """
+
+    yolov5 = irt_module.create_model("yolov5n")
+    assert yolov5.name() == "YOLOv5n"
+    assert yolov5.input_tensor_names() == ["input"]
+    assert yolov5.output_tensor_names() == ["output0", "output1", "output2"]
+
+    yolov8 = irt_module.create_model("YOLOv8")
+    assert yolov8.name() == "YOLOv8n"
+    assert yolov8.input_tensor_names() == ["input"]
+    assert yolov8.output_tensor_names() == ["output0", "output1", "output2"]
 
 
 def test_create_model_rejects_unknown_name(irt_module: object) -> None:
