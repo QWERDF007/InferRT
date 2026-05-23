@@ -10,6 +10,7 @@ This directory contains the ImageNet-style classification sample assets provided
 - `image_search/`: Faiss-based image retrieval sample, including CNN and DINO feature tensors
 - `onnx/`: ONNX export script and ONNX -> TensorRT inference sample
 - `python/`: pybind11 Python binding sample for model creation and inference
+- `segmentation/`: TensorRT-native SAM/SAM2/SAM3 prompt segmentation sample
 
 ## Build
 
@@ -20,6 +21,7 @@ cmake --build build --config Debug --target inferrt_sample_classification
 cmake --build build --config Debug --target inferrt_sample_detection
 cmake --build build --config Debug --target inferrt_sample_feature_extract
 cmake --build build --config Debug --target inferrt_sample_image_search
+cmake --build build --config Debug --target inferrt_sample_segmentation
 cmake --build build --config Debug --target inferrt_model_py
 ```
 
@@ -37,6 +39,7 @@ build/bin/inferrt_sample_classification.exe alexnet samples/model/classification
 build/bin/inferrt_sample_classification.exe resnet50 samples/model/classification/resnet50.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
 build/bin/inferrt_sample_classification.exe vgg16 samples/model/classification/vgg16.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
 build/bin/inferrt_sample_detection.exe -m yolov8n -w samples/model/detection/yolov8n.wts -i assets/pics/dog.jpg -l assets/coco80.names -o build/yolov8n_result.jpg
+build/bin/inferrt_sample_segmentation.exe -m sam_vit_b -w samples/model/segmentation/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_mask.jpg --point-x 0.5 --point-y 0.5
 ```
 
 ## Weight export
@@ -50,6 +53,9 @@ python gen_wts.py -m resnet50
 python gen_wts.py -m vgg16
 python gen_wts.py -m dinov2_vits14 -b torchhub -o dinov2_vits14.wts
 python gen_wts.py -m dinov3_vitb16 -b transformers -o dinov3_vitb16.wts
+cd ../segmentation
+python gen_sam_wts.py -m vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.wts
+python gen_sam2_wts.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.wts
 ```
 
 ## Notes
@@ -97,6 +103,23 @@ Common feature keys exposed by built-in models:
 Current limitation:
 
 - `onnx` models do not support selecting internal feature tensors through this API
+
+## SAM Segmentation Sample
+
+The segmentation sample exercises the TensorRT-native SAM-family model path and uses the default prompt contract:
+`image`, `point_coords`, `point_labels`, `mask_input`, `has_mask_input` -> `masks`, `iou_predictions`, `low_res_masks`.
+SAM v1 builds the official ViT image encoder, prompt encoder, and mask decoder from official `segment_anything`
+checkpoints exported by `segmentation/gen_sam_wts.py`. SAM2/SAM2.1 builds the official Hiera image encoder, FPN
+neck, prompt encoder, and high-resolution mask decoder from checkpoints exported by `segmentation/gen_sam2_wts.py`.
+SAM3 keys are registered, but their native backbone currently fails explicitly with `ERROR_NOT_IMPLEMENTED`.
+
+```bash
+build/bin/inferrt_sample_segmentation.exe -m sam_vit_b -w samples/model/segmentation/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_vit_b_mask.jpg --box 0.2,0.2,0.8,0.8
+build/bin/inferrt_sample_segmentation.exe -m sam2_1_hiera_tiny -w samples/model/segmentation/sam2_1_hiera_tiny.wts -i assets/pics/dog.jpg -o build/sam2_mask.jpg
+build/bin/inferrt_sample_segmentation.exe --help
+```
+
+See [`segmentation/README.md`](segmentation/README.md) for supported keys and details.
 
 ## Feature Comparison Sample
 

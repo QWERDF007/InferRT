@@ -24,6 +24,9 @@ def test_registered_models(irt_module: object) -> None:
     assert "vit_base_patch16_dinov3" in names
     assert "yolov5n" in names
     assert "yolov8n" in names
+    assert "sam" in names
+    assert "sam2" in names
+    assert "sam3" in names
     assert irt_module.is_supported_model("ResNet18")
     assert irt_module.is_supported_model("GoogLeNet")
     assert irt_module.is_supported_model("ViT_Base_Patch16_224")
@@ -35,6 +38,9 @@ def test_registered_models(irt_module: object) -> None:
     assert irt_module.is_supported_model("ViT_Base_Patch16_DINOv3")
     assert irt_module.is_supported_model("YOLOv5N")
     assert irt_module.is_supported_model("YOLOv8N")
+    assert irt_module.is_supported_model("SAM")
+    assert irt_module.is_supported_model("SAM2_Hiera_Tiny")
+    assert irt_module.is_supported_model("SAM3_Image")
     assert not irt_module.is_supported_model("not_a_model")
 
 
@@ -184,6 +190,52 @@ def test_create_yolo_without_build(irt_module: object) -> None:
     assert yolov8.name() == "YOLOv8n"
     assert yolov8.input_tensor_names() == ["input"]
     assert yolov8.output_tensor_names() == ["output0", "output1", "output2"]
+
+
+def test_create_sam_without_build(irt_module: object) -> None:
+    """SAM/SAM2/SAM3 应通过 Python 绑定创建，并暴露统一的 prompt 分割契约。
+
+    Args:
+        irt_module: ``inferrt_model_py`` 模块。
+    """
+
+    expected_inputs = ["image", "point_coords", "point_labels", "mask_input", "has_mask_input"]
+    expected_outputs = ["masks", "iou_predictions", "low_res_masks"]
+
+    sam = irt_module.create_model("sam")
+    assert sam.name() == "SAMViTH"
+    assert sam.input_tensor_names() == expected_inputs
+    assert sam.output_tensor_names() == expected_outputs
+
+    sam2 = irt_module.create_model("SAM2_Hiera_Tiny")
+    assert sam2.name() == "SAM2HieraTiny"
+    assert sam2.input_tensor_names() == expected_inputs
+    assert sam2.output_tensor_names() == expected_outputs
+
+    sam3 = irt_module.create_model("sam3_image")
+    assert sam3.name() == "SAM3Image"
+    assert sam3.input_tensor_names() == expected_inputs
+    assert sam3.output_tensor_names() == expected_outputs
+
+
+def test_sam_build_rejects_placeholder_weights(irt_module: object, repo_root) -> None:
+    """SAM/SAM2 官方 TensorRT 图应拒绝占位权重，避免误以为空权重可推理。
+
+    Args:
+        irt_module: ``inferrt_model_py`` 模块。
+        repo_root: 仓库根目录 fixture，用于定位随样例保留的占位 ``.wts``。
+
+    Raises:
+        irt_module.InferRTError: 缺少官方 SAM 权重时抛出。
+    """
+
+    weights = repo_root / "samples" / "model" / "segmentation" / "sam_placeholder.wts"
+    assert weights.exists()
+
+    for model_name in ("sam_vit_b", "sam2_hiera_tiny"):
+        model = irt_module.create_model(model_name)
+        with pytest.raises(irt_module.InferRTError, match="Missing SAM official weight"):
+            model.build(str(weights))
 
 
 def test_create_model_rejects_unknown_name(irt_module: object) -> None:

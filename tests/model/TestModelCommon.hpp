@@ -32,7 +32,7 @@ struct RegisteredModelCase
 /**
  * @brief 当前仓库中内置注册的模型清单。
  */
-inline constexpr std::array<RegisteredModelCase, 88> kRegisteredModels = {{
+inline constexpr std::array<RegisteredModelCase, 103> kRegisteredModels = {{
     {"onnx", "ONNX", "ONNX"},
     {"alexnet", "AlexNet", "AlexNet"},
     {"googlenet", "GoogLeNet", "GoogLeNet"},
@@ -109,6 +109,21 @@ inline constexpr std::array<RegisteredModelCase, 88> kRegisteredModels = {{
     {"vit_huge_plus_patch16_dinov3", "ViT_Huge_Plus_Patch16_DINOv3", "DINOv3ViTH16Plus"},
     {"vit_huge_plus_patch16_dinov3_qkvb", "ViT_Huge_Plus_Patch16_DINOv3_QKVB", "DINOv3ViTH16Plus"},
     {"vit_7b_patch16_dinov3", "ViT_7B_Patch16_DINOv3", "DINOv3ViT7B16"},
+    {"sam", "SAM", "SAMViTH"},
+    {"sam_vit_b", "SAM_ViT_B", "SAMViTB"},
+    {"sam_vit_l", "SAM_ViT_L", "SAMViTL"},
+    {"sam_vit_h", "SAM_ViT_H", "SAMViTH"},
+    {"sam2", "SAM2", "SAM2HieraLarge"},
+    {"sam2_hiera_tiny", "SAM2_Hiera_Tiny", "SAM2HieraTiny"},
+    {"sam2_hiera_small", "SAM2_Hiera_Small", "SAM2HieraSmall"},
+    {"sam2_hiera_base_plus", "SAM2_Hiera_Base_Plus", "SAM2HieraBasePlus"},
+    {"sam2_hiera_large", "SAM2_Hiera_Large", "SAM2HieraLarge"},
+    {"sam2_1_hiera_tiny", "SAM2_1_Hiera_Tiny", "SAM2.1HieraTiny"},
+    {"sam2_1_hiera_small", "SAM2_1_Hiera_Small", "SAM2.1HieraSmall"},
+    {"sam2_1_hiera_base_plus", "SAM2_1_Hiera_Base_Plus", "SAM2.1HieraBasePlus"},
+    {"sam2_1_hiera_large", "SAM2_1_Hiera_Large", "SAM2.1HieraLarge"},
+    {"sam3", "SAM3", "SAM3Image"},
+    {"sam3_image", "SAM3_Image", "SAM3Image"},
     {"yolov5", "YOLOv5", "YOLOv5s"},
     {"yolov5n", "YOLOv5N", "YOLOv5n"},
     {"yolov5s", "YOLOv5S", "YOLOv5s"},
