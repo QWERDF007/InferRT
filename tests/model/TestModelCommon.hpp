@@ -6,7 +6,11 @@
 #include <inferrt/core/Status.hpp>
 #include <inferrt/model/IModel.h>
 
+#include <atomic>
 #include <array>
+#include <filesystem>
+#include <fstream>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -28,7 +32,7 @@ struct RegisteredModelCase
 /**
  * @brief 当前仓库中内置注册的模型清单。
  */
-inline constexpr std::array<RegisteredModelCase, 38> kRegisteredModels = {{
+inline constexpr std::array<RegisteredModelCase, 76> kRegisteredModels = {{
     {"onnx", "ONNX", "ONNX"},
     {"alexnet", "AlexNet", "AlexNet"},
     {"googlenet", "GoogLeNet", "GoogLeNet"},
@@ -67,6 +71,44 @@ inline constexpr std::array<RegisteredModelCase, 38> kRegisteredModels = {{
     {"vit_huge_patch14_224", "ViT_Huge_Patch14_224", "ViTHugePatch14_224"},
     {"vit_giant_patch14_224", "ViT_Giant_Patch14_224", "ViTGiantPatch14_224"},
     {"vit_gigantic_patch14_224", "ViT_Gigantic_Patch14_224", "ViTGiganticPatch14_224"},
+    {"dinov2_vits14", "DINOv2_ViTS14", "DINOv2ViTS14"},
+    {"dinov2_vitb14", "DINOv2_ViTB14", "DINOv2ViTB14"},
+    {"dinov2_vitl14", "DINOv2_ViTL14", "DINOv2ViTL14"},
+    {"dinov2_vitg14", "DINOv2_ViTG14", "DINOv2ViTG14"},
+    {"dinov2_vits14_reg", "DINOv2_ViTS14_Reg", "DINOv2ViTS14Reg4"},
+    {"dinov2_vitb14_reg", "DINOv2_ViTB14_Reg", "DINOv2ViTB14Reg4"},
+    {"dinov2_vitl14_reg", "DINOv2_ViTL14_Reg", "DINOv2ViTL14Reg4"},
+    {"dinov2_vitg14_reg", "DINOv2_ViTG14_Reg", "DINOv2ViTG14Reg4"},
+    {"dinov2_vits14_reg4", "DINOv2_ViTS14_Reg4", "DINOv2ViTS14Reg4"},
+    {"dinov2_vitb14_reg4", "DINOv2_ViTB14_Reg4", "DINOv2ViTB14Reg4"},
+    {"dinov2_vitl14_reg4", "DINOv2_ViTL14_Reg4", "DINOv2ViTL14Reg4"},
+    {"dinov2_vitg14_reg4", "DINOv2_ViTG14_Reg4", "DINOv2ViTG14Reg4"},
+    {"vit_small_patch14_dinov2", "ViT_Small_Patch14_DINOv2", "DINOv2ViTS14"},
+    {"vit_base_patch14_dinov2", "ViT_Base_Patch14_DINOv2", "DINOv2ViTB14"},
+    {"vit_large_patch14_dinov2", "ViT_Large_Patch14_DINOv2", "DINOv2ViTL14"},
+    {"vit_giant_patch14_dinov2", "ViT_Giant_Patch14_DINOv2", "DINOv2ViTG14"},
+    {"vit_small_patch14_reg4_dinov2", "ViT_Small_Patch14_Reg4_DINOv2", "DINOv2ViTS14Reg4"},
+    {"vit_base_patch14_reg4_dinov2", "ViT_Base_Patch14_Reg4_DINOv2", "DINOv2ViTB14Reg4"},
+    {"vit_large_patch14_reg4_dinov2", "ViT_Large_Patch14_Reg4_DINOv2", "DINOv2ViTL14Reg4"},
+    {"vit_giant_patch14_reg4_dinov2", "ViT_Giant_Patch14_Reg4_DINOv2", "DINOv2ViTG14Reg4"},
+    {"dinov3_vits16", "DINOv3_ViTS16", "DINOv3ViTS16"},
+    {"dinov3_vits16plus", "DINOv3_ViTS16Plus", "DINOv3ViTS16Plus"},
+    {"dinov3_vitb16", "DINOv3_ViTB16", "DINOv3ViTB16"},
+    {"dinov3_vitl16", "DINOv3_ViTL16", "DINOv3ViTL16"},
+    {"dinov3_vitl16plus", "DINOv3_ViTL16Plus", "DINOv3ViTL16Plus"},
+    {"dinov3_vith16plus", "DINOv3_ViTH16Plus", "DINOv3ViTH16Plus"},
+    {"dinov3_vit7b16", "DINOv3_ViT7B16", "DINOv3ViT7B16"},
+    {"vit_small_patch16_dinov3", "ViT_Small_Patch16_DINOv3", "DINOv3ViTS16"},
+    {"vit_small_patch16_dinov3_qkvb", "ViT_Small_Patch16_DINOv3_QKVB", "DINOv3ViTS16"},
+    {"vit_small_plus_patch16_dinov3", "ViT_Small_Plus_Patch16_DINOv3", "DINOv3ViTS16Plus"},
+    {"vit_small_plus_patch16_dinov3_qkvb", "ViT_Small_Plus_Patch16_DINOv3_QKVB", "DINOv3ViTS16Plus"},
+    {"vit_base_patch16_dinov3", "ViT_Base_Patch16_DINOv3", "DINOv3ViTB16"},
+    {"vit_base_patch16_dinov3_qkvb", "ViT_Base_Patch16_DINOv3_QKVB", "DINOv3ViTB16"},
+    {"vit_large_patch16_dinov3", "ViT_Large_Patch16_DINOv3", "DINOv3ViTL16"},
+    {"vit_large_patch16_dinov3_qkvb", "ViT_Large_Patch16_DINOv3_QKVB", "DINOv3ViTL16"},
+    {"vit_huge_plus_patch16_dinov3", "ViT_Huge_Plus_Patch16_DINOv3", "DINOv3ViTH16Plus"},
+    {"vit_huge_plus_patch16_dinov3_qkvb", "ViT_Huge_Plus_Patch16_DINOv3_QKVB", "DINOv3ViTH16Plus"},
+    {"vit_7b_patch16_dinov3", "ViT_7B_Patch16_DINOv3", "DINOv3ViT7B16"},
 }};
 
 /**
@@ -85,6 +127,51 @@ inline std::vector<void *> MakeNullBuffers(size_t count)
 {
     return std::vector<void *>(count, nullptr);
 }
+
+/**
+ * @brief 最小 `.wts` 临时文件，用于触发模型构建期的配置校验。
+ *
+ * 文件只包含一个占位权重；输入尺寸、batch 或通道数等错误会在访问完整权重前抛出，
+ * 因此可复用于 ViT、DINO 等手写 TensorRT 网络测试。
+ */
+class TempWeightsFile
+{
+public:
+    /**
+     * @brief 创建一个合法但不完整的 `.wts` 文件。
+     */
+    explicit TempWeightsFile(std::string prefix = "inferrt_model_test_")
+    {
+        static std::atomic<int> counter{0};
+        path_ = std::filesystem::temp_directory_path()
+              / std::filesystem::path(std::move(prefix) + std::to_string(counter.fetch_add(1, std::memory_order_relaxed))
+                                      + ".wts");
+        std::ofstream(path_) << "1\nplaceholder 0\n";
+    }
+
+    /**
+     * @brief 析构时删除临时权重文件。
+     */
+    ~TempWeightsFile()
+    {
+        std::error_code ec;
+        std::filesystem::remove(path_, ec);
+    }
+
+    /**
+     * @brief 获取临时权重文件路径。
+     */
+    const std::filesystem::path &path() const noexcept
+    {
+        return path_;
+    }
+
+    TempWeightsFile(const TempWeightsFile &) = delete;
+    TempWeightsFile &operator=(const TempWeightsFile &) = delete;
+
+private:
+    std::filesystem::path path_; ///< 临时 `.wts` 文件路径。
+};
 
 /**
  * @brief 断言指定调用抛出 InferRT 异常且错误码符合预期。

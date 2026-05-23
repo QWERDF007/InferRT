@@ -18,11 +18,19 @@ def test_registered_models(irt_module: object) -> None:
     assert "googlenet" in names
     assert "vit_base_patch16_224" in names
     assert "vit_base_patch16_384" in names
+    assert "dinov2_vits14" in names
+    assert "vit_small_patch14_dinov2" in names
+    assert "dinov3_vitb16" in names
+    assert "vit_base_patch16_dinov3" in names
     assert irt_module.is_supported_model("ResNet18")
     assert irt_module.is_supported_model("GoogLeNet")
     assert irt_module.is_supported_model("ViT_Base_Patch16_224")
     assert irt_module.is_supported_model("ViT_Base_Patch16_384")
     assert irt_module.is_supported_model("ViT")
+    assert irt_module.is_supported_model("DINOv2_ViTS14")
+    assert irt_module.is_supported_model("ViT_Small_Patch14_DINOv2")
+    assert irt_module.is_supported_model("DINOv3_ViTB16")
+    assert irt_module.is_supported_model("ViT_Base_Patch16_DINOv3")
     assert not irt_module.is_supported_model("not_a_model")
 
 
@@ -133,6 +141,28 @@ def test_create_vit_without_build(irt_module: object) -> None:
     assert high_res_model.name() == "ViTBasePatch16_384"
     assert high_res_model.input_tensor_names() == ["input"]
     assert high_res_model.output_tensor_names() == ["output"]
+
+
+def test_create_dino_without_build(irt_module: object) -> None:
+    """DINOv2/DINOv3 官方 key 和 timm 别名应可通过 Python 绑定创建。
+
+    Args:
+        irt_module: ``inferrt_model_py`` 模块。
+    """
+
+    dinov2 = irt_module.create_model("dinov2_vits14")
+    assert dinov2.name() == "DINOv2ViTS14"
+    assert dinov2.input_tensor_names() == ["input"]
+    assert dinov2.output_tensor_names() == ["output"]
+
+    dinov2_alias = irt_module.create_model("vit_small_patch14_reg4_dinov2")
+    assert dinov2_alias.name() == "DINOv2ViTS14Reg4"
+
+    dinov3 = irt_module.create_model("dinov3_vitb16")
+    assert dinov3.name() == "DINOv3ViTB16"
+
+    dinov3_alias = irt_module.create_model("vit_base_patch16_dinov3_qkvb")
+    assert dinov3_alias.name() == "DINOv3ViTB16"
 
 
 def test_create_model_rejects_unknown_name(irt_module: object) -> None:

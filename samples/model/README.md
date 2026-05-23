@@ -50,7 +50,8 @@ python gen_wts.py -m vgg16
 ## Notes
 
 - Input preprocessing is aligned with standard ImageNet classification
-- The shared sample assumes `1x3x224x224` input and `1000` output classes
+- The shared sample reads input and output tensor shapes from the built engine, so ViT/DINO variants can use their registered default sizes or a custom size exported by `gen_wts.py --input-size`
+- DINO backbones output feature vectors; the sample prints feature top values when the primary output is not a 1000-class logits tensor
 - The first run builds an engine from `.wts`, and later runs reuse the generated `.engine`
 
 ## Feature Extraction API
@@ -84,6 +85,9 @@ Common feature keys exposed by built-in models:
 - `mobilenet_v2`: `stem`, `features.1` ... `features.18`, `flatten`, `logits`
 - `mobilenet_v3_large` / `mobilenet_v3_small`: `stem`, `features.1` ... final feature block, `flatten`, `classifier.0`, `logits`
 - `vgg*`: `block1`, `block2`, `block3`, `block4`, `block5`, `avgpool`, `flatten`, `fc1`, `fc2`, `logits`
+- `vit*`: `patch_embed`, `tokens`, `blockN` / `blocks.N`, `norm`, `cls`, `pre_logits`, `logits`
+- `dinov2*`: `patch_embed`, `tokens`, `blockN` / `blocks.N`, `x_prenorm`, `norm`, `cls`, `pre_logits`, `x_norm_clstoken`, `x_norm_regtokens`, `x_norm_patchtokens`
+- `dinov3*`: `patch_embed`, `tokens`, `blockN` / `blocks.N`, `x_prenorm`, `norm`, `cls`, `pre_logits`, `x_norm_clstoken`, `x_storage_tokens`, `x_norm_patchtokens`
 
 Current limitation:
 

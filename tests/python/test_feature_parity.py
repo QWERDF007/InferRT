@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
+import numpy as np
 import pytest
 
 pytestmark = pytest.mark.integration
@@ -50,6 +54,43 @@ FEATURE_CASES = [
 ]
 
 
+DINO_OFFICIAL_FEATURE_CASES = [
+    pytest.param(
+        "dinov2_vits14",
+        ["x_norm_clstoken", "x_norm_patchtokens"],
+        id="dinov2_vits14",
+    ),
+    pytest.param(
+        "dinov3_vitb16",
+        ["x_norm_clstoken", "x_storage_tokens", "x_norm_patchtokens"],
+        id="dinov3_vitb16",
+    ),
+]
+
+
+def _load_official_dino_pretrained(model_name: str) -> object:
+    """@brief 通过官方后端加载 DINO 系列预训练模型。
+
+    @param model_name 官方模型名，例如 ``dinov2_vits14`` 或 ``dinov3_vitb16``。
+    @return 已切换到 ``eval`` 模式的 PyTorch 模型。
+
+    DINOv2 使用 PyTorch Hub；DINOv3 使用 Hugging Face
+    ``pipeline(task="image-feature-extraction")``。若当前环境无法访问官方模型或
+    缓存不存在，则跳过该集成测试，避免因为网络/缓存条件导致普通单元测试失败。
+    """
+
+    from model_zoo import create_model
+
+    backend = "transformers" if model_name.startswith("dinov3_") else "torchhub"
+    try:
+        model = create_model(model_name, backend)
+    except Exception as exc:
+        pytest.skip(f"Official {model_name} pretrained model unavailable: {exc}")
+
+    model.eval()
+    return model
+
+
 @pytest.mark.parametrize("model_name,weights_rel,feature_names", FEATURE_CASES)
 def test_forward_features_matches_pytorch(
     model_name: str,
@@ -96,6 +137,73 @@ def test_forward_features_matches_pytorch(
 
     for tensor_name in names:
         assert tensor_name in torch_features, f"PyTorch result missing tensor '{tensor_name}'"
+        assert tensor_name in irt_features, f"InferRT result missing tensor '{tensor_name}'"
+        assert_tensors_close(
+            torch_features[tensor_name],
+            irt_features[tensor_name],
+            rtol=rtol,
+            atol=atol,
+            name=tensor_name,
+        )
+
+
+@pytest.mark.parametrize("model_name,feature_names", DINO_OFFICIAL_FEATURE_CASES)
+def test_dino_forward_features_matches_official_pretrained(
+    model_name: str,
+    feature_names: list[str],
+    irt_module: object,
+    default_image: Path,
+    build_dir: Path,
+    feature_tolerances: tuple[float, float],
+) -> None:
+    """官方 DINO ``forward_features`` 应与 InferRT pybind11 特征输出一致。
+
+    Args:
+        model_name: 官方 DINO 模型名；DINOv2 走 PyTorch Hub，DINOv3 走 Hugging Face pipeline。
+        feature_names: 需要同时从 PyTorch 和 InferRT 读取的特征张量名。
+        irt_module: ``inferrt_model_py`` 模块。
+        default_image: 默认测试图片。
+        build_dir: CMake 构建目录，用于写出本测试专属 ``.wts`` 和 engine。
+        feature_tolerances: ``(rtol, atol)``，复用中间特征容差。
+
+    本测试通过官方权重入口加载 pretrained 模型，不再依赖本地源码目录等固定路径。
+    随后把同一份 ``state_dict`` 导出为 ``.wts``，通过 pybind11
+    ``forward_features()`` 构建 InferRT feature-only engine。
+    """
+
+    torch = pytest.importorskip("torch")
+    cv2 = pytest.importorskip("cv2")
+
+    from gen_wts import write_wts
+    from model_zoo import preprocess, resolve_input_size
+
+    torch_model = _load_official_dino_pretrained(model_name)
+
+    image = cv2.imread(str(default_image), cv2.IMREAD_COLOR)
+    if image is None:
+        pytest.skip(f"Failed to read default image: {default_image}")
+    input_tensor = preprocess(image, image_size=resolve_input_size(torch_model)).numpy()
+
+    batch = torch.from_numpy(np.ascontiguousarray(input_tensor, dtype=np.float32))
+    with torch.inference_mode():
+        torch_outputs = torch_model.forward_features(batch)
+    torch_features = {name: torch_outputs[name].detach().cpu().numpy() for name in feature_names}
+
+    artifact_dir = build_dir / "python_test_artifacts"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    weights_file = artifact_dir / f"{model_name}_pretrained_{os.getpid()}.wts"
+    write_wts(torch_model, str(weights_file), verbose=False)
+
+    irt_features = run_python_features(
+        irt_module,
+        model_name=model_name,
+        weights_path=weights_file,
+        input_tensor=input_tensor,
+        feature_names=feature_names,
+    )
+
+    rtol, atol = feature_tolerances
+    for tensor_name in feature_names:
         assert tensor_name in irt_features, f"InferRT result missing tensor '{tensor_name}'"
         assert_tensors_close(
             torch_features[tensor_name],

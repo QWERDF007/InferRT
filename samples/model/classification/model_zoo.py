@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import re
 from typing import Any, Union
 
@@ -65,6 +65,30 @@ TORCHVISION_MODEL_ZOO = {
 DEFAULT_IMAGE_SIZE = (224, 224)
 ImageSizeLike = Union[int, Sequence[int]]
 
+TORCHHUB_DINOV2_REPO = "facebookresearch/dinov2"
+TORCHHUB_DINOV2_MODEL_NAMES = [
+    "dinov2_vits14",
+    "dinov2_vitb14",
+    "dinov2_vitl14",
+    "dinov2_vitg14",
+    "dinov2_vits14_reg",
+    "dinov2_vitb14_reg",
+    "dinov2_vitl14_reg",
+    "dinov2_vitg14_reg",
+]
+TORCHHUB_DINO_MODEL_REPOS = {
+    **{name: TORCHHUB_DINOV2_REPO for name in TORCHHUB_DINOV2_MODEL_NAMES},
+}
+TRANSFORMERS_DINOV3_MODEL_IDS = {
+    "dinov3_vits16": "facebook/dinov3-vits16-pretrain-lvd1689m",
+    "dinov3_vits16plus": "facebook/dinov3-vits16plus-pretrain-lvd1689m",
+    "dinov3_vitb16": "facebook/dinov3-vitb16-pretrain-lvd1689m",
+    "dinov3_vitl16": "facebook/dinov3-vitl16-pretrain-lvd1689m",
+    "dinov3_vitl16plus": "facebook/dinov3-vitl16plus-pretrain-lvd1689m",
+    "dinov3_vith16plus": "facebook/dinov3-vith16plus-pretrain-lvd1689m",
+    "dinov3_vit7b16": "facebook/dinov3-vit7b16-pretrain-lvd1689m",
+}
+
 
 def read_imagenet_labels(labels_path: str) -> dict[int, str]:
     clsid2label = {}
@@ -88,6 +112,191 @@ def _get_config_value(config: Any, key: str) -> Any:
     if isinstance(config, dict):
         return config.get(key)
     return getattr(config, key, None)
+
+
+def _get_image_processor_size(image_processor: Any) -> tuple[int, int] | None:
+    """@brief 从 Hugging Face image processor 中解析输入尺寸。
+
+    @param image_processor ``transformers.pipeline`` 持有的图像预处理器。
+    @return 若存在固定尺寸则返回 ``(height, width)``，否则返回 ``None``。
+    """
+
+    size = getattr(image_processor, "size", None)
+    if isinstance(size, Mapping):
+        height = size.get("height") or size.get("shortest_edge")
+        width = size.get("width") or size.get("shortest_edge")
+        if height and width:
+            return normalize_image_size((int(height), int(width)))
+    height = getattr(size, "height", None)
+    width = getattr(size, "width", None)
+    shortest_edge = getattr(size, "shortest_edge", None)
+    if (height and width) or shortest_edge:
+        return normalize_image_size((int(height or shortest_edge), int(width or shortest_edge)))
+    if size is not None:
+        return normalize_image_size(size)
+    return None
+
+
+def _require_key(state_dict: Mapping[str, torch.Tensor], key: str) -> torch.Tensor:
+    """@brief 读取 state_dict 中的必需权重，缺失时给出明确错误。
+
+    @param state_dict PyTorch 权重表。
+    @param key 待读取的权重名。
+    @return 对应的张量。
+    @exception KeyError 权重不存在时抛出。
+    """
+
+    try:
+        return state_dict[key]
+    except KeyError as exc:
+        raise KeyError(f"Missing DINOv3 Transformers weight: {key}") from exc
+
+
+def _optional_key(state_dict: Mapping[str, torch.Tensor], key: str) -> torch.Tensor | None:
+    """@brief 读取可选权重，缺失时返回 ``None``。"""
+
+    return state_dict.get(key)
+
+
+def convert_transformers_dinov3_state_dict(
+    state_dict: Mapping[str, torch.Tensor],
+    config: Any,
+) -> dict[str, torch.Tensor]:
+    """@brief 将 Transformers DINOv3 权重转换为 InferRT DINOv3 构建器使用的 key。
+
+    @param state_dict Hugging Face ``DINOv3ViTModel`` 的原始 ``state_dict``。
+    @param config Hugging Face DINOv3 配置对象。
+    @return 转换后的权重表，key 与 ``src/model/priv/DINO.cpp`` 的读取逻辑一致。
+
+    Transformers 使用拆分的 ``q_proj/k_proj/v_proj`` 和 ``embeddings.*`` 命名；
+    当前 TensorRT DINO 实现复用官方/timm 风格的 ``blocks.*.attn.qkv``、
+    ``patch_embed.proj``、``cls_token`` 等命名。本函数只在导出阶段做一次机械映射，
+    避免 C++ 侧同时维护多套权重命名分支。
+    """
+
+    converted: dict[str, torch.Tensor] = {}
+    hidden_size = int(getattr(config, "hidden_size"))
+    num_heads = int(getattr(config, "num_attention_heads"))
+    depth = int(getattr(config, "num_hidden_layers"))
+    head_dim = hidden_size // num_heads
+
+    converted["cls_token"] = _require_key(state_dict, "embeddings.cls_token")
+    converted["storage_tokens"] = _require_key(state_dict, "embeddings.register_tokens")
+    converted["patch_embed.proj.weight"] = _require_key(state_dict, "embeddings.patch_embeddings.weight")
+    converted["patch_embed.proj.bias"] = _require_key(state_dict, "embeddings.patch_embeddings.bias")
+    converted["norm.weight"] = _require_key(state_dict, "norm.weight")
+    converted["norm.bias"] = _require_key(state_dict, "norm.bias")
+
+    rope_theta = float(getattr(config, "rope_theta", 100.0))
+    converted["rope_embed.periods"] = torch.pow(
+        torch.tensor(rope_theta, dtype=torch.float32),
+        torch.arange(0, head_dim // 4, dtype=torch.float32) * (4.0 / float(head_dim)),
+    )
+
+    for index in range(depth):
+        src = f"model.layer.{index}"
+        dst = f"blocks.{index}"
+
+        for norm_name in ("norm1", "norm2"):
+            converted[f"{dst}.{norm_name}.weight"] = _require_key(state_dict, f"{src}.{norm_name}.weight")
+            converted[f"{dst}.{norm_name}.bias"] = _require_key(state_dict, f"{src}.{norm_name}.bias")
+
+        q_weight = _require_key(state_dict, f"{src}.attention.q_proj.weight")
+        k_weight = _require_key(state_dict, f"{src}.attention.k_proj.weight")
+        v_weight = _require_key(state_dict, f"{src}.attention.v_proj.weight")
+        converted[f"{dst}.attn.qkv.weight"] = torch.cat((q_weight, k_weight, v_weight), dim=0)
+
+        q_bias = _optional_key(state_dict, f"{src}.attention.q_proj.bias")
+        k_bias = _optional_key(state_dict, f"{src}.attention.k_proj.bias")
+        v_bias = _optional_key(state_dict, f"{src}.attention.v_proj.bias")
+        if q_bias is not None or k_bias is not None or v_bias is not None:
+            reference = q_bias if q_bias is not None else v_bias if v_bias is not None else k_bias
+            assert reference is not None
+            zero_bias = torch.zeros_like(reference)
+            converted[f"{dst}.attn.qkv.bias"] = torch.cat(
+                (
+                    q_bias if q_bias is not None else zero_bias,
+                    k_bias if k_bias is not None else zero_bias,
+                    v_bias if v_bias is not None else zero_bias,
+                ),
+                dim=0,
+            )
+
+        converted[f"{dst}.attn.proj.weight"] = _require_key(state_dict, f"{src}.attention.o_proj.weight")
+        converted[f"{dst}.attn.proj.bias"] = _require_key(state_dict, f"{src}.attention.o_proj.bias")
+        converted[f"{dst}.ls1.gamma"] = _require_key(state_dict, f"{src}.layer_scale1.lambda1")
+        converted[f"{dst}.ls2.gamma"] = _require_key(state_dict, f"{src}.layer_scale2.lambda1")
+
+        if f"{src}.mlp.gate_proj.weight" in state_dict:
+            converted[f"{dst}.mlp.w1.weight"] = _require_key(state_dict, f"{src}.mlp.gate_proj.weight")
+            converted[f"{dst}.mlp.w1.bias"] = _require_key(state_dict, f"{src}.mlp.gate_proj.bias")
+            converted[f"{dst}.mlp.w2.weight"] = _require_key(state_dict, f"{src}.mlp.up_proj.weight")
+            converted[f"{dst}.mlp.w2.bias"] = _require_key(state_dict, f"{src}.mlp.up_proj.bias")
+            converted[f"{dst}.mlp.w3.weight"] = _require_key(state_dict, f"{src}.mlp.down_proj.weight")
+            converted[f"{dst}.mlp.w3.bias"] = _require_key(state_dict, f"{src}.mlp.down_proj.bias")
+        else:
+            converted[f"{dst}.mlp.fc1.weight"] = _require_key(state_dict, f"{src}.mlp.up_proj.weight")
+            converted[f"{dst}.mlp.fc1.bias"] = _require_key(state_dict, f"{src}.mlp.up_proj.bias")
+            converted[f"{dst}.mlp.fc2.weight"] = _require_key(state_dict, f"{src}.mlp.down_proj.weight")
+            converted[f"{dst}.mlp.fc2.bias"] = _require_key(state_dict, f"{src}.mlp.down_proj.bias")
+
+    return converted
+
+
+class TransformersDINOv3Model(torch.nn.Module):
+    """@brief 基于 Hugging Face pipeline 的 DINOv3 导出适配器。
+
+    pipeline 负责按官方模型 id 加载 pretrained 权重；本适配器提供普通
+    ``torch.nn.Module`` 风格的 ``forward``、``forward_features`` 和
+    ``export_state_dict``，使 ``gen_wts.py`` 与现有测试无需感知 pipeline 包装层。
+    """
+
+    def __init__(self, feature_pipeline: Any, model_name: str, model_id: str):
+        super().__init__()
+        self.feature_pipeline = feature_pipeline
+        self.hf_model = feature_pipeline.model
+        self.image_processor = getattr(feature_pipeline, "image_processor", None)
+        self.config = self.hf_model.config
+        self.model_name = model_name
+        self.model_id = model_id
+
+        processor_size = _get_image_processor_size(self.image_processor)
+        config_size = normalize_image_size(getattr(self.config, "image_size", DEFAULT_IMAGE_SIZE))
+        height, width = processor_size if processor_size is not None else config_size
+        self.default_cfg = {"input_size": (3, height, width)}
+        self.pretrained_cfg = self.default_cfg
+
+    def _to_model_device(self, x: torch.Tensor) -> torch.Tensor:
+        """@brief 将输入张量移动到 HF 模型当前设备。"""
+
+        parameter = next(self.hf_model.parameters(), None)
+        if parameter is None:
+            return x
+        return x.to(device=parameter.device)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """@brief 返回 DINOv3 CLS pooled 特征，供 ``gen_wts.py`` 打印预测结果。"""
+
+        x = self._to_model_device(x)
+        return self.hf_model(pixel_values=x).pooler_output
+
+    def forward_features(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        """@brief 返回与官方 DINOv3 ``forward_features`` 兼容的常用特征字典。"""
+
+        x = self._to_model_device(x)
+        outputs = self.hf_model(pixel_values=x)
+        tokens = outputs.last_hidden_state
+        extra_tokens = int(getattr(self.config, "num_register_tokens", 0))
+        return {
+            "x_norm_clstoken": tokens[:, 0],
+            "x_storage_tokens": tokens[:, 1 : 1 + extra_tokens],
+            "x_norm_patchtokens": tokens[:, 1 + extra_tokens :],
+        }
+
+    def export_state_dict(self) -> dict[str, torch.Tensor]:
+        """@brief 导出 InferRT DINOv3 构建器可读取的权重表。"""
+
+        return convert_transformers_dinov3_state_dict(self.hf_model.state_dict(), self.config)
 
 
 def normalize_image_size(image_size: ImageSizeLike) -> tuple[int, int]:
@@ -158,6 +367,10 @@ def resolve_input_size(model: torch.nn.Module, default: ImageSizeLike = DEFAULT_
     if patch_image_size is not None:
         return normalize_image_size(patch_image_size)
 
+    config_image_size = _get_config_value(getattr(model, "config", None), "image_size")
+    if config_image_size is not None:
+        return normalize_image_size(config_image_size)
+
     for config_name in ("pretrained_cfg", "default_cfg"):
         input_size = _get_config_value(getattr(model, config_name, None), "input_size")
         if input_size is not None:
@@ -184,33 +397,154 @@ def preprocess(img: np.ndarray, image_size: ImageSizeLike = DEFAULT_IMAGE_SIZE) 
     return torch.from_numpy(img)
 
 
+def export_model_state_dict(model: torch.nn.Module) -> Mapping[str, torch.Tensor]:
+    """@brief 获取用于 ``.wts`` 导出的权重表。
+
+    @param model PyTorch 模型或导出适配器。
+    @return 适合写入 InferRT ``.wts`` 的 state_dict。
+
+    普通 torchvision/timm/torchhub 模型直接使用 ``state_dict``；Transformers DINOv3
+    通过 ``export_state_dict`` 做 key 转换后再导出。
+    """
+
+    export_fn = getattr(model, "export_state_dict", None)
+    if callable(export_fn):
+        return export_fn()
+    return model.state_dict()
+
+
 def list_supported_models(backend: str) -> list[str]:
+    """@brief 列出指定后端可导出的模型名称。
+
+    @param backend 模型来源，支持 ``torchvision``、``timm``、``torchhub`` 和 ``transformers``。
+    @return 模型名称列表。
+    @exception ValueError 后端名称不受支持时抛出。
+    """
+
     if backend == "torchvision":
         return list(TORCHVISION_MODEL_ZOO.keys())
     if backend == "timm":
         from timm import list_models
 
         names: list[str] = []
-        for pattern in ("resnet*", "wide_resnet*", "vit*"):
+        for pattern in ("resnet*", "wide_resnet*", "vit*", "*dinov2*", "*dinov3*"):
             names.extend(list_models(pattern))
         return list(dict.fromkeys(names))
+    if backend == "torchhub":
+        return list(TORCHHUB_DINO_MODEL_REPOS.keys())
+    if backend == "transformers":
+        return list(TRANSFORMERS_DINOV3_MODEL_IDS.keys())
     raise ValueError(f"Unsupported backend: {backend}")
 
 
-def create_model(model_name: str, backend: str) -> torch.nn.Module:
+def _resolve_torchhub_repo(model_name: str, hub_repo: str | None) -> str:
+    """@brief 根据模型名解析默认 PyTorch Hub 仓库。
+
+    @param model_name DINO 官方 hub 模型名。
+    @param hub_repo 调用方显式传入的仓库；为空时按模型系列自动选择。
+    @return 可传给 ``torch.hub.load`` 的仓库名或本地目录。
+    @exception ValueError 模型名不属于已注册的 torchhub DINO 系列时抛出。
+    """
+
+    if hub_repo:
+        return hub_repo
+    try:
+        return TORCHHUB_DINO_MODEL_REPOS[model_name]
+    except KeyError as exc:
+        available = ", ".join(TORCHHUB_DINO_MODEL_REPOS.keys())
+        raise ValueError(f"Unsupported torchhub model: {model_name}. Available: {available}") from exc
+
+
+def _resolve_transformers_model_id(model_name: str, model_id: str | None) -> str:
+    """@brief 根据 DINOv3 key 解析 Hugging Face 模型 id。
+
+    @param model_name InferRT / DINOv3 官方模型 key。
+    @param model_id 调用方显式传入的 Hugging Face 模型 id；为空时使用内置映射。
+    @return 可传给 ``transformers.pipeline(model=...)`` 的模型 id。
+    @exception ValueError 模型名不属于已支持的 DINOv3 Transformers key 时抛出。
+    """
+
+    if model_id:
+        return model_id
+    try:
+        return TRANSFORMERS_DINOV3_MODEL_IDS[model_name]
+    except KeyError as exc:
+        available = ", ".join(TRANSFORMERS_DINOV3_MODEL_IDS.keys())
+        raise ValueError(f"Unsupported transformers DINOv3 model: {model_name}. Available: {available}") from exc
+
+
+def create_model(
+    model_name: str,
+    backend: str,
+    *,
+    hub_repo: str | None = None,
+    hub_source: str = "github",
+    pretrained: bool = True,
+    hub_weights: str | None = None,
+    hf_model_id: str | None = None,
+    local_files_only: bool = False,
+) -> torch.nn.Module:
+    """@brief 根据后端创建 PyTorch 参考模型。
+
+    @param model_name 模型名称。
+    @param backend 模型来源，支持 ``torchvision``、``timm``、``torchhub`` 和 ``transformers``。
+    @param hub_repo torch.hub 仓库或本地目录；为空时按 DINOv2 模型名自动选择官方仓库。
+    @param hub_source torch.hub source，通常为 ``github`` 或 ``local``。
+    @param pretrained 是否加载预训练权重。
+    @param hub_weights DINO hub 的 ``weights`` 参数，可传本地 ``.pth`` 或 URL。
+    @param hf_model_id DINOv3 Hugging Face 模型 id；为空时按 ``model_name`` 自动选择。
+    @param local_files_only 是否只从本地 Hugging Face 缓存加载。
+    @return 已创建的 PyTorch 模型实例。
+    @exception ValueError 后端或模型名称不受支持时抛出。
+    """
+
     if backend == "torchvision":
         if model_name not in TORCHVISION_MODEL_ZOO:
             available = ", ".join(TORCHVISION_MODEL_ZOO.keys())
             raise ValueError(f"Unsupported torchvision model: {model_name}. Available: {available}")
 
         model_fn, weights = TORCHVISION_MODEL_ZOO[model_name]
+        selected_weights = weights if pretrained else None
         if model_name == "googlenet":
-            return model_fn(weights=weights, transform_input=False)
-        return model_fn(weights=weights)
+            return model_fn(weights=selected_weights, transform_input=False)
+        return model_fn(weights=selected_weights)
 
     if backend == "timm":
         from timm import create_model
 
-        return create_model(model_name, pretrained=True)
+        if "dinov3" in model_name.lower():
+            return create_model(model_name, pretrained=pretrained, global_pool="token")
+        return create_model(model_name, pretrained=pretrained)
+
+    if backend == "torchhub":
+        if model_name not in TORCHHUB_DINO_MODEL_REPOS:
+            available = ", ".join(TORCHHUB_DINO_MODEL_REPOS.keys())
+            raise ValueError(f"Unsupported torchhub model: {model_name}. Available: {available}")
+
+        repo_or_dir = _resolve_torchhub_repo(model_name, hub_repo)
+        hub_kwargs: dict[str, object] = {
+            "source": hub_source,
+            "pretrained": pretrained,
+        }
+        if hub_weights:
+            hub_kwargs["weights"] = hub_weights
+        if hub_source == "github":
+            # 避免交互式 trust 提示，并跳过 GitHub API 校验以减少离线环境依赖。
+            hub_kwargs["trust_repo"] = True
+            hub_kwargs["skip_validation"] = True
+        return torch.hub.load(repo_or_dir, model_name, **hub_kwargs)
+
+    if backend == "transformers":
+        if not pretrained:
+            raise ValueError("Transformers DINOv3 export requires pretrained=True")
+        model_id = _resolve_transformers_model_id(model_name, hf_model_id)
+        from transformers import pipeline
+
+        feature_pipeline = pipeline(
+            model=model_id,
+            task="image-feature-extraction",
+            local_files_only=local_files_only,
+        )
+        return TransformersDINOv3Model(feature_pipeline, model_name=model_name, model_id=model_id)
 
     raise ValueError(f"Unsupported backend: {backend}")

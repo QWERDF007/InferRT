@@ -82,6 +82,45 @@ void writeBinaryFile(const fs::path &file_path, const void *data, size_t num_byt
 }
 
 /**
+ * @brief 判断主输出是否可以按 ImageNet 分类 logits 解释。
+ * @param labels 已加载的标签表。
+ * @param num_scores 主输出展平后的元素数量。
+ * @return 标签数量与输出元素数量一致时返回 true。
+ */
+bool isClassificationOutput(const std::vector<std::string> &labels, size_t num_scores)
+{
+    return !labels.empty() && labels.size() == num_scores;
+}
+
+/**
+ * @brief 打印分类 logits 或 DINO 等特征向量的 Top-K 结果。
+ * @param scores 已按分数降序排好前 topk 的输出值与索引。
+ * @param topk 需要打印的条数。
+ * @param labels ImageNet 标签表；当数量匹配输出维度时用于打印类别名。
+ */
+void printTopOutputs(const std::vector<std::pair<float, size_t>> &scores, size_t topk,
+                     const std::vector<std::string> &labels)
+{
+    const bool classification_output = isClassificationOutput(labels, scores.size());
+    std::cout << "\nTop-" << topk << (classification_output ? " predictions:" : " feature values:") << std::endl;
+
+    for (size_t i = 0; i < topk; ++i)
+    {
+        const size_t idx   = scores[i].second;
+        const float  value = scores[i].first;
+        if (classification_output)
+        {
+            std::cout << "top: " << (i + 1) << ", confidence: " << value << ", label[" << idx
+                      << "]: " << labels[idx] << std::endl;
+        }
+        else
+        {
+            std::cout << "top: " << (i + 1) << ", value: " << value << ", feature[" << idx << "]" << std::endl;
+        }
+    }
+}
+
+/**
  * @brief 构造命令行选项定义。
  * @param program_name 可执行文件名。
  * @return cxxopts 选项对象。
@@ -139,7 +178,7 @@ Arguments parseArguments(int argc, char *argv[])
 } // namespace
 
 /**
- * @brief 运行单张图片的 ImageNet 分类推理，并打印 Top-3 结果。
+ * @brief 运行单张图片推理，并打印分类 logits 或特征向量的 Top-3 结果。
  * @param argc 命令行参数个数。
  * @param argv 命令行参数数组。
  * @return 成功返回 0，失败返回非 0。
@@ -273,11 +312,9 @@ int main(int argc, char *argv[])
 
         const auto postprocess_start = Clock::now();
         std::vector<std::string> labels;
-        bool                     has_labels = false;
         if (!label_file.empty() && fs::exists(label_file))
         {
-            labels     = irt::model::readImagenetLabels(label_file.string());
-            has_labels = true;
+            labels = irt::model::readImagenetLabels(label_file.string());
         }
 
         const std::string &primary_output_name = output_names.front();
@@ -285,17 +322,17 @@ int main(int argc, char *argv[])
         if (output_types[primary_index] != nvinfer1::DataType::kFLOAT)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "Classification sample expects float32 logits output");
+                                 "Classification sample expects float32 primary output");
         }
 
         const size_t num_scores = elementCount(output_dims[primary_index]);
         const auto  *output_data = reinterpret_cast<const float *>(host_outputs[primary_index].data());
 
-        std::vector<std::pair<float, int>> scores;
+        std::vector<std::pair<float, size_t>> scores;
         scores.reserve(num_scores);
         for (size_t i = 0; i < num_scores; ++i)
         {
-            scores.push_back({output_data[i], static_cast<int>(i)});
+            scores.push_back({output_data[i], i});
         }
         const size_t topk = std::min<size_t>(3, scores.size());
         std::partial_sort(scores.begin(), scores.begin() + static_cast<std::ptrdiff_t>(topk), scores.end(),
@@ -336,22 +373,7 @@ int main(int argc, char *argv[])
                   << " ms, inference=" << elapsedMs(infer_start, infer_end)
                   << " ms, postprocess=" << elapsedMs(postprocess_start, postprocess_end) << " ms" << std::endl;
 
-        std::cout << "\nTop-" << topk << " predictions:" << std::endl;
-        for (size_t i = 0; i < topk; ++i)
-        {
-            int   idx        = scores[i].second;
-            float confidence = scores[i].first;
-            if (has_labels)
-            {
-                std::cout << "top: " << (i + 1) << ", confidence: " << confidence << ", label[" << idx
-                          << "]: " << labels[idx] << std::endl;
-            }
-            else
-            {
-                std::cout << "top: " << (i + 1) << ", confidence: " << confidence << ", label[" << idx << "]"
-                          << std::endl;
-            }
-        }
+        printTopOutputs(scores, topk, labels);
 
         checkCuda(cudaFree(d_input), "cudaFree(input)");
         for (void *device_ptr : device_outputs)
