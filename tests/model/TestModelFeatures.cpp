@@ -1,262 +1,88 @@
-#include <gtest/gtest.h>
+#include "TestModelCommon.hpp"
 
-#include <inferrt/core/Exception.hpp>
-#include <inferrt/core/Status.h>
-#include <inferrt/model/IModel.h>
-
+#include <memory>
 #include <vector>
 
+using test::model::ExpectIrtExceptionCode;
+using test::model::MakeNullBuffers;
+using test::model::RegisteredModelsTest;
+using test::model::kRegisteredModels;
+
+namespace {
+
 /**
- * @brief AlexNet 配置特征张量但未初始化特征执行上下文时，forwardFeatures 应抛出 ERROR_INVALID_OPERATION。
+ * @brief 模型特征前向入口的参数化测试基类。
  */
-TEST(AlexNetFeatureInferTest, ForwardFeaturesWithoutFeatureContextThrowsInvalidOperation)
+class ModelFeaturesRegisteredModelsTest : public RegisteredModelsTest
+{
+};
+
+/**
+ * @brief 使用指定特征配置创建模型。
+ * @param model_name 模型注册名。
+ * @param feature_only 是否启用 featureOnly 模式。
+ * @return 已注入特征配置的模型实例。
+ */
+std::unique_ptr<irt::model::IModel> createFeatureConfiguredModel(const std::string &model_name, bool feature_only)
 {
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setFeatureTensorNames({"pool1"});
+    config->setFeatureTensorNames({"feature_for_runtime_guard"});
+    config->setOutputTensorNames({"feature_for_runtime_guard"});
+    config->setFeatureOnly(feature_only);
+    return irt::model::CreateModel(model_name, std::move(config));
+}
 
-    auto model = irt::model::CreateModel("alexnet", std::move(config));
+} // namespace
+
+INSTANTIATE_TEST_SUITE_P(KnownModels, ModelFeaturesRegisteredModelsTest, ::testing::ValuesIn(kRegisteredModels));
+
+/**
+ * @brief 配置特征张量但未初始化特征执行上下文时，forwardFeatures 应抛出非法操作异常。
+ */
+TEST_P(ModelFeaturesRegisteredModelsTest, ForwardFeaturesWithoutFeatureContextThrowsInvalidOperation)
+{
+    const auto &param = GetParam();
+    auto        model = createFeatureConfiguredModel(param.key, false);
     ASSERT_NE(model, nullptr);
 
-    std::vector<void *> buffers(2, nullptr);
-
-    EXPECT_THROW({ model->forwardFeatures(buffers); }, irt::Exception);
-
-    try
-    {
-        model->forwardFeatures(buffers);
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
+    ExpectIrtExceptionCode([&] { model->forwardFeatures(MakeNullBuffers(2)); },
+                           irt::Status::ERROR_INVALID_OPERATION);
 }
 
 /**
- * @brief AlexNet 处于 featureOnly 模式但未初始化执行上下文时，forwardFeatures 应抛出 ERROR_INVALID_OPERATION。
+ * @brief featureOnly 模式下未初始化执行上下文时，forwardFeatures 仍应抛出非法操作异常。
  */
-TEST(AlexNetFeatureInferTest, ForwardFeaturesWithFeatureOnlyConfigWithoutContextThrowsInvalidOperation)
+TEST_P(ModelFeaturesRegisteredModelsTest, ForwardFeaturesWithFeatureOnlyConfigWithoutContextThrowsInvalidOperation)
 {
-    auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setFeatureTensorNames({"pool1"});
-    config->setFeatureOnly(true);
-
-    auto model = irt::model::CreateModel("alexnet", std::move(config));
+    const auto &param = GetParam();
+    auto        model = createFeatureConfiguredModel(param.key, true);
     ASSERT_NE(model, nullptr);
 
-    std::vector<void *> buffers(2, nullptr);
-
-    EXPECT_THROW({ model->forwardFeatures(buffers); }, irt::Exception);
-
-    try
-    {
-        model->forwardFeatures(buffers);
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
+    ExpectIrtExceptionCode([&] { model->forwardFeatures(MakeNullBuffers(2)); },
+                           irt::Status::ERROR_INVALID_OPERATION);
 }
 
 /**
- * @brief AlexNet 处于 featureOnly 模式但未初始化执行上下文时，infer 也应被运行时保护拦下。
+ * @brief featureOnly 模式下未初始化执行上下文时，infer 也应被同一运行时保护拦截。
  */
-TEST(AlexNetFeatureInferTest, InferWithFeatureOnlyConfigWithoutContextStillThrowsInvalidOperation)
+TEST_P(ModelFeaturesRegisteredModelsTest, InferWithFeatureOnlyConfigWithoutContextStillThrowsInvalidOperation)
 {
-    auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setFeatureTensorNames({"pool1"});
-    config->setFeatureOnly(true);
-
-    auto model = irt::model::CreateModel("alexnet", std::move(config));
+    const auto &param = GetParam();
+    auto        model = createFeatureConfiguredModel(param.key, true);
     ASSERT_NE(model, nullptr);
 
-    std::vector<void *> buffers(2, nullptr);
-
-    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
-
-    try
-    {
-        model->infer(buffers);
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
+    ExpectIrtExceptionCode([&] { model->infer(MakeNullBuffers(2)); }, irt::Status::ERROR_INVALID_OPERATION);
 }
 
 /**
- * @brief GoogLeNet 配置特征张量但未初始化特征执行上下文时，forwardFeatures 应抛出 ERROR_INVALID_OPERATION。
+ * @brief 特征执行 context 缺失时，forwardFeatures 应先报运行时未就绪，而不是 buffer 数量错误。
  */
-TEST(GoogLeNetFeatureInferTest, ForwardFeaturesWithoutFeatureContextThrowsInvalidOperation)
+TEST_P(ModelFeaturesRegisteredModelsTest, ForwardFeaturesWithWrongBufferCountStillFailsBeforeBufferValidation)
 {
-    auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setFeatureTensorNames({"inception3a"});
-
-    auto model = irt::model::CreateModel("googlenet", std::move(config));
+    const auto &param = GetParam();
+    auto        model = createFeatureConfiguredModel(param.key, false);
     ASSERT_NE(model, nullptr);
 
-    std::vector<void *> buffers(2, nullptr);
-
-    EXPECT_THROW({ model->forwardFeatures(buffers); }, irt::Exception);
-
-    try
-    {
-        model->forwardFeatures(buffers);
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
-}
-
-/**
- * @brief GoogLeNet 处于 featureOnly 模式但未初始化执行上下文时，forwardFeatures 应抛出 ERROR_INVALID_OPERATION。
- */
-TEST(GoogLeNetFeatureInferTest, ForwardFeaturesWithFeatureOnlyConfigWithoutContextThrowsInvalidOperation)
-{
-    auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setFeatureTensorNames({"inception3a"});
-    config->setFeatureOnly(true);
-
-    auto model = irt::model::CreateModel("googlenet", std::move(config));
-    ASSERT_NE(model, nullptr);
-
-    std::vector<void *> buffers(2, nullptr);
-
-    EXPECT_THROW({ model->forwardFeatures(buffers); }, irt::Exception);
-
-    try
-    {
-        model->forwardFeatures(buffers);
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
-}
-
-/**
- * @brief GoogLeNet 处于 featureOnly 模式但未初始化执行上下文时，infer 也应被运行时保护拦下。
- */
-TEST(GoogLeNetFeatureInferTest, InferWithFeatureOnlyConfigWithoutContextStillThrowsInvalidOperation)
-{
-    auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setFeatureTensorNames({"inception3a"});
-    config->setFeatureOnly(true);
-
-    auto model = irt::model::CreateModel("googlenet", std::move(config));
-    ASSERT_NE(model, nullptr);
-
-    std::vector<void *> buffers(2, nullptr);
-
-    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
-
-    try
-    {
-        model->infer(buffers);
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
-}
-
-/**
- * @brief ResNet 配置特征张量但未初始化特征执行上下文时，forwardFeatures 应抛出 ERROR_INVALID_OPERATION。
- */
-TEST(ResNetFeatureInferTest, ForwardFeaturesWithoutFeatureContextThrowsInvalidOperation)
-{
-    auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setFeatureTensorNames({"layer1"});
-
-    auto model = irt::model::CreateModel("resnet18", std::move(config));
-    ASSERT_NE(model, nullptr);
-
-    std::vector<void *> buffers(2, nullptr);
-
-    EXPECT_THROW({ model->forwardFeatures(buffers); }, irt::Exception);
-
-    try
-    {
-        model->forwardFeatures(buffers);
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
-}
-
-/**
- * @brief 当前实现中，ResNet 在特征 context 缺失时会先于 buffer 数量检查失败。
- */
-TEST(ResNetFeatureInferTest, ForwardFeaturesWithWrongBufferCountStillThrowsWhenContextIsMissing)
-{
-    auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setFeatureTensorNames({"layer1"});
-
-    auto model = irt::model::CreateModel("resnet18", std::move(config));
-    ASSERT_NE(model, nullptr);
-
-    std::vector<void *> buffers(1, nullptr);
-    EXPECT_THROW({ model->forwardFeatures(buffers); }, irt::Exception);
-}
-
-/**
- * @brief ResNet 处于 featureOnly 模式但未初始化执行上下文时，forwardFeatures 应抛出 ERROR_INVALID_OPERATION。
- */
-TEST(ResNetFeatureInferTest, ForwardFeaturesWithFeatureOnlyConfigWithoutContextThrowsInvalidOperation)
-{
-    auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setFeatureTensorNames({"layer1"});
-    config->setFeatureOnly(true);
-
-    auto model = irt::model::CreateModel("resnet18", std::move(config));
-    ASSERT_NE(model, nullptr);
-
-    std::vector<void *> buffers(2, nullptr);
-
-    EXPECT_THROW({ model->forwardFeatures(buffers); }, irt::Exception);
-
-    try
-    {
-        model->forwardFeatures(buffers);
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
-}
-
-/**
- * @brief ResNet 处于 featureOnly 模式但未初始化执行上下文时，infer 也应被运行时保护拦下。
- */
-TEST(ResNetFeatureInferTest, InferWithFeatureOnlyConfigWithoutContextStillThrowsInvalidOperation)
-{
-    auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setFeatureTensorNames({"layer1"});
-    config->setFeatureOnly(true);
-
-    auto model = irt::model::CreateModel("resnet18", std::move(config));
-    ASSERT_NE(model, nullptr);
-
-    std::vector<void *> buffers(2, nullptr);
-
-    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
-
-    try
-    {
-        model->infer(buffers);
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
+    ExpectIrtExceptionCode([&] { model->forwardFeatures(MakeNullBuffers(1)); },
+                           irt::Status::ERROR_INVALID_OPERATION);
 }

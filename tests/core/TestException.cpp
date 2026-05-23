@@ -93,6 +93,58 @@ TEST(ExceptionTest, ProtectCallConvertsBadAllocToOutOfMemory)
 }
 
 /**
+ * @brief SetThreadError 应将普通 std::exception 转换为内部错误。
+ */
+TEST(ExceptionTest, SetThreadErrorMapsStdExceptionToInternal)
+{
+    irt::SetThreadError(nullptr);
+    irt::SetThreadError(std::make_exception_ptr(std::runtime_error("runtime failure")));
+
+    char msg[IRT_MAX_STATUS_MESSAGE_LENGTH] = {};
+    EXPECT_EQ(irt::PeekAtLastErrorMessage(msg, sizeof(msg)), IRT_ERROR_INTERNAL);
+    EXPECT_NE(std::string(msg).find("runtime failure"), std::string::npos);
+    irt::SetThreadError(nullptr);
+}
+
+/**
+ * @brief ProtectCall 应将 std::invalid_argument 映射为非法参数错误。
+ */
+TEST(ExceptionTest, ProtectCallConvertsInvalidArgumentToInvalidArgumentStatus)
+{
+    irt::SetThreadError(nullptr);
+    const IRTStatus status = irt::ProtectCall(
+        []
+        {
+            throw std::invalid_argument("bad input");
+        });
+
+    char msg[IRT_MAX_STATUS_MESSAGE_LENGTH] = {};
+    EXPECT_EQ(status, IRT_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(irt::PeekAtLastErrorMessage(msg, sizeof(msg)), IRT_ERROR_INVALID_ARGUMENT);
+    EXPECT_NE(std::string(msg).find("bad input"), std::string::npos);
+    irt::SetThreadError(nullptr);
+}
+
+/**
+ * @brief ProtectCall 应将未知异常映射为内部错误并写入兜底消息。
+ */
+TEST(ExceptionTest, ProtectCallConvertsUnknownExceptionToInternal)
+{
+    irt::SetThreadError(nullptr);
+    const IRTStatus status = irt::ProtectCall(
+        []
+        {
+            throw 42;
+        });
+
+    char msg[IRT_MAX_STATUS_MESSAGE_LENGTH] = {};
+    EXPECT_EQ(status, IRT_ERROR_INTERNAL);
+    EXPECT_EQ(irt::PeekAtLastErrorMessage(msg, sizeof(msg)), IRT_ERROR_INTERNAL);
+    EXPECT_NE(std::string(msg).find("Unexpected error"), std::string::npos);
+    irt::SetThreadError(nullptr);
+}
+
+/**
  * @brief 版本相关接口应返回自洽的非空字符串。
  */
 TEST(VersionTest, VersionStringsAreNonEmptyAndConsistent)

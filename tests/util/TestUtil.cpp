@@ -12,9 +12,15 @@ namespace fs = std::filesystem;
 
 namespace {
 
+/**
+ * @brief 自动清理的临时目录，避免路径类测试污染系统临时目录。
+ */
 class TempDir
 {
 public:
+    /**
+     * @brief 创建唯一临时目录。
+     */
     TempDir()
     {
         static std::atomic<int> counter{0};
@@ -23,12 +29,19 @@ public:
         fs::create_directories(path_);
     }
 
+    /**
+     * @brief 析构时递归删除临时目录。
+     */
     ~TempDir()
     {
         std::error_code ec;
         fs::remove_all(path_, ec);
     }
 
+    /**
+     * @brief 获取临时目录路径。
+     * @return 临时目录路径。
+     */
     const fs::path &path() const
     {
         return path_;
@@ -41,15 +54,25 @@ private:
     fs::path path_;
 };
 
+/**
+ * @brief 在作用域内切换当前工作目录，并在析构时恢复。
+ */
 class ScopedCurrentPath
 {
 public:
+    /**
+     * @brief 保存当前目录并切换到目标目录。
+     * @param target 目标工作目录。
+     */
     explicit ScopedCurrentPath(const fs::path &target)
         : old_(fs::current_path())
     {
         fs::current_path(target);
     }
 
+    /**
+     * @brief 恢复构造前的工作目录。
+     */
     ~ScopedCurrentPath()
     {
         std::error_code ec;
@@ -87,6 +110,27 @@ TEST(PathUtilTest, FindsProjectRootFromSourceFileAncestor)
 }
 
 /**
+ * @brief findProjectRoot 应能从可执行文件路径向上找到包含全部 marker 的项目根目录。
+ */
+TEST(PathUtilTest, FindsProjectRootFromProgramNameAncestor)
+{
+    TempDir temp;
+    const fs::path root = temp.path() / "repo";
+    const fs::path bin_dir = root / "build" / "bin";
+
+    fs::create_directories(bin_dir);
+    fs::create_directories(root / "assets");
+    std::ofstream(root / "CMakeLists.txt") << "cmake";
+    std::ofstream(root / "assets" / "marker.txt") << "asset";
+
+    const ScopedCurrentPath cwd_guard(temp.path());
+    const fs::path found = irt::util::findProjectRoot((bin_dir / "app.exe").string().c_str(),
+                                                      {"CMakeLists.txt", "assets/marker.txt"}, nullptr);
+
+    EXPECT_EQ(fs::weakly_canonical(found), fs::weakly_canonical(root));
+}
+
+/**
  * @brief findProjectRoot 在找不到匹配根目录时应回退到当前工作目录。
  */
 TEST(PathUtilTest, FallsBackToCurrentWorkingDirectoryWhenNoMarkerExists)
@@ -117,6 +161,17 @@ TEST(CheckErrorUtilTest, FormattedCheckMessageOverloadFormatsText)
 {
     char buf[64] = {};
     EXPECT_STREQ(irt::util::detail::GetCheckMessage(buf, sizeof(buf), "value=%d", 42), "value=42");
+}
+
+/**
+ * @brief FormatErrorMessage 在没有调用语句和附加消息时也应输出错误名。
+ */
+TEST(CheckErrorUtilTest, FormatErrorMessageHandlesMinimalInput)
+{
+    const std::string text = irt::util::detail::FormatErrorMessage("cudaSuccess", "", "");
+
+    EXPECT_NE(text.find("cudaSuccess"), std::string::npos);
+    EXPECT_EQ(text.find("allocation failed"), std::string::npos);
 }
 
 /**
@@ -198,5 +253,8 @@ TEST(CheckErrorUtilTest, CheckLogReturnsFalseAndPrintsMessageOnFailureStatus)
  */
 TEST(CheckErrorUtilTest, CheckLogReturnsTrueOnSuccessStatus)
 {
+    testing::internal::CaptureStderr();
     EXPECT_TRUE((IRT_CHECK_LOG(cudaSuccess, "unused")));
+    const std::string stderr_text = testing::internal::GetCapturedStderr();
+    EXPECT_TRUE(stderr_text.empty());
 }

@@ -1,11 +1,15 @@
+#include "TestModelCommon.hpp"
+
 #include <gtest/gtest.h>
 
-#include <inferrt/core/Exception.hpp>
-#include <inferrt/core/Status.h>
 #include <inferrt/model/IModel.h>
 #include <inferrt/model/Utils.hpp>
 
+#include <memory>
 #include <vector>
+
+using test::model::ExpectIrtExceptionCode;
+using test::model::MakeNullBuffers;
 
 /**
  * @brief ONNX 模型应使用 `.onnx` 作为权重扩展名。
@@ -28,17 +32,8 @@ TEST(ONNXModelBuildNetworkTest, ManualBuildNetworkThrowsInvalidOperation)
     auto model = irt::model::CreateModel("onnx");
     ASSERT_NE(model, nullptr);
 
-    EXPECT_THROW({ model->buildNetwork(nullptr, irt::model::WeightsMap{}); }, irt::Exception);
-
-    try
-    {
-        model->buildNetwork(nullptr, irt::model::WeightsMap{});
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
+    ExpectIrtExceptionCode([&] { model->buildNetwork(nullptr, irt::model::WeightsMap{}); },
+                           irt::Status::ERROR_INVALID_OPERATION);
 }
 
 /**
@@ -49,7 +44,8 @@ TEST(ONNXModelRuntimeQueryTest, IOTensorNamesWithoutEngineThrowsInvalidOperation
     auto model = irt::model::CreateModel("onnx");
     ASSERT_NE(model, nullptr);
 
-    EXPECT_THROW({ model->ioTensorNames(nvinfer1::TensorIOMode::kINPUT); }, irt::Exception);
+    ExpectIrtExceptionCode([&] { model->ioTensorNames(nvinfer1::TensorIOMode::kINPUT); },
+                           irt::Status::ERROR_INVALID_OPERATION);
 }
 
 /**
@@ -60,7 +56,7 @@ TEST(ONNXModelRuntimeQueryTest, TensorShapeWithoutEngineThrowsInvalidOperation)
     auto model = irt::model::CreateModel("onnx");
     ASSERT_NE(model, nullptr);
 
-    EXPECT_THROW({ model->tensorShape("input"); }, irt::Exception);
+    ExpectIrtExceptionCode([&] { model->tensorShape("input"); }, irt::Status::ERROR_INVALID_OPERATION);
 }
 
 /**
@@ -71,7 +67,7 @@ TEST(ONNXModelRuntimeQueryTest, TensorDataTypeWithoutEngineThrowsInvalidOperatio
     auto model = irt::model::CreateModel("onnx");
     ASSERT_NE(model, nullptr);
 
-    EXPECT_THROW({ model->tensorDataType("input"); }, irt::Exception);
+    ExpectIrtExceptionCode([&] { model->tensorDataType("input"); }, irt::Status::ERROR_INVALID_OPERATION);
 }
 
 /**
@@ -83,7 +79,8 @@ TEST(ONNXModelRuntimeQueryTest, SetTensorShapeWithoutContextThrowsInvalidOperati
     ASSERT_NE(model, nullptr);
 
     const nvinfer1::Dims4 dims(1, 3, 224, 224);
-    EXPECT_THROW({ model->setTensorShape("input", dims); }, irt::Exception);
+    ExpectIrtExceptionCode([&] { model->setTensorShape("input", dims); },
+                           irt::Status::ERROR_INVALID_OPERATION);
 }
 
 /**
@@ -94,17 +91,8 @@ TEST(ONNXModelLifecycleTest, BuildWithNonExistentOnnxThrowsInvalidArgument)
     auto model = irt::model::CreateModel("onnx");
     ASSERT_NE(model, nullptr);
 
-    EXPECT_THROW({ model->build("/non/existent/path/model.onnx"); }, irt::Exception);
-
-    try
-    {
-        model->build("/non/existent/path/model.onnx");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
-    }
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.onnx"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -115,19 +103,13 @@ TEST(ONNXModelLifecycleTest, BuildOrLoadWithNonExistentOnnxThrowsInvalidArgument
     auto model = irt::model::CreateModel("onnx");
     ASSERT_NE(model, nullptr);
 
-    EXPECT_THROW({ model->buildOrLoad("/non/existent/path/model.onnx"); }, irt::Exception);
-
-    try
-    {
-        model->buildOrLoad("/non/existent/path/model.onnx");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
-    }
+    ExpectIrtExceptionCode([&] { model->buildOrLoad("/non/existent/path/model.onnx"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
+/**
+ * @brief ONNX 通道暂不支持内部特征层选择，build 应在进入文件解析前拒绝该配置。
+ */
 TEST(ONNXModelLifecycleTest, BuildWithFeatureTensorSelectionThrowsInvalidOperation)
 {
     auto config = std::make_unique<irt::model::IModelConfig>();
@@ -136,19 +118,13 @@ TEST(ONNXModelLifecycleTest, BuildWithFeatureTensorSelectionThrowsInvalidOperati
     auto model = irt::model::CreateModel("onnx", std::move(config));
     ASSERT_NE(model, nullptr);
 
-    EXPECT_THROW({ model->build("/non/existent/path/model.onnx"); }, irt::Exception);
-
-    try
-    {
-        model->build("/non/existent/path/model.onnx");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.onnx"); },
+                           irt::Status::ERROR_INVALID_OPERATION);
 }
 
+/**
+ * @brief ONNX 通道暂不支持 featureOnly 裁剪网络，build 应返回非法操作错误。
+ */
 TEST(ONNXModelLifecycleTest, BuildWithFeatureOnlyThrowsInvalidOperation)
 {
     auto config = std::make_unique<irt::model::IModelConfig>();
@@ -158,19 +134,13 @@ TEST(ONNXModelLifecycleTest, BuildWithFeatureOnlyThrowsInvalidOperation)
     auto model = irt::model::CreateModel("onnx", std::move(config));
     ASSERT_NE(model, nullptr);
 
-    EXPECT_THROW({ model->build("/non/existent/path/model.onnx"); }, irt::Exception);
-
-    try
-    {
-        model->build("/non/existent/path/model.onnx");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.onnx"); },
+                           irt::Status::ERROR_INVALID_OPERATION);
 }
 
+/**
+ * @brief ONNX 通道在 buildOrLoad 路径中也应拒绝 featureOnly 配置。
+ */
 TEST(ONNXModelLifecycleTest, BuildOrLoadWithFeatureOnlyThrowsInvalidOperation)
 {
     auto config = std::make_unique<irt::model::IModelConfig>();
@@ -180,17 +150,8 @@ TEST(ONNXModelLifecycleTest, BuildOrLoadWithFeatureOnlyThrowsInvalidOperation)
     auto model = irt::model::CreateModel("onnx", std::move(config));
     ASSERT_NE(model, nullptr);
 
-    EXPECT_THROW({ model->buildOrLoad("/non/existent/path/model.onnx"); }, irt::Exception);
-
-    try
-    {
-        model->buildOrLoad("/non/existent/path/model.onnx");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
+    ExpectIrtExceptionCode([&] { model->buildOrLoad("/non/existent/path/model.onnx"); },
+                           irt::Status::ERROR_INVALID_OPERATION);
 }
 
 /**
@@ -201,17 +162,6 @@ TEST(ONNXModelInferTest, InferWithoutContextThrowsInvalidOperation)
     auto model = irt::model::CreateModel("onnx");
     ASSERT_NE(model, nullptr);
 
-    std::vector<void *> buffers(2, nullptr);
-
-    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
-
-    try
-    {
-        model->infer(buffers);
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
+    ExpectIrtExceptionCode([&] { model->infer(MakeNullBuffers(2)); },
+                           irt::Status::ERROR_INVALID_OPERATION);
 }

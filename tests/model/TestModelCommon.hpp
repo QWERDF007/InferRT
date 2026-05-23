@@ -2,9 +2,13 @@
 
 #include <gtest/gtest.h>
 
+#include <inferrt/core/Exception.hpp>
+#include <inferrt/core/Status.hpp>
 #include <inferrt/model/IModel.h>
 
 #include <array>
+#include <utility>
+#include <vector>
 
 namespace test::model {
 
@@ -50,5 +54,38 @@ inline constexpr std::array<RegisteredModelCase, 17> kRegisteredModels = {{
 class RegisteredModelsTest : public ::testing::TestWithParam<RegisteredModelCase>
 {
 };
+
+/**
+ * @brief 构造用于未初始化 runtime 测试的空 buffer 列表。
+ * @param count buffer 数量。
+ * @return 指针均为空的 buffer 列表。
+ */
+inline std::vector<void *> MakeNullBuffers(size_t count)
+{
+    return std::vector<void *>(count, nullptr);
+}
+
+/**
+ * @brief 断言指定调用抛出 InferRT 异常且错误码符合预期。
+ *
+ * 该辅助函数用于减少测试中重复的 `try/catch` 样板代码，同时保留错误码校验。
+ *
+ * @tparam Fn 可调用对象类型。
+ * @param fn 待执行的调用。
+ * @param expected_code 期望的 InferRT 错误码。
+ */
+template <typename Fn>
+void ExpectIrtExceptionCode(Fn &&fn, irt::Status expected_code)
+{
+    try
+    {
+        std::forward<Fn>(fn)();
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), expected_code);
+    }
+}
 
 } // namespace test::model

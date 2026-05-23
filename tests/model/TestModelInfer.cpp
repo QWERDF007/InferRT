@@ -1,253 +1,89 @@
-#include <gtest/gtest.h>
+#include "TestModelCommon.hpp"
 
-#include <inferrt/core/Exception.hpp>
-#include <inferrt/core/Status.h>
-#include <inferrt/model/IModel.h>
+using test::model::ExpectIrtExceptionCode;
+using test::model::MakeNullBuffers;
+using test::model::RegisteredModelsTest;
+using test::model::kRegisteredModels;
 
-#include <vector>
+namespace {
 
 /**
- * @brief AlexNet 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION。
+ * @brief 模型主推理入口的参数化测试基类。
  */
-TEST(AlexNetInferTest, InferWithoutContextThrowsInvalidOperation)
+class ModelInferRegisteredModelsTest : public RegisteredModelsTest
 {
-    auto model = irt::model::CreateModel("alexnet");
+};
+
+} // namespace
+
+INSTANTIATE_TEST_SUITE_P(KnownModels, ModelInferRegisteredModelsTest, ::testing::ValuesIn(kRegisteredModels));
+
+/**
+ * @brief 所有已注册模型在执行上下文未初始化时调用 infer 都应抛出非法操作异常。
+ */
+TEST_P(ModelInferRegisteredModelsTest, InferWithoutContextThrowsInvalidOperation)
+{
+    const auto &param = GetParam();
+    auto        model = irt::model::CreateModel(param.key);
     ASSERT_NE(model, nullptr);
 
-    std::vector<void *> buffers(2, nullptr);
-
-    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
-
-    try
-    {
-        model->infer(buffers);
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
+    ExpectIrtExceptionCode([&] { model->infer(MakeNullBuffers(2)); }, irt::Status::ERROR_INVALID_OPERATION);
 }
 
 /**
- * @brief 当前实现中，AlexNet 在 context 缺失时会先于 buffer 数量检查失败。
+ * @brief 未初始化 context 时，infer 应先报运行时未就绪，而不是进入 buffer 数量校验。
  *
- * 该测试用于固定当前异常顺序，避免后续重构时无意改变行为。
+ * 该测试固定当前错误顺序，避免后续重构时把未构建模型误报为参数数量错误。
  */
-TEST(AlexNetInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
+TEST_P(ModelInferRegisteredModelsTest, InferWithWrongBufferCountStillFailsBeforeBufferValidation)
 {
-    auto model = irt::model::CreateModel("alexnet");
+    const auto &param = GetParam();
+    auto        model = irt::model::CreateModel(param.key);
     ASSERT_NE(model, nullptr);
 
-    std::vector<void *> buffers(1, nullptr);
-    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
+    ExpectIrtExceptionCode([&] { model->infer(MakeNullBuffers(1)); }, irt::Status::ERROR_INVALID_OPERATION);
 }
 
 /**
- * @brief ResNet 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION。
+ * @brief 未初始化 runtime 且无外部 stream 时，resolveExecutionStream 应返回空指针。
  */
-TEST(ResNetInferTest, InferWithoutContextThrowsInvalidOperation)
+TEST_P(ModelInferRegisteredModelsTest, ResolveExecutionStreamWithoutRuntimeReturnsNullptr)
 {
-    auto model = irt::model::CreateModel("resnet50");
+    const auto &param = GetParam();
+    auto        model = irt::model::CreateModel(param.key);
     ASSERT_NE(model, nullptr);
 
-    std::vector<void *> buffers(2, nullptr);
-
-    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
-
-    try
-    {
-        model->infer(buffers);
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
+    EXPECT_EQ(model->resolveExecutionStream(), nullptr);
 }
 
 /**
- * @brief 当前实现中，ResNet 在 context 缺失时同样会先于 buffer 数量检查失败。
+ * @brief 单次传入的 stream 覆盖参数应优先于模型内部状态。
  */
-TEST(ResNetInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
+TEST_P(ModelInferRegisteredModelsTest, ResolveExecutionStreamPrefersCallOverride)
 {
-    auto model = irt::model::CreateModel("resnet18");
+    const auto &param = GetParam();
+    auto        model = irt::model::CreateModel(param.key);
     ASSERT_NE(model, nullptr);
 
-    std::vector<void *> buffers(1, nullptr);
-    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
+    const cudaStream_t override_stream = reinterpret_cast<cudaStream_t>(0x1234);
+
+    EXPECT_EQ(model->resolveExecutionStream(override_stream), override_stream);
 }
 
 /**
- * @brief GoogLeNet 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION。
+ * @brief 显式设置和清除外部 stream 应影响后续默认执行 stream 的解析结果。
  */
-TEST(GoogLeNetInferTest, InferWithoutContextThrowsInvalidOperation)
+TEST_P(ModelInferRegisteredModelsTest, SetAndClearStreamAffectsResolvedDefaultStream)
 {
-    auto model = irt::model::CreateModel("googlenet");
+    const auto &param = GetParam();
+    auto        model = irt::model::CreateModel(param.key);
     ASSERT_NE(model, nullptr);
 
-    std::vector<void *> buffers(2, nullptr);
+    const cudaStream_t external_stream = reinterpret_cast<cudaStream_t>(0x5678);
 
-    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
+    model->setStream(external_stream);
+    EXPECT_EQ(model->resolveExecutionStream(), external_stream);
 
-    try
-    {
-        model->infer(buffers);
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
-}
-
-/**
- * @brief 当前实现中，GoogLeNet 在 context 缺失时也会先于 buffer 数量检查失败。
- */
-TEST(GoogLeNetInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
-{
-    auto model = irt::model::CreateModel("googlenet");
-    ASSERT_NE(model, nullptr);
-
-    std::vector<void *> buffers(1, nullptr);
-    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
-}
-
-/**
- * @brief VGG11 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION。
- */
-TEST(VGGInferTest, InferWithoutContextThrowsInvalidOperation)
-{
-    auto model = irt::model::CreateModel("vgg11");
-    ASSERT_NE(model, nullptr);
-
-    std::vector<void *> buffers(2, nullptr);
-
-    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
-
-    try
-    {
-        model->infer(buffers);
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
-}
-
-/**
- * @brief 当前实现中，VGG11 在 context 缺失时也会先于 buffer 数量检查失败。
- */
-TEST(VGGInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
-{
-    auto model = irt::model::CreateModel("vgg11");
-    ASSERT_NE(model, nullptr);
-
-    std::vector<void *> buffers(1, nullptr);
-    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
-}
-
-/**
- * @brief VGG13 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION。
- */
-TEST(VGGInferTest, VGG13InferWithoutContextThrowsInvalidOperation)
-{
-    auto model = irt::model::CreateModel("vgg13");
-    ASSERT_NE(model, nullptr);
-
-    std::vector<void *> buffers(2, nullptr);
-
-    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
-
-    try
-    {
-        model->infer(buffers);
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
-}
-
-/**
- * @brief VGG16 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION。
- */
-TEST(VGGInferTest, VGG16InferWithoutContextThrowsInvalidOperation)
-{
-    auto model = irt::model::CreateModel("vgg16");
-    ASSERT_NE(model, nullptr);
-
-    std::vector<void *> buffers(2, nullptr);
-
-    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
-
-    try
-    {
-        model->infer(buffers);
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
-}
-
-/**
- * @brief VGG19 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION。
- */
-TEST(VGGInferTest, VGG19InferWithoutContextThrowsInvalidOperation)
-{
-    auto model = irt::model::CreateModel("vgg19");
-    ASSERT_NE(model, nullptr);
-
-    std::vector<void *> buffers(2, nullptr);
-
-    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
-
-    try
-    {
-        model->infer(buffers);
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
-}
-
-/**
- * @brief WideResNet50_2 在执行上下文未初始化时调用 infer，应抛出 ERROR_INVALID_OPERATION。
- */
-TEST(WideResNetInferTest, InferWithoutContextThrowsInvalidOperation)
-{
-    auto model = irt::model::CreateModel("wide_resnet50_2");
-    ASSERT_NE(model, nullptr);
-
-    std::vector<void *> buffers(2, nullptr);
-
-    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
-
-    try
-    {
-        model->infer(buffers);
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
-}
-
-/**
- * @brief 当前实现中，WideResNet101_2 在 context 缺失时会先于 buffer 数量检查失败。
- */
-TEST(WideResNetInferTest, InferWithWrongBufferCountStillThrowsWhenContextIsMissing)
-{
-    auto model = irt::model::CreateModel("wide_resnet101_2");
-    ASSERT_NE(model, nullptr);
-
-    std::vector<void *> buffers(1, nullptr);
-    EXPECT_THROW({ model->infer(buffers); }, irt::Exception);
+    model->clearStream();
+    EXPECT_EQ(model->resolveExecutionStream(), nullptr);
 }

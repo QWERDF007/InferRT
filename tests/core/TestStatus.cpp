@@ -2,8 +2,13 @@
 #include <gtest/gtest.h>
 #include <inferrt/core/Status.h>
 
+#include <string>
+
 namespace t = ::testing;
 
+/**
+ * @brief 参数化校验 C API 状态码到名称的映射关系。
+ */
 class StatusNameTest : public t::TestWithParam<std::tuple<IRTStatus, const char *>>
 {
 };
@@ -21,6 +26,7 @@ INSTANTIATE_TEST_SUITE_P(AllStatuses, StatusNameTest,
                                     MAKE_STATUS_NAME(IRT_ERROR_NOT_READY),
                                     MAKE_STATUS_NAME(IRT_ERROR_OUT_OF_MEMORY),
                                     MAKE_STATUS_NAME(IRT_ERROR_INTERNAL),
+                                    MAKE_STATUS_NAME(IRT_ERROR_UNKNOWN),
                                     std::make_tuple(static_cast<IRTStatus>(255), "Unknown error")));
 #else
 INSTANTIATE_TEST_SUITE_P(AllStatuses, StatusNameTest,
@@ -31,11 +37,15 @@ INSTANTIATE_TEST_SUITE_P(AllStatuses, StatusNameTest,
                                     MAKE_STATUS_NAME(IRT_ERROR_DEVICE),
                                     MAKE_STATUS_NAME(IRT_ERROR_NOT_READY),
                                     MAKE_STATUS_NAME(IRT_ERROR_OUT_OF_MEMORY),
-                                    MAKE_STATUS_NAME(IRT_ERROR_INTERNAL)));
+                                    MAKE_STATUS_NAME(IRT_ERROR_INTERNAL),
+                                    MAKE_STATUS_NAME(IRT_ERROR_UNKNOWN)));
 #endif
 // clang-format on
 
-TEST_P(StatusNameTest, get_name)
+/**
+ * @brief StatusGetName 应为所有公开状态码返回稳定名称。
+ */
+TEST_P(StatusNameTest, GetName)
 {
     IRTStatus   status = std::get<0>(GetParam());
     const char *gold   = std::get<1>(GetParam());
@@ -43,34 +53,49 @@ TEST_P(StatusNameTest, get_name)
     EXPECT_STREQ(gold, irt::StatusGetName(status));
 }
 
-TEST(StatusTest, main_thread_has_success_status_by_default)
+/**
+ * @brief 主线程初始状态应为成功。
+ */
+TEST(StatusTest, MainThreadHasSuccessStatusByDefault)
 {
     EXPECT_EQ(IRT_SUCCESS, irt::GetLastError());
     EXPECT_EQ(IRT_SUCCESS, irt::PeekAtLastError());
 }
 
-TEST(StatusTest, get_last_status_msg_success_has_correct_message)
+/**
+ * @brief 成功状态的错误消息应为固定文本 success。
+ */
+TEST(StatusTest, GetLastStatusMsgSuccessHasCorrectMessage)
 {
     char msg[IRT_MAX_STATUS_MESSAGE_LENGTH];
     ASSERT_EQ(IRT_SUCCESS, irt::GetLastErrorMessage(msg, sizeof(msg)));
     EXPECT_STREQ("success", msg);
 }
 
-TEST(StatusTest, get_last_status_resets_error_state)
+/**
+ * @brief GetLastError 应读取并重置线程错误状态。
+ */
+TEST(StatusTest, GetLastStatusResetsErrorState)
 {
     irt::SetThreadStatus(IRT_ERROR_INTERNAL, "%s", "");
     EXPECT_EQ(IRT_ERROR_INTERNAL, irt::GetLastError());
     EXPECT_EQ(IRT_SUCCESS, irt::GetLastError());
 }
 
-TEST(StatusTest, peek_last_status_doesnt_reset_error_state)
+/**
+ * @brief PeekAtLastError 只读状态，不应重置线程错误状态。
+ */
+TEST(StatusTest, PeekLastStatusDoesntResetErrorState)
 {
     irt::SetThreadStatus(IRT_ERROR_INTERNAL, "%s", "");
     EXPECT_EQ(IRT_ERROR_INTERNAL, irt::PeekAtLastError());
     EXPECT_EQ(IRT_ERROR_INTERNAL, irt::PeekAtLastError());
 }
 
-TEST(StatusTest, get_last_status_msg_error_has_correct_message)
+/**
+ * @brief GetLastErrorMessage 应返回当前错误消息并重置状态。
+ */
+TEST(StatusTest, GetLastStatusMsgErrorHasCorrectMessage)
 {
     irt::SetThreadStatus(IRT_ERROR_INTERNAL, "test message");
 
@@ -82,7 +107,10 @@ TEST(StatusTest, get_last_status_msg_error_has_correct_message)
     EXPECT_STREQ("success", msg);
 }
 
-TEST(StatusTest, peek_at_last_status_msg_success_has_correct_message)
+/**
+ * @brief PeekAtLastErrorMessage 在成功状态下应返回 success 且不改变状态。
+ */
+TEST(StatusTest, PeekAtLastStatusMsgSuccessHasCorrectMessage)
 {
     char msg[IRT_MAX_STATUS_MESSAGE_LENGTH];
     ASSERT_EQ(IRT_SUCCESS, irt::PeekAtLastErrorMessage(msg, sizeof(msg)));
@@ -99,7 +127,10 @@ TEST(StatusTest, peek_at_last_status_msg_success_has_correct_message)
 //     EXPECT_EQ(IRT_ERROR_INVALID_ARGUMENT, irt::GetLastError());
 // }
 
-TEST(StatusTest, peek_at_last_status_msg_error_has_correct_message)
+/**
+ * @brief PeekAtLastErrorMessage 应可重复读取同一条错误消息。
+ */
+TEST(StatusTest, PeekAtLastStatusMsgErrorHasCorrectMessage)
 {
     irt::SetThreadStatus(IRT_ERROR_INTERNAL, "test message");
 
@@ -112,7 +143,10 @@ TEST(StatusTest, peek_at_last_status_msg_error_has_correct_message)
     EXPECT_STREQ("test message", msg);
 }
 
-TEST(StatusTest, set_thread_status_var_arg)
+/**
+ * @brief SetThreadStatus 应支持 printf 风格可变参数格式化。
+ */
+TEST(StatusTest, SetThreadStatusVarArg)
 {
     irt::SetThreadStatus(IRT_ERROR_DEVICE, "test message %d %c %s", 456, 'W', "Liliya");
 
@@ -121,7 +155,10 @@ TEST(StatusTest, set_thread_status_var_arg)
     EXPECT_STREQ("test message 456 W Liliya", msg);
 }
 
-TEST(StatusTest, set_thread_status_var_arg_list)
+/**
+ * @brief SetThreadStatusVarArgList 应支持转发 va_list 参数。
+ */
+TEST(StatusTest, SetThreadStatusVarArgList)
 {
     auto fn = [](const char *fmt, ...)
     {
@@ -139,18 +176,64 @@ TEST(StatusTest, set_thread_status_var_arg_list)
     EXPECT_STREQ("test message 321 rod l", msg);
 }
 
-TEST(StatusTest, set_thread_status_var_arg_list_1)
+/**
+ * @brief SetThreadStatusVarArgList 在空格式串时仍应保留错误码。
+ */
+TEST(StatusTest, SetThreadStatusVarArgListWithNullFormat)
 {
     va_list va{};
     irt::SetThreadStatusVarArgList(IRT_ERROR_DEVICE, nullptr, va);
     EXPECT_EQ(IRT_ERROR_DEVICE, irt::GetLastError());
 }
 
-TEST(StatusTest, set_thread_status_null_message)
+/**
+ * @brief SetThreadStatus 传入空消息时应写入空字符串消息。
+ */
+TEST(StatusTest, SetThreadStatusNullMessage)
 {
     irt::SetThreadStatus(IRT_ERROR_DEVICE, nullptr);
 
     char msg[IRT_MAX_STATUS_MESSAGE_LENGTH];
     ASSERT_EQ(IRT_ERROR_DEVICE, irt::GetLastErrorMessage(msg, sizeof(msg)));
     EXPECT_STREQ("", msg);
+}
+
+/**
+ * @brief GetLastErrorMessage 允许空输出缓冲区，并且仍会重置线程状态。
+ */
+TEST(StatusTest, GetLastErrorMessageAllowsNullBufferAndResetsStatus)
+{
+    irt::SetThreadStatus(IRT_ERROR_INTERNAL, "will reset");
+
+    EXPECT_EQ(IRT_ERROR_INTERNAL, irt::GetLastErrorMessage(nullptr, 0));
+    EXPECT_EQ(IRT_SUCCESS, irt::PeekAtLastError());
+}
+
+/**
+ * @brief PeekAtLastErrorMessage 对小缓冲区应安全截断消息且不重置状态。
+ */
+TEST(StatusTest, PeekAtLastErrorMessageTruncatesSmallBufferWithoutReset)
+{
+    irt::SetThreadStatus(IRT_ERROR_INTERNAL, "abcdef");
+
+    char msg[4] = {};
+    EXPECT_EQ(IRT_ERROR_INTERNAL, irt::PeekAtLastErrorMessage(msg, sizeof(msg)));
+    EXPECT_EQ(std::string(msg), "abc");
+    EXPECT_EQ(IRT_ERROR_INTERNAL, irt::PeekAtLastError());
+
+    irt::GetLastError();
+}
+
+/**
+ * @brief PeekAtLastErrorMessage 在 len 小于等于 0 时不应写入输出缓冲区。
+ */
+TEST(StatusTest, PeekAtLastErrorMessageIgnoresNonPositiveLength)
+{
+    irt::SetThreadStatus(IRT_ERROR_INTERNAL, "abcdef");
+
+    char msg[] = "unchanged";
+    EXPECT_EQ(IRT_ERROR_INTERNAL, irt::PeekAtLastErrorMessage(msg, 0));
+    EXPECT_STREQ(msg, "unchanged");
+
+    irt::GetLastError();
 }

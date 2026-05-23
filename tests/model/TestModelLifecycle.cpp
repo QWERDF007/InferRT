@@ -8,12 +8,24 @@
 #include <vector>
 
 using test::model::RegisteredModelsTest;
+using test::model::ExpectIrtExceptionCode;
 using test::model::kRegisteredModels;
-
-INSTANTIATE_TEST_SUITE_P(KnownModels, RegisteredModelsTest, ::testing::ValuesIn(kRegisteredModels));
 
 namespace {
 
+/**
+ * @brief 模型生命周期与默认配置的参数化测试基类。
+ */
+class ModelLifecycleRegisteredModelsTest : public RegisteredModelsTest
+{
+};
+
+/**
+ * @brief 使用新配置替换模型的输入/输出张量名称。
+ * @param model 待更新的模型实例。
+ * @param input_names 新输入张量名称列表。
+ * @param output_names 新输出张量名称列表。
+ */
 void SetModelTensorNames(irt::model::IModel &model, std::vector<std::string> input_names,
                          std::vector<std::string> output_names)
 {
@@ -28,11 +40,21 @@ void SetModelTensorNames(irt::model::IModel &model, std::vector<std::string> inp
     model.setModelConfig(std::move(new_config));
 }
 
+/**
+ * @brief 仅替换模型输入张量名称，其他配置保持不变。
+ * @param model 待更新的模型实例。
+ * @param input_names 新输入张量名称列表。
+ */
 void SetModelInputTensorNames(irt::model::IModel &model, std::vector<std::string> input_names)
 {
     SetModelTensorNames(model, std::move(input_names), model.modelConfig().outputTensorNames());
 }
 
+/**
+ * @brief 仅替换模型输出张量名称，其他配置保持不变。
+ * @param model 待更新的模型实例。
+ * @param output_names 新输出张量名称列表。
+ */
 void SetModelOutputTensorNames(irt::model::IModel &model, std::vector<std::string> output_names)
 {
     SetModelTensorNames(model, model.modelConfig().inputTensorNames(), std::move(output_names));
@@ -40,10 +62,12 @@ void SetModelOutputTensorNames(irt::model::IModel &model, std::vector<std::strin
 
 } // namespace
 
+INSTANTIATE_TEST_SUITE_P(KnownModels, ModelLifecycleRegisteredModelsTest, ::testing::ValuesIn(kRegisteredModels));
+
 /**
  * @brief 所有内置模型都应使用统一的默认权重扩展名和引擎扩展名。
  */
-TEST_P(RegisteredModelsTest, DefaultExtensionsMatchExpectedValues)
+TEST_P(ModelLifecycleRegisteredModelsTest, DefaultExtensionsMatchExpectedValues)
 {
     const auto &param = GetParam();
 
@@ -57,7 +81,7 @@ TEST_P(RegisteredModelsTest, DefaultExtensionsMatchExpectedValues)
 /**
  * @brief 所有内置模型的默认日志级别都应为 WARNING。
  */
-TEST_P(RegisteredModelsTest, DefaultLogLevelIsWarning)
+TEST_P(ModelLifecycleRegisteredModelsTest, DefaultLogLevelIsWarning)
 {
     const auto &param = GetParam();
 
@@ -99,6 +123,82 @@ TEST(IModelConfigTest, TensorNamesCanBeConfiguredThroughModelApi)
 
     EXPECT_EQ(model->modelConfig().inputTensorNames(), input_names);
     EXPECT_EQ(model->modelConfig().outputTensorNames(), output_names);
+}
+
+/**
+ * @brief IModelConfig 默认值应与 ImageNet 分类模型约定保持一致。
+ */
+TEST(IModelConfigTest, DefaultConfigMatchesImageNetClassificationContract)
+{
+    const irt::model::IModelConfig config;
+
+    EXPECT_EQ(config.numClasses(), 1000);
+    EXPECT_EQ(config.inputTensorNames(), (std::vector<std::string>{"input"}));
+    EXPECT_EQ(config.outputTensorNames(), (std::vector<std::string>{"output"}));
+    EXPECT_TRUE(config.featureTensorNames().empty());
+    EXPECT_FALSE(config.featureOnly());
+    ASSERT_EQ(config.inputShapes().size(), 1U);
+    EXPECT_EQ(config.inputShape().nbDims, 4);
+    EXPECT_EQ(config.inputShape().d[0], 1);
+    EXPECT_EQ(config.inputShape().d[1], 3);
+    EXPECT_EQ(config.inputShape().d[2], 224);
+    EXPECT_EQ(config.inputShape().d[3], 224);
+}
+
+/**
+ * @brief IModelConfig setter 应能覆盖类别数、输入形状和特征配置。
+ */
+TEST(IModelConfigTest, SettersUpdateAllPublicConfigFields)
+{
+    irt::model::IModelConfig config;
+    config.setNumClasses(7);
+    config.setInputShape(nvinfer1::Dims4{2, 3, 32, 32});
+    config.setInputTensorNames({"image"});
+    config.setOutputTensorNames({"logits", "aux"});
+    config.setFeatureTensorNames({"layer1", "layer2"});
+    config.setFeatureOnly(true);
+
+    EXPECT_EQ(config.numClasses(), 7);
+    EXPECT_EQ(config.inputTensorNames(), (std::vector<std::string>{"image"}));
+    EXPECT_EQ(config.outputTensorNames(), (std::vector<std::string>{"logits", "aux"}));
+    EXPECT_EQ(config.featureTensorNames(), (std::vector<std::string>{"layer1", "layer2"}));
+    EXPECT_TRUE(config.featureOnly());
+    EXPECT_EQ(config.inputShape().d[0], 2);
+    EXPECT_EQ(config.inputShape().d[2], 32);
+}
+
+/**
+ * @brief setInputShapes 应替换完整输入形状列表，并保持 inputShape 指向第一个输入。
+ */
+TEST(IModelConfigTest, SetInputShapesReplacesShapeListAndUpdatesFirstShape)
+{
+    irt::model::IModelConfig config;
+    config.setInputShapes({nvinfer1::Dims4{1, 3, 64, 64}, nvinfer1::Dims4{1, 1, 16, 16}});
+
+    ASSERT_EQ(config.inputShapes().size(), 2U);
+    EXPECT_EQ(config.inputShape().d[2], 64);
+    EXPECT_EQ(config.inputShapes()[1].d[1], 1);
+}
+
+/**
+ * @brief setModelConfig 传入空指针时应恢复默认配置并清理旧的自定义值。
+ */
+TEST(IModelConfigTest, SetNullModelConfigResetsToDefaultConfig)
+{
+    auto model = irt::model::CreateModel("alexnet");
+    ASSERT_NE(model, nullptr);
+
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setNumClasses(12);
+    config->setInputTensorNames({"custom_input"});
+    config->setFeatureOnly(true);
+    model->setModelConfig(std::move(config));
+
+    model->setModelConfig(nullptr);
+
+    EXPECT_EQ(model->modelConfig().numClasses(), 1000);
+    EXPECT_EQ(model->modelConfig().inputTensorNames(), (std::vector<std::string>{"input"}));
+    EXPECT_FALSE(model->modelConfig().featureOnly());
 }
 
 /**
@@ -170,17 +270,7 @@ TEST(IModelSaveTest, SaveWithoutEngineThrowsInvalidOperation)
     auto model = irt::model::CreateModel("alexnet");
     ASSERT_NE(model, nullptr);
 
-    EXPECT_THROW({ model->save("output.engine"); }, irt::Exception);
-
-    try
-    {
-        model->save("output.engine");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_OPERATION);
-    }
+    ExpectIrtExceptionCode([&] { model->save("output.engine"); }, irt::Status::ERROR_INVALID_OPERATION);
 }
 
 /**
@@ -191,17 +281,8 @@ TEST(IModelLoadTest, LoadNonExistentFileThrowsInvalidArgument)
     auto model = irt::model::CreateModel("alexnet");
     ASSERT_NE(model, nullptr);
 
-    EXPECT_THROW({ model->load("/non/existent/path/model.engine"); }, irt::Exception);
-
-    try
-    {
-        model->load("/non/existent/path/model.engine");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
-    }
+    ExpectIrtExceptionCode([&] { model->load("/non/existent/path/model.engine"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -212,17 +293,8 @@ TEST(IModelBuildTest, BuildWithNonExistentWeightsThrowsInvalidArgument)
     auto model = irt::model::CreateModel("alexnet");
     ASSERT_NE(model, nullptr);
 
-    EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
-
-    try
-    {
-        model->build("/non/existent/path/model.wts");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
-    }
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -235,17 +307,8 @@ TEST(IModelBuildTest, BuildWithEmptyInputTensorNamesThrowsInvalidArgument)
 
     SetModelInputTensorNames(*model, {});
 
-    EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
-
-    try
-    {
-        model->build("/non/existent/path/model.wts");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
-    }
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -258,17 +321,8 @@ TEST(IModelBuildTest, BuildWithEmptyOutputTensorNamesThrowsInvalidArgument)
 
     SetModelOutputTensorNames(*model, {});
 
-    EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
-
-    try
-    {
-        model->build("/non/existent/path/model.wts");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
-    }
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -281,17 +335,8 @@ TEST(IModelBuildTest, BuildWithEmptyInputTensorNameThrowsInvalidArgument)
 
     SetModelInputTensorNames(*model, {""});
 
-    EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
-
-    try
-    {
-        model->build("/non/existent/path/model.wts");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
-    }
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -304,17 +349,8 @@ TEST(IModelBuildTest, BuildWithEmptyOutputTensorNameThrowsInvalidArgument)
 
     SetModelOutputTensorNames(*model, {""});
 
-    EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
-
-    try
-    {
-        model->build("/non/existent/path/model.wts");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
-    }
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -329,7 +365,8 @@ TEST(IModelBuildTest, BuildWithEmptyFeatureTensorNameThrowsInvalidArgument)
     config->setFeatureTensorNames({""});
     model->setModelConfig(std::move(config));
 
-    EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -346,7 +383,8 @@ TEST(IModelBuildTest, BuildWithMismatchedOutputTensorCountInFeatureOnlyModeThrow
     config->setFeatureOnly(true);
     model->setModelConfig(std::move(config));
 
-    EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -362,17 +400,8 @@ TEST(IModelBuildTest, BuildWithFeatureOnlyAndNoFeatureTensorNamesThrowsInvalidAr
     config->setOutputTensorNames({"layer1"});
     model->setModelConfig(std::move(config));
 
-    EXPECT_THROW({ model->build("/non/existent/path/model.wts"); }, irt::Exception);
-
-    try
-    {
-        model->build("/non/existent/path/model.wts");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
-    }
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -383,17 +412,8 @@ TEST(IModelBuildOrLoadTest, BuildOrLoadNonExistentWeightsThrowsInvalidArgument)
     auto model = irt::model::CreateModel("alexnet");
     ASSERT_NE(model, nullptr);
 
-    EXPECT_THROW({ model->buildOrLoad("/non/existent/path/model.wts"); }, irt::Exception);
-
-    try
-    {
-        model->buildOrLoad("/non/existent/path/model.wts");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
-    }
+    ExpectIrtExceptionCode([&] { model->buildOrLoad("/non/existent/path/model.wts"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -406,17 +426,8 @@ TEST(IModelBuildOrLoadTest, BuildOrLoadWithEmptyInputTensorNamesThrowsInvalidArg
 
     SetModelInputTensorNames(*model, {});
 
-    EXPECT_THROW({ model->buildOrLoad("/non/existent/path/model.wts"); }, irt::Exception);
-
-    try
-    {
-        model->buildOrLoad("/non/existent/path/model.wts");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
-    }
+    ExpectIrtExceptionCode([&] { model->buildOrLoad("/non/existent/path/model.wts"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -429,17 +440,8 @@ TEST(IModelBuildOrLoadTest, BuildOrLoadWithEmptyOutputTensorNamesThrowsInvalidAr
 
     SetModelOutputTensorNames(*model, {});
 
-    EXPECT_THROW({ model->buildOrLoad("/non/existent/path/model.wts"); }, irt::Exception);
-
-    try
-    {
-        model->buildOrLoad("/non/existent/path/model.wts");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
-    }
+    ExpectIrtExceptionCode([&] { model->buildOrLoad("/non/existent/path/model.wts"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -456,7 +458,8 @@ TEST(IModelBuildOrLoadTest, BuildOrLoadWithMismatchedOutputTensorCountInFeatureO
     config->setFeatureOnly(true);
     model->setModelConfig(std::move(config));
 
-    EXPECT_THROW({ model->buildOrLoad("/non/existent/path/model.wts"); }, irt::Exception);
+    ExpectIrtExceptionCode([&] { model->buildOrLoad("/non/existent/path/model.wts"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -472,15 +475,6 @@ TEST(IModelBuildOrLoadTest, BuildOrLoadWithFeatureOnlyAndNoFeatureTensorNamesThr
     config->setOutputTensorNames({"layer1"});
     model->setModelConfig(std::move(config));
 
-    EXPECT_THROW({ model->buildOrLoad("/non/existent/path/model.wts"); }, irt::Exception);
-
-    try
-    {
-        model->buildOrLoad("/non/existent/path/model.wts");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
-    }
+    ExpectIrtExceptionCode([&] { model->buildOrLoad("/non/existent/path/model.wts"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }

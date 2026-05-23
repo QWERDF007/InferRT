@@ -1,3 +1,5 @@
+#include "TestModelCommon.hpp"
+
 #include <gtest/gtest.h>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/core/Status.h>
@@ -15,6 +17,8 @@
 
 namespace fs = std::filesystem;
 
+using test::model::ExpectIrtExceptionCode;
+
 namespace {
 
 /**
@@ -25,6 +29,11 @@ namespace {
 class TempTextFile
 {
 public:
+    /**
+     * @brief 创建带指定后缀和内容的临时文本文件。
+     * @param suffix 文件后缀。
+     * @param content 写入文件的文本内容。
+     */
     explicit TempTextFile(const std::string &suffix, const std::string &content)
     {
         static std::atomic<int> counter{0};
@@ -34,12 +43,19 @@ public:
         file << content;
     }
 
+    /**
+     * @brief 析构时删除临时文件。
+     */
     ~TempTextFile()
     {
         std::error_code ec;
         fs::remove(path_, ec);
     }
 
+    /**
+     * @brief 获取临时文件路径。
+     * @return 临时文件路径。
+     */
     const fs::path &path() const
     {
         return path_;
@@ -121,17 +137,8 @@ TEST(LoadWeightsTest, ZeroCountWeightEntryIsValid)
  */
 TEST(LoadWeightsTest, NonExistentFileThrowsInvalidArgument)
 {
-    EXPECT_THROW({ irt::model::loadWeights("/non/existent/path/weights.wts"); }, irt::Exception);
-
-    try
-    {
-        irt::model::loadWeights("/non/existent/path/weights.wts");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
-    }
+    ExpectIrtExceptionCode([&] { irt::model::loadWeights("/non/existent/path/weights.wts"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -203,17 +210,8 @@ TEST(ReadImagenetLabelsTest, IgnoresMalformedLines)
  */
 TEST(ReadImagenetLabelsTest, NonExistentFileThrowsInvalidArgument)
 {
-    EXPECT_THROW({ irt::model::readImagenetLabels("/non/existent/path/labels.txt"); }, irt::Exception);
-
-    try
-    {
-        irt::model::readImagenetLabels("/non/existent/path/labels.txt");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INVALID_ARGUMENT);
-    }
+    ExpectIrtExceptionCode([&] { irt::model::readImagenetLabels("/non/existent/path/labels.txt"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -224,9 +222,20 @@ TEST(ModelUtilTest, ElementSizeMatchesTensorRTTypes)
     EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kFLOAT), 4U);
     EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kHALF), 2U);
     EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kINT8), 1U);
+    EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kUINT8), 1U);
     EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kINT32), 4U);
+    EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kINT64), 8U);
     EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kBOOL), 1U);
     EXPECT_EQ(irt::model::dataTypeSize(nvinfer1::DataType::kFLOAT), irt::model::elementSize(nvinfer1::DataType::kFLOAT));
+}
+
+/**
+ * @brief elementSize 对未知 TensorRT 数据类型应抛出未实现异常，避免静默返回错误字节数。
+ */
+TEST(ModelUtilTest, ElementSizeRejectsUnknownDataType)
+{
+    ExpectIrtExceptionCode([&] { irt::model::elementSize(static_cast<nvinfer1::DataType>(999)); },
+                           irt::Status::ERROR_NOT_IMPLEMENTED);
 }
 
 /**
@@ -247,6 +256,22 @@ TEST(ModelUtilTest, ElementCountValidatesTensorDims)
 }
 
 /**
+ * @brief elementCount 对标量维度应返回 1，对负维度应抛出非法参数异常。
+ */
+TEST(ModelUtilTest, ElementCountHandlesScalarAndRejectsNegativeDims)
+{
+    nvinfer1::Dims scalar{};
+    scalar.nbDims = 0;
+    EXPECT_EQ(irt::model::elementCount(scalar), 1U);
+
+    nvinfer1::Dims invalid{};
+    invalid.nbDims = 2;
+    invalid.d[0] = 4;
+    invalid.d[1] = -1;
+    EXPECT_THROW({ irt::model::elementCount(invalid); }, irt::Exception);
+}
+
+/**
  * @brief dtype 与维度格式化工具应输出稳定文本，供日志和 manifest 复用。
  */
 TEST(ModelUtilTest, FormatsDataTypeAndDims)
@@ -258,9 +283,27 @@ TEST(ModelUtilTest, FormatsDataTypeAndDims)
     dims.d[2] = 224;
 
     EXPECT_EQ(irt::model::dataTypeToString(nvinfer1::DataType::kFLOAT), "float32");
+    EXPECT_EQ(irt::model::dataTypeToString(nvinfer1::DataType::kHALF), "float16");
     EXPECT_EQ(irt::model::dataTypeToString(nvinfer1::DataType::kINT8), "int8");
+    EXPECT_EQ(irt::model::dataTypeToString(nvinfer1::DataType::kUINT8), "uint8");
+    EXPECT_EQ(irt::model::dataTypeToString(nvinfer1::DataType::kINT32), "int32");
+    EXPECT_EQ(irt::model::dataTypeToString(nvinfer1::DataType::kINT64), "int64");
+    EXPECT_EQ(irt::model::dataTypeToString(nvinfer1::DataType::kBOOL), "bool");
     EXPECT_EQ(irt::model::dimsToCsv(dims), "3,224,224");
     EXPECT_EQ(irt::model::dimsToString(dims), "[3, 224, 224]");
+}
+
+/**
+ * @brief dtype 与维度格式化工具应对未知类型和空维度输出稳定文本。
+ */
+TEST(ModelUtilTest, FormatsUnknownDataTypeAndEmptyDims)
+{
+    nvinfer1::Dims dims{};
+    dims.nbDims = 0;
+
+    EXPECT_EQ(irt::model::dataTypeToString(static_cast<nvinfer1::DataType>(999)), "unknown");
+    EXPECT_EQ(irt::model::dimsToCsv(dims), "");
+    EXPECT_EQ(irt::model::dimsToString(dims), "[]");
 }
 
 /**
@@ -269,17 +312,8 @@ TEST(ModelUtilTest, FormatsDataTypeAndDims)
 TEST(ModelUtilTest, CheckCudaConvertsErrorStatus)
 {
     EXPECT_NO_THROW({ irt::model::checkCuda(cudaSuccess, "cudaSuccess"); });
-    EXPECT_THROW({ irt::model::checkCuda(cudaErrorInvalidValue, "invalid"); }, irt::Exception);
-
-    try
-    {
-        irt::model::checkCuda(cudaErrorInvalidValue, "invalid");
-        FAIL() << "Expected irt::Exception";
-    }
-    catch (const irt::Exception &e)
-    {
-        EXPECT_EQ(e.code(), irt::Status::ERROR_INTERNAL);
-    }
+    ExpectIrtExceptionCode([&] { irt::model::checkCuda(cudaErrorInvalidValue, "invalid"); },
+                           irt::Status::ERROR_INTERNAL);
 }
 
 /**
@@ -330,6 +364,21 @@ TEST(DeviceBufferTest, MoveEmptyBufferKeepsValidState)
 }
 
 /**
+ * @brief DeviceBuffer 按非法 TensorRT 维度 resize 时，应在申请显存前抛出异常。
+ */
+TEST(DeviceBufferTest, ResizeRejectsInvalidDimsBeforeAllocation)
+{
+    irt::model::DeviceBuffer buffer;
+    nvinfer1::Dims           dims{};
+    dims.nbDims = 2;
+    dims.d[0] = 4;
+    dims.d[1] = 0;
+
+    EXPECT_THROW({ buffer.resize(dims); }, irt::Exception);
+    EXPECT_TRUE(buffer.empty());
+}
+
+/**
  * @brief HostBuffer 应按元素数量和数据类型计算字节数，并分配主机内存。
  */
 TEST(HostBufferTest, AllocatesHostMemoryByElementCountAndType)
@@ -348,6 +397,57 @@ TEST(HostBufferTest, AllocatesHostMemoryByElementCountAndType)
     values[1] = 2.0f;
     EXPECT_FLOAT_EQ(values[0], 1.0f);
     EXPECT_FLOAT_EQ(values[1], 2.0f);
+}
+
+/**
+ * @brief HostBuffer 使用仅指定类型的构造函数时不应分配内存，但应保留元素类型。
+ */
+TEST(HostBufferTest, TypeOnlyConstructorKeepsTypeWithoutAllocation)
+{
+    irt::model::HostBuffer buffer(nvinfer1::DataType::kHALF);
+
+    EXPECT_TRUE(buffer.empty());
+    EXPECT_EQ(buffer.data(), nullptr);
+    EXPECT_EQ(buffer.get(), nullptr);
+    EXPECT_EQ(buffer.dataType(), nvinfer1::DataType::kHALF);
+    EXPECT_EQ(buffer.sizeBytes(), 0U);
+}
+
+/**
+ * @brief HostBuffer 按 TensorRT 维度 resize 时应复用 elementCount 计算元素数量。
+ */
+TEST(HostBufferTest, ResizeByDimsComputesElementCount)
+{
+    nvinfer1::Dims dims{};
+    dims.nbDims = 3;
+    dims.d[0] = 2;
+    dims.d[1] = 3;
+    dims.d[2] = 4;
+
+    irt::model::HostBuffer buffer;
+    buffer.resize(dims, nvinfer1::DataType::kINT32);
+
+    ASSERT_NE(buffer.data(), nullptr);
+    EXPECT_EQ(buffer.size(), 24U);
+    EXPECT_EQ(buffer.sizeBytes(), 24U * sizeof(int32_t));
+    EXPECT_EQ(buffer.dataType(), nvinfer1::DataType::kINT32);
+}
+
+/**
+ * @brief HostBuffer 切换数据类型时应重新按新元素大小计算逻辑字节数。
+ */
+TEST(HostBufferTest, ResizeWithDifferentTypeUpdatesByteSize)
+{
+    irt::model::HostBuffer buffer(4, nvinfer1::DataType::kINT8);
+    ASSERT_NE(buffer.data(), nullptr);
+    EXPECT_EQ(buffer.sizeBytes(), 4U);
+
+    buffer.resize(4, nvinfer1::DataType::kFLOAT);
+
+    ASSERT_NE(buffer.data(), nullptr);
+    EXPECT_EQ(buffer.dataType(), nvinfer1::DataType::kFLOAT);
+    EXPECT_EQ(buffer.size(), 4U);
+    EXPECT_EQ(buffer.sizeBytes(), 4U * sizeof(float));
 }
 
 /**
@@ -404,6 +504,23 @@ TEST(HostBufferTest, MoveTransfersOwnership)
     EXPECT_EQ(target.data(), original);
     EXPECT_EQ(target.size(), 3U);
     EXPECT_EQ(target.sizeBytes(), 3U);
+}
+
+/**
+ * @brief HostBuffer reset 应释放内存并清空容量，同时保留当前元素类型。
+ */
+TEST(HostBufferTest, ResetReleasesMemoryAndKeepsDataType)
+{
+    irt::model::HostBuffer buffer(4, nvinfer1::DataType::kINT32);
+    ASSERT_FALSE(buffer.empty());
+
+    buffer.reset();
+
+    EXPECT_TRUE(buffer.empty());
+    EXPECT_EQ(buffer.data(), nullptr);
+    EXPECT_EQ(buffer.size(), 0U);
+    EXPECT_EQ(buffer.capacity(), 0U);
+    EXPECT_EQ(buffer.dataType(), nvinfer1::DataType::kINT32);
 }
 
 /**
