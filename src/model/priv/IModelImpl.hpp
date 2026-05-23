@@ -316,6 +316,19 @@ public:
      */
     cudaStream_t resolveExecutionStream(cudaStream_t stream_override = nullptr);
 
+protected:
+    /**
+     * @brief 允许派生模型规整外部传入的配置。
+     * @param config 已经设置到模型上的配置对象。
+     *
+     * 该 hook 用于补齐模型族的专属默认值，例如不同输入分辨率的 ViT 变体。
+     * 默认实现不修改配置，普通模型无需关心。
+     */
+    virtual void normalizeModelConfig(IModelConfig &config) const
+    {
+        (void)config;
+    }
+
 private:
     /**
      * @brief 将输入与当前 runtime 的输出张量地址绑定到执行上下文。

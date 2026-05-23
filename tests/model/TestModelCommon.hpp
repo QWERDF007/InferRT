@@ -28,7 +28,7 @@ struct RegisteredModelCase
 /**
  * @brief 当前仓库中内置注册的模型清单。
  */
-inline constexpr std::array<RegisteredModelCase, 17> kRegisteredModels = {{
+inline constexpr std::array<RegisteredModelCase, 38> kRegisteredModels = {{
     {"onnx", "ONNX", "ONNX"},
     {"alexnet", "AlexNet", "AlexNet"},
     {"googlenet", "GoogLeNet", "GoogLeNet"},
@@ -46,6 +46,27 @@ inline constexpr std::array<RegisteredModelCase, 17> kRegisteredModels = {{
     {"resnet152", "ResNet152", "ResNet152"},
     {"wide_resnet50_2", "Wide_ResNet50_2", "WideResNet50_2"},
     {"wide_resnet101_2", "Wide_ResNet101_2", "WideResNet101_2"},
+    {"vit", "ViT", "ViTBasePatch16_224"},
+    {"vit_tiny_patch16_224", "ViT_Tiny_Patch16_224", "ViTTinyPatch16_224"},
+    {"vit_tiny_patch16_384", "ViT_Tiny_Patch16_384", "ViTTinyPatch16_384"},
+    {"vit_small_patch32_224", "ViT_Small_Patch32_224", "ViTSmallPatch32_224"},
+    {"vit_small_patch32_384", "ViT_Small_Patch32_384", "ViTSmallPatch32_384"},
+    {"vit_small_patch16_224", "ViT_Small_Patch16_224", "ViTSmallPatch16_224"},
+    {"vit_small_patch16_384", "ViT_Small_Patch16_384", "ViTSmallPatch16_384"},
+    {"vit_small_patch8_224", "ViT_Small_Patch8_224", "ViTSmallPatch8_224"},
+    {"vit_base_patch32_224", "ViT_Base_Patch32_224", "ViTBasePatch32_224"},
+    {"vit_base_patch32_384", "ViT_Base_Patch32_384", "ViTBasePatch32_384"},
+    {"vit_base_patch16_224", "ViT_Base_Patch16_224", "ViTBasePatch16_224"},
+    {"vit_base_patch16_384", "ViT_Base_Patch16_384", "ViTBasePatch16_384"},
+    {"vit_base_patch8_224", "ViT_Base_Patch8_224", "ViTBasePatch8_224"},
+    {"vit_large_patch32_224", "ViT_Large_Patch32_224", "ViTLargePatch32_224"},
+    {"vit_large_patch32_384", "ViT_Large_Patch32_384", "ViTLargePatch32_384"},
+    {"vit_large_patch16_224", "ViT_Large_Patch16_224", "ViTLargePatch16_224"},
+    {"vit_large_patch16_384", "ViT_Large_Patch16_384", "ViTLargePatch16_384"},
+    {"vit_large_patch14_224", "ViT_Large_Patch14_224", "ViTLargePatch14_224"},
+    {"vit_huge_patch14_224", "ViT_Huge_Patch14_224", "ViTHugePatch14_224"},
+    {"vit_giant_patch14_224", "ViT_Giant_Patch14_224", "ViTGiantPatch14_224"},
+    {"vit_gigantic_patch14_224", "ViT_Gigantic_Patch14_224", "ViTGiganticPatch14_224"},
 }};
 
 /**

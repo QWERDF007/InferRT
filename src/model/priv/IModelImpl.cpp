@@ -316,6 +316,7 @@ std::string IModelImpl::generateSuffix(const IModelConfig &config) const noexcep
 void IModelImpl::setModelConfig(std::unique_ptr<IModelConfig> config)
 {
     config_ = config ? std::move(config) : std::make_unique<IModelConfig>();
+    normalizeModelConfig(*config_);
     trt_params_.context.reset();
     trt_params_.engine.reset();
     trt_params_.stream.reset();

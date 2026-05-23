@@ -296,10 +296,26 @@ int main(int argc, char *argv[])
                                  image_path.string().c_str());
         }
 
+        const auto &input_tensor_names = model->modelConfig().inputTensorNames();
+        if (input_tensor_names.empty())
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Model must expose at least one input tensor");
+        }
+
+        const auto input_dims = model->tensorShape(input_tensor_names.front());
+        if (input_dims.nbDims != 4 || input_dims.d[0] != 1 || input_dims.d[1] != 3 || input_dims.d[2] <= 0
+            || input_dims.d[3] <= 0)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "Feature sample expects input shape 1x3xHxW, got %s",
+                                 dimsToCsv(input_dims).c_str());
+        }
+
         const auto preprocess_start = Clock::now();
-        const auto preprocessed     = irt::model::ImageNetUtil::preprocess(img);
-        const auto input_data       = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
-        const auto preprocess_end   = Clock::now();
+        const auto preprocessed = irt::model::ImageNetUtil::preprocess(
+            img, cv::Size(static_cast<int>(input_dims.d[3]), static_cast<int>(input_dims.d[2])));
+        const auto input_data     = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
+        const auto preprocess_end = Clock::now();
 
         const auto stream = model->resolveExecutionStream();
 

@@ -16,8 +16,13 @@ def test_registered_models(irt_module: object) -> None:
     assert "resnet18" in names
     assert "alexnet" in names
     assert "googlenet" in names
+    assert "vit_base_patch16_224" in names
+    assert "vit_base_patch16_384" in names
     assert irt_module.is_supported_model("ResNet18")
     assert irt_module.is_supported_model("GoogLeNet")
+    assert irt_module.is_supported_model("ViT_Base_Patch16_224")
+    assert irt_module.is_supported_model("ViT_Base_Patch16_384")
+    assert irt_module.is_supported_model("ViT")
     assert not irt_module.is_supported_model("not_a_model")
 
 
@@ -107,6 +112,27 @@ def test_create_googlenet_without_build(irt_module: object) -> None:
     assert model.name() == "GoogLeNet"
     assert model.input_tensor_names()
     assert model.output_tensor_names()
+
+
+def test_create_vit_without_build(irt_module: object) -> None:
+    """ViT 标准变体和兼容别名应可通过 Python 绑定创建，且不依赖权重文件。
+
+    Args:
+        irt_module: ``inferrt_model_py`` 模块。
+    """
+
+    model = irt_module.create_model("ViT_Base_Patch16_224")
+    assert model.name() == "ViTBasePatch16_224"
+    assert model.input_tensor_names() == ["input"]
+    assert model.output_tensor_names() == ["output"]
+
+    alias_model = irt_module.create_model("vit")
+    assert alias_model.name() == "ViTBasePatch16_224"
+
+    high_res_model = irt_module.create_model("ViT_Base_Patch16_384")
+    assert high_res_model.name() == "ViTBasePatch16_384"
+    assert high_res_model.input_tensor_names() == ["input"]
+    assert high_res_model.output_tensor_names() == ["output"]
 
 
 def test_create_model_rejects_unknown_name(irt_module: object) -> None:

@@ -184,11 +184,6 @@ int main(int argc, char *argv[])
             return -1;
         }
 
-        const auto preprocess_start = Clock::now();
-        const cv::Mat preprocessed = irt::model::ImageNetUtil::preprocess(img);
-        const std::vector<float> input_data = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
-        const auto preprocess_end = Clock::now();
-
         const auto &input_tensor_names  = model->modelConfig().inputTensorNames();
         const auto &output_tensor_names = model->modelConfig().outputTensorNames();
         if (input_tensor_names.empty() || output_tensor_names.empty())
@@ -199,6 +194,20 @@ int main(int argc, char *argv[])
 
         const std::string &input_tensor_name = input_tensor_names.front();
         const nvinfer1::Dims input_dims      = model->tensorShape(input_tensor_name);
+        if (input_dims.nbDims != 4 || input_dims.d[0] != 1 || input_dims.d[1] != 3 || input_dims.d[2] <= 0
+            || input_dims.d[3] <= 0)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "Classification sample expects input shape 1x3xHxW, got %s",
+                                 dimsToCsv(input_dims).c_str());
+        }
+
+        const auto preprocess_start = Clock::now();
+        const cv::Mat preprocessed = irt::model::ImageNetUtil::preprocess(
+            img, cv::Size(static_cast<int>(input_dims.d[3]), static_cast<int>(input_dims.d[2])));
+        const std::vector<float> input_data = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
+        const auto preprocess_end = Clock::now();
+
         const size_t         input_num_bytes = elementCount(input_dims) * elementSize(nvinfer1::DataType::kFLOAT);
         if (input_num_bytes != input_data.size() * sizeof(float))
         {
