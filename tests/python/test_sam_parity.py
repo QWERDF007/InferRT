@@ -112,7 +112,8 @@ def _run_inferrt_sam2(
     """通过 InferRT pybind11 运行 SAM2.1 tiny 全链路。"""
 
     model = irt_module.create_model(SAM2_MODEL_NAME)
-    model.build_or_load(str(weights_path))
+    # 数值一致性测试需要直接重建 engine，避免旧缓存掩盖网络定义变更。
+    model.build(str(weights_path))
 
     input_names = list(model.input_tensor_names())
     output_names = list(model.output_tensor_names())
@@ -125,10 +126,6 @@ def _run_inferrt_sam2(
     return {name: np.asarray(output_tensors[name], dtype=np.float32) for name in output_names}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="当前 SAM2 TensorRT 手写图与官方 PyTorch 输出仍存在已知数值差异，保留测试用于跟踪一致性收敛。",
-)
 def test_sam2_pybind_matches_official_pytorch_forward(
     irt_module: Any,
     repo_root: Path,
@@ -168,20 +165,20 @@ def test_sam2_pybind_matches_official_pytorch_forward(
         torch_outputs["masks"],
         inferrt_outputs["masks"],
         rtol=1e-3,
-        atol=5e-1,
+        atol=1e-2,
         name="masks",
     )
     assert_tensors_close(
         torch_outputs["low_res_masks"],
         inferrt_outputs["low_res_masks"],
         rtol=1e-3,
-        atol=5e-1,
+        atol=1e-2,
         name="low_res_masks",
     )
     assert_tensors_close(
         torch_outputs["iou_predictions"],
         inferrt_outputs["iou_predictions"],
         rtol=1e-3,
-        atol=5e-2,
+        atol=1e-3,
         name="iou_predictions",
     )

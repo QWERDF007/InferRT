@@ -796,6 +796,16 @@ nvinfer1::ITensor *addSAM2HieraPositionEmbedding(nvinfer1::INetworkDefinition *n
         "Failed to add SAM2 Hiera base position embedding");
     auto *resize = requireLayer(network->addResize(*base->getOutput(0)), "Failed to resize SAM2 Hiera pos_embed");
     resize->setResizeMode(nvinfer1::InterpolationMode::kCUBIC);
+    /**
+     * @brief 对齐官方 PyTorch 的 bicubic 插值语义。
+     *
+     * SAM2 Hiera 在官方实现中使用
+     * ``F.interpolate(..., mode="bicubic", align_corners=False)`` 对绝对位置编码做插值。
+     * TensorRT Resize 默认使用 ASYMMETRIC 坐标，若不显式设置会导致 image encoder
+     * 从第一个 block 开始出现数值偏差；HALF_PIXEL 与 PyTorch 的 align_corners=False 对齐。
+     */
+    resize->setCoordinateTransformation(nvinfer1::ResizeCoordinateTransformation::kHALF_PIXEL);
+    resize->setCubicCoeff(-0.75F);
     resize->setOutputDimensions(nvinfer1::Dims4{1, spec.embed_dim, grid_h, grid_w});
 
     const int window_size = spec.window_spec.front();
@@ -1451,9 +1461,13 @@ void addTwoWayBlock(nvinfer1::INetworkDefinition *network, const WeightsMap &wei
     {
         auto *self_attn = addDecoderAttention(network, weights_map, *queries, *queries, *queries,
                                               prefix + ".self_attn", query_tokens, query_tokens, 1);
-        queries = requireLayer(network->addElementWise(*queries, *self_attn, E::kSUM),
-                               "Failed to add SAM decoder self-attn residual")
-                      ->getOutput(0);
+        /**
+         * @brief 对齐官方 skip_first_layer_pe=True 的第一层 self-attention。
+         *
+         * 官方 SAM/SAM2 在第一层 TwoWayAttentionBlock 中既不叠加 query PE，
+         * 也不做残差加回，而是直接令 ``queries = self_attn(...)``。
+         */
+        queries = self_attn;
     }
     else
     {
