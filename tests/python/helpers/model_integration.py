@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -104,3 +107,142 @@ def assert_output_image(path: Path) -> None:
 
     assert path.exists(), f"output image missing: {path}"
     assert path.stat().st_size > 0, f"output image is empty: {path}"
+
+
+def ensure_yolo_wts(
+    *,
+    repo_root: Path,
+    build_dir: Path,
+    model_name: str,
+    checkpoint: Path,
+    ultralytics_repo: Path,
+    family: str = "yolo",
+) -> Path:
+    """使用 Ultralytics checkpoint 导出 InferRT YOLO ``.wts``。
+
+    Args:
+        repo_root: 仓库根目录。
+        build_dir: CMake 构建目录。
+        model_name: InferRT YOLO 模型 key。
+        checkpoint: ``--inferrt-model-root`` 下的 ``.pt`` 权重。
+        ultralytics_repo: 本地 ultralytics 仓库；未安装包时用于导入。
+        family: 测试产物子目录，便于 sample 与 parity 用例隔离 engine cache。
+
+    Returns:
+        导出的 ``.wts`` 路径。
+    """
+
+    checkpoint = require_file(checkpoint, f"{model_name} checkpoint")
+    os.environ.setdefault("YOLO_AUTOINSTALL", "False")
+    os.environ.setdefault("ULTRALYTICS_SKIP_REQUIREMENTS_CHECKS", "1")
+    os.environ.setdefault("YOLO_CONFIG_DIR", str(build_dir / "ultralytics_config"))
+    output = artifact_dir(build_dir, family) / f"{model_name}.wts"
+    if is_fresh(output, checkpoint):
+        return output
+
+    command = [
+        sys.executable,
+        "samples/model/detection/gen_wts.py",
+        "--model",
+        model_name,
+        "--weights",
+        str(checkpoint),
+        "--output",
+        str(output),
+        "--quiet",
+    ]
+    if ultralytics_repo.exists():
+        command.extend(["--ultralytics-repo", str(ultralytics_repo)])
+    elif importlib.util.find_spec("ultralytics") is None:
+        pytest.skip(f"Ultralytics package/repo not found: {ultralytics_repo}")
+
+    run_export_or_skip(command, cwd=repo_root)
+    return require_file(output, f"{model_name} exported .wts")
+
+
+def ensure_sam_v1_wts(*, repo_root: Path, build_dir: Path, checkpoint: Path, sam_root: Path) -> Path:
+    """使用官方 Segment Anything v1 checkpoint 导出 ``sam_vit_b`` 的 ``.wts``。
+
+    Args:
+        repo_root: 仓库根目录。
+        build_dir: CMake 构建目录。
+        checkpoint: SAM v1 官方 ``.pth`` checkpoint。
+        sam_root: 本地 Segment Anything v1 仓库路径。
+
+    Returns:
+        导出的 ``.wts`` 路径。
+    """
+
+    checkpoint = require_file(checkpoint, "SAM ViT-B checkpoint")
+    output = artifact_dir(build_dir, "sam") / "sam_vit_b.wts"
+    if is_fresh(output, checkpoint):
+        return output
+
+    command = [
+        sys.executable,
+        "samples/model/segmentation/gen_sam_wts.py",
+        "--model",
+        "vit_b",
+        "--checkpoint",
+        str(checkpoint),
+        "--output",
+        str(output),
+        "--device",
+        "cpu",
+        "--skip-forward",
+    ]
+    if sam_root.exists():
+        command.extend(["--sam-root", str(sam_root)])
+    elif importlib.util.find_spec("segment_anything") is None:
+        pytest.skip(f"segment-anything package/repo not found: {sam_root}")
+
+    run_export_or_skip(command, cwd=repo_root)
+    return require_file(output, "SAM ViT-B exported .wts")
+
+
+def ensure_sam2_wts(
+    *,
+    repo_root: Path,
+    build_dir: Path,
+    checkpoint: Path,
+    sam2_root: Path,
+    family: str = "sam",
+) -> Path:
+    """使用官方 SAM2.1 Hiera-Tiny checkpoint 导出 InferRT ``.wts``。
+
+    Args:
+        repo_root: 仓库根目录。
+        build_dir: CMake 构建目录。
+        checkpoint: SAM2.1 官方 ``.pt`` checkpoint。
+        sam2_root: 本地 SAM2 仓库路径。
+        family: 测试产物子目录，便于 sample 与 parity 用例隔离 engine cache。
+
+    Returns:
+        导出的 ``.wts`` 路径。
+    """
+
+    checkpoint = require_file(checkpoint, "SAM2.1 Hiera-Tiny checkpoint")
+    output = artifact_dir(build_dir, family) / "sam2_1_hiera_tiny.wts"
+    if is_fresh(output, checkpoint):
+        return output
+
+    command = [
+        sys.executable,
+        "samples/model/segmentation/gen_sam2_wts.py",
+        "--model",
+        "sam2_1_hiera_tiny",
+        "--checkpoint",
+        str(checkpoint),
+        "--output",
+        str(output),
+        "--device",
+        "cpu",
+        "--skip-forward",
+    ]
+    if sam2_root.exists():
+        command.extend(["--sam2-root", str(sam2_root)])
+    elif importlib.util.find_spec("sam2") is None:
+        pytest.skip(f"SAM2 package/repo not found: {sam2_root}")
+
+    run_export_or_skip(command, cwd=repo_root)
+    return require_file(output, "SAM2.1 Hiera-Tiny exported .wts")
