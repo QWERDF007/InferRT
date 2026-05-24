@@ -181,6 +181,45 @@ TEST(SAMModelBuildTest, BuildRejectsMissingPromptInputs)
 }
 
 /**
+ * @brief SAM point 坐标输入必须保持官方 ``1x16x2x1`` 契约，防止 prompt 绑定顺序或布局错误。
+ */
+TEST(SAMModelBuildTest, BuildRejectsInvalidPointCoordinateShape)
+{
+    auto model = irt::model::CreateModel("sam_vit_b");
+    ASSERT_NE(model, nullptr);
+
+    auto shapes = makeSAMInputShapes(1024);
+    shapes[1] = nvinfer1::Dims4{1, 8, 2, 1};
+
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setInputTensorNames({"image", "point_coords", "point_labels", "mask_input", "has_mask_input"});
+    config->setInputShapes(shapes);
+    config->setOutputTensorNames({"masks", "iou_predictions", "low_res_masks"});
+    model->setModelConfig(std::move(config));
+
+    const TempWeightsFile weights("inferrt_sam_point_shape_");
+    ExpectIrtExceptionCode([&] { model->build(weights.path().string()); }, irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+/**
+ * @brief 非 feature-only 的 SAM 分割路径固定输出 mask、IoU 与 low-res mask 三个张量。
+ */
+TEST(SAMModelBuildTest, BuildRejectsWrongOutputTensorCount)
+{
+    auto model = irt::model::CreateModel("sam2_1_hiera_tiny");
+    ASSERT_NE(model, nullptr);
+
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setInputTensorNames({"image", "point_coords", "point_labels", "mask_input", "has_mask_input"});
+    config->setInputShapes(makeSAMInputShapes(1024));
+    config->setOutputTensorNames({"masks", "iou_predictions"});
+    model->setModelConfig(std::move(config));
+
+    const TempWeightsFile weights("inferrt_sam_outputs_");
+    ExpectIrtExceptionCode([&] { model->build(weights.path().string()); }, irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+/**
  * @brief SAM v1 官方 TensorRT 路径必须使用完整 state_dict 导出的权重。
  */
 TEST(SAMModelBuildTest, BuildRequiresOfficialSAMWeights)

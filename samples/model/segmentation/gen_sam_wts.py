@@ -21,21 +21,27 @@ SAM_PIXEL_STD = (58.395, 57.12, 57.375)
 
 
 def elapsed_ms(start: float, end: float) -> float:
-    """@brief 将 ``perf_counter`` 的时间差转换为毫秒。
+    """将 ``perf_counter`` 的时间差转换为毫秒。
 
-    @param start 起始时间戳。
-    @param end 结束时间戳。
-    @return 毫秒单位耗时。
+    Args:
+        start: 起始时间戳。
+        end: 结束时间戳。
+
+    Returns:
+        毫秒单位耗时。
     """
 
     return (end - start) * 1000.0
 
 
 def import_segment_anything(sam_root: str | None) -> Any:
-    """@brief 导入官方 ``segment_anything`` 包。
+    """导入官方 ``segment_anything`` 包。
 
-    @param sam_root 官方 ``segment-anything`` 仓库根目录；为空时使用当前 Python 环境。
-    @return 已导入的 ``sam_model_registry``。
+    Args:
+        sam_root: 官方 ``segment-anything`` 仓库根目录；为空时使用当前 Python 环境。
+
+    Returns:
+        已导入的 ``sam_model_registry``。
     """
 
     if sam_root:
@@ -50,11 +56,12 @@ def import_segment_anything(sam_root: str | None) -> Any:
 
 
 def write_wts(state_dict: dict[str, torch.Tensor], output_path: Path, *, verbose: bool = False) -> None:
-    """@brief 将官方 ``state_dict`` 写成 InferRT 文本权重格式。
+    """将官方 ``state_dict`` 写成 InferRT 文本权重格式。
 
-    @param state_dict 官方 SAM v1 权重。
-    @param output_path 输出 ``.wts`` 路径。
-    @param verbose 为 true 时打印每个权重 key 和 shape。
+    Args:
+        state_dict: 官方 SAM v1 权重。
+        output_path: 输出 ``.wts`` 路径。
+        verbose: 为 true 时打印每个权重 key 和 shape。
     """
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,11 +79,14 @@ def write_wts(state_dict: dict[str, torch.Tensor], output_path: Path, *, verbose
 
 
 def compute_resize_shape(original_h: int, original_w: int) -> tuple[int, int]:
-    """@brief 复现官方 ``ResizeLongestSide.get_preprocess_shape``。
+    """复现官方 ``ResizeLongestSide.get_preprocess_shape``。
 
-    @param original_h 原图高度。
-    @param original_w 原图宽度。
-    @return padding 前的 ``(height, width)``。
+    Args:
+        original_h: 原图高度。
+        original_w: 原图宽度。
+
+    Returns:
+        padding 前的 ``(height, width)``。
     """
 
     scale = SAM_IMAGE_SIZE / max(original_h, original_w)
@@ -84,11 +94,14 @@ def compute_resize_shape(original_h: int, original_w: int) -> tuple[int, int]:
 
 
 def preprocess_image(image_path: Path, device: torch.device) -> tuple[torch.Tensor, tuple[int, int], tuple[int, int]]:
-    """@brief 按 InferRT sample 使用的 SAM v1 均值方差预处理图像。
+    """按 InferRT sample 使用的 SAM v1 均值方差预处理图像。
 
-    @param image_path 输入图片路径。
-    @param device 输出张量所在设备。
-    @return ``(image_tensor, original_size, resized_size)``，其中张量形状为 ``1x3x1024x1024``。
+    Args:
+        image_path: 输入图片路径。
+        device: 输出张量所在设备。
+
+    Returns:
+        ``(image_tensor, original_size, resized_size)``，其中张量形状为 ``1x3x1024x1024``。
     """
 
     image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
@@ -112,11 +125,14 @@ def make_default_prompts(
     device: torch.device,
     resized_size: tuple[int, int],
 ) -> tuple[tuple[torch.Tensor, torch.Tensor], None, None]:
-    """@brief 构造中心正点提示，用于导出时的官方 PyTorch 前向冒烟验证。
+    """构造中心正点提示，用于导出时的官方 PyTorch 前向冒烟验证。
 
-    @param device prompt 张量所在设备。
-    @param resized_size padding 前图像尺寸。
-    @return ``PromptEncoder`` 需要的 ``points, boxes, masks`` 三元组。
+    Args:
+        device: prompt 张量所在设备。
+        resized_size: padding 前图像尺寸。
+
+    Returns:
+        ``PromptEncoder`` 需要的 ``points, boxes, masks`` 三元组。
     """
 
     resized_h, resized_w = resized_size
@@ -132,12 +148,13 @@ def run_reference_forward(
     original_size: tuple[int, int],
     resized_size: tuple[int, int],
 ) -> None:
-    """@brief 跑一遍官方 image encoder / prompt encoder / mask decoder。
+    """跑一遍官方 image encoder / prompt encoder / mask decoder。
 
-    @param model 官方 ``Sam`` 模型。
-    @param image 预处理后的 ``1x3x1024x1024`` 图像张量。
-    @param original_size 原始图片 ``(height, width)``。
-    @param resized_size padding 前图像尺寸。
+    Args:
+        model: 官方 ``Sam`` 模型。
+        image: 预处理后的 ``1x3x1024x1024`` 图像张量。
+        original_size: 原始图片 ``(height, width)``。
+        resized_size: padding 前图像尺寸。
     """
 
     encoder_start = time.perf_counter()
@@ -183,9 +200,10 @@ def run_reference_forward(
 
 
 def parse_args() -> argparse.Namespace:
-    """@brief 解析命令行参数。
+    """解析命令行参数。
 
-    @return 解析后的参数对象。
+    Returns:
+        解析后的参数对象。
     """
 
     parser = argparse.ArgumentParser(description="Export official SAM v1 checkpoint to InferRT .wts")
@@ -218,7 +236,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """@brief 加载官方 SAM、执行可选前向验证并导出权重。"""
+    """加载官方 SAM、执行可选前向验证并导出权重。"""
 
     args = parse_args()
     output_path = args.output if args.output is not None else Path(f"sam_{args.model}.wts")

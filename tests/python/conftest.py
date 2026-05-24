@@ -7,9 +7,16 @@
     --inferrt-atol: 分类/infer_v2 张量比对绝对容差。默认 ``5e-2``。
     --inferrt-feature-rtol: 特征提取张量比对相对容差。默认 ``1e-4``。
     --inferrt-feature-atol: 特征提取张量比对绝对容差。默认 ``1.5e-1``。
+    --inferrt-model-root: 真实模型根目录。默认 ``INFERRT_MODEL_ROOT`` 或 ``D:/Models``。
+    --inferrt-ultralytics-repo: 本地 ultralytics 仓库。默认 ``INFERRT_ULTRALYTICS_REPO`` 或
+        ``D:/Github/ultralytics``。
+    --inferrt-sam-root: 本地 Segment Anything v1 仓库。默认 ``INFERRT_SAM_ROOT`` 或
+        ``D:/Github/SAM/segment-anything``。
+    --inferrt-sam2-root: 本地 SAM2 仓库。默认 ``INFERRT_SAM2_ROOT`` 或 ``D:/Github/SAM/sam2``。
 
 环境变量:
     INFERRT_BUILD_DIR: 未传 ``--inferrt-build-dir`` 时使用的构建目录路径。
+    INFERRT_MODEL_ROOT: 未传 ``--inferrt-model-root`` 时使用的真实模型根目录。
 """
 
 from __future__ import annotations
@@ -77,6 +84,30 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         type=float,
         default=1.5e-1,
         help="特征提取张量比对的绝对容差（numpy.allclose 的 atol）",
+    )
+    parser.addoption(
+        "--inferrt-model-root",
+        action="store",
+        default="",
+        help="真实模型根目录；默认 INFERRT_MODEL_ROOT 或 D:/Models",
+    )
+    parser.addoption(
+        "--inferrt-ultralytics-repo",
+        action="store",
+        default="",
+        help="本地 ultralytics 仓库路径；默认 INFERRT_ULTRALYTICS_REPO 或 D:/Github/ultralytics",
+    )
+    parser.addoption(
+        "--inferrt-sam-root",
+        action="store",
+        default="",
+        help="本地 segment-anything 仓库路径；默认 INFERRT_SAM_ROOT 或 D:/Github/SAM/segment-anything",
+    )
+    parser.addoption(
+        "--inferrt-sam2-root",
+        action="store",
+        default="",
+        help="本地 SAM2 仓库路径；默认 INFERRT_SAM2_ROOT 或 D:/Github/SAM/sam2",
     )
 
 
@@ -189,6 +220,66 @@ def feature_tolerances(pytestconfig: pytest.Config) -> tuple[float, float]:
     """
 
     return pytestconfig.getoption("--inferrt-feature-rtol"), pytestconfig.getoption("--inferrt-feature-atol")
+
+
+def _configured_path(pytestconfig: pytest.Config, option: str, env_name: str, default: str) -> Path:
+    """解析 pytest 选项、环境变量与默认路径三层配置。
+
+    Args:
+        pytestconfig: pytest 配置对象。
+        option: 命令行选项名。
+        env_name: 环境变量名。
+        default: 二者均为空时使用的默认路径。
+
+    Returns:
+        Path: 解析后的绝对路径。
+    """
+
+    value = pytestconfig.getoption(option) or os.environ.get(env_name) or default
+    return Path(value).expanduser().resolve()
+
+
+@pytest.fixture(scope="session")
+def model_root(pytestconfig: pytest.Config) -> Path:
+    """真实模型根目录，默认指向 ``D:/Models``。
+
+    Args:
+        pytestconfig: pytest 配置对象，用于读取 ``--inferrt-model-root``。
+
+    Returns:
+        Path: 已存在的模型根目录；不存在时跳过依赖真实权重的集成测试。
+    """
+
+    path = _configured_path(pytestconfig, "--inferrt-model-root", "INFERRT_MODEL_ROOT", "D:/Models")
+    if not path.exists():
+        pytest.skip(f"Model root not found: {path}")
+    return path
+
+
+@pytest.fixture(scope="session")
+def ultralytics_repo(pytestconfig: pytest.Config) -> Path:
+    """本地 ultralytics 仓库路径，用于未安装包时导出 YOLO 权重。"""
+
+    return _configured_path(
+        pytestconfig,
+        "--inferrt-ultralytics-repo",
+        "INFERRT_ULTRALYTICS_REPO",
+        "D:/Github/ultralytics",
+    )
+
+
+@pytest.fixture(scope="session")
+def sam_root(pytestconfig: pytest.Config) -> Path:
+    """本地 Segment Anything v1 仓库路径，用于导出 SAM v1 权重。"""
+
+    return _configured_path(pytestconfig, "--inferrt-sam-root", "INFERRT_SAM_ROOT", "D:/Github/SAM/segment-anything")
+
+
+@pytest.fixture(scope="session")
+def sam2_root(pytestconfig: pytest.Config) -> Path:
+    """本地 SAM2 仓库路径，用于导出 SAM2/SAM2.1 权重。"""
+
+    return _configured_path(pytestconfig, "--inferrt-sam2-root", "INFERRT_SAM2_ROOT", "D:/Github/SAM/sam2")
 
 
 @pytest.fixture

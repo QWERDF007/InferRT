@@ -100,11 +100,14 @@ def read_imagenet_labels(labels_path: str) -> dict[int, str]:
 
 
 def _get_config_value(config: Any, key: str) -> Any:
-    """@brief 从 dict 或对象配置中读取指定字段。
+    """从 dict 或对象配置中读取指定字段。
 
-    @param config 模型配置对象，通常来自 timm 的 ``default_cfg`` 或 ``pretrained_cfg``。
-    @param key 待读取的字段名。
-    @return 字段存在时返回对应值，否则返回 ``None``。
+    Args:
+        config: 模型配置对象，通常来自 timm 的 ``default_cfg`` 或 ``pretrained_cfg``。
+        key: 待读取的字段名。
+
+    Returns:
+        字段存在时返回对应值，否则返回 ``None``。
     """
 
     if config is None:
@@ -115,10 +118,13 @@ def _get_config_value(config: Any, key: str) -> Any:
 
 
 def _get_image_processor_size(image_processor: Any) -> tuple[int, int] | None:
-    """@brief 从 Hugging Face image processor 中解析输入尺寸。
+    """从 Hugging Face image processor 中解析输入尺寸。
 
-    @param image_processor ``transformers.pipeline`` 持有的图像预处理器。
-    @return 若存在固定尺寸则返回 ``(height, width)``，否则返回 ``None``。
+    Args:
+        image_processor: ``transformers.pipeline`` 持有的图像预处理器。
+
+    Returns:
+        若存在固定尺寸则返回 ``(height, width)``，否则返回 ``None``。
     """
 
     size = getattr(image_processor, "size", None)
@@ -138,12 +144,17 @@ def _get_image_processor_size(image_processor: Any) -> tuple[int, int] | None:
 
 
 def _require_key(state_dict: Mapping[str, torch.Tensor], key: str) -> torch.Tensor:
-    """@brief 读取 state_dict 中的必需权重，缺失时给出明确错误。
+    """读取 state_dict 中的必需权重，缺失时给出明确错误。
 
-    @param state_dict PyTorch 权重表。
-    @param key 待读取的权重名。
-    @return 对应的张量。
-    @exception KeyError 权重不存在时抛出。
+    Args:
+        state_dict: PyTorch 权重表。
+        key: 待读取的权重名。
+
+    Returns:
+        对应的张量。
+
+    Raises:
+        KeyError: 权重不存在时抛出。
     """
 
     try:
@@ -153,7 +164,7 @@ def _require_key(state_dict: Mapping[str, torch.Tensor], key: str) -> torch.Tens
 
 
 def _optional_key(state_dict: Mapping[str, torch.Tensor], key: str) -> torch.Tensor | None:
-    """@brief 读取可选权重，缺失时返回 ``None``。"""
+    """读取可选权重，缺失时返回 ``None``。"""
 
     return state_dict.get(key)
 
@@ -162,11 +173,14 @@ def convert_transformers_dinov3_state_dict(
     state_dict: Mapping[str, torch.Tensor],
     config: Any,
 ) -> dict[str, torch.Tensor]:
-    """@brief 将 Transformers DINOv3 权重转换为 InferRT DINOv3 构建器使用的 key。
+    """将 Transformers DINOv3 权重转换为 InferRT DINOv3 构建器使用的 key。
 
-    @param state_dict Hugging Face ``DINOv3ViTModel`` 的原始 ``state_dict``。
-    @param config Hugging Face DINOv3 配置对象。
-    @return 转换后的权重表，key 与 ``src/model/priv/DINO.cpp`` 的读取逻辑一致。
+    Args:
+        state_dict: Hugging Face ``DINOv3ViTModel`` 的原始 ``state_dict``。
+        config: Hugging Face DINOv3 配置对象。
+
+    Returns:
+        转换后的权重表，key 与 ``src/model/priv/DINO.cpp`` 的读取逻辑一致。
 
     Transformers 使用拆分的 ``q_proj/k_proj/v_proj`` 和 ``embeddings.*`` 命名；
     当前 TensorRT DINO 实现复用官方/timm 风格的 ``blocks.*.attn.qkv``、
@@ -244,7 +258,7 @@ def convert_transformers_dinov3_state_dict(
 
 
 class TransformersDINOv3Model(torch.nn.Module):
-    """@brief 基于 Hugging Face pipeline 的 DINOv3 导出适配器。
+    """基于 Hugging Face pipeline 的 DINOv3 导出适配器。
 
     pipeline 负责按官方模型 id 加载 pretrained 权重；本适配器提供普通
     ``torch.nn.Module`` 风格的 ``forward``、``forward_features`` 和
@@ -267,7 +281,7 @@ class TransformersDINOv3Model(torch.nn.Module):
         self.pretrained_cfg = self.default_cfg
 
     def _to_model_device(self, x: torch.Tensor) -> torch.Tensor:
-        """@brief 将输入张量移动到 HF 模型当前设备。"""
+        """将输入张量移动到 HF 模型当前设备。"""
 
         parameter = next(self.hf_model.parameters(), None)
         if parameter is None:
@@ -275,13 +289,13 @@ class TransformersDINOv3Model(torch.nn.Module):
         return x.to(device=parameter.device)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """@brief 返回 DINOv3 CLS pooled 特征，供 ``gen_wts.py`` 打印预测结果。"""
+        """返回 DINOv3 CLS pooled 特征，供 ``gen_wts.py`` 打印预测结果。"""
 
         x = self._to_model_device(x)
         return self.hf_model(pixel_values=x).pooler_output
 
     def forward_features(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
-        """@brief 返回与官方 DINOv3 ``forward_features`` 兼容的常用特征字典。"""
+        """返回与官方 DINOv3 ``forward_features`` 兼容的常用特征字典。"""
 
         x = self._to_model_device(x)
         outputs = self.hf_model(pixel_values=x)
@@ -294,17 +308,22 @@ class TransformersDINOv3Model(torch.nn.Module):
         }
 
     def export_state_dict(self) -> dict[str, torch.Tensor]:
-        """@brief 导出 InferRT DINOv3 构建器可读取的权重表。"""
+        """导出 InferRT DINOv3 构建器可读取的权重表。"""
 
         return convert_transformers_dinov3_state_dict(self.hf_model.state_dict(), self.config)
 
 
 def normalize_image_size(image_size: ImageSizeLike) -> tuple[int, int]:
-    """@brief 将不同格式的输入尺寸统一转换为 ``(height, width)``。
+    """将不同格式的输入尺寸统一转换为 ``(height, width)``。
 
-    @param image_size 输入尺寸，可为单个整数、``(H, W)``、``(C, H, W)`` 或 ``(N, C, H, W)``。
-    @return 归一化后的图像高宽。
-    @exception ValueError 输入尺寸格式非法或非正数时抛出。
+    Args:
+        image_size: 输入尺寸，可为单个整数、``(H, W)``、``(C, H, W)`` 或 ``(N, C, H, W)``。
+
+    Returns:
+        归一化后的图像高宽。
+
+    Raises:
+        ValueError: 输入尺寸格式非法或非正数时抛出。
     """
 
     if isinstance(image_size, int):
@@ -328,12 +347,17 @@ def normalize_image_size(image_size: ImageSizeLike) -> tuple[int, int]:
 
 
 def parse_image_size(value: str) -> tuple[int, int]:
-    """@brief 解析命令行传入的图像输入尺寸。
+    """解析命令行传入的图像输入尺寸。
 
-    @param value 尺寸字符串，支持 ``384``、``384x384``、``384,384``、``3x384x384``
+    Args:
+        value: 尺寸字符串，支持 ``384``、``384x384``、``384,384``、``3x384x384``
         或 ``1x3x384x384``。
-    @return 归一化后的 ``(height, width)``。
-    @exception ValueError 输入字符串为空或格式非法时抛出。
+
+    Returns:
+        归一化后的 ``(height, width)``。
+
+    Raises:
+        ValueError: 输入字符串为空或格式非法时抛出。
     """
 
     text = value.strip().lower()
@@ -352,11 +376,14 @@ def parse_image_size(value: str) -> tuple[int, int]:
 
 
 def resolve_input_size(model: torch.nn.Module, default: ImageSizeLike = DEFAULT_IMAGE_SIZE) -> tuple[int, int]:
-    """@brief 根据模型元信息解析预处理输入尺寸。
+    """根据模型元信息解析预处理输入尺寸。
 
-    @param model 已创建的 PyTorch/timm 模型实例。
-    @param default 模型未暴露尺寸信息时使用的默认尺寸。
-    @return 适用于 ``preprocess`` 的 ``(height, width)``。
+    Args:
+        model: 已创建的 PyTorch/timm 模型实例。
+        default: 模型未暴露尺寸信息时使用的默认尺寸。
+
+    Returns:
+        适用于 ``preprocess`` 的 ``(height, width)``。
 
     timm 的 ViT 会在 ``patch_embed.img_size`` 中记录真实输入尺寸；若该字段不存在，
     则回退读取 ``pretrained_cfg`` / ``default_cfg`` 的 ``input_size``，最后使用默认 224。
@@ -380,11 +407,14 @@ def resolve_input_size(model: torch.nn.Module, default: ImageSizeLike = DEFAULT_
 
 
 def preprocess(img: np.ndarray, image_size: ImageSizeLike = DEFAULT_IMAGE_SIZE) -> torch.Tensor:
-    """@brief 按 ImageNet 约定预处理输入图像。
+    """按 ImageNet 约定预处理输入图像。
 
-    @param img OpenCV 读取的 BGR 图像。
-    @param image_size 目标输入尺寸，按 ``(height, width)`` 解析。
-    @return 归一化后的 ``NCHW`` PyTorch 张量。
+    Args:
+        img: OpenCV 读取的 BGR 图像。
+        image_size: 目标输入尺寸，按 ``(height, width)`` 解析。
+
+    Returns:
+        归一化后的 ``NCHW`` PyTorch 张量。
     """
 
     height, width = normalize_image_size(image_size)
@@ -398,10 +428,13 @@ def preprocess(img: np.ndarray, image_size: ImageSizeLike = DEFAULT_IMAGE_SIZE) 
 
 
 def export_model_state_dict(model: torch.nn.Module) -> Mapping[str, torch.Tensor]:
-    """@brief 获取用于 ``.wts`` 导出的权重表。
+    """获取用于 ``.wts`` 导出的权重表。
 
-    @param model PyTorch 模型或导出适配器。
-    @return 适合写入 InferRT ``.wts`` 的 state_dict。
+    Args:
+        model: PyTorch 模型或导出适配器。
+
+    Returns:
+        适合写入 InferRT ``.wts`` 的 state_dict。
 
     普通 torchvision/timm/torchhub 模型直接使用 ``state_dict``；Transformers DINOv3
     通过 ``export_state_dict`` 做 key 转换后再导出。
@@ -414,11 +447,16 @@ def export_model_state_dict(model: torch.nn.Module) -> Mapping[str, torch.Tensor
 
 
 def list_supported_models(backend: str) -> list[str]:
-    """@brief 列出指定后端可导出的模型名称。
+    """列出指定后端可导出的模型名称。
 
-    @param backend 模型来源，支持 ``torchvision``、``timm``、``torchhub`` 和 ``transformers``。
-    @return 模型名称列表。
-    @exception ValueError 后端名称不受支持时抛出。
+    Args:
+        backend: 模型来源，支持 ``torchvision``、``timm``、``torchhub`` 和 ``transformers``。
+
+    Returns:
+        模型名称列表。
+
+    Raises:
+        ValueError: 后端名称不受支持时抛出。
     """
 
     if backend == "torchvision":
@@ -438,12 +476,17 @@ def list_supported_models(backend: str) -> list[str]:
 
 
 def _resolve_torchhub_repo(model_name: str, hub_repo: str | None) -> str:
-    """@brief 根据模型名解析默认 PyTorch Hub 仓库。
+    """根据模型名解析默认 PyTorch Hub 仓库。
 
-    @param model_name DINO 官方 hub 模型名。
-    @param hub_repo 调用方显式传入的仓库；为空时按模型系列自动选择。
-    @return 可传给 ``torch.hub.load`` 的仓库名或本地目录。
-    @exception ValueError 模型名不属于已注册的 torchhub DINO 系列时抛出。
+    Args:
+        model_name: DINO 官方 hub 模型名。
+        hub_repo: 调用方显式传入的仓库；为空时按模型系列自动选择。
+
+    Returns:
+        可传给 ``torch.hub.load`` 的仓库名或本地目录。
+
+    Raises:
+        ValueError: 模型名不属于已注册的 torchhub DINO 系列时抛出。
     """
 
     if hub_repo:
@@ -456,12 +499,17 @@ def _resolve_torchhub_repo(model_name: str, hub_repo: str | None) -> str:
 
 
 def _resolve_transformers_model_id(model_name: str, model_id: str | None) -> str:
-    """@brief 根据 DINOv3 key 解析 Hugging Face 模型 id。
+    """根据 DINOv3 key 解析 Hugging Face 模型 id。
 
-    @param model_name InferRT / DINOv3 官方模型 key。
-    @param model_id 调用方显式传入的 Hugging Face 模型 id；为空时使用内置映射。
-    @return 可传给 ``transformers.pipeline(model=...)`` 的模型 id。
-    @exception ValueError 模型名不属于已支持的 DINOv3 Transformers key 时抛出。
+    Args:
+        model_name: InferRT / DINOv3 官方模型 key。
+        model_id: 调用方显式传入的 Hugging Face 模型 id；为空时使用内置映射。
+
+    Returns:
+        可传给 ``transformers.pipeline(model=...)`` 的模型 id。
+
+    Raises:
+        ValueError: 模型名不属于已支持的 DINOv3 Transformers key 时抛出。
     """
 
     if model_id:
@@ -484,18 +532,23 @@ def create_model(
     hf_model_id: str | None = None,
     local_files_only: bool = False,
 ) -> torch.nn.Module:
-    """@brief 根据后端创建 PyTorch 参考模型。
+    """根据后端创建 PyTorch 参考模型。
 
-    @param model_name 模型名称。
-    @param backend 模型来源，支持 ``torchvision``、``timm``、``torchhub`` 和 ``transformers``。
-    @param hub_repo torch.hub 仓库或本地目录；为空时按 DINOv2 模型名自动选择官方仓库。
-    @param hub_source torch.hub source，通常为 ``github`` 或 ``local``。
-    @param pretrained 是否加载预训练权重。
-    @param hub_weights DINO hub 的 ``weights`` 参数，可传本地 ``.pth`` 或 URL。
-    @param hf_model_id DINOv3 Hugging Face 模型 id；为空时按 ``model_name`` 自动选择。
-    @param local_files_only 是否只从本地 Hugging Face 缓存加载。
-    @return 已创建的 PyTorch 模型实例。
-    @exception ValueError 后端或模型名称不受支持时抛出。
+    Args:
+        model_name: 模型名称。
+        backend: 模型来源，支持 ``torchvision``、``timm``、``torchhub`` 和 ``transformers``。
+        hub_repo: torch.hub 仓库或本地目录；为空时按 DINOv2 模型名自动选择官方仓库。
+        hub_source: torch.hub source，通常为 ``github`` 或 ``local``。
+        pretrained: 是否加载预训练权重。
+        hub_weights: DINO hub 的 ``weights`` 参数，可传本地 ``.pth`` 或 URL。
+        hf_model_id: DINOv3 Hugging Face 模型 id；为空时按 ``model_name`` 自动选择。
+        local_files_only: 是否只从本地 Hugging Face 缓存加载。
+
+    Returns:
+        已创建的 PyTorch 模型实例。
+
+    Raises:
+        ValueError: 后端或模型名称不受支持时抛出。
     """
 
     if backend == "torchvision":

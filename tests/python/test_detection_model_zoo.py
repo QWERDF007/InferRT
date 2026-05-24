@@ -1,4 +1,4 @@
-"""@brief YOLO 检测权重导出工具的单元测试。"""
+"""YOLO 检测权重导出工具的单元测试。"""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ spec.loader.exec_module(yolo_model_zoo)
 
 
 def test_list_supported_models_includes_yolov5_and_yolov8() -> None:
-    """@brief 检测导出器应列出 InferRT 原生注册的 YOLOv5/YOLOv8 key。"""
+    """检测导出器应列出 InferRT 原生注册的 YOLOv5/YOLOv8 key。"""
 
     names = yolo_model_zoo.list_supported_models()
 
@@ -33,7 +33,7 @@ def test_list_supported_models_includes_yolov5_and_yolov8() -> None:
 
 
 def test_resolve_model_weights_uses_alias_defaults() -> None:
-    """@brief 未显式传入权重时，兼容别名应解析到常用的 nano/small 权重名。"""
+    """未显式传入权重时，兼容别名应解析到常用的 nano/small 权重名。"""
 
     assert yolo_model_zoo.resolve_model_weights("yolov5", None) == "yolov5su.pt"
     assert yolo_model_zoo.resolve_model_weights("yolov5n", None) == "yolov5nu.pt"
@@ -43,13 +43,13 @@ def test_resolve_model_weights_uses_alias_defaults() -> None:
 
 
 def test_resolve_model_weights_prefers_explicit_weights() -> None:
-    """@brief 用户显式传入的本地权重路径应优先于模型 key 默认值。"""
+    """用户显式传入的本地权重路径应优先于模型 key 默认值。"""
 
     assert yolo_model_zoo.resolve_model_weights("yolov8n", "D:/models/custom.pt") == "D:/models/custom.pt"
 
 
 def test_load_ultralytics_model_uses_yolo_wrapper(monkeypatch: pytest.MonkeyPatch) -> None:
-    """@brief 模型加载应通过 ``ultralytics.YOLO`` 并返回 FP32 eval 模型。"""
+    """模型加载应通过 ``ultralytics.YOLO`` 并返回 FP32 eval 模型。"""
 
     captured: dict[str, object] = {}
 
@@ -88,7 +88,7 @@ def test_load_ultralytics_model_uses_yolo_wrapper(monkeypatch: pytest.MonkeyPatc
 
 
 def test_write_wts_exports_big_endian_float_hex() -> None:
-    """@brief ``.wts`` 写出格式应与项目中其它权重导出脚本保持一致。"""
+    """``.wts`` 写出格式应与项目中其它权重导出脚本保持一致。"""
 
     class FakeModel:
         def state_dict(self) -> dict[str, torch.Tensor]:

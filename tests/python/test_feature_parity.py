@@ -69,10 +69,13 @@ DINO_OFFICIAL_FEATURE_CASES = [
 
 
 def _load_official_dino_pretrained(model_name: str) -> object:
-    """@brief 通过官方后端加载 DINO 系列预训练模型。
+    """通过官方后端加载 DINO 系列预训练模型。
 
-    @param model_name 官方模型名，例如 ``dinov2_vits14`` 或 ``dinov3_vitb16``。
-    @return 已切换到 ``eval`` 模式的 PyTorch 模型。
+    Args:
+        model_name: 官方模型名，例如 ``dinov2_vits14`` 或 ``dinov3_vitb16``。
+
+    Returns:
+        已切换到 ``eval`` 模式的 PyTorch 模型。
 
     DINOv2 使用 PyTorch Hub；DINOv3 使用 Hugging Face
     ``pipeline(task="image-feature-extraction")``。若当前环境无法访问官方模型或

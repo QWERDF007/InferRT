@@ -37,7 +37,7 @@ YOLO_MODEL_WEIGHTS = {
 
 
 def ensure_ultralytics_config_dir() -> None:
-    """@brief 为 Ultralytics 准备项目内可写配置目录，避免用户目录权限影响导出。"""
+    """为 Ultralytics 准备项目内可写配置目录，避免用户目录权限影响导出。"""
 
     if os.environ.get("YOLO_CONFIG_DIR"):
         return
@@ -47,18 +47,20 @@ def ensure_ultralytics_config_dir() -> None:
 
 
 def list_supported_models() -> list[str]:
-    """@brief 列出当前 InferRT 原生 YOLO 检测构建器支持的模型 key。
+    """列出当前 InferRT 原生 YOLO 检测构建器支持的模型 key。
 
-    @return 模型 key 列表，例如 ``yolov5n`` 和 ``yolov8s``。
+    Returns:
+        模型 key 列表，例如 ``yolov5n`` 和 ``yolov8s``。
     """
 
     return YOLO_MODEL_NAMES.copy()
 
 
 def add_ultralytics_repo(repo: str | Path | None) -> None:
-    """@brief 将本地 ultralytics 仓库加入 ``sys.path``。
+    """将本地 ultralytics 仓库加入 ``sys.path``。
 
-    @param repo 本地仓库根目录；为空时不修改导入路径。
+    Args:
+        repo: 本地仓库根目录；为空时不修改导入路径。
 
     该函数只做路径注入，不导入 ``ultralytics``，便于测试中使用 mock 模块。
     """
@@ -71,12 +73,17 @@ def add_ultralytics_repo(repo: str | Path | None) -> None:
 
 
 def resolve_model_weights(model_name: str, weights: str | Path | None) -> str:
-    """@brief 解析传给 ``ultralytics.YOLO`` 的权重或模型名。
+    """解析传给 ``ultralytics.YOLO`` 的权重或模型名。
 
-    @param model_name InferRT YOLO 模型 key。
-    @param weights 用户显式传入的 ``.pt`` 路径或模型名。
-    @return 可直接传给 ``YOLO(...)`` 的参数。
-    @exception ValueError 模型 key 不在支持列表中时抛出。
+    Args:
+        model_name: InferRT YOLO 模型 key。
+        weights: 用户显式传入的 ``.pt`` 路径或模型名。
+
+    Returns:
+        可直接传给 ``YOLO(...)`` 的参数。
+
+    Raises:
+        ValueError: 模型 key 不在支持列表中时抛出。
     """
 
     if weights:
@@ -89,12 +96,15 @@ def resolve_model_weights(model_name: str, weights: str | Path | None) -> str:
 
 
 def load_ultralytics_model(model_name: str, *, weights: str | Path | None = None, repo: str | Path | None = None) -> Any:
-    """@brief 使用 Ultralytics 加载 YOLOv5/YOLOv8 PyTorch 模型。
+    """使用 Ultralytics 加载 YOLOv5/YOLOv8 PyTorch 模型。
 
-    @param model_name InferRT YOLO 模型 key。
-    @param weights 可选的 ``.pt`` 权重路径；为空时使用 ``<model>.pt``。
-    @param repo 可选的本地 ``D:/Github/ultralytics`` 仓库路径。
-    @return 已切换到 ``eval`` 模式的 FP32 PyTorch 模型。
+    Args:
+        model_name: InferRT YOLO 模型 key。
+        weights: 可选的 ``.pt`` 权重路径；为空时使用 ``<model>.pt``。
+        repo: 可选的本地 ``D:/Github/ultralytics`` 仓库路径。
+
+    Returns:
+        已切换到 ``eval`` 模式的 FP32 PyTorch 模型。
     """
 
     source = resolve_model_weights(model_name, weights)
@@ -118,10 +128,13 @@ def load_ultralytics_model(model_name: str, *, weights: str | Path | None = None
 
 
 def export_state_dict(model: Any) -> Mapping[str, torch.Tensor]:
-    """@brief 获取适合 InferRT ``.wts`` 导出的 YOLO 权重表。
+    """获取适合 InferRT ``.wts`` 导出的 YOLO 权重表。
 
-    @param model Ultralytics ``DetectionModel`` 或兼容对象。
-    @return ``state_dict`` 权重表。
+    Args:
+        model: Ultralytics ``DetectionModel`` 或兼容对象。
+
+    Returns:
+        ``state_dict`` 权重表。
 
     YOLOv5u 和 YOLOv8 的原生 C++ 构建器均读取 Ultralytics ``model.*`` 命名；
     若调用方显式传入旧版 YOLOv5 权重，C++ 构建器也会回退到 tensorrtx 的
@@ -135,11 +148,12 @@ def export_state_dict(model: Any) -> Mapping[str, torch.Tensor]:
 
 
 def write_wts(model: Any, output_path: str | Path, *, verbose: bool = True) -> None:
-    """@brief 将 Ultralytics YOLO 权重导出为 InferRT 文本 ``.wts``。
+    """将 Ultralytics YOLO 权重导出为 InferRT 文本 ``.wts``。
 
-    @param model Ultralytics PyTorch 模型。
-    @param output_path 输出 ``.wts`` 文件路径。
-    @param verbose 为 true 时打印每个权重 key 和 shape。
+    Args:
+        model: Ultralytics PyTorch 模型。
+        output_path: 输出 ``.wts`` 文件路径。
+        verbose: 为 true 时打印每个权重 key 和 shape。
     """
 
     state_dict = export_state_dict(model)

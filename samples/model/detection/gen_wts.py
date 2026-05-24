@@ -8,13 +8,13 @@ from yolo_model_zoo import list_supported_models, load_ultralytics_model, resolv
 
 
 def elapsed_ms(start: float, end: float) -> float:
-    """@brief 将 ``perf_counter`` 时间差转换为毫秒。"""
+    """将 ``perf_counter`` 时间差转换为毫秒。"""
 
     return (end - start) * 1000.0
 
 
 def parse_args() -> argparse.Namespace:
-    """@brief 解析 YOLO ``.wts`` 导出命令行参数。"""
+    """解析 YOLO ``.wts`` 导出命令行参数。"""
 
     parser = argparse.ArgumentParser(description="Generate YOLOv5/YOLOv8 detection weights for InferRT")
     parser.add_argument("-m", "--model", default="yolov8n", choices=list_supported_models(), help="InferRT YOLO key")
@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """@brief 加载 Ultralytics YOLO 权重并写出 InferRT ``.wts``。"""
+    """加载 Ultralytics YOLO 权重并写出 InferRT ``.wts``。"""
 
     args = parse_args()
     if args.list_model:

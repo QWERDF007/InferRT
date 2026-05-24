@@ -20,22 +20,30 @@ DEFAULT_IMAGE_PATH = Path(__file__).resolve().parents[3] / "assets" / "pics" / "
 
 
 def elapsed_ms(start: float, end: float) -> float:
-    """@brief 将 ``perf_counter`` 时间差转换为毫秒。
+    """将 ``perf_counter`` 时间差转换为毫秒。
 
-    @param start 起始时间戳。
-    @param end 结束时间戳。
-    @return 毫秒单位的耗时。
+    Args:
+        start: 起始时间戳。
+        end: 结束时间戳。
+
+    Returns:
+        毫秒单位的耗时。
     """
 
     return (end - start) * 1000.0
 
 
 def parse_cli_image_size(value: str) -> tuple[int, int]:
-    """@brief 解析命令行输入尺寸，并转换为 argparse 可展示的错误。
+    """解析命令行输入尺寸，并转换为 argparse 可展示的错误。
 
-    @param value 用户传入的尺寸字符串。
-    @return ``(height, width)`` 格式的输入尺寸。
-    @exception argparse.ArgumentTypeError 尺寸格式非法时抛出。
+    Args:
+        value: 用户传入的尺寸字符串。
+
+    Returns:
+        ``(height, width)`` 格式的输入尺寸。
+
+    Raises:
+        argparse.ArgumentTypeError: 尺寸格式非法时抛出。
     """
 
     try:
@@ -45,11 +53,12 @@ def parse_cli_image_size(value: str) -> tuple[int, int]:
 
 
 def write_wts(model: torch.nn.Module, output_path: str, *, verbose: bool = True) -> None:
-    """@brief 将 PyTorch 模型 ``state_dict`` 导出为 InferRT ``.wts`` 文本格式。
+    """将 PyTorch 模型 ``state_dict`` 导出为 InferRT ``.wts`` 文本格式。
 
-    @param model 待导出的 PyTorch 模型。
-    @param output_path 输出 ``.wts`` 文件路径。
-    @param verbose 为 true 时打印每个权重 key 和 shape；测试中可关闭以减少日志噪声。
+    Args:
+        model: 待导出的 PyTorch 模型。
+        output_path: 输出 ``.wts`` 文件路径。
+        verbose: 为 true 时打印每个权重 key 和 shape；测试中可关闭以减少日志噪声。
     """
 
     print(f"\nGenerating weights file to {output_path}...")
@@ -70,9 +79,11 @@ def write_wts(model: torch.nn.Module, output_path: str, *, verbose: bool = True)
 
 
 def print_inference_results(output: torch.Tensor, labels: dict[int, str]) -> None:
-    """@brief 打印 PyTorch 前向结果，兼容分类 logits 和 DINO 特征向量。
-    @param output 模型前向输出。
-    @param labels ImageNet 标签表；仅当输出维度等于 1000 时用于显示类别名。
+    """打印 PyTorch 前向结果，兼容分类 logits 和 DINO 特征向量。
+
+    Args:
+        output: 模型前向输出。
+        labels: ImageNet 标签表；仅当输出维度等于 1000 时用于显示类别名。
     """
 
     output = output.reshape(output.shape[0], -1)

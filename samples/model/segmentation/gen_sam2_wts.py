@@ -99,21 +99,27 @@ MODEL_SPECS = {
 
 
 def elapsed_ms(start: float, end: float) -> float:
-    """@brief 将 ``perf_counter`` 的时间差转换为毫秒。
+    """将 ``perf_counter`` 的时间差转换为毫秒。
 
-    @param start 起始时间戳。
-    @param end 结束时间戳。
-    @return 毫秒单位耗时。
+    Args:
+        start: 起始时间戳。
+        end: 结束时间戳。
+
+    Returns:
+        毫秒单位耗时。
     """
 
     return (end - start) * 1000.0
 
 
 def import_sam2_builder(sam2_root: str | None) -> Any:
-    """@brief 导入官方 ``sam2.build_sam.build_sam2``。
+    """导入官方 ``sam2.build_sam.build_sam2``。
 
-    @param sam2_root 官方 SAM2 仓库根目录；为空时使用当前 Python 环境。
-    @return 官方 ``build_sam2`` 函数。
+    Args:
+        sam2_root: 官方 SAM2 仓库根目录；为空时使用当前 Python 环境。
+
+    Returns:
+        官方 ``build_sam2`` 函数。
     """
 
     if sam2_root:
@@ -128,7 +134,7 @@ def import_sam2_builder(sam2_root: str | None) -> Any:
 
 
 def install_optional_dependency_shims() -> None:
-    """@brief 为最小导出环境安装 Hydra/iopath 兼容桩。
+    """为最小导出环境安装 Hydra/iopath 兼容桩。
 
     官方 SAM2 包的 ``__init__`` 会导入 Hydra；Hiera 文件会导入 iopath。
     导出 TensorRT 权重只需要模型类本身，因此在这些包缺失时用轻量桩绕过导入。
@@ -171,13 +177,16 @@ def install_optional_dependency_shims() -> None:
 
 
 def build_sam2_without_hydra(model_name: str, checkpoint: Path, sam2_root: str | None, device: torch.device) -> Any:
-    """@brief 不依赖 Hydra 直接实例化官方 SAM2 图像分割模型。
+    """不依赖 Hydra 直接实例化官方 SAM2 图像分割模型。
 
-    @param model_name InferRT/SAM2 模型 key。
-    @param checkpoint 官方 checkpoint 路径。
-    @param sam2_root 官方 SAM2 仓库根目录。
-    @param device 模型所在设备。
-    @return 已加载权重并切换到 eval 的官方模型。
+    Args:
+        model_name: InferRT/SAM2 模型 key。
+        checkpoint: 官方 checkpoint 路径。
+        sam2_root: 官方 SAM2 仓库根目录。
+        device: 模型所在设备。
+
+    Returns:
+        已加载权重并切换到 eval 的官方模型。
     """
 
     if sam2_root:
@@ -318,13 +327,16 @@ def build_sam2_without_hydra(model_name: str, checkpoint: Path, sam2_root: str |
 
 
 def preprocess_image(image_path: Path, device: torch.device) -> tuple[torch.Tensor, tuple[int, int]]:
-    """@brief 按官方 SAM2 图像流程预处理单张图片。
+    """按官方 SAM2 图像流程预处理单张图片。
 
     SAM2 image predictor 使用固定 ``1024x1024`` resize、``0..1`` RGB 和 ImageNet 均值方差。
 
-    @param image_path 输入图片路径。
-    @param device 输出张量所在设备。
-    @return ``(image_tensor, original_size)``，其中张量形状为 ``1x3x1024x1024``。
+    Args:
+        image_path: 输入图片路径。
+        device: 输出张量所在设备。
+
+    Returns:
+        ``(image_tensor, original_size)``，其中张量形状为 ``1x3x1024x1024``。
     """
 
     image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
@@ -341,11 +353,12 @@ def preprocess_image(image_path: Path, device: torch.device) -> tuple[torch.Tens
 
 
 def write_wts(state_dict: dict[str, torch.Tensor], output_path: Path, *, verbose: bool = False) -> None:
-    """@brief 将官方 SAM2 ``state_dict`` 写成 InferRT 文本权重格式。
+    """将官方 SAM2 ``state_dict`` 写成 InferRT 文本权重格式。
 
-    @param state_dict 官方 SAM2 权重。
-    @param output_path 输出 ``.wts`` 路径。
-    @param verbose 为 true 时打印每个权重 key 和 shape。
+    Args:
+        state_dict: 官方 SAM2 权重。
+        output_path: 输出 ``.wts`` 路径。
+        verbose: 为 true 时打印每个权重 key 和 shape。
     """
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -364,11 +377,12 @@ def write_wts(state_dict: dict[str, torch.Tensor], output_path: Path, *, verbose
 
 @torch.no_grad()
 def run_reference_forward(model: torch.nn.Module, image: torch.Tensor, original_size: tuple[int, int]) -> None:
-    """@brief 跑一遍官方 SAM2 image encoder / prompt encoder / mask decoder。
+    """跑一遍官方 SAM2 image encoder / prompt encoder / mask decoder。
 
-    @param model 官方 ``SAM2Base`` 模型。
-    @param image 预处理后的 ``1x3x1024x1024`` 图像张量。
-    @param original_size 原图 ``(height, width)``，用于后处理计时。
+    Args:
+        model: 官方 ``SAM2Base`` 模型。
+        image: 预处理后的 ``1x3x1024x1024`` 图像张量。
+        original_size: 原图 ``(height, width)``，用于后处理计时。
     """
 
     encoder_start = time.perf_counter()
@@ -425,9 +439,10 @@ def run_reference_forward(model: torch.nn.Module, image: torch.Tensor, original_
 
 
 def parse_args() -> argparse.Namespace:
-    """@brief 解析命令行参数。
+    """解析命令行参数。
 
-    @return 解析后的参数对象。
+    Returns:
+        解析后的参数对象。
     """
 
     parser = argparse.ArgumentParser(description="Export official SAM2/SAM2.1 checkpoint to InferRT .wts")
@@ -443,7 +458,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """@brief 加载官方 SAM2、执行可选前向验证并导出权重。"""
+    """加载官方 SAM2、执行可选前向验证并导出权重。"""
 
     args = parse_args()
     output_path = args.output if args.output is not None else Path(f"{args.model}.wts")

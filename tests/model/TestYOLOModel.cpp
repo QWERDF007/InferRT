@@ -133,3 +133,37 @@ TEST(YOLOModelBuildTest, BuildRejectsInvalidChannelCount)
     const TempWeightsFile weights("inferrt_yolov8_test_");
     ExpectIrtExceptionCode([&] { model->build(weights.path().string()); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
+
+/**
+ * @brief YOLO 检测模型只支持单输入，避免多输入配置进入 TensorRT 构图后才暴露错误。
+ */
+TEST(YOLOModelBuildTest, BuildRejectsMultipleInputShapes)
+{
+    auto model = irt::model::CreateModel("yolov8n");
+    ASSERT_NE(model, nullptr);
+
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setInputShapes({nvinfer1::Dims4{1, 3, 640, 640}, nvinfer1::Dims4{1, 3, 640, 640}});
+    config->setOutputTensorNames({"output0", "output1", "output2"});
+    model->setModelConfig(std::move(config));
+
+    const TempWeightsFile weights("inferrt_yolov8_multi_input_");
+    ExpectIrtExceptionCode([&] { model->build(weights.path().string()); }, irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+/**
+ * @brief YOLO 检测头固定导出 3 个尺度输出，输出名数量错误时应在构建前期拒绝。
+ */
+TEST(YOLOModelBuildTest, BuildRejectsWrongOutputTensorCount)
+{
+    auto model = irt::model::CreateModel("yolov5n");
+    ASSERT_NE(model, nullptr);
+
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setInputShape(nvinfer1::Dims4{1, 3, 640, 640});
+    config->setOutputTensorNames({"output0", "output1"});
+    model->setModelConfig(std::move(config));
+
+    const TempWeightsFile weights("inferrt_yolov5_outputs_");
+    ExpectIrtExceptionCode([&] { model->build(weights.path().string()); }, irt::Status::ERROR_INVALID_ARGUMENT);
+}

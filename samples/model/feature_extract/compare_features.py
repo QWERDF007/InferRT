@@ -112,10 +112,14 @@ def model_family(model_name: str) -> str:
 
 
 def default_backend_for_model(model_name: str, backend: str) -> str:
-    """@brief 根据模型名推断 PyTorch 参考后端。
-    @param model_name InferRT 模型注册名。
-    @param backend 命令行显式传入的后端；非空时直接返回。
-    @return 可传给 ``model_zoo.create_model`` 的后端名称。
+    """根据模型名推断 PyTorch 参考后端。
+
+    Args:
+        model_name: InferRT 模型注册名。
+        backend: 命令行显式传入的后端；非空时直接返回。
+
+    Returns:
+        可传给 ``model_zoo.create_model`` 的后端名称。
     """
 
     if backend:
@@ -130,9 +134,13 @@ def default_backend_for_model(model_name: str, backend: str) -> str:
 
 
 def image_size_from_manifest(tensors: dict[str, TensorSpec]) -> tuple[int, int] | None:
-    """@brief 从 C++ dump manifest 的 input 张量形状中解析预处理尺寸。
-    @param tensors ``parse_manifest`` 返回的张量描述表。
-    @return ``(height, width)``；manifest 缺少 input 或形状不完整时返回 ``None``。
+    """从 C++ dump manifest 的 input 张量形状中解析预处理尺寸。
+
+    Args:
+        tensors: ``parse_manifest`` 返回的张量描述表。
+
+    Returns:
+        ``(height, width)``；manifest 缺少 input 或形状不完整时返回 ``None``。
     """
 
     input_spec = tensors.get("input")
@@ -315,11 +323,17 @@ def capture_mobilenet_v3_features(model: torch.nn.Module, x: torch.Tensor) -> di
 
 
 def capture_dino_features(model: torch.nn.Module, x: torch.Tensor) -> dict[str, torch.Tensor]:
-    """@brief 调用官方 DINO ``forward_features`` 并转换为 CPU 张量字典。
-    @param model DINOv2 torch.hub 模型或 DINOv3 Transformers 适配器。
-    @param x 预处理后的 NCHW 输入张量。
-    @return 特征名到 PyTorch 张量的映射。
-    @exception TypeError 当官方模型未返回字典时抛出，避免静默比较错误张量。
+    """调用官方 DINO ``forward_features`` 并转换为 CPU 张量字典。
+
+    Args:
+        model: DINOv2 torch.hub 模型或 DINOv3 Transformers 适配器。
+        x: 预处理后的 NCHW 输入张量。
+
+    Returns:
+        特征名到 PyTorch 张量的映射。
+
+    Raises:
+        TypeError: 当官方模型未返回字典时抛出，避免静默比较错误张量。
     """
 
     outputs = model.forward_features(x)

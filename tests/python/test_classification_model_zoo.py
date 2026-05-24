@@ -1,4 +1,4 @@
-"""@brief 分类样例 ``model_zoo`` 工具函数的单元测试。"""
+"""分类样例 ``model_zoo`` 工具函数的单元测试。"""
 
 from __future__ import annotations
 
@@ -25,38 +25,38 @@ from model_zoo import (  # noqa: E402
 
 
 class DummyPatchEmbedModel:
-    """@brief 模拟 timm ViT，通过 ``patch_embed.img_size`` 暴露真实输入尺寸。"""
+    """模拟 timm ViT，通过 ``patch_embed.img_size`` 暴露真实输入尺寸。"""
 
     patch_embed = SimpleNamespace(img_size=(384, 384))
     default_cfg = {"input_size": (3, 224, 224)}
 
 
 class DummyConfigModel:
-    """@brief 模拟仅通过配置暴露输入尺寸的 timm/torchvision 模型。"""
+    """模拟仅通过配置暴露输入尺寸的 timm/torchvision 模型。"""
 
     pretrained_cfg = {"input_size": (3, 320, 256)}
 
 
 def test_resolve_input_size_prefers_patch_embed_size() -> None:
-    """@brief ViT 的实际 patch 输入尺寸应优先于默认配置。"""
+    """ViT 的实际 patch 输入尺寸应优先于默认配置。"""
 
     assert resolve_input_size(DummyPatchEmbedModel()) == (384, 384)
 
 
 def test_resolve_input_size_reads_model_config() -> None:
-    """@brief 当模型没有 ``patch_embed`` 时，应从配置中的 ``input_size`` 解析 H/W。"""
+    """当模型没有 ``patch_embed`` 时，应从配置中的 ``input_size`` 解析 H/W。"""
 
     assert resolve_input_size(DummyConfigModel()) == (320, 256)
 
 
 def test_resolve_input_size_falls_back_to_default() -> None:
-    """@brief 模型未提供尺寸元信息时应回退到 ImageNet 默认 224。"""
+    """模型未提供尺寸元信息时应回退到 ImageNet 默认 224。"""
 
     assert resolve_input_size(object()) == (224, 224)
 
 
 def test_normalize_image_size_rejects_invalid_shape() -> None:
-    """@brief 非法尺寸应尽早报错，避免 OpenCV resize 阶段出现难读异常。"""
+    """非法尺寸应尽早报错，避免 OpenCV resize 阶段出现难读异常。"""
 
     with pytest.raises(ValueError):
         normalize_image_size((1, 3, 224, 224, 1))
@@ -72,20 +72,20 @@ def test_normalize_image_size_rejects_invalid_shape() -> None:
     ],
 )
 def test_parse_image_size_accepts_cli_formats(raw: str, expected: tuple[int, int]) -> None:
-    """@brief 命令行尺寸解析应兼容常见 H/W、CHW 和 NCHW 写法。"""
+    """命令行尺寸解析应兼容常见 H/W、CHW 和 NCHW 写法。"""
 
     assert parse_image_size(raw) == expected
 
 
 def test_parse_image_size_rejects_invalid_text() -> None:
-    """@brief 非数字尺寸字符串应在进入预处理前报错。"""
+    """非数字尺寸字符串应在进入预处理前报错。"""
 
     with pytest.raises(ValueError):
         parse_image_size("abc")
 
 
 def test_preprocess_uses_custom_hw_size() -> None:
-    """@brief 预处理应按调用方传入的 H/W 输出 NCHW 张量。"""
+    """预处理应按调用方传入的 H/W 输出 NCHW 张量。"""
 
     image = np.zeros((12, 20, 3), dtype=np.uint8)
     tensor = preprocess(image, image_size=(384, 256))
@@ -95,7 +95,7 @@ def test_preprocess_uses_custom_hw_size() -> None:
 
 
 def test_list_supported_timm_models_queries_dino_patterns(monkeypatch: pytest.MonkeyPatch) -> None:
-    """@brief timm 模型枚举应显式覆盖 DINOv2/DINOv3，避免只依赖 ``vit*`` 前缀。"""
+    """timm 模型枚举应显式覆盖 DINOv2/DINOv3，避免只依赖 ``vit*`` 前缀。"""
 
     calls: list[str] = []
 
@@ -113,7 +113,7 @@ def test_list_supported_timm_models_queries_dino_patterns(monkeypatch: pytest.Mo
 
 
 def test_list_supported_torchhub_models_includes_official_dinov2_keys() -> None:
-    """@brief torchhub 后端应列出官方 DINOv2 backbone key，避免依赖网络枚举。"""
+    """torchhub 后端应列出官方 DINOv2 backbone key，避免依赖网络枚举。"""
 
     names = list_supported_models("torchhub")
 
@@ -124,7 +124,7 @@ def test_list_supported_torchhub_models_includes_official_dinov2_keys() -> None:
 
 
 def test_list_supported_transformers_models_includes_official_dinov3_keys() -> None:
-    """@brief transformers 后端应列出 Hugging Face DINOv3 backbone key。"""
+    """transformers 后端应列出 Hugging Face DINOv3 backbone key。"""
 
     names = list_supported_models("transformers")
 
@@ -134,7 +134,7 @@ def test_list_supported_transformers_models_includes_official_dinov3_keys() -> N
 
 
 def test_create_timm_dinov3_uses_cls_token_pooling(monkeypatch: pytest.MonkeyPatch) -> None:
-    """@brief 导出 DINOv3 timm 权重时应使用 CLS-token pooling，与官方 DINOv3 前向保持一致。"""
+    """导出 DINOv3 timm 权重时应使用 CLS-token pooling，与官方 DINOv3 前向保持一致。"""
 
     captured: dict[str, object] = {}
 
@@ -153,7 +153,7 @@ def test_create_timm_dinov3_uses_cls_token_pooling(monkeypatch: pytest.MonkeyPat
 
 
 def test_create_torchhub_dinov2_uses_official_repo_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """@brief torchhub 后端默认应等价于加载 ``facebookresearch/dinov2`` 官方仓库。"""
+    """torchhub 后端默认应等价于加载 ``facebookresearch/dinov2`` 官方仓库。"""
 
     captured: dict[str, object] = {}
 
@@ -176,7 +176,7 @@ def test_create_torchhub_dinov2_uses_official_repo_by_default(monkeypatch: pytes
 
 
 def test_create_transformers_dinov3_uses_huggingface_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
-    """@brief DINOv3 transformers 后端应通过 Hugging Face pipeline 创建。"""
+    """DINOv3 transformers 后端应通过 Hugging Face pipeline 创建。"""
 
     captured: dict[str, object] = {}
 
@@ -216,7 +216,7 @@ def test_create_transformers_dinov3_uses_huggingface_pipeline(monkeypatch: pytes
 
 
 def test_create_torchhub_dinov2_supports_local_repo_and_weights(monkeypatch: pytest.MonkeyPatch) -> None:
-    """@brief torchhub 后端应支持本地 DINOv2 仓库和显式权重路径，便于离线导出。"""
+    """torchhub 后端应支持本地 DINOv2 仓库和显式权重路径，便于离线导出。"""
 
     captured: dict[str, object] = {}
 
@@ -249,7 +249,7 @@ def test_create_torchhub_dinov2_supports_local_repo_and_weights(monkeypatch: pyt
 
 
 def test_create_transformers_dinov3_supports_model_id_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    """@brief transformers 后端应允许显式覆盖 Hugging Face 模型 id 并限制只读本地缓存。"""
+    """transformers 后端应允许显式覆盖 Hugging Face 模型 id 并限制只读本地缓存。"""
 
     captured: dict[str, object] = {}
 
@@ -286,10 +286,13 @@ def test_create_transformers_dinov3_supports_model_id_override(monkeypatch: pyte
 
 
 def _make_transformers_dinov3_state_dict(*, gated_mlp: bool = False) -> dict[str, torch.Tensor]:
-    """@brief 构造最小 HF DINOv3 权重表，复用标准 MLP 与拆分 SwiGLU 转换测试数据。
+    """构造最小 HF DINOv3 权重表，复用标准 MLP 与拆分 SwiGLU 转换测试数据。
 
-    @param gated_mlp 为 true 时生成 DINOv3 Plus/7B 使用的 ``gate/up/down`` 三分支 MLP。
-    @return 可传入 ``convert_transformers_dinov3_state_dict`` 的伪 HF 权重表。
+    Args:
+        gated_mlp: 为 true 时生成 DINOv3 Plus/7B 使用的 ``gate/up/down`` 三分支 MLP。
+
+    Returns:
+        可传入 ``convert_transformers_dinov3_state_dict`` 的伪 HF 权重表。
     """
 
     state_dict = {
@@ -337,7 +340,7 @@ def _make_transformers_dinov3_state_dict(*, gated_mlp: bool = False) -> dict[str
 
 
 def test_transformers_dinov3_export_state_dict_packs_hf_keys() -> None:
-    """@brief HF DINOv3 拆分权重应转换为 TensorRT DINO 构建器使用的 qkv/blocks 命名。"""
+    """HF DINOv3 拆分权重应转换为 TensorRT DINO 构建器使用的 qkv/blocks 命名。"""
 
     config = SimpleNamespace(hidden_size=4, num_attention_heads=2, num_hidden_layers=1, rope_theta=100.0)
     state_dict = _make_transformers_dinov3_state_dict()
@@ -365,7 +368,7 @@ def test_transformers_dinov3_export_state_dict_packs_hf_keys() -> None:
 
 
 def test_transformers_dinov3_export_state_dict_maps_gated_mlp() -> None:
-    """@brief DINOv3 Plus/7B 的拆分 SwiGLU MLP 应映射到 C++ 侧的 ``w1/w2/w3`` 命名。"""
+    """DINOv3 Plus/7B 的拆分 SwiGLU MLP 应映射到 C++ 侧的 ``w1/w2/w3`` 命名。"""
 
     config = SimpleNamespace(hidden_size=4, num_attention_heads=2, num_hidden_layers=1, rope_theta=100.0)
     state_dict = _make_transformers_dinov3_state_dict(gated_mlp=True)
@@ -379,7 +382,7 @@ def test_transformers_dinov3_export_state_dict_maps_gated_mlp() -> None:
 
 
 def test_export_model_state_dict_uses_adapter_export() -> None:
-    """@brief ``gen_wts.py`` 应通过通用导出入口读取适配器转换后的权重。"""
+    """``gen_wts.py`` 应通过通用导出入口读取适配器转换后的权重。"""
 
     class FakeExportModel(torch.nn.Module):
         def export_state_dict(self) -> dict[str, torch.Tensor]:
@@ -391,7 +394,7 @@ def test_export_model_state_dict_uses_adapter_export() -> None:
 
 
 def test_torchhub_rejects_dinov3_models() -> None:
-    """@brief DINOv3 已切换到 transformers pipeline，torchhub 后端应给出明确错误。"""
+    """DINOv3 已切换到 transformers pipeline，torchhub 后端应给出明确错误。"""
 
     with pytest.raises(ValueError, match="Unsupported torchhub model"):
         create_model("dinov3_vitb16", "torchhub")

@@ -62,7 +62,7 @@ def sample_executable(build_dir: Path, sample_name: str) -> Path:
             return candidate
     raise FileNotFoundError(
         f"Sample executable '{exe_name}' not found under {build_dir}. "
-        "Build targets inferrt_sample_classification and inferrt_sample_feature_extract first."
+        f"Build target inferrt_sample_{sample_name} first."
     )
 
 
@@ -89,8 +89,8 @@ def require_weights(root: Path, relative_weights: str) -> Path:
     return weights_path
 
 
-def run_process(command: list[str], *, cwd: Path) -> None:
-    """运行子进程并在非零退出码时抛出 ``RuntimeError``。
+def run_process_capture(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    """运行子进程并返回完整输出，便于集成测试断言 sample 日志。
 
     Args:
         command:  argv 列表（不含 shell 展开）。
@@ -98,6 +98,9 @@ def run_process(command: list[str], *, cwd: Path) -> None:
 
     Raises:
         RuntimeError: 退出码非零时，附带完整命令与 stdout/stderr。
+
+    Returns:
+        subprocess.CompletedProcess[str]: 已完成进程对象。
     """
 
     completed = subprocess.run(
@@ -115,6 +118,18 @@ def run_process(command: list[str], *, cwd: Path) -> None:
             f"  stdout:\n{completed.stdout}\n"
             f"  stderr:\n{completed.stderr}"
         )
+    return completed
+
+
+def run_process(command: list[str], *, cwd: Path) -> None:
+    """运行子进程并在非零退出码时抛出 ``RuntimeError``。
+
+    Args:
+        command:  argv 列表（不含 shell 展开）。
+        cwd: 子进程工作目录。
+    """
+
+    run_process_capture(command, cwd=cwd)
 
 
 def run_cpp_classification_dump(
