@@ -10,15 +10,36 @@ import numpy as np
 import pytest
 
 from helpers.manifest import assert_tensors_close
-from helpers.model_integration import ensure_sam2_wts
+from helpers.model_integration import ensure_sam2_wts, ensure_sam_v1_wts
 from util import allocate_output_tensors
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
+SAM_V1_MODEL_NAME = "sam_vit_b"
 SAM2_MODEL_NAME = "sam2_1_hiera_tiny"
 SAM2_INPUT_SIZE = 1024
 SAM2_MASK_SIZE = 256
 SAM2_MAX_POINTS = 16
+SAM_V1_MASK_RTOL = 1e-2
+SAM_V1_MASK_ATOL = 3e-1
+SAM_MASK_RTOL = 1e-3
+SAM_MASK_ATOL = 1e-2
+SAM_V1_IOU_RTOL = 5e-3
+SAM_V1_IOU_ATOL = 3e-3
+SAM_IOU_RTOL = 1e-3
+SAM_IOU_ATOL = 1e-3
+
+
+def _import_sam_v1_export_helpers(repo_root: Path):
+    """导入 SAM v1 导出脚本中的官方构建与预处理 helper。"""
+
+    segmentation_samples = repo_root / "samples" / "model" / "segmentation"
+    if str(segmentation_samples) not in sys.path:
+        sys.path.insert(0, str(segmentation_samples))
+
+    from gen_sam_wts import SAM_IMAGE_SIZE, import_segment_anything, preprocess_image
+
+    return SAM_IMAGE_SIZE, import_segment_anything, preprocess_image
 
 
 def _import_sam2_export_helpers(repo_root: Path):
@@ -33,14 +54,82 @@ def _import_sam2_export_helpers(repo_root: Path):
     return SAM2_IMAGE_SIZE, build_sam2_without_hydra, preprocess_image
 
 
-def _make_center_point_prompt() -> tuple[np.ndarray, np.ndarray]:
-    """构造与 segmentation sample 一致的中心正样本点提示。"""
+def _make_point_prompt(x: float, y: float) -> tuple[np.ndarray, np.ndarray]:
+    """构造与 segmentation sample 输入契约一致的单个正样本点提示。"""
 
     point_coords = np.zeros((1, SAM2_MAX_POINTS, 2, 1), dtype=np.float32)
     point_labels = np.full((1, SAM2_MAX_POINTS, 1, 1), -1.0, dtype=np.float32)
-    point_coords[0, 0, :, 0] = SAM2_INPUT_SIZE / 2.0
+    point_coords[0, 0, :, 0] = (x, y)
     point_labels[0, 0, 0, 0] = 1.0
     return point_coords, point_labels
+
+
+def _make_center_point_prompt() -> tuple[np.ndarray, np.ndarray]:
+    """构造与 SAM2 fixed-square preprocessing 一致的中心正样本点提示。"""
+
+    return _make_point_prompt(SAM2_INPUT_SIZE / 2.0, SAM2_INPUT_SIZE / 2.0)
+
+
+def _run_torch_sam_v1_reference(
+    *,
+    repo_root: Path,
+    checkpoint: Path,
+    sam_root: Path,
+    image_path: Path,
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    """运行官方 SAM v1 image encoder / prompt encoder / mask decoder 全链路。"""
+
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("SAM v1 TensorRT parity requires CUDA")
+    device = torch.device("cuda")
+
+    sam_image_size, import_segment_anything, preprocess_image = _import_sam_v1_export_helpers(repo_root)
+    if sam_image_size != SAM2_INPUT_SIZE:
+        raise AssertionError(f"Unexpected SAM image size: {sam_image_size}")
+
+    registry = import_segment_anything(str(sam_root) if sam_root.exists() else None)
+    model = registry["vit_b"](checkpoint=str(checkpoint)).to(device)
+    model.eval()
+
+    image, _original_size, resized_size = preprocess_image(image_path, device)
+    resized_h, resized_w = resized_size
+    point_coords_np, point_labels_np = _make_point_prompt(resized_w / 2.0, resized_h / 2.0)
+    point_coords = torch.from_numpy(point_coords_np.reshape(1, SAM2_MAX_POINTS, 2)).to(device=device)
+    point_labels = torch.from_numpy(point_labels_np.reshape(1, SAM2_MAX_POINTS)).to(device=device, dtype=torch.int64)
+
+    with torch.inference_mode():
+        image_embeddings = model.image_encoder(image)
+        sparse_embeddings, dense_embeddings = model.prompt_encoder(
+            points=(point_coords, point_labels),
+            boxes=None,
+            masks=None,
+        )
+        low_res_masks, iou_predictions = model.mask_decoder(
+            image_embeddings=image_embeddings,
+            image_pe=model.prompt_encoder.get_dense_pe(),
+            sparse_prompt_embeddings=sparse_embeddings,
+            dense_prompt_embeddings=dense_embeddings,
+            multimask_output=True,
+        )
+    torch.cuda.synchronize()
+
+    inputs = {
+        "image": image.detach().cpu().numpy().astype(np.float32, copy=False),
+        "point_coords": point_coords_np,
+        "point_labels": point_labels_np,
+        "mask_input": np.zeros((1, 1, SAM2_MASK_SIZE, SAM2_MASK_SIZE), dtype=np.float32),
+        "has_mask_input": np.zeros((1, 1, 1, 1), dtype=np.float32),
+    }
+    outputs = {
+        "masks": low_res_masks.detach().cpu().numpy().astype(np.float32, copy=False),
+        "low_res_masks": low_res_masks.detach().cpu().numpy().astype(np.float32, copy=False),
+        "iou_predictions": iou_predictions.detach().cpu().numpy().astype(np.float32, copy=False).reshape(1, 3, 1, 1),
+    }
+
+    del model, image, point_coords, point_labels, image_embeddings, low_res_masks, iou_predictions
+    torch.cuda.empty_cache()
+    return inputs, outputs
 
 
 def _run_torch_sam2_reference(
@@ -103,15 +192,16 @@ def _run_torch_sam2_reference(
     return inputs, outputs
 
 
-def _run_inferrt_sam2(
+def _run_inferrt_sam(
     irt_module: Any,
     *,
+    model_name: str,
     weights_path: Path,
     inputs: dict[str, np.ndarray],
 ) -> dict[str, np.ndarray]:
-    """通过 InferRT pybind11 运行 SAM2.1 tiny 全链路。"""
+    """通过 InferRT pybind11 运行 SAM/SAM2 全链路。"""
 
-    model = irt_module.create_model(SAM2_MODEL_NAME)
+    model = irt_module.create_model(model_name)
     # 数值一致性测试需要直接重建 engine，避免旧缓存掩盖网络定义变更。
     model.build(str(weights_path))
 
@@ -124,6 +214,60 @@ def _run_inferrt_sam2(
     model_inputs = {name: np.ascontiguousarray(inputs[name], dtype=np.float32) for name in input_names}
     model.infer(model_inputs, output_tensors)
     return {name: np.asarray(output_tensors[name], dtype=np.float32) for name in output_names}
+
+
+def test_sam_v1_pybind_matches_official_pytorch_forward(
+    irt_module: Any,
+    repo_root: Path,
+    build_dir: Path,
+    model_root: Path,
+    default_image: Path,
+    sam_root: Path,
+) -> None:
+    """同一图片和点提示下，InferRT SAM v1 输出应与官方 PyTorch 前向保持一致。"""
+
+    checkpoint = model_root / "sam" / "sam_vit_b_01ec64.pth"
+    weights = ensure_sam_v1_wts(
+        repo_root=repo_root,
+        build_dir=build_dir,
+        checkpoint=checkpoint,
+        sam_root=sam_root,
+    )
+
+    inputs, torch_outputs = _run_torch_sam_v1_reference(
+        repo_root=repo_root,
+        checkpoint=checkpoint,
+        sam_root=sam_root,
+        image_path=default_image,
+    )
+    inferrt_outputs = _run_inferrt_sam(
+        irt_module,
+        model_name=SAM_V1_MODEL_NAME,
+        weights_path=weights,
+        inputs=inputs,
+    )
+
+    assert_tensors_close(
+        torch_outputs["masks"],
+        inferrt_outputs["masks"],
+        rtol=SAM_V1_MASK_RTOL,
+        atol=SAM_V1_MASK_ATOL,
+        name="masks",
+    )
+    assert_tensors_close(
+        torch_outputs["low_res_masks"],
+        inferrt_outputs["low_res_masks"],
+        rtol=SAM_V1_MASK_RTOL,
+        atol=SAM_V1_MASK_ATOL,
+        name="low_res_masks",
+    )
+    assert_tensors_close(
+        torch_outputs["iou_predictions"],
+        inferrt_outputs["iou_predictions"],
+        rtol=SAM_V1_IOU_RTOL,
+        atol=SAM_V1_IOU_ATOL,
+        name="iou_predictions",
+    )
 
 
 def test_sam2_pybind_matches_official_pytorch_forward(
@@ -159,26 +303,31 @@ def test_sam2_pybind_matches_official_pytorch_forward(
         sam2_root=sam2_root,
         image_path=default_image,
     )
-    inferrt_outputs = _run_inferrt_sam2(irt_module, weights_path=weights, inputs=inputs)
+    inferrt_outputs = _run_inferrt_sam(
+        irt_module,
+        model_name=SAM2_MODEL_NAME,
+        weights_path=weights,
+        inputs=inputs,
+    )
 
     assert_tensors_close(
         torch_outputs["masks"],
         inferrt_outputs["masks"],
-        rtol=1e-3,
-        atol=1e-2,
+        rtol=SAM_MASK_RTOL,
+        atol=SAM_MASK_ATOL,
         name="masks",
     )
     assert_tensors_close(
         torch_outputs["low_res_masks"],
         inferrt_outputs["low_res_masks"],
-        rtol=1e-3,
-        atol=1e-2,
+        rtol=SAM_MASK_RTOL,
+        atol=SAM_MASK_ATOL,
         name="low_res_masks",
     )
     assert_tensors_close(
         torch_outputs["iou_predictions"],
         inferrt_outputs["iou_predictions"],
-        rtol=1e-3,
-        atol=1e-3,
+        rtol=SAM_IOU_RTOL,
+        atol=SAM_IOU_ATOL,
         name="iou_predictions",
     )

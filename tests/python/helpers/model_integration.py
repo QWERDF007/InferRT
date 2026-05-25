@@ -98,6 +98,15 @@ def is_fresh(output: Path, source: Path) -> bool:
     return output.exists() and output.stat().st_size > 0 and output.stat().st_mtime >= source.stat().st_mtime
 
 
+def is_fresh_against_all(output: Path, sources: list[Path]) -> bool:
+    """判断缓存文件是否不早于所有存在的源文件。"""
+
+    if not output.exists() or output.stat().st_size <= 0:
+        return False
+    output_mtime = output.stat().st_mtime
+    return all(output_mtime >= source.stat().st_mtime for source in sources if source.exists())
+
+
 def assert_output_image(path: Path) -> None:
     """检查 sample 输出图片已生成且非空。
 
@@ -116,6 +125,7 @@ def ensure_yolo_wts(
     model_name: str,
     checkpoint: Path,
     ultralytics_repo: Path,
+    yolov5_repo: Path | None = None,
     family: str = "yolo",
 ) -> Path:
     """使用 Ultralytics checkpoint 导出 InferRT YOLO ``.wts``。
@@ -137,7 +147,12 @@ def ensure_yolo_wts(
     os.environ.setdefault("ULTRALYTICS_SKIP_REQUIREMENTS_CHECKS", "1")
     os.environ.setdefault("YOLO_CONFIG_DIR", str(build_dir / "ultralytics_config"))
     output = artifact_dir(build_dir, family) / f"{model_name}.wts"
-    if is_fresh(output, checkpoint):
+    exporter_sources = [
+        checkpoint,
+        repo_root / "samples" / "model" / "detection" / "gen_wts.py",
+        repo_root / "samples" / "model" / "detection" / "yolo_model_zoo.py",
+    ]
+    if is_fresh_against_all(output, exporter_sources):
         return output
 
     command = [
@@ -155,6 +170,8 @@ def ensure_yolo_wts(
         command.extend(["--ultralytics-repo", str(ultralytics_repo)])
     elif importlib.util.find_spec("ultralytics") is None:
         pytest.skip(f"Ultralytics package/repo not found: {ultralytics_repo}")
+    if yolov5_repo is not None and yolov5_repo.exists():
+        command.extend(["--yolov5-repo", str(yolov5_repo)])
 
     run_export_or_skip(command, cwd=repo_root)
     return require_file(output, f"{model_name} exported .wts")

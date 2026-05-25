@@ -17,7 +17,8 @@ from helpers.runtime import run_process_capture
     "model_name,relative_checkpoint",
     [
         pytest.param("yolov8n", Path("yolov8") / "yolov8n.pt", id="yolov8n"),
-        pytest.param("yolov5n", Path("yolov5") / "yolov5nu.pt", id="yolov5n"),
+        pytest.param("yolov5n", Path("yolov5") / "yolov5n.pt", id="yolov5n_legacy"),
+        pytest.param("yolov5s", Path("yolov5") / "yolov5s.pt", id="yolov5s_legacy"),
     ],
 )
 def test_yolo_sample_runs_with_models_root(
@@ -28,6 +29,7 @@ def test_yolo_sample_runs_with_models_root(
     model_root: Path,
     default_image: Path,
     ultralytics_repo: Path,
+    yolov5_repo: Path,
 ) -> None:
     """使用 ``D:/Models`` 中的 YOLO 权重导出 ``.wts`` 并运行 detection sample。
 
@@ -48,6 +50,8 @@ def test_yolo_sample_runs_with_models_root(
         model_name=model_name,
         checkpoint=model_root / relative_checkpoint,
         ultralytics_repo=ultralytics_repo,
+        yolov5_repo=yolov5_repo,
+        family=f"yolo_sample_{relative_checkpoint.stem}",
     )
     output_image = artifact_dir(build_dir, "yolo") / f"{model_name}_dog_{os.getpid()}.jpg"
 

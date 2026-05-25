@@ -19,6 +19,11 @@ pytestmark = [pytest.mark.integration, pytest.mark.slow]
 YOLO_INPUT_SIZE = 640
 YOLO_STRIDES = (8, 16, 32)
 YOLO_OUTPUT_NAMES = ("output0", "output1", "output2")
+YOLOV5_ANCHORS = (
+    ((10.0, 13.0), (16.0, 30.0), (33.0, 23.0)),
+    ((30.0, 61.0), (62.0, 45.0), (59.0, 119.0)),
+    ((116.0, 90.0), (156.0, 198.0), (373.0, 326.0)),
+)
 
 
 def _configure_ultralytics(repo_root: Path, build_dir: Path, ultralytics_repo: Path) -> None:
@@ -31,7 +36,7 @@ def _configure_ultralytics(repo_root: Path, build_dir: Path, ultralytics_repo: P
     detection_samples = repo_root / "samples" / "model" / "detection"
     for path in (detection_samples, ultralytics_repo):
         if path.exists() and str(path) not in sys.path:
-            sys.path.insert(0, str(path))
+            sys.path.append(str(path))
 
 
 def _deterministic_yolo_input() -> np.ndarray:
@@ -48,6 +53,7 @@ def _run_torch_yolo(
     model_name: str,
     checkpoint: Path,
     ultralytics_repo: Path,
+    yolov5_repo: Path,
     input_tensor: np.ndarray,
 ) -> np.ndarray:
     """直接运行 Ultralytics PyTorch 模型，返回已解码的 ``1x84x8400`` 输出。"""
@@ -57,7 +63,12 @@ def _run_torch_yolo(
 
     from yolo_model_zoo import load_ultralytics_model
 
-    model = load_ultralytics_model(model_name, weights=checkpoint, repo=ultralytics_repo)
+    model = load_ultralytics_model(
+        model_name,
+        weights=checkpoint,
+        repo=ultralytics_repo,
+        yolov5_repo=yolov5_repo,
+    )
     batch = torch.from_numpy(np.ascontiguousarray(input_tensor, dtype=np.float32))
     with torch.inference_mode():
         output = model(batch)
@@ -66,7 +77,14 @@ def _run_torch_yolo(
         output = output[0]
     if not isinstance(output, torch.Tensor):
         raise AssertionError(f"Unexpected Ultralytics output type: {type(output)!r}")
-    return output.detach().cpu().numpy().astype(np.float32, copy=False)
+    values = output.detach().cpu().numpy().astype(np.float32, copy=False)
+    if values.ndim != 3:
+        raise AssertionError(f"Unexpected YOLO output shape: {values.shape}")
+    if values.shape[1] in (84, 85):
+        return values
+    if values.shape[2] in (84, 85):
+        return np.transpose(values, (0, 2, 1))
+    raise AssertionError(f"Unexpected YOLO output shape: {values.shape}")
 
 
 def _run_inferrt_yolo(
@@ -91,7 +109,11 @@ def _run_inferrt_yolo(
     return {name: np.asarray(outputs[name], dtype=np.float32) for name in output_names}
 
 
-def _decode_inferrt_yolo_outputs(outputs: dict[str, np.ndarray], image_size: int) -> np.ndarray:
+def _sigmoid(values: np.ndarray) -> np.ndarray:
+    return 1.0 / (1.0 + np.exp(-values))
+
+
+def _decode_dfl_inferrt_yolo_outputs(outputs: dict[str, np.ndarray], image_size: int) -> np.ndarray:
     """将 InferRT 三个 YOLO 分支解码为 Ultralytics ``xywh + class`` 排列。"""
 
     decoded_parts: list[np.ndarray] = []
@@ -120,17 +142,57 @@ def _decode_inferrt_yolo_outputs(outputs: dict[str, np.ndarray], image_size: int
         y2 = (anchor_xy[1][None, :] + distances[:, 3, :]) * stride
         xywh = np.stack(((x1 + x2) * 0.5, (y1 + y2) * 0.5, x2 - x1, y2 - y1), axis=1)
 
-        class_scores = 1.0 / (1.0 + np.exp(-branch[:, 4:, :]))
+        class_scores = _sigmoid(branch[:, 4:, :])
         decoded_parts.append(np.concatenate([xywh, class_scores], axis=1).reshape(batch, 84, anchors))
 
     return np.concatenate(decoded_parts, axis=2)
+
+
+def _decode_legacy_inferrt_yolo_outputs(outputs: dict[str, np.ndarray]) -> np.ndarray:
+    """将旧版 YOLOv5 raw anchor head 解码为 ``xywh + obj + class`` 排列。"""
+
+    decoded_parts: list[np.ndarray] = []
+    for output_name, stride, anchors in zip(YOLO_OUTPUT_NAMES, YOLO_STRIDES, YOLOV5_ANCHORS, strict=True):
+        branch = np.asarray(outputs[output_name], dtype=np.float32)
+        batch, channels, grid_h, grid_w = branch.shape
+        if channels != 255:
+            raise AssertionError(f"{output_name} should have 255 channels, got {channels}")
+
+        raw = branch.reshape(batch, 3, 85, grid_h, grid_w).transpose(0, 1, 3, 4, 2)
+        grid_y, grid_x = np.meshgrid(
+            np.arange(grid_h, dtype=np.float32),
+            np.arange(grid_w, dtype=np.float32),
+            indexing="ij",
+        )
+        grid = np.stack((grid_x, grid_y), axis=-1).reshape(1, 1, grid_h, grid_w, 2)
+        anchor_grid = np.asarray(anchors, dtype=np.float32).reshape(1, 3, 1, 1, 2)
+
+        xy = (_sigmoid(raw[..., 0:2]) * 2.0 - 0.5 + grid) * float(stride)
+        wh = np.square(_sigmoid(raw[..., 2:4]) * 2.0) * anchor_grid
+        scores = _sigmoid(raw[..., 4:])
+        decoded = np.concatenate((xy, wh, scores), axis=-1)
+        decoded_parts.append(decoded.reshape(batch, -1, 85).transpose(0, 2, 1))
+
+    return np.concatenate(decoded_parts, axis=2)
+
+
+def _decode_inferrt_yolo_outputs(outputs: dict[str, np.ndarray], image_size: int) -> np.ndarray:
+    """根据 InferRT 输出形状自动选择 YOLOv5u/YOLOv8 DFL 或旧版 YOLOv5 anchor 解码。"""
+
+    first = np.asarray(outputs[YOLO_OUTPUT_NAMES[0]])
+    if first.ndim == 3:
+        return _decode_dfl_inferrt_yolo_outputs(outputs, image_size)
+    if first.ndim == 4:
+        return _decode_legacy_inferrt_yolo_outputs(outputs)
+    raise AssertionError(f"Unsupported YOLO output rank: {first.shape}")
 
 
 @pytest.mark.parametrize(
     "model_name,relative_checkpoint",
     [
         pytest.param("yolov8n", Path("yolov8") / "yolov8n.pt", id="yolov8n"),
-        pytest.param("yolov5n", Path("yolov5") / "yolov5nu.pt", id="yolov5n"),
+        pytest.param("yolov5n", Path("yolov5") / "yolov5n.pt", id="yolov5n_legacy"),
+        pytest.param("yolov5s", Path("yolov5") / "yolov5s.pt", id="yolov5s_legacy"),
     ],
 )
 def test_yolo_pybind_matches_ultralytics_forward(
@@ -139,6 +201,7 @@ def test_yolo_pybind_matches_ultralytics_forward(
     build_dir: Path,
     model_root: Path,
     ultralytics_repo: Path,
+    yolov5_repo: Path,
     model_name: str,
     relative_checkpoint: Path,
 ) -> None:
@@ -162,6 +225,8 @@ def test_yolo_pybind_matches_ultralytics_forward(
         model_name=model_name,
         checkpoint=checkpoint,
         ultralytics_repo=ultralytics_repo,
+        yolov5_repo=yolov5_repo,
+        family=f"yolo_parity_{relative_checkpoint.stem}",
     )
 
     torch_output = _run_torch_yolo(
@@ -170,6 +235,7 @@ def test_yolo_pybind_matches_ultralytics_forward(
         model_name=model_name,
         checkpoint=checkpoint,
         ultralytics_repo=ultralytics_repo,
+        yolov5_repo=yolov5_repo,
         input_tensor=input_tensor,
     )
     inferrt_outputs = _run_inferrt_yolo(
@@ -180,6 +246,24 @@ def test_yolo_pybind_matches_ultralytics_forward(
     )
     decoded_output = _decode_inferrt_yolo_outputs(inferrt_outputs, YOLO_INPUT_SIZE)
 
-    assert decoded_output.shape == torch_output.shape == (1, 84, 8400)
+    assert decoded_output.shape == torch_output.shape
     assert_tensors_close(torch_output[:, :4, :], decoded_output[:, :4, :], rtol=1e-3, atol=1.1, name="boxes")
-    assert_tensors_close(torch_output[:, 4:, :], decoded_output[:, 4:, :], rtol=1e-3, atol=5e-4, name="classes")
+    if torch_output.shape[1] == 85:
+        assert_tensors_close(
+            torch_output[:, 4:5, :],
+            decoded_output[:, 4:5, :],
+            rtol=1e-3,
+            atol=5e-4,
+            name="objectness",
+        )
+        class_start = 5
+    else:
+        class_start = 4
+    class_atol = 2e-3 if torch_output.shape[1] == 85 else 5e-4
+    assert_tensors_close(
+        torch_output[:, class_start:, :],
+        decoded_output[:, class_start:, :],
+        rtol=1e-3,
+        atol=class_atol,
+        name="classes",
+    )

@@ -25,6 +25,11 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional local ultralytics repository path, e.g. D:/Github/ultralytics",
     )
+    parser.add_argument(
+        "--yolov5-repo",
+        default=None,
+        help="Optional local YOLOv5 repository path for legacy yolov5*.pt checkpoints",
+    )
     parser.add_argument("-l", "--list-model", action="store_true", help="List supported YOLO model keys")
     parser.add_argument("--quiet", action="store_true", help="Do not print every exported weight key")
     return parser.parse_args()
@@ -45,7 +50,12 @@ def main() -> None:
 
     print(f"Loading Ultralytics model: {source}")
     load_start = time.perf_counter()
-    model = load_ultralytics_model(args.model, weights=args.weights, repo=args.ultralytics_repo)
+    model = load_ultralytics_model(
+        args.model,
+        weights=args.weights,
+        repo=args.ultralytics_repo,
+        yolov5_repo=args.yolov5_repo,
+    )
     load_end = time.perf_counter()
 
     print(f"Writing weights: {output_path}")

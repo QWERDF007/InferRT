@@ -169,6 +169,30 @@ def _optional_key(state_dict: Mapping[str, torch.Tensor], key: str) -> torch.Ten
     return state_dict.get(key)
 
 
+def _transformers_dinov3_layer_prefix(state_dict: Mapping[str, torch.Tensor], index: int) -> str:
+    """解析 Transformers DINOv3 各层的 state_dict 前缀。
+
+    不同版本的 Hugging Face 权重命名不一致：
+    - 新版：``layer.{i}.attention.*``（无 ``model.`` 包裹）
+    - 旧版：``model.layer.{i}.attention.*``（顶层带 ``model.``）
+
+    用 ``norm1.weight`` 探测前缀，供 ``convert_transformers_dinov3_state_dict`` 统一读取。
+
+    Args:
+        state_dict: Hugging Face ``DINOv3ViTModel`` 的原始 ``state_dict``。
+        index: Transformer 层索引（从 0 开始）。
+
+    Returns:
+        该层权重在 ``state_dict`` 中的前缀，形如 ``layer.{index}`` 或 ``model.layer.{index}``。
+    """
+
+    direct_prefix = f"layer.{index}"  # 新版 Transformers 命名
+    legacy_prefix = f"model.layer.{index}"  # 旧版带 model. 包裹
+    if f"{direct_prefix}.norm1.weight" in state_dict:
+        return direct_prefix
+    return legacy_prefix
+
+
 def convert_transformers_dinov3_state_dict(
     state_dict: Mapping[str, torch.Tensor],
     config: Any,
@@ -208,7 +232,7 @@ def convert_transformers_dinov3_state_dict(
     )
 
     for index in range(depth):
-        src = f"model.layer.{index}"
+        src = _transformers_dinov3_layer_prefix(state_dict, index)
         dst = f"blocks.{index}"
 
         for norm_name in ("norm1", "norm2"):

@@ -367,6 +367,22 @@ def test_transformers_dinov3_export_state_dict_packs_hf_keys() -> None:
     assert torch.equal(converted["blocks.0.ls1.gamma"], state_dict["model.layer.0.layer_scale1.lambda1"])
 
 
+def test_transformers_dinov3_export_state_dict_accepts_unwrapped_layer_keys() -> None:
+    """Transformers DINOv3 新版 state_dict 使用无 ``model.`` 前缀的 ``layer.*`` 键名。"""
+
+    config = SimpleNamespace(hidden_size=4, num_attention_heads=2, num_hidden_layers=1, rope_theta=100.0)
+    legacy_state_dict = _make_transformers_dinov3_state_dict()
+    state_dict = {
+        key.removeprefix("model."): value for key, value in legacy_state_dict.items()
+    }
+
+    converted = convert_transformers_dinov3_state_dict(state_dict, config)
+
+    assert torch.equal(converted["blocks.0.attn.proj.weight"], state_dict["layer.0.attention.o_proj.weight"])
+    assert torch.equal(converted["blocks.0.mlp.fc1.weight"], state_dict["layer.0.mlp.up_proj.weight"])
+    assert torch.equal(converted["blocks.0.ls1.gamma"], state_dict["layer.0.layer_scale1.lambda1"])
+
+
 def test_transformers_dinov3_export_state_dict_maps_gated_mlp() -> None:
     """DINOv3 Plus/7B 的拆分 SwiGLU MLP 应映射到 C++ 侧的 ``w1/w2/w3`` 命名。"""
 

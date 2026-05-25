@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import importlib.util
 import os
 from pathlib import Path
 import struct
 import sys
+import types
 from typing import Any
 
 import torch
@@ -72,6 +74,59 @@ def add_ultralytics_repo(repo: str | Path | None) -> None:
         sys.path.insert(0, repo_path)
 
 
+def add_yolov5_repo(repo: str | Path | None) -> None:
+    """将本地 YOLOv5 仓库加入 ``sys.path``，用于加载旧版 YOLOv5 checkpoint。"""
+
+    if repo is None:
+        return
+    repo_path = str(Path(repo).resolve())
+    if repo_path not in sys.path:
+        sys.path.insert(0, repo_path)
+
+
+def infer_yolov5_repo(ultralytics_repo: str | Path | None) -> Path | None:
+    """从显式环境变量或 Ultralytics 仓库旁推断本地 YOLOv5 仓库。"""
+
+    env_repo = os.environ.get("INFERRT_YOLOV5_REPO")
+    if env_repo:
+        return Path(env_repo)
+    if ultralytics_repo is not None:
+        sibling = Path(ultralytics_repo).resolve().parent / "yolov5"
+        if sibling.exists():
+            return sibling
+    default = Path("F:/Github/CV/yolov5")
+    return default if default.exists() else None
+
+
+def is_legacy_yolov5_source(model_name: str, source: str) -> bool:
+    """判断显式权重是否应按旧版 YOLOv5 repo 加载。"""
+
+    path = Path(source)
+    return (
+        model_name.startswith("yolov5")
+        and path.suffix.lower() == ".pt"
+        and path.stem.startswith("yolov5")
+        and not path.stem.endswith("u")
+    )
+
+
+def load_legacy_yolov5_model(source: str, *, repo: str | Path | None, ultralytics_repo: str | Path | None) -> Any:
+    """使用本地 YOLOv5 仓库加载旧版 anchor-head checkpoint。"""
+
+    yolov5_repo = Path(repo) if repo is not None else infer_yolov5_repo(ultralytics_repo)
+    if yolov5_repo is None or not yolov5_repo.exists():
+        raise FileNotFoundError("Legacy YOLOv5 checkpoint requires --yolov5-repo or INFERRT_YOLOV5_REPO")
+
+    add_ultralytics_repo(ultralytics_repo)
+    add_yolov5_repo(yolov5_repo)
+    if "seaborn" not in sys.modules and importlib.util.find_spec("seaborn") is None:
+        sys.modules.setdefault("seaborn", types.SimpleNamespace())
+
+    from models.experimental import attempt_load  # type: ignore
+
+    return attempt_load(source, device="cpu", inplace=True, fuse=False)
+
+
 def resolve_model_weights(model_name: str, weights: str | Path | None) -> str:
     """解析传给 ``ultralytics.YOLO`` 的权重或模型名。
 
@@ -95,7 +150,13 @@ def resolve_model_weights(model_name: str, weights: str | Path | None) -> str:
         raise ValueError(f"Unsupported YOLO model: {model_name}. Available: {available}") from exc
 
 
-def load_ultralytics_model(model_name: str, *, weights: str | Path | None = None, repo: str | Path | None = None) -> Any:
+def load_ultralytics_model(
+    model_name: str,
+    *,
+    weights: str | Path | None = None,
+    repo: str | Path | None = None,
+    yolov5_repo: str | Path | None = None,
+) -> Any:
     """使用 Ultralytics 加载 YOLOv5/YOLOv8 PyTorch 模型。
 
     Args:
@@ -109,6 +170,10 @@ def load_ultralytics_model(model_name: str, *, weights: str | Path | None = None
 
     source = resolve_model_weights(model_name, weights)
     ensure_ultralytics_config_dir()
+    if is_legacy_yolov5_source(model_name, source):
+        model = load_legacy_yolov5_model(source, repo=yolov5_repo, ultralytics_repo=repo)
+        return model.float().eval()
+
     add_ultralytics_repo(repo)
     try:
         from ultralytics import YOLO

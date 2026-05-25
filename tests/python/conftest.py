@@ -10,6 +10,8 @@
     --inferrt-model-root: 真实模型根目录。默认 ``INFERRT_MODEL_ROOT`` 或 ``D:/Models``。
     --inferrt-ultralytics-repo: 本地 ultralytics 仓库。默认 ``INFERRT_ULTRALYTICS_REPO`` 或
         ``D:/Github/ultralytics``。
+    --inferrt-yolov5-repo: 本地 YOLOv5 仓库。默认 ``INFERRT_YOLOV5_REPO`` 或
+        ``F:/Github/CV/yolov5``。
     --inferrt-sam-root: 本地 Segment Anything v1 仓库。默认 ``INFERRT_SAM_ROOT`` 或
         ``D:/Github/SAM/segment-anything``。
     --inferrt-sam2-root: 本地 SAM2 仓库。默认 ``INFERRT_SAM2_ROOT`` 或 ``D:/Github/SAM/sam2``。
@@ -96,6 +98,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store",
         default="",
         help="本地 ultralytics 仓库路径；默认 INFERRT_ULTRALYTICS_REPO 或 D:/Github/ultralytics",
+    )
+    parser.addoption(
+        "--inferrt-yolov5-repo",
+        action="store",
+        default="",
+        help="本地 YOLOv5 仓库路径；默认 INFERRT_YOLOV5_REPO 或 F:/Github/CV/yolov5",
     )
     parser.addoption(
         "--inferrt-sam-root",
@@ -265,6 +273,18 @@ def ultralytics_repo(pytestconfig: pytest.Config) -> Path:
         "--inferrt-ultralytics-repo",
         "INFERRT_ULTRALYTICS_REPO",
         "D:/Github/ultralytics",
+    )
+
+
+@pytest.fixture(scope="session")
+def yolov5_repo(pytestconfig: pytest.Config) -> Path:
+    """本地 YOLOv5 仓库路径，用于旧版 YOLOv5 checkpoint parity。"""
+
+    return _configured_path(
+        pytestconfig,
+        "--inferrt-yolov5-repo",
+        "INFERRT_YOLOV5_REPO",
+        "F:/Github/CV/yolov5",
     )
 
 

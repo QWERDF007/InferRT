@@ -218,19 +218,19 @@ def test_create_sam_without_build(irt_module: object) -> None:
     assert sam3.output_tensor_names() == expected_outputs
 
 
-def test_sam_build_rejects_placeholder_weights(irt_module: object, repo_root) -> None:
+def test_sam_build_rejects_placeholder_weights(irt_module: object, tmp_path) -> None:
     """SAM/SAM2 官方 TensorRT 图应拒绝占位权重，避免误以为空权重可推理。
 
     Args:
         irt_module: ``inferrt_model_py`` 模块。
-        repo_root: 仓库根目录 fixture，用于定位随样例保留的占位 ``.wts``。
+        tmp_path: pytest 临时目录 fixture，用于写入最小占位 ``.wts``。
 
     Raises:
         irt_module.InferRTError: 缺少官方 SAM 权重时抛出。
     """
 
-    weights = repo_root / "samples" / "model" / "segmentation" / "sam_placeholder.wts"
-    assert weights.exists()
+    weights = tmp_path / "sam_placeholder.wts"
+    weights.write_text("1\nplaceholder.weight 1 00000000\n", encoding="utf-8")
 
     for model_name in ("sam_vit_b", "sam2_hiera_tiny"):
         model = irt_module.create_model(model_name)
