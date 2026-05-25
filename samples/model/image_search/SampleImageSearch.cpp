@@ -44,9 +44,9 @@ cxxopts::Options makeOptions(const char *program_name)
     options.add_options()("weights-file,w", "Weights file (.wts)", cxxopts::value<std::string>())(
         "gallery-dir,g", "Gallery image directory", cxxopts::value<std::string>())("query-image,q", "Query image path",
                                                                                    cxxopts::value<std::string>())(
-        "model", "Built-in model name",
+        "model,m", "Built-in model name",
         cxxopts::value<std::string>()->default_value(irt::features::ImageSearch::kDefaultModelName))(
-        "feature", "Feature tensor name",
+        "feature,f", "Feature tensor name",
         cxxopts::value<std::string>()->default_value(irt::features::ImageSearch::kDefaultFeatureName))(
         "topk", "Top-k nearest results",
         cxxopts::value<int>()->default_value(std::to_string(irt::features::ImageSearch::kDefaultTopK)))(
