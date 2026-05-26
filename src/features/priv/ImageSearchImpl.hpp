@@ -65,6 +65,40 @@ public:
                      const std::filesystem::path &index_file, bool rebuild_index);
 
     /**
+     * @brief 从图库目录构建图像检索索引。
+     *
+     * @param weights_file 模型 ``.wts`` 权重文件路径。
+     * @param gallery_dir 图库目录。
+     * @param index_file Faiss 索引文件路径；为空时使用 ``ImageSearch::defaultIndexPath``。
+     */
+    void build(const std::filesystem::path &weights_file, const std::filesystem::path &gallery_dir,
+               const std::filesystem::path &index_file);
+
+    /**
+     * @brief 从显式图片路径列表构建图像检索索引。
+     *
+     * 向量顺序决定 Faiss id 与图片路径的映射关系。由于无图库目录可用于推导默认索引路径，
+     * 必须显式指定 ``index_file``。
+     *
+     * @param weights_file 模型 ``.wts`` 权重文件路径。
+     * @param gallery_images 待加入索引的图片路径列表。
+     * @param index_file Faiss 索引文件路径；不可为空。
+     */
+    void build(const std::filesystem::path &weights_file,
+               const std::vector<std::filesystem::path> &gallery_images,
+               const std::filesystem::path &index_file);
+
+    /**
+     * @brief 为图库目录加载已有图像检索索引。
+     *
+     * @param weights_file 模型 ``.wts`` 权重文件路径。
+     * @param gallery_dir 用于校验元数据的图库目录。
+     * @param index_file Faiss 索引文件路径；为空时使用 ``ImageSearch::defaultIndexPath``。
+     */
+    void load(const std::filesystem::path &weights_file, const std::filesystem::path &gallery_dir,
+              const std::filesystem::path &index_file);
+
+    /**
      * @brief 对查询图片执行 Top-K 相似检索。
      * @param query_image 查询图片路径。
      * @param top_k 返回数量。
@@ -103,6 +137,22 @@ public:
     int featureDim() const noexcept;
 
 private:
+    /**
+     * @brief 从已确定的图库图片列表构建索引并更新内部状态。
+     *
+     * ``build`` 两个重载的公共实现：提取特征、构建 Faiss 索引、保存 ``.meta.txt``，
+     * 并将索引实例与路径映射写入成员变量。
+     *
+     * @param weights_file 模型 ``.wts`` 权重文件路径。
+     * @param gallery_dir 图库根目录；显式路径列表构建时为空。
+     * @param gallery_images 与 Faiss id 一一对应的图库图片路径（调用方负责扫描或规范化）。
+     * @param index_path 已解析的 Faiss 索引文件路径。
+     * @param metadata_gallery_value 写入 ``gallery_dir`` 元数据字段的值（目录 canonical 路径或占位哨兵）。
+     */
+    void buildWithImages(const std::filesystem::path &weights_file, const std::filesystem::path &gallery_dir,
+                         std::vector<std::filesystem::path> gallery_images,
+                         const std::filesystem::path &index_path, const std::string &metadata_gallery_value);
+
     /**
      * @brief 按需懒加载特征提取器。
      *

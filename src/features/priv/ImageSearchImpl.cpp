@@ -28,6 +28,7 @@
 #include <memory>
 #include <numeric>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -322,6 +323,84 @@ fs::path metadataPathFromIndex(const fs::path &index_path)
 }
 
 /**
+ * @brief 解析 Faiss 索引文件路径。
+ *
+ * 若 ``index_file`` 为空，则根据图库目录与模型/特征名生成默认路径。
+ *
+ * @param gallery_dir 图库目录。
+ * @param index_file 用户指定的索引路径；可为空。
+ * @param config 检索配置，用于推导默认索引文件名。
+ * @return 最终使用的索引文件路径。
+ */
+fs::path resolveIndexPath(const fs::path &gallery_dir, const fs::path &index_file, const ImageSearchConfig &config)
+{
+    return index_file.empty() ? ImageSearch::defaultIndexPath(gallery_dir, config.model_name, config.feature_name)
+                              : index_file;
+}
+
+/**
+ * @brief 生成图库目录在元数据文件中的 canonical 值。
+ * @param gallery_dir 图库目录。
+ * @return 绝对路径的 generic 字符串，用于 ``gallery_dir`` 元数据字段校验。
+ */
+std::string galleryDirectoryMetadataValue(const fs::path &gallery_dir)
+{
+    return fs::absolute(gallery_dir).generic_string();
+}
+
+/**
+ * @brief 显式路径列表构建时写入元数据的 ``gallery_dir`` 占位值。
+ * @return 固定哨兵字符串 ``"<explicit_path_list>"``。
+ */
+std::string explicitPathListMetadataValue()
+{
+    return "<explicit_path_list>";
+}
+
+/**
+ * @brief 校验并规范化显式传入的图库图片路径列表。
+ *
+ * 要求列表非空、路径存在且为支持的图片文件，并统一转为绝对路径。
+ *
+ * @param gallery_images 待加入索引的图片路径列表。
+ * @return 规范化后的绝对路径列表，顺序与输入一致（对应 Faiss id）。
+ * @throws irt::Exception 列表为空、路径无效或不支持的图片格式时抛出。
+ */
+std::vector<fs::path> normalizeExplicitGalleryImages(const std::vector<fs::path> &gallery_images)
+{
+    if (gallery_images.empty())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Image path list must not be empty");
+    }
+
+    std::vector<fs::path> normalized;
+    normalized.reserve(gallery_images.size());
+    for (const auto &image_path : gallery_images)
+    {
+        if (image_path.empty())
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Image path must not be empty");
+        }
+
+        std::error_code ec;
+        const bool      exists          = fs::exists(image_path, ec);
+        const bool      is_regular_file = exists && fs::is_regular_file(image_path, ec);
+        if (!is_regular_file)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Image path does not exist: %s",
+                                 image_path.string().c_str());
+        }
+        if (!ImageSearch::isImageFile(image_path))
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported image file: %s",
+                                 image_path.string().c_str());
+        }
+        normalized.push_back(fs::absolute(image_path));
+    }
+    return normalized;
+}
+
+/**
  * @brief 将图库图片路径列表写入映射文件（每行一条 generic 路径）。
  * @param mapping_path 输出路径。
  * @param image_paths 与 Faiss 向量顺序一致的图库路径。
@@ -370,12 +449,12 @@ std::vector<fs::path> loadPathMapping(const fs::path &mapping_path)
 /**
  * @brief 将模型、特征与检索配置写入元数据文件，供增量加载时校验。
  * @param metadata_path ``.meta.txt`` 路径。
- * @param gallery_dir 图库根目录。
+ * @param gallery_value 写入元数据的图库标识（图库目录 canonical 路径或显式路径列表占位值）。
  * @param model_name 模型名称。
  * @param feature_name 特征层名称。
  * @param config 当前检索配置。
  */
-void saveMetadata(const fs::path &metadata_path, const fs::path &gallery_dir, const std::string &model_name,
+void saveMetadata(const fs::path &metadata_path, const std::string &gallery_value, const std::string &model_name,
                   const std::string &feature_name, const ImageSearchConfig &config)
 {
     std::ofstream output(metadata_path);
@@ -387,7 +466,7 @@ void saveMetadata(const fs::path &metadata_path, const fs::path &gallery_dir, co
 
     output << "model=" << model_name << "\n";
     output << "feature=" << feature_name << "\n";
-    output << "gallery_dir=" << fs::absolute(gallery_dir).generic_string() << "\n";
+    output << "gallery_dir=" << gallery_value << "\n";
     output << "preprocess_backend=" << preprocessBackendName(config.preprocess_backend) << "\n";
     output << "norm=" << featureNormName(config.norm) << "\n";
     output << "faiss_backend=" << faissBackendName(config.faiss_backend) << "\n";
@@ -472,7 +551,7 @@ bool existingIndexMatchesConfig(const fs::path &index_path, const fs::path &gall
     }
 
     return metadataValueEquals(metadata, "model", model_name) && metadataValueEquals(metadata, "feature", feature_name)
-        && metadataValueEquals(metadata, "gallery_dir", fs::absolute(gallery_dir).generic_string())
+        && metadataValueEquals(metadata, "gallery_dir", galleryDirectoryMetadataValue(gallery_dir))
         && metadataConfigValueEquals(metadata, "preprocess_backend", preprocessBackendName(config.preprocess_backend),
                                      "cpu")
         && metadataConfigValueEquals(metadata, "norm", featureNormName(config.norm), "l2")
@@ -768,40 +847,97 @@ ImageSearch::Impl::~Impl() = default;
 void ImageSearch::Impl::buildOrLoad(const fs::path &weights_file, const fs::path &gallery_dir,
                                     const fs::path &index_file, bool rebuild_index)
 {
-    weights_file_ = weights_file;
-    gallery_dir_  = gallery_dir;
-    index_path_   = index_file.empty()
-                      ? ImageSearch::defaultIndexPath(gallery_dir_, config_.model_name, config_.feature_name)
-                      : index_file;
-
-    if (!rebuild_index && fs::exists(index_path_) && fs::exists(mappingPathFromIndex(index_path_))
-        && existingIndexMatchesConfig(index_path_, gallery_dir_, config_.model_name, config_.feature_name, config_))
+    const fs::path resolved_index_path = resolveIndexPath(gallery_dir, index_file, config_);
+    if (!rebuild_index && fs::exists(resolved_index_path) && fs::exists(mappingPathFromIndex(resolved_index_path))
+        && existingIndexMatchesConfig(resolved_index_path, gallery_dir, config_.model_name, config_.feature_name,
+                                      config_))
     {
-        auto loaded = loadIndex(index_path_, config_);
-        index_.reset();
-        faiss_gpu_resources_.reset();
-        faiss_gpu_resources_ = std::move(loaded.gpu_resources);
-        index_               = std::move(loaded.index);
-        gallery_images_      = std::move(loaded.image_paths);
-        feature_dim_         = static_cast<int>(index_->d);
+        load(weights_file, gallery_dir, index_file);
         return;
     }
 
-    auto extractor  = std::make_unique<priv::ImageSearchFeatureExtractor>(config_.model_name, config_.feature_name,
-                                                                          weights_file_, config_);
-    gallery_images_ = ImageSearch::collectGalleryImages(gallery_dir_);
-    if (!index_path_.parent_path().empty())
+    build(weights_file, gallery_dir, index_file);
+}
+
+void ImageSearch::Impl::build(const fs::path &weights_file, const fs::path &gallery_dir,
+                              const fs::path &index_file)
+{
+    auto images = ImageSearch::collectGalleryImages(gallery_dir);
+    buildWithImages(weights_file, gallery_dir, std::move(images), resolveIndexPath(gallery_dir, index_file, config_),
+                    galleryDirectoryMetadataValue(gallery_dir));
+}
+
+void ImageSearch::Impl::build(const fs::path &weights_file, const std::vector<fs::path> &gallery_images,
+                              const fs::path &index_file)
+{
+    if (index_file.empty())
     {
-        fs::create_directories(index_path_.parent_path());
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "index_file must not be empty when building from explicit image paths");
     }
-    auto built = buildIndex(gallery_images_, *extractor, index_path_, config_);
+
+    buildWithImages(weights_file, {}, normalizeExplicitGalleryImages(gallery_images), index_file,
+                    explicitPathListMetadataValue());
+}
+
+void ImageSearch::Impl::load(const fs::path &weights_file, const fs::path &gallery_dir, const fs::path &index_file)
+{
+    const fs::path resolved_index_path = resolveIndexPath(gallery_dir, index_file, config_);
+    if (!fs::exists(resolved_index_path))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Index file does not exist: %s",
+                             resolved_index_path.string().c_str());
+    }
+    if (!fs::exists(mappingPathFromIndex(resolved_index_path)))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Index path mapping file does not exist: %s",
+                             mappingPathFromIndex(resolved_index_path).string().c_str());
+    }
+    if (!existingIndexMatchesConfig(resolved_index_path, gallery_dir, config_.model_name, config_.feature_name,
+                                    config_))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "Index metadata does not match current ImageSearch config: %s",
+                             metadataPathFromIndex(resolved_index_path).string().c_str());
+    }
+
+    auto loaded = loadIndex(resolved_index_path, config_);
     index_.reset();
     faiss_gpu_resources_.reset();
+    weights_file_        = weights_file;
+    gallery_dir_         = gallery_dir;
+    index_path_          = resolved_index_path;
+    faiss_gpu_resources_ = std::move(loaded.gpu_resources);
+    index_               = std::move(loaded.index);
+    gallery_images_      = std::move(loaded.image_paths);
+    extractor_.reset();
+    feature_dim_ = static_cast<int>(index_->d);
+}
+
+void ImageSearch::Impl::buildWithImages(const fs::path &weights_file, const fs::path &gallery_dir,
+                                        std::vector<fs::path> gallery_images, const fs::path &index_path,
+                                        const std::string &metadata_gallery_value)
+{
+    auto extractor = std::make_unique<priv::ImageSearchFeatureExtractor>(config_.model_name, config_.feature_name,
+                                                                         weights_file, config_);
+    if (!index_path.parent_path().empty())
+    {
+        fs::create_directories(index_path.parent_path());
+    }
+
+    auto built = buildIndex(gallery_images, *extractor, index_path, config_);
+    index_.reset();
+    faiss_gpu_resources_.reset();
+    weights_file_        = weights_file;
+    gallery_dir_         = gallery_dir;
+    index_path_          = index_path;
     faiss_gpu_resources_ = std::move(built.gpu_resources);
     index_               = std::move(built.index);
+    gallery_images_      = std::move(gallery_images);
     feature_dim_         = extractor->featureDim();
     extractor_           = std::move(extractor);
-    saveMetadata(metadataPathFromIndex(index_path_), gallery_dir_, config_.model_name, config_.feature_name, config_);
+    saveMetadata(metadataPathFromIndex(index_path_), metadata_gallery_value, config_.model_name, config_.feature_name,
+                 config_);
 }
 
 std::vector<ImageSearchResult> ImageSearch::Impl::search(const fs::path &query_image, int top_k)

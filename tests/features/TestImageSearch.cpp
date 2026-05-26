@@ -462,7 +462,36 @@ TEST(ImageSearchTest, CollectGalleryImagesRejectsEmptyGallery)
 }
 
 /**
- * @brief 未注册模型名称应在构造 ImageSearch 时被拒绝。
+ * @brief 显式图片路径列表构建时必须指定 Faiss 索引路径。
+ */
+TEST(ImageSearchTest, BuildFromExplicitImagePathsRequiresIndexFile)
+{
+    TempDir temp;
+    writeFile(temp.path() / "a.jpg");
+
+    irt::features::ImageSearch search;
+    const std::vector<fs::path> images{temp.path() / "a.jpg"};
+
+    expectIrtExceptionCode([&] { search.build("weights.wts", images, {}); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+/**
+ * @brief 显式图片路径列表构建时，空列表应在加载权重前被拒绝。
+ */
+TEST(ImageSearchTest, BuildFromExplicitImagePathsRejectsEmptyList)
+{
+    TempDir temp;
+
+    irt::features::ImageSearch search;
+    const std::vector<fs::path> images;
+
+    expectIrtExceptionCode([&] { search.build("weights.wts", images, temp.path() / "index.faiss"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+/**
+ * @brief 未注册的模型名应在 ImageSearch 构造时被拒绝。
  */
 TEST(ImageSearchTest, ConstructorRejectsUnsupportedModel)
 {

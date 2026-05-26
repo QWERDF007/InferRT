@@ -79,6 +79,22 @@ void ImageSearch::buildOrLoad(const fs::path &weights_file, const fs::path &gall
     impl_->buildOrLoad(weights_file, gallery_dir, index_file, rebuild_index);
 }
 
+void ImageSearch::build(const fs::path &weights_file, const fs::path &gallery_dir, const fs::path &index_file)
+{
+    impl_->build(weights_file, gallery_dir, index_file);
+}
+
+void ImageSearch::build(const fs::path &weights_file, const std::vector<fs::path> &gallery_images,
+                        const fs::path &index_file)
+{
+    impl_->build(weights_file, gallery_images, index_file);
+}
+
+void ImageSearch::load(const fs::path &weights_file, const fs::path &gallery_dir, const fs::path &index_file)
+{
+    impl_->load(weights_file, gallery_dir, index_file);
+}
+
 std::vector<ImageSearchResult> ImageSearch::search(const fs::path &query_image, int top_k)
 {
     return impl_->search(query_image, top_k);

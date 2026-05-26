@@ -164,6 +164,40 @@ public:
                      const std::filesystem::path &index_file = {}, bool rebuild_index = false);
 
     /**
+     * @brief 从图库目录构建图像检索索引。
+     *
+     * @param weights_file 模型 `.wts` 权重文件路径。
+     * @param gallery_dir 图库目录。
+     * @param index_file Faiss 索引文件路径；为空时使用默认路径。
+     */
+    void build(const std::filesystem::path &weights_file, const std::filesystem::path &gallery_dir,
+               const std::filesystem::path &index_file = {});
+
+    /**
+     * @brief 从显式图片路径列表构建图像检索索引。
+     *
+     * 向量顺序决定 Faiss id 与图片路径的映射关系。由于无图库目录可用于推导默认索引路径，
+     * 必须显式指定 ``index_file``。
+     *
+     * @param weights_file 模型 `.wts` 权重文件路径。
+     * @param gallery_images 待加入索引的图片路径列表。
+     * @param index_file Faiss 索引文件路径；不可为空。
+     */
+    void build(const std::filesystem::path &weights_file,
+               const std::vector<std::filesystem::path> &gallery_images,
+               const std::filesystem::path &index_file);
+
+    /**
+     * @brief 为图库目录加载已有图像检索索引。
+     *
+     * @param weights_file 模型 `.wts` 权重文件路径。
+     * @param gallery_dir 用于校验元数据的图库目录。
+     * @param index_file Faiss 索引文件路径；为空时使用默认路径。
+     */
+    void load(const std::filesystem::path &weights_file, const std::filesystem::path &gallery_dir,
+              const std::filesystem::path &index_file = {});
+
+    /**
      * @brief 查询单张图片的 Top-K 相似图片。
      * @param query_image 查询图片路径。
      * @param top_k 返回数量。
