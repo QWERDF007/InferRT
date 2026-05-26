@@ -1,3 +1,8 @@
+/**
+ * @file ImageSearch.cpp
+ * @brief ``ImageSearch`` 公共 API 的实现与图库/索引路径辅助函数。
+ */
+
 #include "priv/ImageSearchImpl.hpp"
 
 #include <inferrt/core/Exception.hpp>
@@ -29,6 +34,14 @@ std::string toLower(std::string value)
     return value;
 }
 
+/**
+ * @brief 将字符串规范化为安全的文件名片段。
+ *
+ * 非字母数字字符替换为下划线，用于生成默认索引文件名。
+ *
+ * @param value 原始字符串（如模型名、特征名）。
+ * @return 可用于文件名的 stem 字符串。
+ */
 std::string sanitizeFileStem(std::string_view value)
 {
     std::string stem;

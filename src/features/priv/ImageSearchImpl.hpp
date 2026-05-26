@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file ImageSearchImpl.hpp
+ * @brief ``ImageSearch::Impl`` PIMPL 声明。
+ */
+
 #include <inferrt/features/ImageSearch.hpp>
 
 #include <filesystem>
@@ -73,6 +78,10 @@ public:
      */
     bool isReady() const noexcept;
 
+    /**
+     * @brief 获取当前检索流程配置。
+     * @return 构造时传入的配置副本。
+     */
     const ImageSearchConfig &config() const noexcept;
 
     /**

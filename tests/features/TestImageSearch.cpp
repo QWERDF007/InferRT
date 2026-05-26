@@ -1,3 +1,8 @@
+/**
+ * @file TestImageSearch.cpp
+ * @brief ``ImageSearch`` 与 CPU 磁盘 Faiss 索引的单元测试。
+ */
+
 #include <gtest/gtest.h>
 
 #include <inferrt/core/Exception.hpp>
@@ -57,11 +62,13 @@ public:
         return path_;
     }
 
+    /** @brief 禁止拷贝构造。 */
     TempDir(const TempDir &)            = delete;
+    /** @brief 禁止拷贝赋值。 */
     TempDir &operator=(const TempDir &) = delete;
 
 private:
-    fs::path path_;
+    fs::path path_; ///< 临时目录绝对路径。
 };
 
 /**
@@ -310,6 +317,65 @@ TEST(ImageSearchTest, CpuDiskIndexUsesOnDiskIvfInvertedLists)
     ASSERT_NE(reloaded_ivf->invlists, nullptr);
     const std::string reloaded_invlists_type = typeid(*reloaded_ivf->invlists).name();
     EXPECT_NE(reloaded_invlists_type.find("OnDisk"), std::string::npos) << reloaded_invlists_type;
+}
+
+/**
+ * @brief 高维 DINO 特征下，IVF 训练/构建批大小应受内存上限约束。
+ *
+ * 验证 ``chooseCpuOnDiskIvf*`` 在约 1369×384 维、12500 条向量规模下不会超出
+ * ``kCpuOnDiskIvfMaxTrainingBytes`` 与 ``kCpuOnDiskIvfMaxBatchBytes``。
+ */
+TEST(ImageSearchTest, CpuDiskIndexBoundsWideFeatureBuffers)
+{
+    constexpr size_t vector_count = 12500;
+    constexpr int    feature_dim  = 1369 * 384;
+
+    const auto nlist = irt::features::priv::chooseCpuOnDiskIvfListCount(vector_count, feature_dim);
+    const auto training_count =
+        irt::features::priv::chooseCpuOnDiskIvfTrainingCount(vector_count, feature_dim, nlist);
+    const auto batch_size = irt::features::priv::chooseCpuOnDiskIvfBuildBatchSize(256, vector_count, feature_dim);
+
+    const auto bytes_per_feature = static_cast<size_t>(feature_dim) * sizeof(float);
+
+    EXPECT_GE(nlist, 1U);
+    EXPECT_LE(nlist, training_count);
+    EXPECT_LT(training_count, irt::features::priv::kCpuOnDiskIvfMaxTrainingVectors);
+    EXPECT_LE(training_count * bytes_per_feature, irt::features::priv::kCpuOnDiskIvfMaxTrainingBytes);
+    EXPECT_LT(batch_size, 256U);
+    EXPECT_LE(batch_size * bytes_per_feature, irt::features::priv::kCpuOnDiskIvfMaxBatchBytes);
+}
+
+/**
+ * @brief 384 维 CLS 特征、万级图库应能成功构建 CPU 磁盘 IVF 索引并落盘。
+ */
+TEST(ImageSearchTest, CpuDiskIndexBuildsDinoClsSizedGallery)
+{
+    constexpr size_t vector_count = 12500;
+    constexpr int    feature_dim  = 384;
+
+    std::vector<float> features(vector_count * feature_dim, 0.0f);
+    for (size_t row = 0; row < vector_count; ++row)
+    {
+        const size_t first  = row % feature_dim;
+        const size_t second = (row * 37 + 11) % feature_dim;
+        features[row * feature_dim + first] = 1.0f;
+        features[row * feature_dim + second] += 0.25f;
+    }
+
+    auto load_feature = [&](size_t row) {
+        const auto begin = features.begin() + static_cast<std::ptrdiff_t>(row * feature_dim);
+        return std::vector<float>(begin, begin + feature_dim);
+    };
+
+    TempDir temp;
+    const auto index_path = temp.path() / "dino_cls_sized_disk.faiss";
+    auto index = irt::features::priv::buildCpuOnDiskIvfFlatIndex(vector_count, feature_dim, index_path, 256,
+                                                                 load_feature);
+
+    ASSERT_TRUE(index);
+    EXPECT_EQ(index->ntotal, static_cast<faiss::idx_t>(vector_count));
+    EXPECT_TRUE(fs::exists(index_path));
+    EXPECT_TRUE(fs::exists(irt::features::priv::cpuOnDiskIvfDataPath(index_path)));
 }
 
 /**

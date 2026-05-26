@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file ImageSearch.hpp
+ * @brief 图像检索公共 API、配置类型与 ``ImageSearch`` 类声明。
+ */
+
 #include <inferrt/features/Export.h>
 
 #include <cstddef>
@@ -10,72 +15,89 @@
 
 namespace irt::features {
 
-inline constexpr const char *kDefaultImageSearchModelName   = "resnet18";
+/// 默认检索模型名称（ResNet-18）。
+inline constexpr const char *kDefaultImageSearchModelName = "resnet18";
+
+/// 默认导出的中间特征层名称。
 inline constexpr const char *kDefaultImageSearchFeatureName = "layer4";
-inline constexpr size_t      kDefaultImageSearchDiskBuildBatchSize = 256;
+
+/// CPU 磁盘索引构建时的默认特征批大小。
+inline constexpr size_t kDefaultImageSearchDiskBuildBatchSize = 256;
 
 /**
  * @brief 图像检索结果。
  */
 struct ImageSearchResult
 {
-    /// 与查询图片的相似度分数；当前实现使用配置归一化后的特征内积。
+    ///< 与查询图片的相似度分数；当前实现使用配置归一化后的特征内积。
     float score{0.0f};
 
-    /// 命中的图库图片路径。
+    ///< 命中的图库图片路径。
     std::filesystem::path image_path;
 };
 
+/**
+ * @brief 图像预处理执行后端。
+ */
 enum class ImageSearchPreprocessBackend
 {
-    /// 使用 OpenCV 与 CPU 完成图像预处理。
-    CPU,
-    /// 预留 GPU 预处理配置；当前尚未实现。
-    GPU,
+    CPU, ///< 使用 OpenCV 与 CPU 完成图像预处理。
+    GPU, ///< 预留 GPU 预处理配置；当前尚未实现。
 };
 
+/**
+ * @brief 推理特征归一化方式。
+ */
 enum class ImageSearchFeatureNorm
 {
-    /// 不对推理特征做归一化。
-    None,
-    /// 对推理特征做 L1 归一化。
-    L1,
-    /// 对推理特征做 L2 归一化。
-    L2,
+    None, ///< 不对推理特征做归一化。
+    L1,   ///< 对推理特征做 L1 归一化。
+    L2,   ///< 对推理特征做 L2 归一化。
 };
 
+/**
+ * @brief Faiss 索引执行后端。
+ */
 enum class ImageSearchFaissBackend
 {
-    /// 使用 CPU Faiss 索引。
-    CPU,
-    /// 使用 GPU Faiss 索引。
-    GPU,
+    CPU, ///< 使用 CPU Faiss 索引。
+    GPU, ///< 使用 GPU Faiss 索引。
 };
 
+/**
+ * @brief Faiss 索引在搜索阶段的存储位置。
+ */
 enum class ImageSearchIndexStorage
 {
-    /// 搜索时索引常驻内存。
-    RAM,
-    /// CPU Faiss 搜索时按需从磁盘读取索引。
-    Disk,
+    RAM,  ///< 搜索时索引常驻内存。
+    Disk, ///< CPU Faiss 搜索时按需从磁盘读取索引。
 };
 
+/**
+ * @brief 图像检索流程的配置项集合。
+ */
 struct ImageSearchConfig
 {
     ///< 内置分类、ViT 或 DINO 模型名称。
     std::string model_name{kDefaultImageSearchModelName};
+
     ///< 用作检索向量的中间特征名。
     std::string feature_name{kDefaultImageSearchFeatureName};
+
     ///< 预处理执行后端。
     ImageSearchPreprocessBackend preprocess_backend{ImageSearchPreprocessBackend::CPU};
+
     ///< 推理特征归一化方式。
-    ImageSearchFeatureNorm       norm{ImageSearchFeatureNorm::L2};
+    ImageSearchFeatureNorm norm{ImageSearchFeatureNorm::L2};
+
     ///< Faiss 索引执行后端。
-    ImageSearchFaissBackend      faiss_backend{ImageSearchFaissBackend::CPU};
+    ImageSearchFaissBackend faiss_backend{ImageSearchFaissBackend::CPU};
+
     ///< Faiss 索引搜索存储位置；GPU Faiss 当前始终使用 RAM。
-    ImageSearchIndexStorage      index_storage{ImageSearchIndexStorage::RAM};
-    // CPU disk index build batch size.
-    size_t                       disk_build_batch_size{kDefaultImageSearchDiskBuildBatchSize};
+    ImageSearchIndexStorage index_storage{ImageSearchIndexStorage::RAM};
+
+    ///< CPU disk index build batch size.
+    size_t disk_build_batch_size{kDefaultImageSearchDiskBuildBatchSize};
 };
 
 /**
@@ -110,6 +132,7 @@ public:
 
     /** @brief 禁止拷贝构造。 */
     ImageSearch(const ImageSearch &) = delete;
+
     /** @brief 禁止拷贝赋值。 */
     ImageSearch &operator=(const ImageSearch &) = delete;
 
@@ -200,8 +223,7 @@ public:
      * @return `<gallery_dir>/<model>_<feature>.faiss`。
      */
     static std::filesystem::path defaultIndexPath(const std::filesystem::path &gallery_dir,
-                                                  const std::string &model_name,
-                                                  const std::string &feature_name);
+                                                  const std::string &model_name, const std::string &feature_name);
 
 private:
     class Impl;

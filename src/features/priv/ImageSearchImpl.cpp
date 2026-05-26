@@ -1,7 +1,14 @@
+/**
+ * @file ImageSearchImpl.cpp
+ * @brief 图像检索 PIMPL：特征提取、Faiss 索引构建/加载与 Top-K 搜索。
+ */
+
 #include "ImageSearchImpl.hpp"
+
 #include "ImageSearchFaissIndex.hpp"
 
 #include <cuda_runtime_api.h>
+
 #pragma warning(push)
 #pragma warning(disable : 4244)
 #include <faiss/IndexFlat.h>
@@ -38,13 +45,22 @@ using irt::model::checkCuda;
 using irt::model::dimsToCsv;
 using irt::model::elementCount;
 
+/**
+ * @brief Faiss 索引及其关联资源的打包结构。
+ *
+ * 构建或加载索引时的中间返回值，便于一并转移 GPU 资源、索引实例与路径映射。
+ */
 struct FaissIndexBundle
 {
-    std::unique_ptr<faiss::gpu::StandardGpuResources> gpu_resources;
-    std::unique_ptr<faiss::Index>                     index;
-    std::vector<fs::path>                             image_paths;
+    std::unique_ptr<faiss::gpu::StandardGpuResources> gpu_resources; ///< GPU Faiss 资源（可选）。
+    std::unique_ptr<faiss::Index>                     index;         ///< Faiss 内积索引。
+    std::vector<fs::path>                             image_paths;   ///< 与索引向量一一对应的图库路径。
 };
 
+/**
+ * @brief 对特征向量做 L2 归一化（原地修改）。
+ * @param values 特征分量数组。
+ */
 void l2Normalize(std::vector<float> &values)
 {
     const float sum_sq = std::inner_product(values.begin(), values.end(), values.begin(), 0.0f);
@@ -60,6 +76,10 @@ void l2Normalize(std::vector<float> &values)
     }
 }
 
+/**
+ * @brief 对特征向量做 L1 归一化（原地修改）。
+ * @param values 特征分量数组。
+ */
 void l1Normalize(std::vector<float> &values)
 {
     float sum_abs = 0.0f;
@@ -79,6 +99,11 @@ void l1Normalize(std::vector<float> &values)
     }
 }
 
+/**
+ * @brief 按配置对特征向量做归一化。
+ * @param values 特征分量数组（原地修改）。
+ * @param norm 归一化方式。
+ */
 void normalizeFeature(std::vector<float> &values, ImageSearchFeatureNorm norm)
 {
     switch (norm)
@@ -96,6 +121,9 @@ void normalizeFeature(std::vector<float> &values, ImageSearchFeatureNorm norm)
     throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported ImageSearch feature norm");
 }
 
+/** 
+ * @brief 将预处理后端枚举序列化为元数据文件中的字符串。 
+ */
 const char *preprocessBackendName(ImageSearchPreprocessBackend backend)
 {
     switch (backend)
@@ -108,6 +136,9 @@ const char *preprocessBackendName(ImageSearchPreprocessBackend backend)
     return "unknown";
 }
 
+/**
+ * @brief 将特征归一化枚举序列化为元数据文件中的字符串。
+ **/
 const char *featureNormName(ImageSearchFeatureNorm norm)
 {
     switch (norm)
@@ -122,6 +153,9 @@ const char *featureNormName(ImageSearchFeatureNorm norm)
     return "unknown";
 }
 
+/**
+ * @brief 将 Faiss 后端枚举序列化为元数据文件中的字符串。 
+ **/
 const char *faissBackendName(ImageSearchFaissBackend backend)
 {
     switch (backend)
@@ -134,6 +168,9 @@ const char *faissBackendName(ImageSearchFaissBackend backend)
     return "unknown";
 }
 
+/** 
+ * @brief 将索引存储位置枚举序列化为元数据文件中的字符串。 
+ **/
 const char *indexStorageName(ImageSearchIndexStorage storage)
 {
     switch (storage)
@@ -146,17 +183,27 @@ const char *indexStorageName(ImageSearchIndexStorage storage)
     return "unknown";
 }
 
+/**
+ * @brief 判断是否使用 CPU 磁盘 IVF 索引模式。
+ * @param config 检索配置。
+ * @return CPU 后端且 ``index_storage`` 为 Disk 时返回 true。
+ */
 bool useCpuDiskIndex(const ImageSearchConfig &config)
 {
     return config.faiss_backend == ImageSearchFaissBackend::CPU
         && config.index_storage == ImageSearchIndexStorage::Disk;
 }
 
+/** @brief 返回写入元数据的索引类型标识（``flat_ip`` 或 ``ivf_flat_ondisk``）。 */
 const char *indexKindName(const ImageSearchConfig &config)
 {
     return useCpuDiskIndex(config) ? "ivf_flat_ondisk" : "flat_ip";
 }
 
+/**
+ * @brief 判断配置是否与库内默认检索参数一致。
+ * @param config 待检查配置。
+ */
 bool isDefaultConfig(const ImageSearchConfig &config)
 {
     return config.model_name == ImageSearch::kDefaultModelName
@@ -165,6 +212,11 @@ bool isDefaultConfig(const ImageSearchConfig &config)
         && config.faiss_backend == ImageSearchFaissBackend::CPU && config.index_storage == ImageSearchIndexStorage::RAM;
 }
 
+/**
+ * @brief 校验检索配置中的枚举与批大小是否合法。
+ * @param config 待校验配置。
+ * @throws irt::Exception 含未实现选项或非法值时抛出。
+ */
 void validateConfig(const ImageSearchConfig &config)
 {
     switch (config.preprocess_backend)
@@ -172,8 +224,7 @@ void validateConfig(const ImageSearchConfig &config)
     case ImageSearchPreprocessBackend::CPU:
         break;
     case ImageSearchPreprocessBackend::GPU:
-        throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED,
-                             "ImageSearch GPU preprocessing is not implemented");
+        throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED, "ImageSearch GPU preprocessing is not implemented");
     default:
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported ImageSearch preprocessing backend");
     }
@@ -209,11 +260,14 @@ void validateConfig(const ImageSearchConfig &config)
 
     if (config.disk_build_batch_size == 0)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "ImageSearch disk build batch size must be positive");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch disk build batch size must be positive");
     }
 }
 
+/**
+ * @brief 获取当前 CUDA 设备编号，供 GPU Faiss 索引使用。
+ * @return 设备 ID。
+ */
 int currentCudaDevice()
 {
     int device{0};
@@ -221,6 +275,12 @@ int currentCudaDevice()
     return device;
 }
 
+/**
+ * @brief 创建空的 Faiss 内积平面索引（CPU 或 GPU）。
+ * @param feature_dim 特征维度。
+ * @param backend Faiss 执行后端。
+ * @return 已分配、尚未添加向量的索引包。
+ */
 FaissIndexBundle createEmptyFaissIndex(int feature_dim, ImageSearchFaissBackend backend)
 {
     FaissIndexBundle bundle;
@@ -234,8 +294,8 @@ FaissIndexBundle createEmptyFaissIndex(int feature_dim, ImageSearchFaissBackend 
         bundle.gpu_resources = std::make_unique<faiss::gpu::StandardGpuResources>();
         faiss::gpu::GpuIndexFlatConfig gpu_config;
         gpu_config.device = currentCudaDevice();
-        bundle.index = std::make_unique<faiss::gpu::GpuIndexFlatIP>(bundle.gpu_resources.get(), feature_dim,
-                                                                    gpu_config);
+        bundle.index
+            = std::make_unique<faiss::gpu::GpuIndexFlatIP>(bundle.gpu_resources.get(), feature_dim, gpu_config);
         break;
     }
     default:
@@ -245,8 +305,14 @@ FaissIndexBundle createEmptyFaissIndex(int feature_dim, ImageSearchFaissBackend 
     return bundle;
 }
 
+/**
+ * @brief 将磁盘读入的 CPU 索引迁移到配置指定的后端。
+ * @param cpu_index 从文件加载的 CPU 索引。
+ * @param backend 目标 Faiss 后端。
+ * @return 可在配置后端上搜索的索引包。
+ */
 FaissIndexBundle moveCpuIndexToConfiguredBackend(std::unique_ptr<faiss::Index> cpu_index,
-                                                 ImageSearchFaissBackend backend)
+                                                 ImageSearchFaissBackend       backend)
 {
     if (!cpu_index)
     {
@@ -278,6 +344,12 @@ FaissIndexBundle moveCpuIndexToConfiguredBackend(std::unique_ptr<faiss::Index> c
     return bundle;
 }
 
+/**
+ * @brief 将 Faiss 索引序列化到磁盘（GPU 索引会先克隆到 CPU 再写入）。
+ * @param index 待保存索引。
+ * @param backend 索引当前所在后端。
+ * @param index_path 输出 ``.faiss`` 路径。
+ */
 void writeIndex(const faiss::Index &index, ImageSearchFaissBackend backend, const fs::path &index_path)
 {
     switch (backend)
@@ -300,16 +372,31 @@ void writeIndex(const faiss::Index &index, ImageSearchFaissBackend backend, cons
     }
 }
 
+/**
+ * @brief 由索引文件路径推导图库路径映射文件路径。
+ * @param index_path Faiss 索引路径。
+ * @return ``<index_path>.paths.txt``。
+ */
 fs::path mappingPathFromIndex(const fs::path &index_path)
 {
     return index_path.string() + ".paths.txt";
 }
 
+/**
+ * @brief 由索引文件路径推导元数据文件路径。
+ * @param index_path Faiss 索引路径。
+ * @return ``<index_path>.meta.txt``。
+ */
 fs::path metadataPathFromIndex(const fs::path &index_path)
 {
     return index_path.string() + ".meta.txt";
 }
 
+/**
+ * @brief 将图库图片路径列表写入映射文件（每行一条 generic 路径）。
+ * @param mapping_path 输出路径。
+ * @param image_paths 与 Faiss 向量顺序一致的图库路径。
+ */
 void savePathMapping(const fs::path &mapping_path, const std::vector<fs::path> &image_paths)
 {
     std::ofstream output(mapping_path);
@@ -325,6 +412,11 @@ void savePathMapping(const fs::path &mapping_path, const std::vector<fs::path> &
     }
 }
 
+/**
+ * @brief 从映射文件加载图库路径列表。
+ * @param mapping_path ``.paths.txt`` 路径。
+ * @return 图库路径向量。
+ */
 std::vector<fs::path> loadPathMapping(const fs::path &mapping_path)
 {
     std::ifstream input(mapping_path);
@@ -346,6 +438,14 @@ std::vector<fs::path> loadPathMapping(const fs::path &mapping_path)
     return image_paths;
 }
 
+/**
+ * @brief 将模型、特征与检索配置写入元数据文件，供增量加载时校验。
+ * @param metadata_path ``.meta.txt`` 路径。
+ * @param gallery_dir 图库根目录。
+ * @param model_name 模型名称。
+ * @param feature_name 特征层名称。
+ * @param config 当前检索配置。
+ */
 void saveMetadata(const fs::path &metadata_path, const fs::path &gallery_dir, const std::string &model_name,
                   const std::string &feature_name, const ImageSearchConfig &config)
 {
@@ -367,6 +467,11 @@ void saveMetadata(const fs::path &metadata_path, const fs::path &gallery_dir, co
     output << "index_kind=" << indexKindName(config) << "\n";
 }
 
+/**
+ * @brief 从元数据文件解析 ``key=value`` 行。
+ * @param metadata_path ``.meta.txt`` 路径。
+ * @return 键值映射；文件不存在或无法打开时返回空映射。
+ */
 std::unordered_map<std::string, std::string> loadMetadata(const fs::path &metadata_path)
 {
     std::ifstream input(metadata_path);
@@ -376,7 +481,7 @@ std::unordered_map<std::string, std::string> loadMetadata(const fs::path &metada
     }
 
     std::unordered_map<std::string, std::string> metadata;
-    std::string                                 line;
+    std::string                                  line;
     while (std::getline(input, line))
     {
         const auto separator = line.find('=');
@@ -389,6 +494,9 @@ std::unordered_map<std::string, std::string> loadMetadata(const fs::path &metada
     return metadata;
 }
 
+/**
+ * @brief 判断元数据中某键的值是否与期望一致（键缺失视为匹配）。
+ */
 bool metadataValueEquals(const std::unordered_map<std::string, std::string> &metadata, const std::string &key,
                          const std::string &expected)
 {
@@ -396,6 +504,9 @@ bool metadataValueEquals(const std::unordered_map<std::string, std::string> &met
     return it == metadata.end() || it->second == expected;
 }
 
+/**
+ * @brief 判断配置项元数据是否匹配；旧索引无该键时与 ``legacy_default`` 比较。
+ */
 bool metadataConfigValueEquals(const std::unordered_map<std::string, std::string> &metadata, const std::string &key,
                                const std::string &expected, const std::string &legacy_default)
 {
@@ -403,8 +514,9 @@ bool metadataConfigValueEquals(const std::unordered_map<std::string, std::string
     return it == metadata.end() ? expected == legacy_default : it->second == expected;
 }
 
+/** @brief 校验元数据中的 ``index_kind`` 与当前配置是否一致。 */
 bool metadataIndexKindEquals(const std::unordered_map<std::string, std::string> &metadata,
-                             const ImageSearchConfig &config)
+                             const ImageSearchConfig                            &config)
 {
     const auto it = metadata.find("index_kind");
     if (useCpuDiskIndex(config))
@@ -414,9 +526,13 @@ bool metadataIndexKindEquals(const std::unordered_map<std::string, std::string> 
     return it == metadata.end() || it->second == indexKindName(config);
 }
 
-bool existingIndexMatchesConfig(const fs::path &index_path, const fs::path &gallery_dir,
-                                const std::string &model_name, const std::string &feature_name,
-                                const ImageSearchConfig &config)
+/**
+ * @brief 判断磁盘上已有索引是否与当前图库及配置兼容，可直接加载。
+ *
+ * 无元数据文件时，仅当配置为默认参数时才视为可复用。
+ */
+bool existingIndexMatchesConfig(const fs::path &index_path, const fs::path &gallery_dir, const std::string &model_name,
+                                const std::string &feature_name, const ImageSearchConfig &config)
 {
     const fs::path metadata_path = metadataPathFromIndex(index_path);
     if (!fs::exists(metadata_path))
@@ -430,11 +546,10 @@ bool existingIndexMatchesConfig(const fs::path &index_path, const fs::path &gall
         return isDefaultConfig(config);
     }
 
-    return metadataValueEquals(metadata, "model", model_name)
-        && metadataValueEquals(metadata, "feature", feature_name)
+    return metadataValueEquals(metadata, "model", model_name) && metadataValueEquals(metadata, "feature", feature_name)
         && metadataValueEquals(metadata, "gallery_dir", fs::absolute(gallery_dir).generic_string())
-        && metadataConfigValueEquals(metadata, "preprocess_backend",
-                                     preprocessBackendName(config.preprocess_backend), "cpu")
+        && metadataConfigValueEquals(metadata, "preprocess_backend", preprocessBackendName(config.preprocess_backend),
+                                     "cpu")
         && metadataConfigValueEquals(metadata, "norm", featureNormName(config.norm), "l2")
         && metadataConfigValueEquals(metadata, "faiss_backend", faissBackendName(config.faiss_backend), "cpu")
         && metadataConfigValueEquals(metadata, "index_storage", indexStorageName(config.index_storage), "ram")
@@ -445,9 +560,22 @@ bool existingIndexMatchesConfig(const fs::path &index_path, const fs::path &gall
 
 namespace priv {
 
+/**
+ * @brief 基于 InferRT 模型的单图特征提取器。
+ *
+ * 加载 TensorRT 引擎，对查询/图库图片做 ImageNet 预处理，经 ``forwardFeatures``
+ * 导出指定中间层 float 特征并按配置归一化。
+ */
 class ImageSearchFeatureExtractor
 {
 public:
+    /**
+     * @brief 创建特征提取器并构建或加载 TensorRT 引擎。
+     * @param model_name 内置模型名称。
+     * @param feature_name 中间特征张量名。
+     * @param weights_file ``.wts`` 权重路径。
+     * @param config 预处理与归一化配置。
+     */
     ImageSearchFeatureExtractor(std::string model_name, std::string feature_name, const fs::path &weights_file,
                                 ImageSearchConfig config)
         : model_name_(std::move(model_name))
@@ -492,8 +620,7 @@ public:
         if (input_shape.nbDims != 4 || input_shape.d[0] != 1 || input_shape.d[1] != 3 || input_shape.d[2] <= 0
             || input_shape.d[3] <= 0)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "ImageSearch expects input shape 1x3xHxW, got %s",
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch expects input shape 1x3xHxW, got %s",
                                  dimsToCsv(input_shape).c_str());
         }
 
@@ -504,17 +631,27 @@ public:
         device_output_.resize(feature_dim_, nvinfer1::DataType::kFLOAT);
     }
 
+    /** @brief 析构；先释放 TensorRT 模型再销毁 CUDA 缓冲区。 */
     ~ImageSearchFeatureExtractor()
     {
         // Release TensorRT context/engine before CUDA buffers.
         model_.reset();
     }
 
+    /**
+     * @brief 获取特征向量维度。
+     * @return 输出张量元素个数。
+     */
     int featureDim() const noexcept
     {
         return static_cast<int>(feature_dim_);
     }
 
+    /**
+     * @brief 从单张图片提取归一化后的检索特征。
+     * @param image_path 图片路径。
+     * @return 长度为 ``featureDim()`` 的 float 特征向量。
+     */
     std::vector<float> extract(const fs::path &image_path)
     {
         cv::Mat image = cv::imread(image_path.string(), cv::IMREAD_COLOR);
@@ -556,44 +693,67 @@ public:
     }
 
 private:
-    std::string                         model_name_;
-    std::string                         feature_name_;
-    ImageSearchConfig                   config_{};
+    ///< 模型名称。
+    std::string model_name_;
+
+    ///< 导出的中间特征名。
+    std::string feature_name_;
+
+    ///< 预处理与归一化配置。
+    ImageSearchConfig config_{};
+
+    ///< TensorRT 推理模型。
     std::unique_ptr<irt::model::IModel> model_;
-    std::string                         output_name_;
-    nvinfer1::Dims                      output_dims_{};
-    nvinfer1::DataType                  output_type_{};
-    int                                 input_height_{224};
-    int                                 input_width_{224};
-    size_t                              feature_dim_{0};
-    DeviceBuffer                        device_input_;
-    DeviceBuffer                        device_output_;
+
+    ///< 特征输出张量名。
+    std::string output_name_;
+
+    ///< 输出张量形状。
+    nvinfer1::Dims output_dims_{};
+
+    ///< 输出张量数据类型。
+    nvinfer1::DataType output_type_{};
+
+    ///< 模型输入高度。
+    int input_height_{224};
+
+    ///< 模型输入宽度。
+    int input_width_{224};
+
+    ///< 特征向量维度。
+    size_t feature_dim_{0};
+
+    ///< 设备侧输入缓冲区。
+    DeviceBuffer device_input_;
+
+    ///< 设备侧特征输出缓冲区。
+    DeviceBuffer device_output_;
 };
 
 } // namespace priv
 
 namespace {
 
-FaissIndexBundle buildCpuOnDiskIndex(const std::vector<fs::path> &gallery_images,
-                                     priv::ImageSearchFeatureExtractor &extractor,
-                                     const fs::path &index_path,
+/**
+ * @brief 构建 CPU 磁盘 IVF 索引并保存路径映射。
+ */
+FaissIndexBundle buildCpuOnDiskIndex(const std::vector<fs::path>       &gallery_images,
+                                     priv::ImageSearchFeatureExtractor &extractor, const fs::path &index_path,
                                      const ImageSearchConfig &config)
 {
-    savePathMapping(mappingPathFromIndex(index_path), gallery_images);
-
     FaissIndexBundle bundle;
     bundle.index = priv::buildCpuOnDiskIvfFlatIndex(gallery_images.size(), extractor.featureDim(), index_path,
-                                                    config.disk_build_batch_size,
-                                                    [&](size_t index) {
-                                                        return extractor.extract(gallery_images[index]);
-                                                    });
+                                                    config.disk_build_batch_size, [&](size_t index)
+                                                    { return extractor.extract(gallery_images[index]); });
+    savePathMapping(mappingPathFromIndex(index_path), gallery_images);
     return bundle;
 }
 
-FaissIndexBundle buildIndex(const std::vector<fs::path> &gallery_images,
-                            priv::ImageSearchFeatureExtractor &extractor,
-                            const fs::path &index_path,
-                            const ImageSearchConfig &config)
+/**
+ * @brief 按配置构建 Faiss 索引（内存 Flat 或 CPU 磁盘 IVF）。
+ */
+FaissIndexBundle buildIndex(const std::vector<fs::path> &gallery_images, priv::ImageSearchFeatureExtractor &extractor,
+                            const fs::path &index_path, const ImageSearchConfig &config)
 {
     if (useCpuDiskIndex(config))
     {
@@ -613,6 +773,9 @@ FaissIndexBundle buildIndex(const std::vector<fs::path> &gallery_images,
     return bundle;
 }
 
+/**
+ * @brief 从磁盘加载 Faiss 索引、路径映射，并迁移到配置指定的后端。
+ */
 FaissIndexBundle loadIndex(const fs::path &index_path, const ImageSearchConfig &config)
 {
     auto cpu_index = useCpuDiskIndex(config)
@@ -672,9 +835,9 @@ void ImageSearch::Impl::buildOrLoad(const fs::path &weights_file, const fs::path
 {
     weights_file_ = weights_file;
     gallery_dir_  = gallery_dir;
-    index_path_ = index_file.empty()
-                    ? ImageSearch::defaultIndexPath(gallery_dir_, config_.model_name, config_.feature_name)
-                    : index_file;
+    index_path_   = index_file.empty()
+                      ? ImageSearch::defaultIndexPath(gallery_dir_, config_.model_name, config_.feature_name)
+                      : index_file;
 
     if (!rebuild_index && fs::exists(index_path_) && fs::exists(mappingPathFromIndex(index_path_))
         && existingIndexMatchesConfig(index_path_, gallery_dir_, config_.model_name, config_.feature_name, config_))
@@ -689,8 +852,8 @@ void ImageSearch::Impl::buildOrLoad(const fs::path &weights_file, const fs::path
         return;
     }
 
-    auto extractor = std::make_unique<priv::ImageSearchFeatureExtractor>(config_.model_name, config_.feature_name,
-                                                                         weights_file_, config_);
+    auto extractor  = std::make_unique<priv::ImageSearchFeatureExtractor>(config_.model_name, config_.feature_name,
+                                                                          weights_file_, config_);
     gallery_images_ = ImageSearch::collectGalleryImages(gallery_dir_);
     if (!index_path_.parent_path().empty())
     {
@@ -703,8 +866,7 @@ void ImageSearch::Impl::buildOrLoad(const fs::path &weights_file, const fs::path
     index_               = std::move(built.index);
     feature_dim_         = extractor->featureDim();
     extractor_           = std::move(extractor);
-    saveMetadata(metadataPathFromIndex(index_path_), gallery_dir_, config_.model_name, config_.feature_name,
-                 config_);
+    saveMetadata(metadataPathFromIndex(index_path_), gallery_dir_, config_.model_name, config_.feature_name, config_);
 }
 
 std::vector<ImageSearchResult> ImageSearch::Impl::search(const fs::path &query_image, int top_k)
@@ -772,8 +934,8 @@ void ImageSearch::Impl::ensureExtractor()
 {
     if (!extractor_)
     {
-        extractor_ = std::make_unique<priv::ImageSearchFeatureExtractor>(config_.model_name, config_.feature_name,
-                                                                         weights_file_, config_);
+        extractor_   = std::make_unique<priv::ImageSearchFeatureExtractor>(config_.model_name, config_.feature_name,
+                                                                           weights_file_, config_);
         feature_dim_ = extractor_->featureDim();
     }
 }
