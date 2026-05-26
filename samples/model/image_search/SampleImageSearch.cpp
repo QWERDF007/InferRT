@@ -5,14 +5,23 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <iostream>
 #include <string>
 
+
 namespace fs = std::filesystem;
 
 namespace {
+
+using Clock = std::chrono::steady_clock;
+
+double elapsedMs(Clock::time_point start, Clock::time_point end)
+{
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
 
 /**
  * @brief 用于在显示帮助后中断主流程。
@@ -26,13 +35,13 @@ struct HelpRequested
  */
 struct Arguments
 {
-    fs::path    weights_file;
-    fs::path    gallery_dir;
-    fs::path    query_image;
-    fs::path    index_file;
+    fs::path                         weights_file;
+    fs::path                         gallery_dir;
+    fs::path                         query_image;
+    fs::path                         index_file;
     irt::features::ImageSearchConfig config;
-    int         top_k{irt::features::ImageSearch::kDefaultTopK};
-    bool        rebuild_index{false};
+    int                              top_k{irt::features::ImageSearch::kDefaultTopK};
+    bool                             rebuild_index{false};
 };
 
 std::string toLower(std::string value)
@@ -202,8 +211,7 @@ Arguments parseArguments(int argc, char *argv[])
         std::cout << "Default feature tensor: " << irt::features::ImageSearch::kDefaultFeatureName << std::endl;
         std::cout << "Default top-k: " << irt::features::ImageSearch::kDefaultTopK << std::endl;
         std::cout << "Default config: --norm l2 --preprocess-backend cpu --faiss-backend cpu --index-storage ram"
-                  << " --disk-build-batch-size " << irt::features::kDefaultImageSearchDiskBuildBatchSize
-                  << std::endl;
+                  << " --disk-build-batch-size " << irt::features::kDefaultImageSearchDiskBuildBatchSize << std::endl;
         std::cout << "If --index is omitted, the sample uses <gallery_dir>/<model>_<feature>.faiss" << std::endl;
         std::cout << "DINO feature hint: use x_norm_clstoken for compact image-level retrieval" << std::endl;
         std::cout << "Supported models:";
@@ -222,19 +230,19 @@ Arguments parseArguments(int argc, char *argv[])
     }
 
     Arguments args;
-    args.weights_file               = result["weights-file"].as<std::string>();
-    args.gallery_dir                = result["gallery-dir"].as<std::string>();
-    args.query_image                = result["query-image"].as<std::string>();
-    args.index_file                 = result["index"].as<std::string>();
-    args.top_k                      = result["topk"].as<int>();
-    args.config.model_name          = result["model"].as<std::string>();
-    args.config.feature_name        = result["feature"].as<std::string>();
-    args.config.norm                = parseNorm(result["norm"].as<std::string>());
-    args.config.preprocess_backend = parsePreprocessBackend(result["preprocess-backend"].as<std::string>());
-    args.config.faiss_backend      = parseFaissBackend(result["faiss-backend"].as<std::string>());
-    args.config.index_storage      = parseIndexStorage(result["index-storage"].as<std::string>());
+    args.weights_file                 = result["weights-file"].as<std::string>();
+    args.gallery_dir                  = result["gallery-dir"].as<std::string>();
+    args.query_image                  = result["query-image"].as<std::string>();
+    args.index_file                   = result["index"].as<std::string>();
+    args.top_k                        = result["topk"].as<int>();
+    args.config.model_name            = result["model"].as<std::string>();
+    args.config.feature_name          = result["feature"].as<std::string>();
+    args.config.norm                  = parseNorm(result["norm"].as<std::string>());
+    args.config.preprocess_backend    = parsePreprocessBackend(result["preprocess-backend"].as<std::string>());
+    args.config.faiss_backend         = parseFaissBackend(result["faiss-backend"].as<std::string>());
+    args.config.index_storage         = parseIndexStorage(result["index-storage"].as<std::string>());
     args.config.disk_build_batch_size = result["disk-build-batch-size"].as<size_t>();
-    args.rebuild_index              = result.count("rebuild-index") > 0;
+    args.rebuild_index                = result.count("rebuild-index") > 0;
 
     if (args.top_k <= 0)
     {
@@ -265,12 +273,18 @@ int main(int argc, char *argv[])
         const auto args = parseArguments(argc, argv);
 
         irt::features::ImageSearch searcher(args.config);
+
+        const auto build_start = Clock::now();
         searcher.buildOrLoad(args.weights_file, args.gallery_dir, args.index_file, args.rebuild_index);
-        const auto results = searcher.search(args.query_image, args.top_k);
+        const auto build_end = Clock::now();
+
+        const auto search_start = Clock::now();
+        const auto results      = searcher.search(args.query_image, args.top_k);
+        const auto search_end   = Clock::now();
 
         std::cout << "Query image: " << fs::absolute(args.query_image).string() << std::endl;
-        std::cout << "Model: " << searcher.config().model_name
-                  << ", feature tensor: " << searcher.config().feature_name << std::endl;
+        std::cout << "Model: " << searcher.config().model_name << ", feature tensor: " << searcher.config().feature_name
+                  << std::endl;
         std::cout << "Config: norm=" << normName(searcher.config().norm)
                   << ", preprocess=" << preprocessBackendName(searcher.config().preprocess_backend)
                   << ", faiss=" << faissBackendName(searcher.config().faiss_backend)
@@ -284,6 +298,9 @@ int main(int argc, char *argv[])
             std::cout << (i + 1) << ". score=" << results[i].score << " image=" << results[i].image_path.string()
                       << std::endl;
         }
+
+        std::cout << "Timing: build_or_load=" << elapsedMs(build_start, build_end)
+                  << " ms, search=" << elapsedMs(search_start, search_end) << " ms" << std::endl;
 
         return 0;
     }
