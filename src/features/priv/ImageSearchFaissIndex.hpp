@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -753,41 +754,20 @@ inline size_t chooseRamIvfPqSubQuantizerCount(int feature_dim)
     return 1;
 }
 
-inline std::vector<float> makeRamIvfPqCentroids(const std::vector<float> &training_features, size_t training_count,
-                                                int feature_dim, size_t sub_quantizers, size_t bits_per_code)
+inline size_t chooseRamIvfPqTrainingCount(size_t vector_count, int feature_dim, size_t nlist)
 {
-    const auto dim  = static_cast<size_t>(feature_dim);
-    const auto dsub = dim / sub_quantizers;
-    const auto ksub = size_t{1} << bits_per_code;
-
-    std::vector<float> centroids(sub_quantizers * ksub * dsub);
-    for (size_t sub = 0; sub < sub_quantizers; ++sub)
-    {
-        for (size_t centroid_no = 0; centroid_no < ksub; ++centroid_no)
-        {
-            const size_t source_index = ksub == 1 ? 0 : (centroid_no * (training_count - 1)) / (ksub - 1);
-            std::copy_n(training_features.data() + source_index * dim + sub * dsub, dsub,
-                        centroids.data() + (sub * ksub + centroid_no) * dsub);
-        }
-    }
-    return centroids;
+    const auto by_memory = maxCpuOnDiskIvfBufferedVectorCount(feature_dim, kCpuOnDiskIvfMaxTrainingBytes);
+    return std::min(vector_count, std::max<size_t>(nlist, by_memory));
 }
 
-inline std::vector<float> makeResidualFeatures(const std::vector<float> &features,
-                                               const std::vector<faiss::idx_t> &assignments, int feature_dim,
-                                               const std::vector<float> &centroids)
+inline size_t chooseRamIvfPqBitsPerCode(size_t training_count)
 {
-    const auto dim = static_cast<size_t>(feature_dim);
-    std::vector<float> residuals(features.size());
-    for (size_t row = 0; row < assignments.size(); ++row)
+    size_t bits = 0;
+    while (bits < kRamIvfPqBitsPerCode && (size_t{1} << (bits + 1)) <= training_count)
     {
-        const auto list_no = static_cast<size_t>(assignments[row]);
-        for (size_t col = 0; col < dim; ++col)
-        {
-            residuals[row * dim + col] = features[row * dim + col] - centroids[list_no * dim + col];
-        }
+        ++bits;
     }
-    return residuals;
+    return std::max<size_t>(1, bits);
 }
 
 /**
@@ -921,11 +901,13 @@ inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int
     }
 
     const size_t nlist          = chooseCpuOnDiskIvfListCount(vector_count, feature_dim);
-    const size_t training_count = chooseCpuOnDiskIvfTrainingCount(vector_count, feature_dim, nlist);
+    const size_t training_count = chooseRamIvfPqTrainingCount(vector_count, feature_dim, nlist);
     const size_t stride         = std::max<size_t>(1, vector_count / training_count);
 
-    std::vector<float> training_features;
+    std::vector<float>  training_features;
+    std::vector<size_t> training_indices;
     training_features.reserve(training_count * static_cast<size_t>(feature_dim));
+    training_indices.reserve(training_count);
     for (size_t index_in_gallery = 0; index_in_gallery < vector_count
                                       && training_features.size() / static_cast<size_t>(feature_dim) < training_count;
          index_in_gallery += stride)
@@ -936,6 +918,7 @@ inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected ImageSearch feature size");
         }
         training_features.insert(training_features.end(), feature.begin(), feature.end());
+        training_indices.push_back(index_in_gallery);
     }
 
     const size_t actual_training_count = training_features.size() / static_cast<size_t>(feature_dim);
@@ -944,40 +927,63 @@ inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Not enough training features for IVF-PQ index");
     }
 
-    auto coarse_quantizer = std::make_unique<faiss::IndexFlatIP>(feature_dim);
-    auto coarse_centroids = makeCpuOnDiskIvfCentroids(training_features, actual_training_count, feature_dim, nlist);
-    coarse_quantizer->add(static_cast<faiss::idx_t>(nlist), coarse_centroids.data());
-    const auto training_assignments =
-        assignFeatureBatchToCentroids(training_features, actual_training_count, feature_dim, coarse_centroids, nlist);
-    const auto residual_training_features =
-        makeResidualFeatures(training_features, training_assignments, feature_dim, coarse_centroids);
-
     const size_t sub_quantizers = chooseRamIvfPqSubQuantizerCount(feature_dim);
+    const size_t bits_per_code  = chooseRamIvfPqBitsPerCode(actual_training_count);
+    const size_t pq_centroids   = size_t{1} << bits_per_code;
+
+    const float  *faiss_training_data  = training_features.data();
+    faiss::idx_t  faiss_training_count = static_cast<faiss::idx_t>(actual_training_count);
+    std::vector<float> padded_training_features;
+    if (actual_training_count < pq_centroids)
+    {
+        padded_training_features.reserve(pq_centroids * static_cast<size_t>(feature_dim));
+        for (size_t i = 0; i < pq_centroids; ++i)
+        {
+            const size_t source_index = i % actual_training_count;
+            padded_training_features.insert(padded_training_features.end(),
+                                            training_features.begin()
+                                                + static_cast<std::ptrdiff_t>(source_index
+                                                                              * static_cast<size_t>(feature_dim)),
+                                            training_features.begin()
+                                                + static_cast<std::ptrdiff_t>((source_index + 1)
+                                                                              * static_cast<size_t>(feature_dim)));
+        }
+        faiss_training_data  = padded_training_features.data();
+        faiss_training_count = static_cast<faiss::idx_t>(pq_centroids);
+    }
+
+    auto coarse_quantizer = std::make_unique<faiss::IndexFlatIP>(feature_dim);
     auto         index
         = std::make_unique<faiss::IndexIVFPQ>(coarse_quantizer.release(), static_cast<size_t>(feature_dim), nlist,
-                                              sub_quantizers, kRamIvfPqBitsPerCode, faiss::METRIC_INNER_PRODUCT);
-    auto *ivfpq_index         = index.get();
-    ivfpq_index->own_fields   = true;
-    ivfpq_index->by_residual  = true;
-    ivfpq_index->pq.centroids = makeRamIvfPqCentroids(residual_training_features, actual_training_count, feature_dim,
-                                                      sub_quantizers, kRamIvfPqBitsPerCode);
-    ivfpq_index->pq.sync_transposed_centroids();
-    ivfpq_index->is_trained = true;
-    ivfpq_index->nprobe     = chooseCpuOnDiskIvfProbeCount(nlist);
+                                              sub_quantizers, bits_per_code, faiss::METRIC_INNER_PRODUCT);
+    auto *ivfpq_index       = index.get();
+    ivfpq_index->own_fields = true;
+    const auto points_per_pq_centroid =
+        static_cast<int>(std::min<size_t>(static_cast<size_t>(std::numeric_limits<int>::max()),
+                                          (static_cast<size_t>(faiss_training_count) + pq_centroids - 1)
+                                              / pq_centroids));
+    ivfpq_index->pq.cp.max_points_per_centroid =
+        std::max(ivfpq_index->pq.cp.max_points_per_centroid, points_per_pq_centroid);
+    ivfpq_index->train(faiss_training_count, faiss_training_data);
+    ivfpq_index->nprobe = chooseCpuOnDiskIvfProbeCount(nlist);
+
+    auto load_cached_feature = [&](size_t index_in_gallery) {
+        const auto found = std::lower_bound(training_indices.begin(), training_indices.end(), index_in_gallery);
+        if (found != training_indices.end() && *found == index_in_gallery)
+        {
+            const auto  training_index = static_cast<size_t>(std::distance(training_indices.begin(), found));
+            const auto *begin = training_features.data() + training_index * static_cast<size_t>(feature_dim);
+            return std::vector<float>(begin, begin + static_cast<size_t>(feature_dim));
+        }
+        return load_feature(index_in_gallery);
+    };
 
     batch_size = chooseCpuOnDiskIvfBuildBatchSize(batch_size, vector_count, feature_dim);
     for (size_t begin = 0; begin < vector_count; begin += batch_size)
     {
-        const size_t count       = std::min(batch_size, vector_count - begin);
-        const auto   features    = loadFeatureBatch(begin, count, feature_dim, load_feature);
-        const auto   assignments = assignFeatureBatchToCentroids(features, count, feature_dim, coarse_centroids, nlist);
-
-        std::vector<faiss::idx_t> ids(count);
-        for (size_t i = 0; i < count; ++i)
-        {
-            ids[i] = static_cast<faiss::idx_t>(begin + i);
-        }
-        ivfpq_index->add_core(static_cast<faiss::idx_t>(count), features.data(), ids.data(), assignments.data());
+        const size_t count    = std::min(batch_size, vector_count - begin);
+        const auto   features = loadFeatureBatch(begin, count, feature_dim, load_cached_feature);
+        ivfpq_index->add(static_cast<faiss::idx_t>(count), features.data());
     }
 
     return index;
