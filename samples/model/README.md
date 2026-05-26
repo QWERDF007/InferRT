@@ -147,6 +147,8 @@ Use the dedicated image search sample to build an image retrieval index from a g
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg
 build/bin/inferrt_sample_image_search.exe -w samples/model/classification/resnet18.wts -g assets/pics -q assets/pics/dog.jpg
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --topk 5 --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --faiss-backend cpu --index-storage disk --disk-build-batch-size 128 --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --norm l2 --preprocess-backend cpu --faiss-backend gpu --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet50.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model resnet50 --feature layer3
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/dinov2_vits14.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --index build/gallery/dinov2_vits14_x_norm_clstoken.faiss
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/dinov3_vitb16.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov3_vitb16 --feature x_norm_clstoken --index build/gallery/dinov3_vitb16_x_norm_clstoken.faiss
@@ -158,6 +160,11 @@ Behavior:
 - default model: `resnet18`
 - default feature tensor: `layer4`
 - `--model` and `--feature` can be used to switch to other built-in classification, ViT, and DINO feature tensors
+- `--norm` selects `l2`, `l1`, or `none`
+- `--preprocess-backend` selects `cpu` or `gpu`; GPU preprocessing is reserved and currently reports not implemented
+- `--faiss-backend` selects `cpu` or `gpu`
+- `--index-storage` selects `ram` or `disk` for CPU Faiss search; `disk` uses IVF with an on-disk inverted-list sidecar for large galleries; GPU Faiss currently keeps RAM behavior
+- `--disk-build-batch-size` controls CPU disk index build memory; default is `256`
 - default `top_k`: `5`
 - if the target Faiss index already exists, the sample reuses it by default
 - pass `--rebuild-index` to rescan the gallery and include newly added images

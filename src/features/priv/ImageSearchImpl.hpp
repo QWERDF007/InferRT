@@ -9,6 +9,9 @@
 
 namespace faiss {
 struct Index;
+namespace gpu {
+class StandardGpuResources;
+} // namespace gpu
 } // namespace faiss
 
 namespace irt::features {
@@ -29,10 +32,9 @@ class ImageSearch::Impl
 public:
     /**
      * @brief 构造实现对象。
-     * @param model_name 内置分类、ViT 或 DINO 模型名称。
-     * @param feature_name 用作检索向量的中间特征名。
+     * @param config 检索流程配置。
      */
-    Impl(std::string model_name, std::string feature_name);
+    explicit Impl(ImageSearchConfig config);
 
     /** @brief 析构实现对象。 */
     ~Impl();
@@ -47,7 +49,7 @@ public:
      * @brief 构建或加载图库索引。
      *
      * 当 ``rebuild_index`` 为 false 且索引文件及 ``.paths.txt`` 映射文件均存在时，
-     * 直接加载 Faiss 索引；否则扫描图库、提取 L2 归一化特征并重建索引。
+     * 直接加载 Faiss 索引；否则扫描图库、提取特征并按配置归一化后重建索引。
      *
      * @param weights_file 模型 ``.wts`` 权重文件路径。
      * @param gallery_dir 图库根目录。
@@ -71,17 +73,7 @@ public:
      */
     bool isReady() const noexcept;
 
-    /**
-     * @brief 获取当前模型名称。
-     * @return 构造时传入的模型名称。
-     */
-    const std::string &modelName() const noexcept;
-
-    /**
-     * @brief 获取当前特征名称。
-     * @return 构造时传入的中间特征名。
-     */
-    const std::string &featureName() const noexcept;
+    const ImageSearchConfig &config() const noexcept;
 
     /**
      * @brief 获取当前索引文件路径。
@@ -110,11 +102,7 @@ private:
      */
     void ensureExtractor();
 
-    ///< 检索模型名称。
-    std::string model_name_;
-
-    ///< 中间特征层名称。
-    std::string feature_name_;
+    ImageSearchConfig config_{};
 
     ///< 模型权重路径。
     std::filesystem::path weights_file_;
@@ -128,7 +116,10 @@ private:
     ///< 图库图片路径，与索引向量顺序一致。
     std::vector<std::filesystem::path> gallery_images_;
 
-    ///< Faiss 内积索引（``IndexFlatIP``）。
+    ///< GPU Faiss 资源；必须比 GPU 索引生命周期更长。
+    std::unique_ptr<faiss::gpu::StandardGpuResources> faiss_gpu_resources_;
+
+    ///< Faiss 内积索引（CPU ``IndexFlatIP`` 或 GPU ``GpuIndexFlatIP``）。
     std::unique_ptr<faiss::Index> index_;
 
     ///< 查询侧特征提取器；加载索引后可能为空直至首次检索。

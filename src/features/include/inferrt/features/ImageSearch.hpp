@@ -2,6 +2,7 @@
 
 #include <inferrt/features/Export.h>
 
+#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -9,44 +10,98 @@
 
 namespace irt::features {
 
+inline constexpr const char *kDefaultImageSearchModelName   = "resnet18";
+inline constexpr const char *kDefaultImageSearchFeatureName = "layer4";
+inline constexpr size_t      kDefaultImageSearchDiskBuildBatchSize = 256;
+
 /**
  * @brief 图像检索结果。
  */
 struct ImageSearchResult
 {
-    /// 与查询图片的相似度分数；当前实现使用 L2 归一化特征的内积。
+    /// 与查询图片的相似度分数；当前实现使用配置归一化后的特征内积。
     float score{0.0f};
 
     /// 命中的图库图片路径。
     std::filesystem::path image_path;
 };
 
+enum class ImageSearchPreprocessBackend
+{
+    /// 使用 OpenCV 与 CPU 完成图像预处理。
+    CPU,
+    /// 预留 GPU 预处理配置；当前尚未实现。
+    GPU,
+};
+
+enum class ImageSearchFeatureNorm
+{
+    /// 不对推理特征做归一化。
+    None,
+    /// 对推理特征做 L1 归一化。
+    L1,
+    /// 对推理特征做 L2 归一化。
+    L2,
+};
+
+enum class ImageSearchFaissBackend
+{
+    /// 使用 CPU Faiss 索引。
+    CPU,
+    /// 使用 GPU Faiss 索引。
+    GPU,
+};
+
+enum class ImageSearchIndexStorage
+{
+    /// 搜索时索引常驻内存。
+    RAM,
+    /// CPU Faiss 搜索时按需从磁盘读取索引。
+    Disk,
+};
+
+struct ImageSearchConfig
+{
+    ///< 内置分类、ViT 或 DINO 模型名称。
+    std::string model_name{kDefaultImageSearchModelName};
+    ///< 用作检索向量的中间特征名。
+    std::string feature_name{kDefaultImageSearchFeatureName};
+    ///< 预处理执行后端。
+    ImageSearchPreprocessBackend preprocess_backend{ImageSearchPreprocessBackend::CPU};
+    ///< 推理特征归一化方式。
+    ImageSearchFeatureNorm       norm{ImageSearchFeatureNorm::L2};
+    ///< Faiss 索引执行后端。
+    ImageSearchFaissBackend      faiss_backend{ImageSearchFaissBackend::CPU};
+    ///< Faiss 索引搜索存储位置；GPU Faiss 当前始终使用 RAM。
+    ImageSearchIndexStorage      index_storage{ImageSearchIndexStorage::RAM};
+    // CPU disk index build batch size.
+    size_t                       disk_build_batch_size{kDefaultImageSearchDiskBuildBatchSize};
+};
+
 /**
  * @brief 基于 InferRT 中间特征与 Faiss 的图像检索器。
  *
- * 该类负责从分类、ViT 或 DINO 模型的指定中间层提取 L2 归一化特征，构建或加载 Faiss
- * 内积索引，并对查询图片返回 Top-K 相似图片。索引会伴随保存路径映射文件，
+ * 该类负责从分类、ViT 或 DINO 模型的指定中间层提取特征，按配置做归一化，
+ * 构建或加载 Faiss 内积索引，并对查询图片返回 Top-K 相似图片。索引会伴随保存路径映射文件，
  * 因此后续运行可直接加载已有索引。
  */
 class INFERRT_FEATURES_API ImageSearch
 {
 public:
     /// 默认检索模型名称。
-    static constexpr const char *kDefaultModelName = "resnet18";
+    static constexpr const char *kDefaultModelName = kDefaultImageSearchModelName;
 
     /// 默认导出的中间特征名。
-    static constexpr const char *kDefaultFeatureName = "layer4";
+    static constexpr const char *kDefaultFeatureName = kDefaultImageSearchFeatureName;
 
     /// 默认返回的相似图片数量。
     static constexpr int kDefaultTopK = 5;
 
     /**
      * @brief 构造图像检索器。
-     * @param model_name 内置分类、ViT 或 DINO 模型名称。
-     * @param feature_name 用作检索向量的中间特征名。
+     * @param config 检索流程配置。
      */
-    explicit ImageSearch(std::string model_name = kDefaultModelName,
-                         std::string feature_name = kDefaultFeatureName);
+    explicit ImageSearch(ImageSearchConfig config = {});
 
     /**
      * @brief 析构图像检索器。
@@ -100,16 +155,10 @@ public:
     bool isReady() const noexcept;
 
     /**
-     * @brief 获取当前模型名称。
-     * @return 模型名称。
+     * @brief 获取当前检索流程配置。
+     * @return 构造时传入的配置。
      */
-    const std::string &modelName() const noexcept;
-
-    /**
-     * @brief 获取当前特征名称。
-     * @return 特征名称。
-     */
-    const std::string &featureName() const noexcept;
+    const ImageSearchConfig &config() const noexcept;
 
     /**
      * @brief 获取当前索引路径。

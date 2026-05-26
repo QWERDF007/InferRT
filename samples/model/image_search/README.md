@@ -14,8 +14,8 @@ cmake --build build --config Debug --target inferrt_sample_image_search
 ## Run
 
 ```bash
-build/bin/inferrt_sample_image_search.exe --weights-file <weights_file.wts> --gallery-dir <gallery_dir> --query-image <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--rebuild-index]
-build/bin/inferrt_sample_image_search.exe -w <weights_file.wts> -g <gallery_dir> -q <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--rebuild-index]
+build/bin/inferrt_sample_image_search.exe --weights-file <weights_file.wts> --gallery-dir <gallery_dir> --query-image <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--norm l2|l1|none] [--preprocess-backend cpu|gpu] [--faiss-backend cpu|gpu] [--index-storage ram|disk] [--disk-build-batch-size N] [--rebuild-index]
+build/bin/inferrt_sample_image_search.exe -w <weights_file.wts> -g <gallery_dir> -q <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--norm l2|l1|none] [--preprocess-backend cpu|gpu] [--faiss-backend cpu|gpu] [--index-storage ram|disk] [--disk-build-batch-size N] [--rebuild-index]
 build/bin/inferrt_sample_image_search.exe --help
 ```
 
@@ -27,6 +27,8 @@ build/bin/inferrt_sample_image_search.exe -w samples/model/classification/resnet
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --topk 5 --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --index build/gallery/resnet18_layer4.faiss
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet50.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model resnet50 --feature layer3
+build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --norm l2 --preprocess-backend cpu --faiss-backend cpu --index-storage disk --disk-build-batch-size 128 --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --norm l2 --preprocess-backend cpu --faiss-backend gpu --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/dinov2_vits14.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --index build/gallery/dinov2_vits14_x_norm_clstoken.faiss
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/dinov3_vitb16.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov3_vitb16 --feature x_norm_clstoken --index build/gallery/dinov3_vitb16_x_norm_clstoken.faiss
 ```
@@ -45,6 +47,11 @@ Use `--rebuild-index` when the gallery directory has changed and you want to inc
 
 - `--model`: selects the built-in classification model, default is `resnet18`
 - `--feature`: selects the feature tensor name used for retrieval, default is `layer4`
+- `--norm`: selects feature normalization, one of `l2`, `l1`, `none`; default is `l2`
+- `--preprocess-backend`: selects preprocessing backend, one of `cpu`, `gpu`; default is `cpu`; GPU preprocessing is reserved and currently reports not implemented
+- `--faiss-backend`: selects Faiss backend, one of `cpu`, `gpu`; default is `cpu`
+- `--index-storage`: selects CPU Faiss search storage, one of `ram`, `disk`; default is `ram`; `disk` uses IVF with an on-disk inverted-list sidecar for large galleries; GPU Faiss currently keeps the default RAM behavior
+- `--disk-build-batch-size`: controls the batch size used while building CPU disk indexes; default is `256`; lower it to reduce peak RAM during build
 - if `--index` is omitted, the sample writes `<gallery_dir>/<model>_<feature>.faiss`
 - DINO models use the engine input size during preprocessing, so `dinov2_vits14` runs at its registered `518x518` default and `dinov3_*` official keys run at `224x224` unless the model config is overridden.
 
@@ -65,5 +72,6 @@ Patch-token features can also be indexed, but they flatten to much larger vector
 Generated files:
 
 - `*.faiss`: Faiss index file
+- `*.faiss.ivfdata`: CPU disk inverted-list sidecar
 - `*.faiss.paths.txt`: line-by-line mapping from Faiss vector ids to image paths
 - `*.faiss.meta.txt`: simple metadata about the sample configuration

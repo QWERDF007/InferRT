@@ -3,6 +3,9 @@
 #include <inferrt/features/ImageSearch.hpp>
 #include <inferrt/model/IModel.h>
 
+#include <algorithm>
+#include <cctype>
+#include <cstddef>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -23,15 +26,135 @@ struct HelpRequested
  */
 struct Arguments
 {
-    std::string model_name{irt::features::ImageSearch::kDefaultModelName};
-    std::string feature_name{irt::features::ImageSearch::kDefaultFeatureName};
     fs::path    weights_file;
     fs::path    gallery_dir;
     fs::path    query_image;
     fs::path    index_file;
+    irt::features::ImageSearchConfig config;
     int         top_k{irt::features::ImageSearch::kDefaultTopK};
     bool        rebuild_index{false};
 };
+
+std::string toLower(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
+
+irt::features::ImageSearchFeatureNorm parseNorm(std::string value)
+{
+    value = toLower(std::move(value));
+    if (value == "none")
+    {
+        return irt::features::ImageSearchFeatureNorm::None;
+    }
+    if (value == "l1")
+    {
+        return irt::features::ImageSearchFeatureNorm::L1;
+    }
+    if (value == "l2")
+    {
+        return irt::features::ImageSearchFeatureNorm::L2;
+    }
+
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported norm mode: %s", value.c_str());
+}
+
+irt::features::ImageSearchPreprocessBackend parsePreprocessBackend(std::string value)
+{
+    value = toLower(std::move(value));
+    if (value == "cpu")
+    {
+        return irt::features::ImageSearchPreprocessBackend::CPU;
+    }
+    if (value == "gpu")
+    {
+        return irt::features::ImageSearchPreprocessBackend::GPU;
+    }
+
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported preprocess backend: %s", value.c_str());
+}
+
+irt::features::ImageSearchFaissBackend parseFaissBackend(std::string value)
+{
+    value = toLower(std::move(value));
+    if (value == "cpu")
+    {
+        return irt::features::ImageSearchFaissBackend::CPU;
+    }
+    if (value == "gpu")
+    {
+        return irt::features::ImageSearchFaissBackend::GPU;
+    }
+
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported Faiss backend: %s", value.c_str());
+}
+
+irt::features::ImageSearchIndexStorage parseIndexStorage(std::string value)
+{
+    value = toLower(std::move(value));
+    if (value == "ram")
+    {
+        return irt::features::ImageSearchIndexStorage::RAM;
+    }
+    if (value == "disk")
+    {
+        return irt::features::ImageSearchIndexStorage::Disk;
+    }
+
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported index storage: %s", value.c_str());
+}
+
+const char *normName(irt::features::ImageSearchFeatureNorm norm)
+{
+    switch (norm)
+    {
+    case irt::features::ImageSearchFeatureNorm::None:
+        return "none";
+    case irt::features::ImageSearchFeatureNorm::L1:
+        return "l1";
+    case irt::features::ImageSearchFeatureNorm::L2:
+        return "l2";
+    }
+    return "unknown";
+}
+
+const char *preprocessBackendName(irt::features::ImageSearchPreprocessBackend backend)
+{
+    switch (backend)
+    {
+    case irt::features::ImageSearchPreprocessBackend::CPU:
+        return "cpu";
+    case irt::features::ImageSearchPreprocessBackend::GPU:
+        return "gpu";
+    }
+    return "unknown";
+}
+
+const char *faissBackendName(irt::features::ImageSearchFaissBackend backend)
+{
+    switch (backend)
+    {
+    case irt::features::ImageSearchFaissBackend::CPU:
+        return "cpu";
+    case irt::features::ImageSearchFaissBackend::GPU:
+        return "gpu";
+    }
+    return "unknown";
+}
+
+const char *indexStorageName(irt::features::ImageSearchIndexStorage storage)
+{
+    switch (storage)
+    {
+    case irt::features::ImageSearchIndexStorage::RAM:
+        return "ram";
+    case irt::features::ImageSearchIndexStorage::Disk:
+        return "disk";
+    }
+    return "unknown";
+}
 
 /**
  * @brief 构造命令行选项定义。
@@ -51,6 +174,13 @@ cxxopts::Options makeOptions(const char *program_name)
         "topk", "Top-k nearest results",
         cxxopts::value<int>()->default_value(std::to_string(irt::features::ImageSearch::kDefaultTopK)))(
         "index", "Faiss index path", cxxopts::value<std::string>()->default_value(""))(
+        "norm", "Feature norm mode: none, l1, l2", cxxopts::value<std::string>()->default_value("l2"))(
+        "preprocess-backend", "Preprocess backend: cpu, gpu", cxxopts::value<std::string>()->default_value("cpu"))(
+        "faiss-backend", "Faiss backend: cpu, gpu", cxxopts::value<std::string>()->default_value("cpu"))(
+        "index-storage", "Index storage for CPU Faiss search: ram, disk",
+        cxxopts::value<std::string>()->default_value("ram"))(
+        "disk-build-batch-size", "Batch size used while building CPU disk indexes",
+        cxxopts::value<size_t>()->default_value(std::to_string(irt::features::kDefaultImageSearchDiskBuildBatchSize)))(
         "rebuild-index", "Force rebuild of the Faiss index")("h,help", "Show help");
     return options;
 }
@@ -71,6 +201,9 @@ Arguments parseArguments(int argc, char *argv[])
         std::cout << "Default model: " << irt::features::ImageSearch::kDefaultModelName << std::endl;
         std::cout << "Default feature tensor: " << irt::features::ImageSearch::kDefaultFeatureName << std::endl;
         std::cout << "Default top-k: " << irt::features::ImageSearch::kDefaultTopK << std::endl;
+        std::cout << "Default config: --norm l2 --preprocess-backend cpu --faiss-backend cpu --index-storage ram"
+                  << " --disk-build-batch-size " << irt::features::kDefaultImageSearchDiskBuildBatchSize
+                  << std::endl;
         std::cout << "If --index is omitted, the sample uses <gallery_dir>/<model>_<feature>.faiss" << std::endl;
         std::cout << "DINO feature hint: use x_norm_clstoken for compact image-level retrieval" << std::endl;
         std::cout << "Supported models:";
@@ -89,23 +222,29 @@ Arguments parseArguments(int argc, char *argv[])
     }
 
     Arguments args;
-    args.model_name    = result["model"].as<std::string>();
-    args.feature_name  = result["feature"].as<std::string>();
-    args.weights_file  = result["weights-file"].as<std::string>();
-    args.gallery_dir   = result["gallery-dir"].as<std::string>();
-    args.query_image   = result["query-image"].as<std::string>();
-    args.index_file    = result["index"].as<std::string>();
-    args.top_k         = result["topk"].as<int>();
-    args.rebuild_index = result.count("rebuild-index") > 0;
+    args.weights_file               = result["weights-file"].as<std::string>();
+    args.gallery_dir                = result["gallery-dir"].as<std::string>();
+    args.query_image                = result["query-image"].as<std::string>();
+    args.index_file                 = result["index"].as<std::string>();
+    args.top_k                      = result["topk"].as<int>();
+    args.config.model_name          = result["model"].as<std::string>();
+    args.config.feature_name        = result["feature"].as<std::string>();
+    args.config.norm                = parseNorm(result["norm"].as<std::string>());
+    args.config.preprocess_backend = parsePreprocessBackend(result["preprocess-backend"].as<std::string>());
+    args.config.faiss_backend      = parseFaissBackend(result["faiss-backend"].as<std::string>());
+    args.config.index_storage      = parseIndexStorage(result["index-storage"].as<std::string>());
+    args.config.disk_build_batch_size = result["disk-build-batch-size"].as<size_t>();
+    args.rebuild_index              = result.count("rebuild-index") > 0;
 
     if (args.top_k <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "top_k must be positive");
     }
 
-    if (!irt::model::isSupportedModel(args.model_name))
+    if (!irt::model::isSupportedModel(args.config.model_name))
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported model: %s", args.model_name.c_str());
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported model: %s",
+                             args.config.model_name.c_str());
     }
 
     return args;
@@ -125,12 +264,18 @@ int main(int argc, char *argv[])
     {
         const auto args = parseArguments(argc, argv);
 
-        irt::features::ImageSearch searcher(args.model_name, args.feature_name);
+        irt::features::ImageSearch searcher(args.config);
         searcher.buildOrLoad(args.weights_file, args.gallery_dir, args.index_file, args.rebuild_index);
         const auto results = searcher.search(args.query_image, args.top_k);
 
         std::cout << "Query image: " << fs::absolute(args.query_image).string() << std::endl;
-        std::cout << "Model: " << searcher.modelName() << ", feature tensor: " << searcher.featureName() << std::endl;
+        std::cout << "Model: " << searcher.config().model_name
+                  << ", feature tensor: " << searcher.config().feature_name << std::endl;
+        std::cout << "Config: norm=" << normName(searcher.config().norm)
+                  << ", preprocess=" << preprocessBackendName(searcher.config().preprocess_backend)
+                  << ", faiss=" << faissBackendName(searcher.config().faiss_backend)
+                  << ", index_storage=" << indexStorageName(searcher.config().index_storage)
+                  << ", disk_build_batch_size=" << searcher.config().disk_build_batch_size << std::endl;
         std::cout << "Index: " << fs::absolute(searcher.indexPath()).string() << std::endl;
         std::cout << "Top " << results.size() << " similar images:" << std::endl;
 

@@ -10,4 +10,11 @@ add_inferrt_test(features
         inferrt_core
         inferrt_features
         inferrt_model
+        ${Faiss_LIBS}
+)
+
+target_include_directories(${PROJECT_NAME_LOWER}_test_features
+    PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/features/priv
+        ${Faiss_INCLUDE_DIRS}
 )

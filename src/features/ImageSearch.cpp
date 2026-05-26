@@ -49,8 +49,8 @@ std::string sanitizeFileStem(std::string_view value)
 
 } // namespace
 
-ImageSearch::ImageSearch(std::string model_name, std::string feature_name)
-    : impl_(std::make_unique<Impl>(std::move(model_name), std::move(feature_name)))
+ImageSearch::ImageSearch(ImageSearchConfig config)
+    : impl_(std::make_unique<Impl>(std::move(config)))
 {
 }
 
@@ -76,14 +76,9 @@ bool ImageSearch::isReady() const noexcept
     return impl_ && impl_->isReady();
 }
 
-const std::string &ImageSearch::modelName() const noexcept
+const ImageSearchConfig &ImageSearch::config() const noexcept
 {
-    return impl_->modelName();
-}
-
-const std::string &ImageSearch::featureName() const noexcept
-{
-    return impl_->featureName();
+    return impl_->config();
 }
 
 const fs::path &ImageSearch::indexPath() const noexcept
