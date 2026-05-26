@@ -11,9 +11,7 @@
 
 #pragma warning(push)
 #pragma warning(disable : 4244)
-#include <faiss/IndexFlat.h>
 #include <faiss/gpu/GpuCloner.h>
-#include <faiss/gpu/GpuIndexFlat.h>
 #include <faiss/gpu/StandardGpuResources.h>
 #include <faiss/index_io.h>
 #pragma warning(pop)
@@ -194,22 +192,10 @@ bool useCpuDiskIndex(const ImageSearchConfig &config)
         && config.index_storage == ImageSearchIndexStorage::Disk;
 }
 
-/** @brief 返回写入元数据的索引类型标识（``flat_ip`` 或 ``ivf_flat_ondisk``）。 */
+/** @brief 返回写入元数据的索引类型标识。 */
 const char *indexKindName(const ImageSearchConfig &config)
 {
-    return useCpuDiskIndex(config) ? "ivf_flat_ondisk" : "flat_ip";
-}
-
-/**
- * @brief 判断配置是否与库内默认检索参数一致。
- * @param config 待检查配置。
- */
-bool isDefaultConfig(const ImageSearchConfig &config)
-{
-    return config.model_name == ImageSearch::kDefaultModelName
-        && config.feature_name == ImageSearch::kDefaultFeatureName
-        && config.preprocess_backend == ImageSearchPreprocessBackend::CPU && config.norm == ImageSearchFeatureNorm::L2
-        && config.faiss_backend == ImageSearchFaissBackend::CPU && config.index_storage == ImageSearchIndexStorage::RAM;
+    return useCpuDiskIndex(config) ? "ivf_flat_ondisk" : "ivf_pq_ram";
 }
 
 /**
@@ -276,36 +262,6 @@ int currentCudaDevice()
 }
 
 /**
- * @brief 创建空的 Faiss 内积平面索引（CPU 或 GPU）。
- * @param feature_dim 特征维度。
- * @param backend Faiss 执行后端。
- * @return 已分配、尚未添加向量的索引包。
- */
-FaissIndexBundle createEmptyFaissIndex(int feature_dim, ImageSearchFaissBackend backend)
-{
-    FaissIndexBundle bundle;
-    switch (backend)
-    {
-    case ImageSearchFaissBackend::CPU:
-        bundle.index = std::make_unique<faiss::IndexFlatIP>(feature_dim);
-        break;
-    case ImageSearchFaissBackend::GPU:
-    {
-        bundle.gpu_resources = std::make_unique<faiss::gpu::StandardGpuResources>();
-        faiss::gpu::GpuIndexFlatConfig gpu_config;
-        gpu_config.device = currentCudaDevice();
-        bundle.index
-            = std::make_unique<faiss::gpu::GpuIndexFlatIP>(bundle.gpu_resources.get(), feature_dim, gpu_config);
-        break;
-    }
-    default:
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported ImageSearch Faiss backend");
-    }
-
-    return bundle;
-}
-
-/**
  * @brief 将磁盘读入的 CPU 索引迁移到配置指定的后端。
  * @param cpu_index 从文件加载的 CPU 索引。
  * @param backend 目标 Faiss 后端。
@@ -329,6 +285,7 @@ FaissIndexBundle moveCpuIndexToConfiguredBackend(std::unique_ptr<faiss::Index> c
     {
         bundle.gpu_resources = std::make_unique<faiss::gpu::StandardGpuResources>();
         faiss::gpu::GpuClonerOptions options;
+        options.useFloat16 = true;
         bundle.index.reset(
             faiss::gpu::index_cpu_to_gpu(bundle.gpu_resources.get(), currentCudaDevice(), cpu_index.get(), &options));
         if (!bundle.index)
@@ -342,34 +299,6 @@ FaissIndexBundle moveCpuIndexToConfiguredBackend(std::unique_ptr<faiss::Index> c
     }
 
     return bundle;
-}
-
-/**
- * @brief 将 Faiss 索引序列化到磁盘（GPU 索引会先克隆到 CPU 再写入）。
- * @param index 待保存索引。
- * @param backend 索引当前所在后端。
- * @param index_path 输出 ``.faiss`` 路径。
- */
-void writeIndex(const faiss::Index &index, ImageSearchFaissBackend backend, const fs::path &index_path)
-{
-    switch (backend)
-    {
-    case ImageSearchFaissBackend::CPU:
-        faiss::write_index(&index, index_path.string().c_str());
-        break;
-    case ImageSearchFaissBackend::GPU:
-    {
-        auto cpu_index = std::unique_ptr<faiss::Index>(faiss::gpu::index_gpu_to_cpu(&index));
-        if (!cpu_index)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to clone Faiss GPU index to CPU");
-        }
-        faiss::write_index(cpu_index.get(), index_path.string().c_str());
-        break;
-    }
-    default:
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported ImageSearch Faiss backend");
-    }
 }
 
 /**
@@ -519,11 +448,7 @@ bool metadataIndexKindEquals(const std::unordered_map<std::string, std::string> 
                              const ImageSearchConfig                            &config)
 {
     const auto it = metadata.find("index_kind");
-    if (useCpuDiskIndex(config))
-    {
-        return it != metadata.end() && it->second == indexKindName(config);
-    }
-    return it == metadata.end() || it->second == indexKindName(config);
+    return it != metadata.end() && it->second == indexKindName(config);
 }
 
 /**
@@ -537,13 +462,13 @@ bool existingIndexMatchesConfig(const fs::path &index_path, const fs::path &gall
     const fs::path metadata_path = metadataPathFromIndex(index_path);
     if (!fs::exists(metadata_path))
     {
-        return isDefaultConfig(config);
+        return false;
     }
 
     const auto metadata = loadMetadata(metadata_path);
     if (metadata.empty())
     {
-        return isDefaultConfig(config);
+        return false;
     }
 
     return metadataValueEquals(metadata, "model", model_name) && metadataValueEquals(metadata, "feature", feature_name)
@@ -750,7 +675,27 @@ FaissIndexBundle buildCpuOnDiskIndex(const std::vector<fs::path>       &gallery_
 }
 
 /**
- * @brief 按配置构建 Faiss 索引（内存 Flat 或 CPU 磁盘 IVF）。
+ * @brief 构建内存 IVF-PQ 压缩索引，并按配置保留在 CPU 或迁移到 GPU。
+ */
+FaissIndexBundle buildRamIvfPqIndex(const std::vector<fs::path>       &gallery_images,
+                                    priv::ImageSearchFeatureExtractor &extractor,
+                                    const fs::path                    &index_path,
+                                    const ImageSearchConfig           &config)
+{
+    auto cpu_index = priv::buildRamIvfPqIndex(gallery_images.size(), extractor.featureDim(),
+                                              config.disk_build_batch_size,
+                                              [&](size_t index)
+                                              { return extractor.extract(gallery_images[index]); });
+
+    faiss::write_index(cpu_index.get(), index_path.string().c_str());
+    savePathMapping(mappingPathFromIndex(index_path), gallery_images);
+
+    auto bundle = moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend);
+    return bundle;
+}
+
+/**
+ * @brief 按配置构建 Faiss 索引（内存 IVF-PQ 或 CPU 磁盘 IVF）。
  */
 FaissIndexBundle buildIndex(const std::vector<fs::path> &gallery_images, priv::ImageSearchFeatureExtractor &extractor,
                             const fs::path &index_path, const ImageSearchConfig &config)
@@ -760,17 +705,7 @@ FaissIndexBundle buildIndex(const std::vector<fs::path> &gallery_images, priv::I
         return buildCpuOnDiskIndex(gallery_images, extractor, index_path, config);
     }
 
-    auto bundle = createEmptyFaissIndex(extractor.featureDim(), config.faiss_backend);
-
-    for (const auto &image_path : gallery_images)
-    {
-        const auto feature = extractor.extract(image_path);
-        bundle.index->add(1, feature.data());
-    }
-
-    writeIndex(*bundle.index, config.faiss_backend, index_path);
-    savePathMapping(mappingPathFromIndex(index_path), gallery_images);
-    return bundle;
+    return buildRamIvfPqIndex(gallery_images, extractor, index_path, config);
 }
 
 /**

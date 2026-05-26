@@ -128,7 +128,7 @@ private:
     ///< GPU Faiss 资源；必须比 GPU 索引生命周期更长。
     std::unique_ptr<faiss::gpu::StandardGpuResources> faiss_gpu_resources_;
 
-    ///< Faiss 内积索引（CPU ``IndexFlatIP`` 或 GPU ``GpuIndexFlatIP``）。
+    ///< Faiss 内积索引（RAM ``IndexIVFPQ``/GPU clone 或 CPU 磁盘 IVF）。
     std::unique_ptr<faiss::Index> index_;
 
     ///< 查询侧特征提取器；加载索引后可能为空直至首次检索。

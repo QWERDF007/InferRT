@@ -13,13 +13,14 @@
 #include <faiss/IndexFlat.h>
 #include <faiss/IndexIVF.h>
 #include <faiss/IndexIVFFlat.h>
+#include <faiss/IndexIVFPQ.h>
 #include <faiss/index_io.h>
 #pragma warning(pop)
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -31,19 +32,19 @@
 #include <vector>
 
 #ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#ifdef ERROR_INVALID_ARGUMENT
-#undef ERROR_INVALID_ARGUMENT
-#endif
-#ifdef ERROR_INVALID_OPERATION
-#undef ERROR_INVALID_OPERATION
-#endif
-#ifdef ERROR_NOT_IMPLEMENTED
-#undef ERROR_NOT_IMPLEMENTED
-#endif
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
+#    include <windows.h>
+#    ifdef ERROR_INVALID_ARGUMENT
+#        undef ERROR_INVALID_ARGUMENT
+#    endif
+#    ifdef ERROR_INVALID_OPERATION
+#        undef ERROR_INVALID_OPERATION
+#    endif
+#    ifdef ERROR_NOT_IMPLEMENTED
+#        undef ERROR_NOT_IMPLEMENTED
+#    endif
 #endif
 
 namespace irt::features::priv {
@@ -114,8 +115,7 @@ public:
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to open Faiss on-disk data: %s",
                                  path.string().c_str());
         }
-        owned_data_ = std::vector<uint8_t>(std::istreambuf_iterator<char>(input),
-                                           std::istreambuf_iterator<char>());
+        owned_data_ = std::vector<uint8_t>(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
         if (owned_data_.empty())
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Invalid Faiss on-disk data file: %s",
@@ -135,7 +135,7 @@ public:
     }
 
     /** @brief 禁止拷贝构造。 */
-    MappedFile(const MappedFile &)            = delete;
+    MappedFile(const MappedFile &) = delete;
     /** @brief 禁止拷贝赋值。 */
     MappedFile &operator=(const MappedFile &) = delete;
 
@@ -233,7 +233,7 @@ inline size_t alignUp(size_t value, size_t alignment)
  * @return 读取到的值。
  * @throws irt::Exception 越界时抛出。
  */
-template <typename T>
+template<typename T>
 T readMappedValue(const MappedFile &mapped_file, size_t offset)
 {
     if (offset + sizeof(T) > mapped_file.size())
@@ -338,8 +338,8 @@ public:
     }
 
 private:
-    MappedFile                        mapped_file_;  ///< 倒排列表数据文件的映射视图。
-    std::vector<CpuOnDiskIvfListMeta> list_meta_;    ///< 各倒排列表的偏移与大小元数据。
+    MappedFile                        mapped_file_;    ///< 倒排列表数据文件的映射视图。
+    std::vector<CpuOnDiskIvfListMeta> list_meta_;      ///< 各倒排列表的偏移与大小元数据。
     size_t                            entry_count_{0}; ///< 向量总数缓存。
 };
 
@@ -375,11 +375,8 @@ inline void writeAt(std::fstream &output, uint64_t offset, const void *data, siz
  * @param load_feature 按下标返回单条特征的回调。
  * @return 长度为 ``count * feature_dim`` 的拼接特征。
  */
-inline std::vector<float> loadFeatureBatch(
-    size_t begin,
-    size_t count,
-    int feature_dim,
-    const std::function<std::vector<float>(size_t)> &load_feature)
+inline std::vector<float> loadFeatureBatch(size_t begin, size_t count, int feature_dim,
+                                           const std::function<std::vector<float>(size_t)> &load_feature)
 {
     std::vector<float> features;
     features.reserve(count * static_cast<size_t>(feature_dim));
@@ -404,14 +401,12 @@ inline std::vector<float> loadFeatureBatch(
  * @param nlist IVF 列表数量。
  * @return 每条特征对应的列表编号。
  */
-inline std::vector<faiss::idx_t> assignFeatureBatchToCentroids(const std::vector<float> &features,
-                                                               size_t count,
-                                                               int feature_dim,
-                                                               const std::vector<float> &centroids,
+inline std::vector<faiss::idx_t> assignFeatureBatchToCentroids(const std::vector<float> &features, size_t count,
+                                                               int feature_dim, const std::vector<float> &centroids,
                                                                size_t nlist)
 {
     std::vector<faiss::idx_t> assignments(count);
-    const auto dim = static_cast<size_t>(feature_dim);
+    const auto                dim = static_cast<size_t>(feature_dim);
     for (size_t row = 0; row < count; ++row)
     {
         const float *feature = features.data() + row * dim;
@@ -443,7 +438,7 @@ inline std::vector<faiss::idx_t> assignFeatureBatchToCentroids(const std::vector
  * @return 与 ``list_sizes`` 等长的元数据数组。
  */
 inline std::vector<CpuOnDiskIvfListMeta> makeCpuOnDiskIvfListMeta(const std::vector<uint64_t> &list_sizes,
-                                                                  size_t code_size)
+                                                                  size_t                       code_size)
 {
     std::vector<CpuOnDiskIvfListMeta> list_meta(list_sizes.size());
     size_t offset = sizeof(CpuOnDiskIvfHeader) + list_meta.size() * sizeof(CpuOnDiskIvfListMeta);
@@ -451,9 +446,9 @@ inline std::vector<CpuOnDiskIvfListMeta> makeCpuOnDiskIvfListMeta(const std::vec
 
     for (size_t list_no = 0; list_no < list_sizes.size(); ++list_no)
     {
-        auto &meta       = list_meta[list_no];
-        meta.size        = list_sizes[list_no];
-        meta.ids_offset  = static_cast<uint64_t>(offset);
+        auto &meta      = list_meta[list_no];
+        meta.size       = list_sizes[list_no];
+        meta.ids_offset = static_cast<uint64_t>(offset);
         offset += static_cast<size_t>(meta.size) * sizeof(faiss::idx_t);
         offset            = alignUp(offset, alignof(float));
         meta.codes_offset = static_cast<uint64_t>(offset);
@@ -481,10 +476,8 @@ inline size_t cpuOnDiskIvfDataFileSize(const std::vector<CpuOnDiskIvfListMeta> &
 /**
  * @brief 预分配并写入 ``.ivfdata`` 文件头与列表元数据区。
  */
-inline void initializeCpuOnDiskIvfDataFile(const std::filesystem::path &data_path,
-                                           const CpuOnDiskIvfHeader &header,
-                                           const std::vector<CpuOnDiskIvfListMeta> &list_meta,
-                                           size_t file_size)
+inline void initializeCpuOnDiskIvfDataFile(const std::filesystem::path &data_path, const CpuOnDiskIvfHeader &header,
+                                           const std::vector<CpuOnDiskIvfListMeta> &list_meta, size_t file_size)
 {
     std::ofstream output(data_path, std::ios::binary | std::ios::trunc);
     if (!output)
@@ -515,14 +508,10 @@ inline size_t chooseCpuOnDiskIvfBuildBatchSize(size_t requested_batch_size, size
 /**
  * @brief 分两趟扫描图库：先统计各 IVF 列表大小，再分批写入 ID 与编码到 ``.ivfdata``。
  */
-inline void writeCpuOnDiskIvfDataFileBatched(
-    const faiss::IndexIVF &index,
-    size_t vector_count,
-    int feature_dim,
-    const std::filesystem::path &data_path,
-    const std::vector<float> &centroids,
-    size_t batch_size,
-    const std::function<std::vector<float>(size_t)> &load_feature)
+inline void writeCpuOnDiskIvfDataFileBatched(const faiss::IndexIVF &index, size_t vector_count, int feature_dim,
+                                             const std::filesystem::path &data_path,
+                                             const std::vector<float> &centroids, size_t batch_size,
+                                             const std::function<std::vector<float>(size_t)> &load_feature)
 {
     if (batch_size == 0)
     {
@@ -545,8 +534,7 @@ inline void writeCpuOnDiskIvfDataFileBatched(
     {
         const size_t count       = std::min(batch_size, vector_count - begin);
         const auto   features    = loadFeatureBatch(begin, count, feature_dim, load_feature);
-        const auto   assignments =
-            assignFeatureBatchToCentroids(features, count, feature_dim, centroids, index.nlist);
+        const auto   assignments = assignFeatureBatchToCentroids(features, count, feature_dim, centroids, index.nlist);
         for (const auto list_no : assignments)
         {
             ++list_sizes[static_cast<size_t>(list_no)];
@@ -559,8 +547,7 @@ inline void writeCpuOnDiskIvfDataFileBatched(
     header.ntotal    = static_cast<uint64_t>(vector_count);
 
     const auto list_meta = makeCpuOnDiskIvfListMeta(list_sizes, index.code_size);
-    initializeCpuOnDiskIvfDataFile(data_path, header, list_meta,
-                                   cpuOnDiskIvfDataFileSize(list_meta, index.code_size));
+    initializeCpuOnDiskIvfDataFile(data_path, header, list_meta, cpuOnDiskIvfDataFileSize(list_meta, index.code_size));
 
     std::fstream output(data_path, std::ios::binary | std::ios::in | std::ios::out);
     if (!output)
@@ -574,8 +561,7 @@ inline void writeCpuOnDiskIvfDataFileBatched(
     {
         const size_t count       = std::min(batch_size, vector_count - begin);
         const auto   features    = loadFeatureBatch(begin, count, feature_dim, load_feature);
-        const auto   assignments =
-            assignFeatureBatchToCentroids(features, count, feature_dim, centroids, index.nlist);
+        const auto   assignments = assignFeatureBatchToCentroids(features, count, feature_dim, centroids, index.nlist);
 
         std::vector<std::pair<faiss::idx_t, size_t>> ordered;
         ordered.reserve(count);
@@ -588,7 +574,7 @@ inline void writeCpuOnDiskIvfDataFileBatched(
 
         for (size_t group_begin = 0; group_begin < ordered.size();)
         {
-            const auto list_no = ordered[group_begin].first;
+            const auto list_no   = ordered[group_begin].first;
             size_t     group_end = group_begin + 1;
             while (group_end < ordered.size() && ordered[group_end].first == list_no)
             {
@@ -605,10 +591,9 @@ inline void writeCpuOnDiskIvfDataFileBatched(
             for (size_t i = 0; i < group_count; ++i)
             {
                 const size_t batch_index = ordered[group_begin + i].second;
-                ids[i] = static_cast<faiss::idx_t>(begin + batch_index);
+                ids[i]                   = static_cast<faiss::idx_t>(begin + batch_index);
                 std::copy_n(features.data() + batch_index * static_cast<size_t>(feature_dim),
-                            static_cast<size_t>(feature_dim),
-                            codes.data() + i * static_cast<size_t>(feature_dim));
+                            static_cast<size_t>(feature_dim), codes.data() + i * static_cast<size_t>(feature_dim));
             }
 
             writeAt(output, meta.ids_offset + entry_start * sizeof(faiss::idx_t), ids.data(),
@@ -672,7 +657,7 @@ inline size_t chooseCpuOnDiskIvfListCount(size_t vector_count)
         return 1;
     }
 
-    const auto by_sqrt = static_cast<size_t>(std::sqrt(static_cast<double>(vector_count)));
+    const auto by_sqrt          = static_cast<size_t>(std::sqrt(static_cast<double>(vector_count)));
     const auto by_training_size = std::max<size_t>(1, vector_count / 64);
     return std::max<size_t>(1, std::min<size_t>({vector_count, by_sqrt, by_training_size, 4096}));
 }
@@ -680,9 +665,9 @@ inline size_t chooseCpuOnDiskIvfListCount(size_t vector_count)
 /// IVF 训练阶段最多采样的向量条数。
 inline constexpr size_t kCpuOnDiskIvfMaxTrainingVectors = 8192;
 /// IVF 训练特征缓冲区的最大字节数（512 MiB）。
-inline constexpr size_t kCpuOnDiskIvfMaxTrainingBytes   = 512ULL * 1024ULL * 1024ULL;
+inline constexpr size_t kCpuOnDiskIvfMaxTrainingBytes = 512ULL * 1024ULL * 1024ULL;
 /// 磁盘构建批特征缓冲区的最大字节数（256 MiB）。
-inline constexpr size_t kCpuOnDiskIvfMaxBatchBytes      = 256ULL * 1024ULL * 1024ULL;
+inline constexpr size_t kCpuOnDiskIvfMaxBatchBytes = 256ULL * 1024ULL * 1024ULL;
 
 /**
  * @brief 在给定字节预算下，计算可一次性缓冲的向量条数上限。
@@ -734,20 +719,75 @@ inline size_t chooseCpuOnDiskIvfBuildBatchSize(size_t requested_batch_size, size
 /**
  * @brief 从训练特征中均匀采样生成 IVF 量化器初始聚类中心。
  */
-inline std::vector<float> makeCpuOnDiskIvfCentroids(const std::vector<float> &training_features,
-                                                    size_t training_count,
-                                                    int feature_dim,
-                                                    size_t nlist)
+inline std::vector<float> makeCpuOnDiskIvfCentroids(const std::vector<float> &training_features, size_t training_count,
+                                                    int feature_dim, size_t nlist)
 {
     std::vector<float> centroids(nlist * static_cast<size_t>(feature_dim));
     for (size_t list_index = 0; list_index < nlist; ++list_index)
     {
         const size_t source_index = nlist == 1 ? 0 : (list_index * (training_count - 1)) / (nlist - 1);
         std::copy_n(training_features.data() + source_index * static_cast<size_t>(feature_dim),
-                    static_cast<size_t>(feature_dim),
-                    centroids.data() + list_index * static_cast<size_t>(feature_dim));
+                    static_cast<size_t>(feature_dim), centroids.data() + list_index * static_cast<size_t>(feature_dim));
     }
     return centroids;
+}
+
+inline constexpr size_t kRamIvfPqMaxSubQuantizers = 64;
+inline constexpr size_t kRamIvfPqBitsPerCode      = 8;
+
+inline size_t chooseRamIvfPqSubQuantizerCount(int feature_dim)
+{
+    if (feature_dim <= 0)
+    {
+        return 1;
+    }
+
+    const auto dim = static_cast<size_t>(feature_dim);
+    for (size_t candidate = std::min(kRamIvfPqMaxSubQuantizers, dim); candidate > 1; --candidate)
+    {
+        if (dim % candidate == 0)
+        {
+            return candidate;
+        }
+    }
+    return 1;
+}
+
+inline std::vector<float> makeRamIvfPqCentroids(const std::vector<float> &training_features, size_t training_count,
+                                                int feature_dim, size_t sub_quantizers, size_t bits_per_code)
+{
+    const auto dim  = static_cast<size_t>(feature_dim);
+    const auto dsub = dim / sub_quantizers;
+    const auto ksub = size_t{1} << bits_per_code;
+
+    std::vector<float> centroids(sub_quantizers * ksub * dsub);
+    for (size_t sub = 0; sub < sub_quantizers; ++sub)
+    {
+        for (size_t centroid_no = 0; centroid_no < ksub; ++centroid_no)
+        {
+            const size_t source_index = ksub == 1 ? 0 : (centroid_no * (training_count - 1)) / (ksub - 1);
+            std::copy_n(training_features.data() + source_index * dim + sub * dsub, dsub,
+                        centroids.data() + (sub * ksub + centroid_no) * dsub);
+        }
+    }
+    return centroids;
+}
+
+inline std::vector<float> makeResidualFeatures(const std::vector<float> &features,
+                                               const std::vector<faiss::idx_t> &assignments, int feature_dim,
+                                               const std::vector<float> &centroids)
+{
+    const auto dim = static_cast<size_t>(feature_dim);
+    std::vector<float> residuals(features.size());
+    for (size_t row = 0; row < assignments.size(); ++row)
+    {
+        const auto list_no = static_cast<size_t>(assignments[row]);
+        for (size_t col = 0; col < dim; ++col)
+        {
+            residuals[row * dim + col] = features[row * dim + col] - centroids[list_no * dim + col];
+        }
+    }
+    return residuals;
 }
 
 /**
@@ -816,10 +856,7 @@ inline std::unique_ptr<faiss::Index> loadCpuOnDiskIvfFlatIndex(const std::filesy
  * @throws irt::Exception 参数非法、训练/添加失败或落盘失败时抛出。
  */
 inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
-    size_t vector_count,
-    int feature_dim,
-    const std::filesystem::path &index_path,
-    size_t batch_size,
+    size_t vector_count, int feature_dim, const std::filesystem::path &index_path, size_t batch_size,
     const std::function<std::vector<float>(size_t)> &load_feature)
 {
     if (vector_count == 0 || feature_dim <= 0)
@@ -828,15 +865,14 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
                              "On-disk Faiss IVF index requires non-empty features");
     }
 
-    const size_t nlist = chooseCpuOnDiskIvfListCount(vector_count, feature_dim);
+    const size_t nlist          = chooseCpuOnDiskIvfListCount(vector_count, feature_dim);
     const size_t training_count = chooseCpuOnDiskIvfTrainingCount(vector_count, feature_dim, nlist);
     const size_t stride         = std::max<size_t>(1, vector_count / training_count);
 
     std::vector<float> training_features;
     training_features.reserve(training_count * static_cast<size_t>(feature_dim));
-    for (size_t index_in_gallery = 0;
-         index_in_gallery < vector_count
-         && training_features.size() / static_cast<size_t>(feature_dim) < training_count;
+    for (size_t index_in_gallery = 0; index_in_gallery < vector_count
+                                      && training_features.size() / static_cast<size_t>(feature_dim) < training_count;
          index_in_gallery += stride)
     {
         auto feature = load_feature(index_in_gallery);
@@ -857,8 +893,8 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
     auto centroids = makeCpuOnDiskIvfCentroids(training_features, actual_training_count, feature_dim, nlist);
     quantizer->add(static_cast<faiss::idx_t>(nlist), centroids.data());
 
-    auto index = std::make_unique<faiss::IndexIVFFlat>(quantizer.release(), static_cast<size_t>(feature_dim), nlist,
-                                                       faiss::METRIC_INNER_PRODUCT);
+    auto  index = std::make_unique<faiss::IndexIVFFlat>(quantizer.release(), static_cast<size_t>(feature_dim), nlist,
+                                                        faiss::METRIC_INNER_PRODUCT);
     auto *ivf_index       = index.get();
     ivf_index->own_fields = true;
     ivf_index->is_trained = true;
@@ -866,9 +902,85 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
 
     faiss::write_index(index.get(), index_path.string().c_str());
 
-    writeCpuOnDiskIvfDataFileBatched(*ivf_index, vector_count, feature_dim, cpuOnDiskIvfDataPath(index_path),
-                                     centroids, batch_size, load_feature);
+    writeCpuOnDiskIvfDataFileBatched(*ivf_index, vector_count, feature_dim, cpuOnDiskIvfDataPath(index_path), centroids,
+                                     batch_size, load_feature);
     return loadCpuOnDiskIvfFlatIndex(index_path);
+}
+
+inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int feature_dim, size_t batch_size,
+                                                        const std::function<std::vector<float>(size_t)> &load_feature)
+{
+    if (vector_count == 0 || feature_dim <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "In-memory Faiss IVF-PQ index requires non-empty features");
+    }
+    if (batch_size == 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Faiss IVF-PQ build batch size must be positive");
+    }
+
+    const size_t nlist          = chooseCpuOnDiskIvfListCount(vector_count, feature_dim);
+    const size_t training_count = chooseCpuOnDiskIvfTrainingCount(vector_count, feature_dim, nlist);
+    const size_t stride         = std::max<size_t>(1, vector_count / training_count);
+
+    std::vector<float> training_features;
+    training_features.reserve(training_count * static_cast<size_t>(feature_dim));
+    for (size_t index_in_gallery = 0; index_in_gallery < vector_count
+                                      && training_features.size() / static_cast<size_t>(feature_dim) < training_count;
+         index_in_gallery += stride)
+    {
+        auto feature = load_feature(index_in_gallery);
+        if (feature.size() != static_cast<size_t>(feature_dim))
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected ImageSearch feature size");
+        }
+        training_features.insert(training_features.end(), feature.begin(), feature.end());
+    }
+
+    const size_t actual_training_count = training_features.size() / static_cast<size_t>(feature_dim);
+    if (actual_training_count < nlist)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Not enough training features for IVF-PQ index");
+    }
+
+    auto coarse_quantizer = std::make_unique<faiss::IndexFlatIP>(feature_dim);
+    auto coarse_centroids = makeCpuOnDiskIvfCentroids(training_features, actual_training_count, feature_dim, nlist);
+    coarse_quantizer->add(static_cast<faiss::idx_t>(nlist), coarse_centroids.data());
+    const auto training_assignments =
+        assignFeatureBatchToCentroids(training_features, actual_training_count, feature_dim, coarse_centroids, nlist);
+    const auto residual_training_features =
+        makeResidualFeatures(training_features, training_assignments, feature_dim, coarse_centroids);
+
+    const size_t sub_quantizers = chooseRamIvfPqSubQuantizerCount(feature_dim);
+    auto         index
+        = std::make_unique<faiss::IndexIVFPQ>(coarse_quantizer.release(), static_cast<size_t>(feature_dim), nlist,
+                                              sub_quantizers, kRamIvfPqBitsPerCode, faiss::METRIC_INNER_PRODUCT);
+    auto *ivfpq_index         = index.get();
+    ivfpq_index->own_fields   = true;
+    ivfpq_index->by_residual  = true;
+    ivfpq_index->pq.centroids = makeRamIvfPqCentroids(residual_training_features, actual_training_count, feature_dim,
+                                                      sub_quantizers, kRamIvfPqBitsPerCode);
+    ivfpq_index->pq.sync_transposed_centroids();
+    ivfpq_index->is_trained = true;
+    ivfpq_index->nprobe     = chooseCpuOnDiskIvfProbeCount(nlist);
+
+    batch_size = chooseCpuOnDiskIvfBuildBatchSize(batch_size, vector_count, feature_dim);
+    for (size_t begin = 0; begin < vector_count; begin += batch_size)
+    {
+        const size_t count       = std::min(batch_size, vector_count - begin);
+        const auto   features    = loadFeatureBatch(begin, count, feature_dim, load_feature);
+        const auto   assignments = assignFeatureBatchToCentroids(features, count, feature_dim, coarse_centroids, nlist);
+
+        std::vector<faiss::idx_t> ids(count);
+        for (size_t i = 0; i < count; ++i)
+        {
+            ids[i] = static_cast<faiss::idx_t>(begin + i);
+        }
+        ivfpq_index->add_core(static_cast<faiss::idx_t>(count), features.data(), ids.data(), assignments.data());
+    }
+
+    return index;
 }
 
 } // namespace irt::features::priv

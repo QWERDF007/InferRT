@@ -12,6 +12,7 @@
 #include "ImageSearchFaissIndex.hpp"
 
 #include <faiss/IndexIVF.h>
+#include <faiss/IndexIVFPQ.h>
 
 #include <algorithm>
 #include <atomic>
@@ -261,6 +262,43 @@ TEST(ImageSearchTest, DefaultIndexPathHandlesDinoFeatureNames)
 
     EXPECT_EQ(cls_path.generic_string(), "gallery/dinov3_vitb16_x_norm_clstoken.faiss");
     EXPECT_EQ(block_path.generic_string(), "gallery/dinov2_vits14_blocks_11.faiss");
+}
+
+/**
+ * @brief RAM 模式应使用内存 IVF-PQ 压缩索引，而不是 Flat 全量浮点索引。
+ */
+TEST(ImageSearchTest, RamIndexUsesInMemoryIvfPqCompression)
+{
+    constexpr int    feature_dim  = 16;
+    constexpr size_t vector_count = 64;
+
+    std::vector<float> features(vector_count * feature_dim, 0.0f);
+    for (size_t row = 0; row < vector_count; ++row)
+    {
+        features[row * feature_dim + (row % feature_dim)] = 1.0f;
+        features[row * feature_dim + ((row * 3 + 1) % feature_dim)] += 0.25f;
+    }
+
+    auto load_feature = [&](size_t row) {
+        const auto begin = features.begin() + static_cast<std::ptrdiff_t>(row * feature_dim);
+        return std::vector<float>(begin, begin + feature_dim);
+    };
+
+    auto index = irt::features::priv::buildRamIvfPqIndex(vector_count, feature_dim, 16, load_feature);
+    ASSERT_TRUE(index);
+    EXPECT_EQ(index->ntotal, static_cast<faiss::idx_t>(vector_count));
+    EXPECT_EQ(index->metric_type, faiss::METRIC_INNER_PRODUCT);
+
+    auto *ivfpq = dynamic_cast<faiss::IndexIVFPQ *>(index.get());
+    ASSERT_NE(ivfpq, nullptr);
+    EXPECT_LT(ivfpq->code_size, static_cast<size_t>(feature_dim) * sizeof(float));
+    EXPECT_GE(ivfpq->nprobe, 1U);
+
+    auto query = load_feature(0);
+    std::vector<float> distances(3);
+    std::vector<faiss::idx_t> labels(3);
+    index->search(1, query.data(), static_cast<faiss::idx_t>(labels.size()), distances.data(), labels.data());
+    EXPECT_GE(labels[0], 0);
 }
 
 /**
