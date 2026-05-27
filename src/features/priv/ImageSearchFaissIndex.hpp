@@ -760,8 +760,13 @@ inline size_t chooseRamIvfPqTrainingCount(size_t vector_count, int feature_dim, 
     return std::min(vector_count, std::max<size_t>(nlist, by_memory));
 }
 
-inline size_t chooseRamIvfPqBitsPerCode(size_t training_count)
+inline size_t chooseRamIvfPqBitsPerCode(size_t training_count, bool require_gpu_compatible = false)
 {
+    if (require_gpu_compatible)
+    {
+        return kRamIvfPqBitsPerCode;
+    }
+
     size_t bits = 0;
     while (bits < kRamIvfPqBitsPerCode && (size_t{1} << (bits + 1)) <= training_count)
     {
@@ -888,7 +893,8 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
 }
 
 inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int feature_dim, size_t batch_size,
-                                                        const std::function<std::vector<float>(size_t)> &load_feature)
+                                                        const std::function<std::vector<float>(size_t)> &load_feature,
+                                                        bool require_gpu_compatible = false)
 {
     if (vector_count == 0 || feature_dim <= 0)
     {
@@ -928,7 +934,7 @@ inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int
     }
 
     const size_t sub_quantizers = chooseRamIvfPqSubQuantizerCount(feature_dim);
-    const size_t bits_per_code  = chooseRamIvfPqBitsPerCode(actual_training_count);
+    const size_t bits_per_code  = chooseRamIvfPqBitsPerCode(actual_training_count, require_gpu_compatible);
     const size_t pq_centroids   = size_t{1} << bits_per_code;
 
     const float  *faiss_training_data  = training_features.data();

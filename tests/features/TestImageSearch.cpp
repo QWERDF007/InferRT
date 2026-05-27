@@ -302,6 +302,35 @@ TEST(ImageSearchTest, RamIndexUsesInMemoryIvfPqCompression)
 }
 
 /**
+ * @brief GPU 兼容的 RAM IVF-PQ 索引应固定使用 8 位子码（``require_gpu_compatible=true``）。
+ */
+TEST(ImageSearchTest, RamIvfPqGpuCompatibleIndexUsesEightBitCodes)
+{
+    constexpr int    feature_dim  = 16;
+    constexpr size_t vector_count = 16;
+
+    std::vector<float> features(vector_count * feature_dim, 0.0f);
+    for (size_t row = 0; row < vector_count; ++row)
+    {
+        features[row * feature_dim + (row % feature_dim)] = 1.0f;
+        features[row * feature_dim + ((row * 3 + 1) % feature_dim)] += 0.25f;
+    }
+
+    auto load_feature = [&](size_t row) {
+        const auto begin = features.begin() + static_cast<std::ptrdiff_t>(row * feature_dim);
+        return std::vector<float>(begin, begin + feature_dim);
+    };
+
+    auto index = irt::features::priv::buildRamIvfPqIndex(vector_count, feature_dim, 16, load_feature, true);
+    ASSERT_TRUE(index);
+    EXPECT_EQ(index->ntotal, static_cast<faiss::idx_t>(vector_count));
+
+    auto *ivfpq = dynamic_cast<faiss::IndexIVFPQ *>(index.get());
+    ASSERT_NE(ivfpq, nullptr);
+    EXPECT_EQ(ivfpq->pq.nbits, 8U);
+}
+
+/**
  * @brief CPU disk 模式应使用 IVF + mmap/OnDiskInvertedLists，而不是搜索时整索引读入内存。
  */
 TEST(ImageSearchTest, CpuDiskIndexUsesOnDiskIvfInvertedLists)

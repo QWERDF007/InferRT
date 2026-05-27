@@ -764,7 +764,8 @@ FaissIndexBundle buildRamIvfPqIndex(const std::vector<fs::path>       &gallery_i
     auto cpu_index = priv::buildRamIvfPqIndex(gallery_images.size(), extractor.featureDim(),
                                               config.disk_build_batch_size,
                                               [&](size_t index)
-                                              { return extractor.extract(gallery_images[index]); });
+                                              { return extractor.extract(gallery_images[index]); },
+                                              config.faiss_backend == ImageSearchFaissBackend::GPU);
 
     faiss::write_index(cpu_index.get(), index_path.string().c_str());
     savePathMapping(mappingPathFromIndex(index_path), gallery_images);
