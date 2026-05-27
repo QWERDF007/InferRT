@@ -1,4 +1,5 @@
 #include "DINO.hpp"
+#include "Layers.hpp"
 
 #include <NvInfer.h>
 #include <inferrt/core/Exception.hpp>
@@ -19,8 +20,6 @@ namespace {
 
 using E = nvinfer1::ElementWiseOperation;
 using M = nvinfer1::MatrixOperation;
-
-constexpr float kPi = 3.14159265358979323846F;
 
 /**
  * @brief DINO 构建期派生出的输入几何信息。
@@ -49,32 +48,14 @@ struct DINORopeConstants
 };
 
 /**
- * @brief 判断权重表中是否存在指定 key。
- */
-bool hasWeight(const WeightsMap &weights_map, const std::string &key)
-{
-    return weights_map.find(key) != weights_map.end();
-}
-
-/**
  * @brief 读取权重并按需校验元素数量。
  */
-const nvinfer1::Weights &requireWeight(const WeightsMap &weights_map, const std::string &key,
-                                       int64_t expected_count = -1)
-{
-    const auto it = weights_map.find(key);
-    if (it == weights_map.end())
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Missing DINO weight: %s", key.c_str());
-    }
+constexpr const char *kDINOTag = "DINO";
 
-    if (expected_count >= 0 && it->second.count != expected_count)
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
-                             "Unexpected DINO weight element count for %s: got %lld, expected %lld", key.c_str(),
-                             static_cast<long long>(it->second.count), static_cast<long long>(expected_count));
-    }
-    return it->second;
+inline const nvinfer1::Weights &requireWeight(const WeightsMap &weights_map, const std::string &key,
+                                              int64_t expected_count = -1)
+{
+    return irt::model::requireWeight(weights_map, key, kDINOTag, expected_count);
 }
 
 /**
@@ -103,129 +84,11 @@ float weightValue(const nvinfer1::Weights &weights, int64_t index)
     return values[index];
 }
 
-/**
- * @brief 构造在建网期间保持有效的标量权重。
- */
-nvinfer1::Weights ownedScalarWeight(float value)
-{
-    static std::vector<std::unique_ptr<float>> scalars;
-    scalars.push_back(std::make_unique<float>(value));
-    return nvinfer1::Weights{nvinfer1::DataType::kFLOAT, scalars.back().get(), 1};
-}
+// weightValue() is DINO-specific and is kept here.
 
-/**
- * @brief 构造在建网期间保持有效的 float 数组权重。
- */
-nvinfer1::Weights ownedFloatVector(std::vector<float> values)
-{
-    static std::vector<std::unique_ptr<float[]>> buffers;
-
-    auto buffer = std::make_unique<float[]>(values.size());
-    std::copy(values.begin(), values.end(), buffer.get());
-
-    auto *raw = buffer.get();
-    buffers.push_back(std::move(buffer));
-    return nvinfer1::Weights{nvinfer1::DataType::kFLOAT, raw, static_cast<int64_t>(values.size())};
-}
-
-/**
- * @brief 生成与输入张量同 rank 的标量广播维度。
- */
-nvinfer1::Dims scalarDimsLike(const nvinfer1::ITensor &input)
-{
-    const auto input_dims = input.getDimensions();
-    nvinfer1::Dims dims{};
-    dims.nbDims = input_dims.nbDims;
-    for (int32_t i = 0; i < dims.nbDims; ++i)
-    {
-        dims.d[i] = 1;
-    }
-    return dims;
-}
-
-/**
- * @brief 添加 GeLU tanh 近似激活。
- */
-nvinfer1::ITensor *addGelu(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input)
-{
-    const auto scalar_dims = scalarDimsLike(input);
-    auto *half = network->addConstant(scalar_dims, ownedScalarWeight(0.5F));
-    auto *one = network->addConstant(scalar_dims, ownedScalarWeight(1.0F));
-    auto *sqrt_2_div_pi = network->addConstant(scalar_dims, ownedScalarWeight(std::sqrt(2.0F / kPi)));
-    auto *coeff = network->addConstant(scalar_dims, ownedScalarWeight(0.044715F));
-
-    auto *x2 = network->addElementWise(input, input, E::kPROD);
-    auto *x3 = network->addElementWise(*x2->getOutput(0), input, E::kPROD);
-    auto *scaled_x3 = network->addElementWise(*x3->getOutput(0), *coeff->getOutput(0), E::kPROD);
-    auto *inner = network->addElementWise(input, *scaled_x3->getOutput(0), E::kSUM);
-    auto *scaled = network->addElementWise(*inner->getOutput(0), *sqrt_2_div_pi->getOutput(0), E::kPROD);
-    auto *tanh = network->addActivation(*scaled->getOutput(0), nvinfer1::ActivationType::kTANH);
-    auto *one_plus_tanh = network->addElementWise(*tanh->getOutput(0), *one->getOutput(0), E::kSUM);
-    auto *half_x = network->addElementWise(input, *half->getOutput(0), E::kPROD);
-    return network->addElementWise(*half_x->getOutput(0), *one_plus_tanh->getOutput(0), E::kPROD)->getOutput(0);
-}
-
-/**
- * @brief 添加 SiLU 激活：`x * sigmoid(x)`。
- */
-nvinfer1::ITensor *addSilu(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input)
-{
-    auto *sigmoid = network->addActivation(input, nvinfer1::ActivationType::kSIGMOID);
-    return network->addElementWise(input, *sigmoid->getOutput(0), E::kPROD)->getOutput(0);
-}
-
-/**
- * @brief 添加最后一维上的 LayerNorm。
- */
-nvinfer1::ITensor *addLayerNorm(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
-                                nvinfer1::ITensor &input, const std::string &prefix, int embed_dim, float epsilon)
-{
-    const auto scale_weights = requireWeight(weights_map, prefix + ".weight", embed_dim);
-    const auto bias_weights = requireWeight(weights_map, prefix + ".bias", embed_dim);
-    auto *scale = network->addConstant(nvinfer1::Dims3{1, 1, embed_dim}, scale_weights);
-    auto *bias = network->addConstant(nvinfer1::Dims3{1, 1, embed_dim}, bias_weights);
-
-    const auto dims = input.getDimensions();
-    const auto axes = 1U << static_cast<uint32_t>(dims.nbDims - 1);
-#if TRT_VERSION >= 11500
-    auto *norm = network->addNormalizationV2(input, *scale->getOutput(0), *bias->getOutput(0), axes);
-#else
-    auto *norm = network->addNormalization(input, *scale->getOutput(0), *bias->getOutput(0), axes);
-#endif
-    norm->setEpsilon(epsilon);
-    return norm->getOutput(0);
-}
-
-/**
- * @brief 添加面向 `[N, L, C]` token 张量的线性层。
- */
-nvinfer1::ITensor *addLinear3D(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
-                               nvinfer1::ITensor &input, const std::string &prefix, int in_features,
-                               int out_features, bool bias_required)
-{
-    auto *weight = network
-                       ->addConstant(nvinfer1::Dims3{1, out_features, in_features},
-                                     requireWeight(weights_map, prefix + ".weight",
-                                                   static_cast<int64_t>(out_features) * in_features))
-                       ->getOutput(0);
-    auto *matmul = network->addMatrixMultiply(input, M::kNONE, *weight, M::kTRANSPOSE);
-    auto *output = matmul->getOutput(0);
-
-    const auto bias_key = prefix + ".bias";
-    if (hasWeight(weights_map, bias_key))
-    {
-        auto *bias = network
-                         ->addConstant(nvinfer1::Dims3{1, 1, out_features},
-                                       requireWeight(weights_map, bias_key, out_features))
-                         ->getOutput(0);
-        output = network->addElementWise(*output, *bias, E::kSUM)->getOutput(0);
-    }
-    else if (bias_required)
-    {
-        requireWeight(weights_map, bias_key, out_features);
-    }
-    return output;
-}
+// kPi, hasWeight, requireWeight (wrapped above), ownedScalarWeight, ownedFloatVector,
+// scalarDimsLike, addGeluApprox, addSilu, addLayerNorm, addLinear3D, reshapeToHeads,
+// mergeHeads are now provided by Layers.hpp.
 
 /**
  * @brief 添加不自动附加 bias 的线性层，供 qkv 手动处理官方/timm 不同偏置格式。
@@ -260,19 +123,6 @@ nvinfer1::ITensor *addLayerScale(nvinfer1::INetworkDefinition *network, const We
         }
     }
     return &input;
-}
-
-/**
- * @brief 将 `[N, L, D]` 投影结果 reshape 为 `[N, H, L, head_dim]`。
- */
-nvinfer1::ITensor *reshapeToHeads(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input,
-                                  const DINOInputGeometry &geometry, const DINOTransformerSpec &spec)
-{
-    auto *shuffle = network->addShuffle(input);
-    shuffle->setReshapeDimensions(nvinfer1::Dims4{geometry.batch, geometry.num_tokens, spec.num_heads,
-                                                  geometry.head_dim});
-    shuffle->setSecondTranspose(nvinfer1::Permutation{0, 2, 1, 3});
-    return shuffle->getOutput(0);
 }
 
 /**
@@ -480,25 +330,17 @@ nvinfer1::ITensor *addAttention(nvinfer1::INetworkDefinition *network, const Wei
                                 const DINOInputGeometry &geometry, const DINOTransformerSpec &spec)
 {
     auto *qkv = addQkvProjection(network, weights_map, input, prefix, spec);
-    auto *q = network
-                  ->addSlice(*qkv, nvinfer1::Dims3{0, 0, 0},
-                             nvinfer1::Dims3{geometry.batch, geometry.num_tokens, spec.embed_dim},
-                             nvinfer1::Dims3{1, 1, 1})
-                  ->getOutput(0);
-    auto *k = network
-                  ->addSlice(*qkv, nvinfer1::Dims3{0, 0, spec.embed_dim},
-                             nvinfer1::Dims3{geometry.batch, geometry.num_tokens, spec.embed_dim},
-                             nvinfer1::Dims3{1, 1, 1})
-                  ->getOutput(0);
-    auto *v = network
-                  ->addSlice(*qkv, nvinfer1::Dims3{0, 0, 2 * spec.embed_dim},
-                             nvinfer1::Dims3{geometry.batch, geometry.num_tokens, spec.embed_dim},
-                             nvinfer1::Dims3{1, 1, 1})
-                  ->getOutput(0);
+    nvinfer1::ITensor *q = nullptr;
+    nvinfer1::ITensor *k = nullptr;
+    nvinfer1::ITensor *v = nullptr;
+    splitQkv(network, *qkv, geometry.batch, geometry.num_tokens, spec.embed_dim, q, k, v);
 
-    auto *q_heads = reshapeToHeads(network, *q, geometry, spec);
-    auto *k_heads = reshapeToHeads(network, *k, geometry, spec);
-    auto *v_heads = reshapeToHeads(network, *v, geometry, spec);
+    auto *q_heads = reshapeToHeads(network, *q, geometry.batch, geometry.num_tokens, spec.num_heads,
+                                    geometry.head_dim);
+    auto *k_heads = reshapeToHeads(network, *k, geometry.batch, geometry.num_tokens, spec.num_heads,
+                                    geometry.head_dim);
+    auto *v_heads = reshapeToHeads(network, *v, geometry.batch, geometry.num_tokens, spec.num_heads,
+                                    geometry.head_dim);
 
     if (spec.version == DINOVersion::V3)
     {
@@ -515,11 +357,10 @@ nvinfer1::ITensor *addAttention(nvinfer1::INetworkDefinition *network, const Wei
     softmax->setAxes(1U << static_cast<uint32_t>(scaled_qk->getOutput(0)->getDimensions().nbDims - 1));
 
     auto *attended = network->addMatrixMultiply(*softmax->getOutput(0), M::kNONE, *v_heads, M::kNONE);
-    auto *merge_heads = network->addShuffle(*attended->getOutput(0));
-    merge_heads->setFirstTranspose(nvinfer1::Permutation{0, 2, 1, 3});
-    merge_heads->setReshapeDimensions(nvinfer1::Dims3{geometry.batch, geometry.num_tokens, spec.embed_dim});
+    auto *attended_output = mergeHeads(network, *attended->getOutput(0), geometry.batch, geometry.num_tokens,
+                                        spec.embed_dim);
 
-    return addLinear3D(network, weights_map, *merge_heads->getOutput(0), prefix + ".attn.proj", spec.embed_dim,
+    return addLinear3D(network, weights_map, *attended_output, prefix + ".attn.proj", spec.embed_dim,
                        spec.embed_dim, true);
 }
 
@@ -543,7 +384,7 @@ nvinfer1::ITensor *addStandardMlp(nvinfer1::INetworkDefinition *network, const W
 {
     const int hidden = static_cast<int>(std::lround(static_cast<float>(spec.embed_dim) * spec.mlp_ratio));
     auto *fc1 = addLinear3D(network, weights_map, input, prefix + ".mlp.fc1", spec.embed_dim, hidden, true);
-    auto *gelu = addGelu(network, *fc1);
+    auto *gelu = addGeluApprox(network, *fc1);
     return addLinear3D(network, weights_map, *gelu, prefix + ".mlp.fc2", hidden, spec.embed_dim, true);
 }
 

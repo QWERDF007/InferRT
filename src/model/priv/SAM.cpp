@@ -1,4 +1,5 @@
 #include "SAM.hpp"
+#include "Layers.hpp"
 
 #include <NvInferVersion.h>
 #include <inferrt/core/Exception.hpp>
@@ -39,7 +40,6 @@ constexpr int   kSamTwoWayDepth      = 2;
 constexpr int   kSamTwoWayHeads      = 8;
 constexpr int   kSamTwoWayMlpDim     = 2048;
 constexpr float kLayerNormEps        = 1.0e-6F;
-constexpr float kPi                  = 3.14159265358979323846F;
 
 constexpr std::array<const char *, 5> kDefaultInputNames{
     "image",
@@ -117,15 +117,6 @@ struct SAMGeometry
 };
 
 /**
- * @brief TensorRT 网络构建时持久化派生常量的存储。
- */
-std::vector<std::vector<float>> &ownedWeightStorage()
-{
-    static std::vector<std::vector<float>> storage;
-    return storage;
-}
-
-/**
  * @brief 构造 TensorRT Dims。
  */
 nvinfer1::Dims makeDims(std::initializer_list<int32_t> values)
@@ -154,58 +145,6 @@ int64_t volume(const nvinfer1::Dims &dims)
 }
 
 /**
- * @brief 生成与输入同 rank 的标量广播 Dims。
- */
-nvinfer1::Dims scalarDimsLike(const nvinfer1::ITensor &input)
-{
-    const auto input_dims = input.getDimensions();
-    nvinfer1::Dims dims{};
-    dims.nbDims = input_dims.nbDims;
-    for (int32_t i = 0; i < dims.nbDims; ++i)
-    {
-        dims.d[i] = 1;
-    }
-    return dims;
-}
-
-/**
- * @brief 空权重，用于无 bias 的卷积。
- */
-nvinfer1::Weights emptyWeights()
-{
-    return nvinfer1::Weights{nvinfer1::DataType::kFLOAT, nullptr, 0};
-}
-
-/**
- * @brief 持久化一个标量权重。
- */
-nvinfer1::Weights ownedScalarWeight(float value)
-{
-    auto &storage = ownedWeightStorage();
-    storage.push_back({value});
-    return nvinfer1::Weights{nvinfer1::DataType::kFLOAT, storage.back().data(), 1};
-}
-
-/**
- * @brief 持久化一组派生权重。
- */
-nvinfer1::Weights ownedVectorWeight(std::vector<float> values)
-{
-    auto &storage = ownedWeightStorage();
-    storage.push_back(std::move(values));
-    return nvinfer1::Weights{nvinfer1::DataType::kFLOAT, storage.back().data(),
-                             static_cast<int64_t>(storage.back().size())};
-}
-
-/**
- * @brief 判断权重表中是否存在指定 key。
- */
-bool hasWeight(const WeightsMap &weights_map, const std::string &key)
-{
-    return weights_map.find(key) != weights_map.end();
-}
-
-/**
  * @brief 从候选线性层前缀中选择实际存在的权重命名。
  *
  * SAM v1 与 SAM2 的 TwoWayTransformer 结构一致，但 MLP 命名分别为
@@ -223,24 +162,12 @@ std::string resolveLinearPrefix(const WeightsMap &weights_map, std::initializer_
     return candidates.size() > 0 ? *candidates.begin() : std::string{};
 }
 
-/**
- * @brief 读取并校验 SAM 官方权重。
- */
-const nvinfer1::Weights &requireWeight(const WeightsMap &weights_map, const std::string &key,
-                                       int64_t expected_count = -1)
+constexpr const char *kSAMTag = "SAM official";
+
+inline const nvinfer1::Weights &requireWeight(const WeightsMap &weights_map, const std::string &key,
+                                              int64_t expected_count = -1)
 {
-    const auto it = weights_map.find(key);
-    if (it == weights_map.end())
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Missing SAM official weight: %s", key.c_str());
-    }
-    if (expected_count >= 0 && it->second.count != expected_count)
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
-                             "Unexpected SAM weight element count for %s: got %lld, expected %lld", key.c_str(),
-                             static_cast<long long>(it->second.count), static_cast<long long>(expected_count));
-    }
-    return it->second;
+    return irt::model::requireWeight(weights_map, key, kSAMTag, expected_count);
 }
 
 /**
@@ -264,25 +191,6 @@ nvinfer1::ITensor *addScalar(nvinfer1::INetworkDefinition *network, const nvinfe
     auto *constant = requireLayer(network->addConstant(scalarDimsLike(like), ownedScalarWeight(value)),
                                   "Failed to add SAM scalar constant");
     return constant->getOutput(0);
-}
-
-/**
- * @brief 添加精确 GeLU：0.5*x*(1+erf(x/sqrt(2)))。
- */
-nvinfer1::ITensor *addGelu(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input)
-{
-    auto *half       = addScalar(network, input, 0.5F);
-    auto *one        = addScalar(network, input, 1.0F);
-    auto *inv_sqrt_2 = addScalar(network, input, 0.70710678118654752440F);
-    auto *scaled     = requireLayer(network->addElementWise(input, *inv_sqrt_2, E::kPROD),
-                                "Failed to add SAM GeLU scale");
-    auto *erf        = requireLayer(network->addUnary(*scaled->getOutput(0), U::kERF), "Failed to add SAM GeLU erf");
-    auto *one_plus   = requireLayer(network->addElementWise(*erf->getOutput(0), *one, E::kSUM),
-                                  "Failed to add SAM GeLU bias");
-    auto *half_x     = requireLayer(network->addElementWise(input, *half, E::kPROD), "Failed to add SAM GeLU half");
-    return requireLayer(network->addElementWise(*half_x->getOutput(0), *one_plus->getOutput(0), E::kPROD),
-                        "Failed to add SAM GeLU product")
-        ->getOutput(0);
 }
 
 /**
@@ -345,39 +253,6 @@ nvinfer1::ITensor *addLayerNorm2d(nvinfer1::INetworkDefinition *network, const W
 }
 
 /**
- * @brief 添加面向 `[B, N, C]` token 的线性层。
- */
-nvinfer1::ITensor *addLinear3D(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
-                               nvinfer1::ITensor &input, const std::string &prefix, int in_features,
-                               int out_features, bool bias_required = true)
-{
-    auto *weight = requireLayer(
-        network->addConstant(nvinfer1::Dims3{1, out_features, in_features},
-                             requireWeight(weights_map, prefix + ".weight",
-                                           static_cast<int64_t>(out_features) * in_features)),
-        "Failed to add SAM linear weight");
-    auto *matmul = requireLayer(network->addMatrixMultiply(input, M::kNONE, *weight->getOutput(0), M::kTRANSPOSE),
-                                "Failed to add SAM linear matmul");
-    auto *output = matmul->getOutput(0);
-
-    const auto bias_key = prefix + ".bias";
-    if (hasWeight(weights_map, bias_key))
-    {
-        auto *bias = requireLayer(network->addConstant(nvinfer1::Dims3{1, 1, out_features},
-                                                       requireWeight(weights_map, bias_key, out_features)),
-                                  "Failed to add SAM linear bias");
-        output = requireLayer(network->addElementWise(*output, *bias->getOutput(0), E::kSUM),
-                              "Failed to add SAM linear bias add")
-                     ->getOutput(0);
-    }
-    else if (bias_required)
-    {
-        requireWeight(weights_map, bias_key, out_features);
-    }
-    return output;
-}
-
-/**
  * @brief 将 NHWC 图像 token 展平为 `[B, H*W, C]`。
  */
 nvinfer1::ITensor *flattenNHWC(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input, int batch, int height,
@@ -416,30 +291,6 @@ nvinfer1::ITensor *nhwcToNchw(nvinfer1::INetworkDefinition *network, nvinfer1::I
 {
     auto *shuffle = requireLayer(network->addShuffle(input), "Failed to add SAM NHWC->NCHW");
     shuffle->setFirstTranspose(nvinfer1::Permutation{0, 3, 1, 2});
-    return shuffle->getOutput(0);
-}
-
-/**
- * @brief 将 token reshape 为多头注意力布局 `[B, heads, N, head_dim]`。
- */
-nvinfer1::ITensor *reshapeToHeads(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input, int batch,
-                                  int tokens, int heads, int head_dim)
-{
-    auto *shuffle = requireLayer(network->addShuffle(input), "Failed to add SAM attention head reshape");
-    shuffle->setReshapeDimensions(nvinfer1::Dims4{batch, tokens, heads, head_dim});
-    shuffle->setSecondTranspose(nvinfer1::Permutation{0, 2, 1, 3});
-    return shuffle->getOutput(0);
-}
-
-/**
- * @brief 合并多头注意力输出为 `[B, N, C]`。
- */
-nvinfer1::ITensor *mergeHeads(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input, int batch, int tokens,
-                              int channels)
-{
-    auto *shuffle = requireLayer(network->addShuffle(input), "Failed to add SAM attention head merge");
-    shuffle->setFirstTranspose(nvinfer1::Permutation{0, 2, 1, 3});
-    shuffle->setReshapeDimensions(nvinfer1::Dims3{batch, tokens, channels});
     return shuffle->getOutput(0);
 }
 
@@ -510,7 +361,7 @@ nvinfer1::Weights makeRelativePositionWeight(const WeightsMap &weights_map, cons
             }
         }
     }
-    return ownedVectorWeight(std::move(values));
+    return ownedFloatVector(std::move(values));
 }
 
 /**
@@ -579,21 +430,10 @@ nvinfer1::ITensor *addImageAttention(nvinfer1::INetworkDefinition *network, cons
     const int token_count = height * width;
     const int head_dim    = spec.embed_dim / spec.num_heads;
     auto *qkv = addLinear3D(network, weights_map, tokens, prefix + ".attn.qkv", spec.embed_dim, 3 * spec.embed_dim);
-    auto *q = requireLayer(network->addSlice(*qkv, nvinfer1::Dims3{0, 0, 0},
-                                             nvinfer1::Dims3{batch, token_count, spec.embed_dim},
-                                             nvinfer1::Dims3{1, 1, 1}),
-                           "Failed to add SAM q slice")
-                  ->getOutput(0);
-    auto *k = requireLayer(network->addSlice(*qkv, nvinfer1::Dims3{0, 0, spec.embed_dim},
-                                             nvinfer1::Dims3{batch, token_count, spec.embed_dim},
-                                             nvinfer1::Dims3{1, 1, 1}),
-                           "Failed to add SAM k slice")
-                  ->getOutput(0);
-    auto *v = requireLayer(network->addSlice(*qkv, nvinfer1::Dims3{0, 0, 2 * spec.embed_dim},
-                                             nvinfer1::Dims3{batch, token_count, spec.embed_dim},
-                                             nvinfer1::Dims3{1, 1, 1}),
-                           "Failed to add SAM v slice")
-                  ->getOutput(0);
+    nvinfer1::ITensor *q = nullptr;
+    nvinfer1::ITensor *k = nullptr;
+    nvinfer1::ITensor *v = nullptr;
+    splitQkv(network, *qkv, batch, token_count, spec.embed_dim, q, k, v);
     auto *q_heads = reshapeToHeads(network, *q, batch, token_count, spec.num_heads, head_dim);
     auto *k_heads = reshapeToHeads(network, *k, batch, token_count, spec.num_heads, head_dim);
     auto *v_heads = reshapeToHeads(network, *v, batch, token_count, spec.num_heads, head_dim);
@@ -722,7 +562,7 @@ nvinfer1::ITensor *addImageBlock(nvinfer1::INetworkDefinition *network, const We
     auto *norm2 = addLayerNormLastDim(network, weights_map, *attn_residual, prefix + ".norm2", spec.embed_dim);
     auto *tokens = flattenNHWC(network, *norm2, geometry.batch, geometry.grid_h, geometry.grid_w, spec.embed_dim);
     auto *fc1 = addLinear3D(network, weights_map, *tokens, prefix + ".mlp.lin1", spec.embed_dim, spec.embed_dim * 4);
-    auto *gelu = addGelu(network, *fc1);
+    auto *gelu = addGeluExact(network, *fc1);
     auto *fc2 = addLinear3D(network, weights_map, *gelu, prefix + ".mlp.lin2", spec.embed_dim * 4, spec.embed_dim);
     auto *mlp = unflattenNHWC(network, *fc2, geometry.batch, geometry.grid_h, geometry.grid_w, spec.embed_dim);
     return requireLayer(network->addElementWise(*attn_residual, *mlp, E::kSUM), "Failed to add SAM image MLP residual")
@@ -827,7 +667,7 @@ nvinfer1::ITensor *addSAM2HieraPositionEmbedding(nvinfer1::INetworkDefinition *n
         }
     }
     auto *window = requireLayer(network->addConstant(nvinfer1::Dims4{1, spec.embed_dim, grid_h, grid_w},
-                                                     ownedVectorWeight(std::move(tiled))),
+                                                     ownedFloatVector(std::move(tiled))),
                                 "Failed to add SAM2 Hiera window position embedding");
     auto *sum = requireLayer(network->addElementWise(*resize->getOutput(0), *window->getOutput(0), E::kSUM),
                              "Failed to add SAM2 Hiera position embedding");
@@ -845,21 +685,10 @@ nvinfer1::ITensor *addSAM2HieraAttention(nvinfer1::INetworkDefinition *network, 
     const int token_count = height * width;
     auto     *tokens      = flattenNHWC(network, input, batch, height, width, dim_in);
     auto *qkv = addLinear3D(network, weights_map, *tokens, prefix + ".attn.qkv", dim_in, 3 * dim_out);
-    auto *q = requireLayer(network->addSlice(*qkv, nvinfer1::Dims3{0, 0, 0},
-                                             nvinfer1::Dims3{batch, token_count, dim_out},
-                                             nvinfer1::Dims3{1, 1, 1}),
-                           "Failed to slice SAM2 Hiera q")
-                  ->getOutput(0);
-    auto *k = requireLayer(network->addSlice(*qkv, nvinfer1::Dims3{0, 0, dim_out},
-                                             nvinfer1::Dims3{batch, token_count, dim_out},
-                                             nvinfer1::Dims3{1, 1, 1}),
-                           "Failed to slice SAM2 Hiera k")
-                  ->getOutput(0);
-    auto *v = requireLayer(network->addSlice(*qkv, nvinfer1::Dims3{0, 0, 2 * dim_out},
-                                             nvinfer1::Dims3{batch, token_count, dim_out},
-                                             nvinfer1::Dims3{1, 1, 1}),
-                           "Failed to slice SAM2 Hiera v")
-                  ->getOutput(0);
+    nvinfer1::ITensor *q = nullptr;
+    nvinfer1::ITensor *k = nullptr;
+    nvinfer1::ITensor *v = nullptr;
+    splitQkv(network, *qkv, batch, token_count, dim_out, q, k, v);
 
     out_h = height;
     out_w = width;
@@ -934,7 +763,7 @@ nvinfer1::ITensor *addSAM2HieraBlock(nvinfer1::INetworkDefinition *network, cons
     auto *norm2 = addLayerNormLastDim(network, weights_map, *x, prefix + ".norm2", dim_out);
     auto *mlp0 = addLinearNHWC(network, weights_map, *norm2, prefix + ".mlp.layers.0", batch, out_h, out_w, dim_out,
                                dim_out * 4);
-    auto *gelu = addGelu(network, *mlp0);
+    auto *gelu = addGeluExact(network, *mlp0);
     auto *mlp1 = addLinearNHWC(network, weights_map, *gelu, prefix + ".mlp.layers.1", batch, out_h, out_w,
                                dim_out * 4, dim_out);
     height = out_h;
@@ -1253,7 +1082,7 @@ nvinfer1::ITensor *addDensePromptPE(nvinfer1::INetworkDefinition *network, const
     }
 
     auto *pe = requireLayer(network->addConstant(nvinfer1::Dims4{1, kSamPromptDim, kSamEmbedGrid, kSamEmbedGrid},
-                                                 ownedVectorWeight(std::move(values))),
+                                                 ownedFloatVector(std::move(values))),
                             "Failed to add SAM dense prompt PE");
     return pe->getOutput(0);
 }
@@ -1306,11 +1135,11 @@ nvinfer1::ITensor *addPointPromptEmbedding(const SAMSegmentationModel &impl, nvi
     auto *shifted = requireLayer(network->addElementWise(*coords->getOutput(0), *half, E::kSUM),
                                  "Failed to shift SAM point coords");
     std::vector<float> inv_size{1.0F / static_cast<float>(geometry.image_w), 1.0F / static_cast<float>(geometry.image_h)};
-    auto *norm_const = requireLayer(network->addConstant(nvinfer1::Dims3{1, 1, 2}, ownedVectorWeight(inv_size)),
+    auto *norm_const = requireLayer(network->addConstant(nvinfer1::Dims3{1, 1, 2}, ownedFloatVector(inv_size)),
                                     "Failed to add SAM point norm");
     auto *normalized = requireLayer(network->addElementWise(*shifted->getOutput(0), *norm_const->getOutput(0), E::kPROD),
                                     "Failed to normalize SAM point coords");
-    auto *pad_coord = requireLayer(network->addConstant(nvinfer1::Dims3{1, 1, 2}, ownedVectorWeight({0.0F, 0.0F})),
+    auto *pad_coord = requireLayer(network->addConstant(nvinfer1::Dims3{1, 1, 2}, ownedFloatVector({0.0F, 0.0F})),
                                    "Failed to add SAM padding point");
     std::array<nvinfer1::ITensor *, 2> coord_tensors{normalized->getOutput(0), pad_coord->getOutput(0)};
     auto *coords_cat = requireLayer(network->addConcatenation(coord_tensors.data(), 2), "Failed to concat SAM coords");
@@ -1398,7 +1227,7 @@ nvinfer1::ITensor *addDensePromptEmbedding(const SAMSegmentationModel &impl, nvi
                                "Failed to add SAM mask prompt conv0");
     conv0->setStrideNd(nvinfer1::DimsHW{2, 2});
     auto *norm0 = addLayerNorm2d(network, weights_map, *conv0->getOutput(0), prompt_prefix + ".mask_downscaling.1", 4);
-    auto *gelu0 = addGelu(network, *norm0);
+    auto *gelu0 = addGeluExact(network, *norm0);
     auto *conv1 = requireLayer(network->addConvolutionNd(
                                    *gelu0, 16, nvinfer1::DimsHW{2, 2},
                                    requireWeight(weights_map, prompt_prefix + ".mask_downscaling.3.weight", 16 * 4 * 2 * 2),
@@ -1406,7 +1235,7 @@ nvinfer1::ITensor *addDensePromptEmbedding(const SAMSegmentationModel &impl, nvi
                                "Failed to add SAM mask prompt conv1");
     conv1->setStrideNd(nvinfer1::DimsHW{2, 2});
     auto *norm1 = addLayerNorm2d(network, weights_map, *conv1->getOutput(0), prompt_prefix + ".mask_downscaling.4", 16);
-    auto *gelu1 = addGelu(network, *norm1);
+    auto *gelu1 = addGeluExact(network, *norm1);
     auto *mask_embedding = requireLayer(
         network->addConvolutionNd(*gelu1, kSamPromptDim, nvinfer1::DimsHW{1, 1},
                                   requireWeight(weights_map, prompt_prefix + ".mask_downscaling.6.weight",
@@ -1637,7 +1466,7 @@ void addSAMMaskDecoder(nvinfer1::INetworkDefinition *network, const WeightsMap &
     }
     auto *up_norm = addLayerNorm2d(network, weights_map, *up0_input, mask_prefix + ".output_upscaling.1",
                                    kSamPromptDim / 4);
-    auto *up_gelu = addGelu(network, *up_norm);
+    auto *up_gelu = addGeluExact(network, *up_norm);
     auto *up1 = requireLayer(network->addDeconvolutionNd(
                                  *up_gelu, kSamPromptDim / 8, nvinfer1::DimsHW{2, 2},
                                  requireWeight(weights_map, mask_prefix + ".output_upscaling.3.weight",
@@ -1652,7 +1481,7 @@ void addSAMMaskDecoder(nvinfer1::INetworkDefinition *network, const WeightsMap &
                                  "Failed to add SAM2 high-res s0 feature")
                         ->getOutput(0);
     }
-    auto *upscaled = addGelu(network, *up1_input);
+    auto *upscaled = addGeluExact(network, *up1_input);
     named_tensors["upscaled_embedding"] = upscaled;
 
     std::vector<nvinfer1::ITensor *> hyper_outputs;

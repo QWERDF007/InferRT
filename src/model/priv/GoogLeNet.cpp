@@ -1,4 +1,5 @@
 #include "GoogLeNet.hpp"
+#include "Weights.hpp"
 
 #include "BatchNorm.hpp"
 
@@ -35,15 +36,6 @@ struct PoolFlatten
     nvinfer1::ITensor *pooled;    ///< 保留 NCHW 维度的全局平均池化输出。
     nvinfer1::ITensor *flattened; ///< 展平后的二维输出。
 };
-
-/**
- * @brief 返回空权重，供无 bias 的卷积层使用。
- * @return TensorRT 空权重对象。
- */
-nvinfer1::Weights emptyWeights()
-{
-    return {nvinfer1::DataType::kFLOAT, nullptr, 0};
-}
 
 /**
  * @brief 添加 GoogLeNet 中重复使用的 Conv2d + BatchNorm2d + ReLU 结构。

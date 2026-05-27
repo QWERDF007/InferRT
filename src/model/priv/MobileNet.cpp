@@ -1,4 +1,5 @@
 #include "MobileNet.hpp"
+#include "Weights.hpp"
 
 #include "BatchNorm.hpp"
 
@@ -41,11 +42,6 @@ struct V3Block
     Act act;
     int stride;
 };
-
-nvinfer1::Weights emptyWeights()
-{
-    return {nvinfer1::DataType::kFLOAT, nullptr, 0};
-}
 
 nvinfer1::ITensor *addActivation(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input, Act act)
 {
