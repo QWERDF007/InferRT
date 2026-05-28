@@ -97,6 +97,16 @@ message(STATUS "    CUDAToolkit lib dir     : ${CUDAToolkit_LIBRARY_DIR}")
 message(STATUS "    cudnn lib               : ${CUDNN_LIB}")
 message(STATUS "")
 
+message(STATUS "Model backends")
+message(STATUS "    ONNX Runtime enabled : ${INFERRT_WITH_ONNXRUNTIME}")
+message(STATUS "    ONNX Runtime root    : ${ONNXRUNTIME_ROOT}")
+message(STATUS "    OpenVINO enabled     : ${INFERRT_WITH_OPENVINO}")
+message(STATUS "    OpenVINO provider    : ${INFERRT_OPENVINO_PROVIDER}")
+message(STATUS "    OpenVINO root        : ${INFERRT_OPENVINO_ROOT}")
+message(STATUS "    OpenVINO package dir : ${OpenVINO_DIR}")
+message(STATUS "    OpenVINO TBB bin     : ${INFERRT_OPENVINO_TBB_BIN_DIR}")
+message(STATUS "")
+
 # 显示 Python 配置信息
 message(STATUS "Python")
 message(STATUS "    Python root: ${Python_ROOT_DIR}")

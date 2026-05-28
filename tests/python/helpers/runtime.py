@@ -84,7 +84,7 @@ def require_weights(root: Path, relative_weights: str) -> Path:
     if not weights_path.exists():
         raise FileNotFoundError(
             f"Weights file missing: {weights_path}. "
-            "Generate it with samples/model/classification/gen_wts.py."
+            "Generate it with the model-dir parity exporter or provide --inferrt-model-root."
         )
     return weights_path
 
@@ -329,7 +329,24 @@ def run_torch_features(model_name: str, input_tensor: np.ndarray, feature_names:
     hooks: list = []
 
     def _make_hook(name: str):
+        """创建保存指定特征输出的 forward hook。
+
+        Args:
+            name: 当前 hook 对应的特征名。
+
+        Returns:
+            可注册到 PyTorch module 的 hook 函数。
+        """
+
         def _hook(_module, _input, _output):
+            """把 module 输出从 GPU/Autograd 张量转换为 NumPy 并保存。
+
+            Args:
+                _module: 触发 hook 的 PyTorch module。
+                _input: module 输入，占位参数。
+                _output: module 输出张量。
+            """
+
             outputs[name] = _output.detach().cpu().numpy()
 
         return _hook

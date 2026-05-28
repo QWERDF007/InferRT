@@ -139,6 +139,10 @@ public:
      */
     virtual const IModelConfig &modelConfig() const noexcept;
 
+    virtual ModelBackend backend() const noexcept;
+
+    virtual ModelDevice device() const noexcept;
+
     /**
      * @brief 获取当前 engine 中指定类型的 I/O 张量名称。
      * @param mode TensorRT 张量 I/O 类型。

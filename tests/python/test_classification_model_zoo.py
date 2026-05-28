@@ -100,6 +100,15 @@ def test_list_supported_timm_models_queries_dino_patterns(monkeypatch: pytest.Mo
     calls: list[str] = []
 
     def fake_list_models(pattern: str) -> list[str]:
+        """记录 timm 查询模式并返回伪造模型名。
+
+        Args:
+            pattern: ``model_zoo`` 传入的 timm 通配符。
+
+        Returns:
+            包含该通配符的伪造模型列表。
+        """
+
         calls.append(pattern)
         return [f"{pattern}_model"]
 
@@ -139,6 +148,16 @@ def test_create_timm_dinov3_uses_cls_token_pooling(monkeypatch: pytest.MonkeyPat
     captured: dict[str, object] = {}
 
     def fake_create_model(model_name: str, **kwargs: object) -> object:
+        """捕获 timm.create_model 调用参数。
+
+        Args:
+            model_name: 传入 timm 的模型名。
+            **kwargs: 创建模型时传入的关键字参数。
+
+        Returns:
+            用于占位的模型对象。
+        """
+
         captured["model_name"] = model_name
         captured.update(kwargs)
         return object()
@@ -158,6 +177,17 @@ def test_create_torchhub_dinov2_uses_official_repo_by_default(monkeypatch: pytes
     captured: dict[str, object] = {}
 
     def fake_hub_load(repo_or_dir: str, model: str, **kwargs: object) -> object:
+        """捕获 torch.hub.load 的仓库、模型名和参数。
+
+        Args:
+            repo_or_dir: torchhub 仓库或本地目录。
+            model: torchhub 模型 key。
+            **kwargs: 额外加载参数。
+
+        Returns:
+            用于占位的模型对象。
+        """
+
         captured["repo_or_dir"] = repo_or_dir
         captured["model"] = model
         captured.update(kwargs)
@@ -181,6 +211,8 @@ def test_create_transformers_dinov3_uses_huggingface_pipeline(monkeypatch: pytes
     captured: dict[str, object] = {}
 
     class FakeHFModel(torch.nn.Module):
+        """模拟 Hugging Face DINOv3 模型对象。"""
+
         config = SimpleNamespace(
             image_size=224,
             hidden_size=768,
@@ -191,16 +223,36 @@ def test_create_transformers_dinov3_uses_huggingface_pipeline(monkeypatch: pytes
         )
 
         def forward(self, pixel_values: torch.Tensor) -> object:
+            """返回包含 pooler 和 token 输出的伪造前向结果。
+
+            Args:
+                pixel_values: 输入图像张量。
+
+            Returns:
+                带 ``pooler_output`` 和 ``last_hidden_state`` 的对象。
+            """
+
             return SimpleNamespace(
                 pooler_output=torch.zeros((pixel_values.shape[0], 768)),
                 last_hidden_state=torch.zeros((pixel_values.shape[0], 1 + 4 + 196, 768)),
             )
 
     class FakePipeline:
+        """模拟 transformers pipeline 返回对象。"""
+
         model = FakeHFModel()
         image_processor = SimpleNamespace(size={"height": 224, "width": 224})
 
     def fake_pipeline(**kwargs: object) -> object:
+        """捕获 transformers.pipeline 调用参数。
+
+        Args:
+            **kwargs: pipeline 创建参数。
+
+        Returns:
+            伪造的 pipeline 对象。
+        """
+
         captured.update(kwargs)
         return FakePipeline()
 
@@ -221,6 +273,17 @@ def test_create_torchhub_dinov2_supports_local_repo_and_weights(monkeypatch: pyt
     captured: dict[str, object] = {}
 
     def fake_hub_load(repo_or_dir: str, model: str, **kwargs: object) -> object:
+        """捕获离线 torchhub 加载参数。
+
+        Args:
+            repo_or_dir: 本地 DINOv2 仓库路径。
+            model: DINOv2 模型 key。
+            **kwargs: torchhub 加载参数。
+
+        Returns:
+            用于占位的模型对象。
+        """
+
         captured["repo_or_dir"] = repo_or_dir
         captured["model"] = model
         captured.update(kwargs)
@@ -254,6 +317,8 @@ def test_create_transformers_dinov3_supports_model_id_override(monkeypatch: pyte
     captured: dict[str, object] = {}
 
     class FakeHFModel(torch.nn.Module):
+        """模拟带配置的 Hugging Face DINOv3 模型。"""
+
         config = SimpleNamespace(
             image_size=224,
             hidden_size=768,
@@ -264,10 +329,21 @@ def test_create_transformers_dinov3_supports_model_id_override(monkeypatch: pyte
         )
 
     class FakePipeline:
+        """模拟 transformers pipeline 返回对象。"""
+
         model = FakeHFModel()
         image_processor = SimpleNamespace(size={"height": 224, "width": 224})
 
     def fake_pipeline(**kwargs: object) -> object:
+        """捕获 transformers.pipeline 的本地模型参数。
+
+        Args:
+            **kwargs: pipeline 创建参数。
+
+        Returns:
+            伪造的 pipeline 对象。
+        """
+
         captured.update(kwargs)
         return FakePipeline()
 
@@ -401,7 +477,15 @@ def test_export_model_state_dict_uses_adapter_export() -> None:
     """``gen_wts.py`` 应通过通用导出入口读取适配器转换后的权重。"""
 
     class FakeExportModel(torch.nn.Module):
+        """模拟提供自定义导出 state_dict 的模型。"""
+
         def export_state_dict(self) -> dict[str, torch.Tensor]:
+            """返回转换后的伪造权重表。
+
+            Returns:
+                仅包含一个权重项的 state_dict。
+            """
+
             return {"converted.weight": torch.ones(1)}
 
     exported = export_model_state_dict(FakeExportModel())

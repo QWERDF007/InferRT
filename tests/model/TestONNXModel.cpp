@@ -5,11 +5,111 @@
 #include <inferrt/model/IModel.h>
 #include <inferrt/model/Utils.hpp>
 
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
 #include <memory>
 #include <vector>
 
 using test::model::ExpectIrtExceptionCode;
 using test::model::MakeNullBuffers;
+
+namespace {
+
+std::filesystem::path ProjectRoot()
+{
+    auto source = std::filesystem::path(__FILE__);
+    if (source.is_relative())
+    {
+        source = std::filesystem::current_path() / source;
+    }
+    return source.parent_path().parent_path().parent_path();
+}
+
+std::filesystem::path SampleResNet50Onnx()
+{
+    return ProjectRoot() / "samples" / "model" / "onnx" / "resnet50.onnx";
+}
+
+void RunOnnxGraphBackend(irt::model::ModelBackend backend, bool feature_only)
+{
+    const auto onnx_path = SampleResNet50Onnx();
+    if (!std::filesystem::exists(onnx_path))
+    {
+        GTEST_SKIP() << "sample ONNX file not found: " << onnx_path.string();
+    }
+
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setBackend(backend);
+    config->setDevice(irt::model::ModelDevice::CPU);
+    if (feature_only)
+    {
+        config->setFeatureOnly(true);
+        config->setFeatureTensorNames({"output"});
+        config->setOutputTensorNames({"output"});
+    }
+
+    auto model = irt::model::CreateModel("onnx", std::move(config));
+    ASSERT_NE(model, nullptr);
+    model->buildOrLoad(onnx_path.string());
+
+    const auto input_names = model->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
+    const auto output_names = model->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+    EXPECT_EQ(model->backend(), backend);
+    EXPECT_EQ(model->device(), irt::model::ModelDevice::CPU);
+    ASSERT_EQ(input_names.size(), 1U);
+    ASSERT_EQ(output_names.size(), 1U);
+    EXPECT_EQ(model->tensorDataType(input_names.front()), nvinfer1::DataType::kFLOAT);
+    EXPECT_EQ(model->tensorDataType(output_names.front()), nvinfer1::DataType::kFLOAT);
+
+    const auto input_dims = model->tensorShape(input_names.front());
+    const auto output_dims = model->tensorShape(output_names.front());
+    EXPECT_EQ(input_dims.nbDims, 4);
+    EXPECT_EQ(input_dims.d[0], 1);
+    EXPECT_EQ(input_dims.d[1], 3);
+    EXPECT_EQ(input_dims.d[2], 224);
+    EXPECT_EQ(input_dims.d[3], 224);
+    EXPECT_EQ(output_dims.nbDims, 2);
+    EXPECT_EQ(output_dims.d[0], 1);
+    EXPECT_EQ(output_dims.d[1], 1000);
+
+    std::vector<float> input(irt::model::elementCount(input_dims), 0.01F);
+    std::vector<float> output(irt::model::elementCount(output_dims), 0.0F);
+    std::vector<void *> buffers{input.data(), output.data()};
+
+    if (feature_only)
+    {
+        model->forwardFeatures(buffers);
+    }
+    else
+    {
+        model->infer(buffers);
+    }
+
+    EXPECT_TRUE(std::all_of(output.begin(), output.end(), [](float value) { return std::isfinite(value); }));
+    EXPECT_TRUE(std::any_of(output.begin(), output.end(), [](float value) { return std::abs(value) > 1.0e-7F; }));
+}
+
+void ExpectInvalidOutputRejected(irt::model::ModelBackend backend)
+{
+    const auto onnx_path = SampleResNet50Onnx();
+    if (!std::filesystem::exists(onnx_path))
+    {
+        GTEST_SKIP() << "sample ONNX file not found: " << onnx_path.string();
+    }
+
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setBackend(backend);
+    config->setDevice(irt::model::ModelDevice::CPU);
+    config->setOutputTensorNames({"missing_output"});
+
+    auto model = irt::model::CreateModel("onnx", std::move(config));
+    ASSERT_NE(model, nullptr);
+
+    ExpectIrtExceptionCode([&] { model->buildOrLoad(onnx_path.string()); }, irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+} // namespace
 
 /**
  * @brief ONNX 模型应使用 `.onnx` 作为权重扩展名。
@@ -83,6 +183,21 @@ TEST(ONNXModelRuntimeQueryTest, SetTensorShapeWithoutContextThrowsInvalidOperati
                            irt::Status::ERROR_INVALID_OPERATION);
 }
 
+TEST(ONNXRuntimeBackendTest, RuntimeQueriesBeforeLoadThrowInvalidOperation)
+{
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setBackend(irt::model::ModelBackend::ONNXRuntime);
+    config->setDevice(irt::model::ModelDevice::CPU);
+
+    auto model = irt::model::CreateModel("onnx", std::move(config));
+    ASSERT_NE(model, nullptr);
+
+    ExpectIrtExceptionCode([&] { model->ioTensorNames(nvinfer1::TensorIOMode::kINPUT); },
+                           irt::Status::ERROR_INVALID_OPERATION);
+    ExpectIrtExceptionCode([&] { model->infer(MakeNullBuffers(2)); },
+                           irt::Status::ERROR_INVALID_OPERATION);
+}
+
 /**
  * @brief 构建不存在的 ONNX 文件时，应返回非法参数错误。
  */
@@ -95,9 +210,52 @@ TEST(ONNXModelLifecycleTest, BuildWithNonExistentOnnxThrowsInvalidArgument)
                            irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
+TEST(ONNXRuntimeBackendTest, BuildWithNonExistentOnnxThrowsInvalidArgument)
+{
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setBackend(irt::model::ModelBackend::ONNXRuntime);
+    config->setDevice(irt::model::ModelDevice::CPU);
+
+    auto model = irt::model::CreateModel("onnx", std::move(config));
+    ASSERT_NE(model, nullptr);
+
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.onnx"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
 /**
  * @brief buildOrLoad 在 ONNX 文件不存在时，也应返回非法参数错误。
  */
+TEST(ONNXRuntimeBackendTest, BuildsAndRunsCpuInferenceFromSampleOnnx)
+{
+    RunOnnxGraphBackend(irt::model::ModelBackend::ONNXRuntime, false);
+}
+
+TEST(ONNXRuntimeBackendTest, ForwardFeaturesRunsConfiguredGraphOutput)
+{
+    RunOnnxGraphBackend(irt::model::ModelBackend::ONNXRuntime, true);
+}
+
+TEST(ONNXRuntimeBackendTest, RejectsOutputNameThatIsNotGraphOutput)
+{
+    ExpectInvalidOutputRejected(irt::model::ModelBackend::ONNXRuntime);
+}
+
+TEST(OpenVINOBackendTest, BuildsAndRunsCpuInferenceFromSampleOnnx)
+{
+    RunOnnxGraphBackend(irt::model::ModelBackend::OpenVINO, false);
+}
+
+TEST(OpenVINOBackendTest, ForwardFeaturesRunsConfiguredGraphOutput)
+{
+    RunOnnxGraphBackend(irt::model::ModelBackend::OpenVINO, true);
+}
+
+TEST(OpenVINOBackendTest, RejectsOutputNameThatIsNotGraphOutput)
+{
+    ExpectInvalidOutputRejected(irt::model::ModelBackend::OpenVINO);
+}
+
 TEST(ONNXModelLifecycleTest, BuildOrLoadWithNonExistentOnnxThrowsInvalidArgument)
 {
     auto model = irt::model::CreateModel("onnx");

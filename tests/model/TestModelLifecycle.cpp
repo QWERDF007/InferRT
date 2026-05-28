@@ -37,6 +37,8 @@ void SetModelTensorNames(irt::model::IModel &model, std::vector<std::string> inp
     new_config->setOutputTensorNames(std::move(output_names));
     new_config->setFeatureTensorNames(config.featureTensorNames());
     new_config->setFeatureOnly(config.featureOnly());
+    new_config->setBackend(config.backend());
+    new_config->setDevice(config.device());
     model.setModelConfig(std::move(new_config));
 }
 
@@ -137,6 +139,8 @@ TEST(IModelConfigTest, DefaultConfigMatchesImageNetClassificationContract)
     EXPECT_EQ(config.outputTensorNames(), (std::vector<std::string>{"output"}));
     EXPECT_TRUE(config.featureTensorNames().empty());
     EXPECT_FALSE(config.featureOnly());
+    EXPECT_EQ(config.backend(), irt::model::ModelBackend::TensorRT);
+    EXPECT_EQ(config.device(), irt::model::ModelDevice::GPU);
     ASSERT_EQ(config.inputShapes().size(), 1U);
     EXPECT_EQ(config.inputShape().nbDims, 4);
     EXPECT_EQ(config.inputShape().d[0], 1);
@@ -157,14 +161,36 @@ TEST(IModelConfigTest, SettersUpdateAllPublicConfigFields)
     config.setOutputTensorNames({"logits", "aux"});
     config.setFeatureTensorNames({"layer1", "layer2"});
     config.setFeatureOnly(true);
+    config.setBackend(irt::model::ModelBackend::ONNXRuntime);
+    config.setDevice(irt::model::ModelDevice::CPU);
 
     EXPECT_EQ(config.numClasses(), 7);
     EXPECT_EQ(config.inputTensorNames(), (std::vector<std::string>{"image"}));
     EXPECT_EQ(config.outputTensorNames(), (std::vector<std::string>{"logits", "aux"}));
     EXPECT_EQ(config.featureTensorNames(), (std::vector<std::string>{"layer1", "layer2"}));
     EXPECT_TRUE(config.featureOnly());
+    EXPECT_EQ(config.backend(), irt::model::ModelBackend::ONNXRuntime);
+    EXPECT_EQ(config.device(), irt::model::ModelDevice::CPU);
     EXPECT_EQ(config.inputShape().d[0], 2);
     EXPECT_EQ(config.inputShape().d[2], 32);
+}
+
+/**
+ * @brief CreateModel 应保留调用方传入的后端和设备配置。
+ */
+TEST(IModelConfigTest, CreateModelPreservesBackendAndDeviceFromConfig)
+{
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setBackend(irt::model::ModelBackend::ONNXRuntime);
+    config->setDevice(irt::model::ModelDevice::CPU);
+
+    auto model = irt::model::CreateModel("onnx", std::move(config));
+    ASSERT_NE(model, nullptr);
+
+    EXPECT_EQ(model->backend(), irt::model::ModelBackend::ONNXRuntime);
+    EXPECT_EQ(model->device(), irt::model::ModelDevice::CPU);
+    EXPECT_EQ(model->modelConfig().backend(), irt::model::ModelBackend::ONNXRuntime);
+    EXPECT_EQ(model->modelConfig().device(), irt::model::ModelDevice::CPU);
 }
 
 /**

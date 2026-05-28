@@ -33,15 +33,27 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SAMPLES_PYTHON = ROOT / "samples" / "model" / "python"
 CLASSIFICATION_SAMPLES = ROOT / "samples" / "model" / "classification"
+ONNX_SAMPLES = ROOT / "samples" / "model" / "onnx"
+DETECTION_SAMPLES = ROOT / "samples" / "model" / "detection"
+SEGMENTATION_SAMPLES = ROOT / "samples" / "model" / "segmentation"
 
-if str(SAMPLES_PYTHON) not in sys.path:
-    sys.path.insert(0, str(SAMPLES_PYTHON))
-if str(CLASSIFICATION_SAMPLES) not in sys.path:
-    sys.path.insert(0, str(CLASSIFICATION_SAMPLES))
+SAMPLE_MODULE_PATHS = (
+    SAMPLES_PYTHON,
+    CLASSIFICATION_SAMPLES,
+    ONNX_SAMPLES,
+    DETECTION_SAMPLES,
+    SEGMENTATION_SAMPLES,
+)
+
+for module_path in reversed(SAMPLE_MODULE_PATHS):
+    module_path_text = str(module_path)
+    if module_path_text in sys.path:
+        sys.path.remove(module_path_text)
+    sys.path.insert(0, module_path_text)
 
 from util import ensure_module_path, preprocess_image  # noqa: E402
 
-from helpers.runtime import default_build_dir, project_root, require_weights  # noqa: E402
+from helpers.runtime import default_build_dir, project_root  # noqa: E402
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -86,6 +98,37 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         type=float,
         default=1.5e-1,
         help="特征提取张量比对的绝对容差（numpy.allclose 的 atol）",
+    )
+    parser.addoption(
+        "--inferrt-compare-runtime",
+        action="store",
+        default="",
+        help="Comma-separated runtimes to compare: tensorrt, onnx, openvino. Case-insensitive.",
+    )
+    parser.addoption(
+        "--inferrt-model-dir-families",
+        action="store",
+        default="resnet,dinov2,dinov3",
+        help="要扫描的 model-root 子目录，逗号分隔，例如 resnet,dinov2,dinov3",
+    )
+    parser.addoption(
+        "--inferrt-model-dir-max-cases",
+        action="store",
+        type=int,
+        default=0,
+        help="最多运行的 checkpoint 用例数；0 表示运行全部",
+    )
+    parser.addoption(
+        "--inferrt-dinov2-hub-repo",
+        action="store",
+        default="",
+        help="可选的本地 facebookresearch/dinov2 torch.hub 仓库，供 model-dir parity 离线加载",
+    )
+    parser.addoption(
+        "--inferrt-compare-devices",
+        action="store",
+        default="gpu",
+        help="后端对比设备，逗号分隔：cpu、gpu，或 cpu,gpu",
     )
     parser.addoption(
         "--inferrt-model-root",
@@ -230,6 +273,47 @@ def feature_tolerances(pytestconfig: pytest.Config) -> tuple[float, float]:
     return pytestconfig.getoption("--inferrt-feature-rtol"), pytestconfig.getoption("--inferrt-feature-atol")
 
 
+_RUNTIME_ALIASES = {
+    "tensorrt": "TENSORRT",
+    "trt": "TENSORRT",
+    "onnx": "ONNXRUNTIME",
+    "onnxruntime": "ONNXRUNTIME",
+    "ort": "ONNXRUNTIME",
+    "openvino": "OPENVINO",
+    "ov": "OPENVINO",
+}
+
+
+@pytest.fixture(scope="session")
+def compare_runtimes(pytestconfig: pytest.Config) -> list[str]:
+    """Runtimes selected by --inferrt-compare-runtime."""
+
+    raw = pytestconfig.getoption("--inferrt-compare-runtime")
+    values = [item.strip().lower() for item in raw.split(",") if item.strip()]
+    invalid = sorted(set(values) - set(_RUNTIME_ALIASES))
+    if invalid:
+        allowed = "tensorrt, onnx, openvino"
+        raise pytest.UsageError(
+            f"Unsupported --inferrt-compare-runtime value(s): {', '.join(invalid)}; allowed: {allowed}"
+        )
+    runtimes = [_RUNTIME_ALIASES[value] for value in values]
+    return list(dict.fromkeys(runtimes))
+
+
+@pytest.fixture(scope="session")
+def compare_devices(pytestconfig: pytest.Config) -> list[str]:
+    """Devices selected for optional backend parity."""
+
+    raw = pytestconfig.getoption("--inferrt-compare-devices")
+    devices = [item.strip().lower() for item in raw.split(",") if item.strip()]
+    invalid = sorted(set(devices) - {"cpu", "gpu"})
+    if invalid:
+        raise pytest.UsageError(f"Unsupported --inferrt-compare-devices value(s): {', '.join(invalid)}")
+    if not devices:
+        raise pytest.UsageError("--inferrt-compare-devices must contain cpu, gpu, or both")
+    return list(dict.fromkeys(devices))
+
+
 def _configured_path(pytestconfig: pytest.Config, option: str, env_name: str, default: str) -> Path:
     """解析 pytest 选项、环境变量与默认路径三层配置。
 
@@ -302,22 +386,3 @@ def sam2_root(pytestconfig: pytest.Config) -> Path:
     return _configured_path(pytestconfig, "--inferrt-sam2-root", "INFERRT_SAM2_ROOT", "D:/Github/SAM/sam2")
 
 
-@pytest.fixture
-def weights_path(repo_root: Path):
-    """解析权重文件路径的工厂 fixture。
-
-    Args:
-        repo_root: 仓库根目录，权重路径相对此目录解析。
-
-    Returns:
-        Callable[[str], Path]: 接受相对路径（如 ``samples/model/.../resnet18.wts``），
-        返回绝对 ``Path``；文件缺失时 ``pytest.skip`` 而非抛错到测试体。
-    """
-
-    def _resolve(relative_path: str) -> Path:
-        try:
-            return require_weights(repo_root, relative_path)
-        except FileNotFoundError as exc:
-            pytest.skip(str(exc))
-
-    return _resolve

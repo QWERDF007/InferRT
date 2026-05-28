@@ -1,52 +1,23 @@
+from __future__ import annotations
+
 import argparse
 import io
 import os
+from pathlib import Path
 import sys
 import warnings
 
 import torch
-from torchvision.models import (
-    AlexNet_Weights,
-    ResNet18_Weights,
-    ResNet34_Weights,
-    ResNet50_Weights,
-    ResNet101_Weights,
-    ResNet152_Weights,
-    VGG11_Weights,
-    VGG13_Weights,
-    VGG16_Weights,
-    VGG19_Weights,
-    Wide_ResNet50_2_Weights,
-    Wide_ResNet101_2_Weights,
-    alexnet,
-    resnet18,
-    resnet34,
-    resnet50,
-    resnet101,
-    resnet152,
-    vgg11,
-    vgg13,
-    vgg16,
-    vgg19,
-    wide_resnet50_2,
-    wide_resnet101_2,
-)
+
+THIS_DIR = Path(__file__).resolve().parent
+CLASSIFICATION_DIR = THIS_DIR.parent / "classification"
+if str(CLASSIFICATION_DIR) not in sys.path:
+    sys.path.insert(0, str(CLASSIFICATION_DIR))
+
+from model_zoo import create_model, list_supported_models, parse_image_size, resolve_input_size
 
 
-TORCHVISION_MODEL_ZOO = {
-    "alexnet": (alexnet, AlexNet_Weights.IMAGENET1K_V1),
-    "vgg11": (vgg11, VGG11_Weights.IMAGENET1K_V1),
-    "vgg13": (vgg13, VGG13_Weights.IMAGENET1K_V1),
-    "vgg16": (vgg16, VGG16_Weights.IMAGENET1K_V1),
-    "vgg19": (vgg19, VGG19_Weights.IMAGENET1K_V1),
-    "resnet18": (resnet18, ResNet18_Weights.IMAGENET1K_V1),
-    "resnet34": (resnet34, ResNet34_Weights.IMAGENET1K_V1),
-    "resnet50": (resnet50, ResNet50_Weights.IMAGENET1K_V2),
-    "resnet101": (resnet101, ResNet101_Weights.IMAGENET1K_V2),
-    "resnet152": (resnet152, ResNet152_Weights.IMAGENET1K_V2),
-    "wide_resnet50_2": (wide_resnet50_2, Wide_ResNet50_2_Weights.IMAGENET1K_V2),
-    "wide_resnet101_2": (wide_resnet101_2, Wide_ResNet101_2_Weights.IMAGENET1K_V2),
-}
+MODEL_BACKENDS = ("timm", "torchhub", "torchvision", "transformers")
 
 
 def configure_stdio() -> None:
@@ -68,51 +39,59 @@ def configure_stdio() -> None:
             setattr(sys, stream_name, io.TextIOWrapper(buffer, encoding="utf-8", errors="replace"))
 
 
-def list_supported_models(backend: str) -> list[str]:
-    if backend == "torchvision":
-        return list(TORCHVISION_MODEL_ZOO.keys())
-    if backend == "timm":
-        from timm import list_models
-
-        return list_models("resnet*") + list_models("wide_resnet*")
-    raise ValueError(f"Unsupported backend: {backend}")
+def parse_cli_image_size(value: str) -> tuple[int, int]:
+    try:
+        return parse_image_size(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
-def create_model(model_name: str, backend: str) -> torch.nn.Module:
-    if backend == "torchvision":
-        if model_name not in TORCHVISION_MODEL_ZOO:
-            available = ", ".join(TORCHVISION_MODEL_ZOO.keys())
-            raise ValueError(f"Unsupported torchvision model: {model_name}. Available: {available}")
+def resolve_export_image_size(model: torch.nn.Module, args: argparse.Namespace) -> tuple[tuple[int, int], str]:
+    if args.input_size is not None:
+        return args.input_size, "manual"
 
-        model_fn, weights = TORCHVISION_MODEL_ZOO[model_name]
-        return model_fn(weights=weights)
+    if args.height or args.width:
+        if args.height <= 0 or args.width <= 0:
+            raise ValueError("--height and --width must both be positive when either one is specified")
+        return (args.height, args.width), "manual"
 
-    if backend == "timm":
-        from timm import create_model
+    return resolve_input_size(model), "model"
 
-        return create_model(model_name, pretrained=True)
 
-    raise ValueError(f"Unsupported backend: {backend}")
+def make_dummy_input(args: argparse.Namespace, image_size: tuple[int, int]) -> torch.Tensor:
+    if args.batch_size <= 0:
+        raise ValueError(f"--batch-size must be positive, got {args.batch_size}")
+    if args.channels <= 0:
+        raise ValueError(f"--channels must be positive, got {args.channels}")
+
+    height, width = image_size
+    return torch.randn(args.batch_size, args.channels, height, width)
 
 
 def export_with_onnx(
     model: torch.nn.Module,
     dummy_input: torch.Tensor,
-    output_path: str,
+    output_path: Path,
     args: argparse.Namespace,
+    *,
     use_dynamo: bool,
 ) -> None:
-    export_kwargs = {
+    export_kwargs: dict[str, object] = {
         "export_params": True,
         "opset_version": args.opset,
         "do_constant_folding": True,
         "input_names": [args.input_name],
         "output_names": [args.output_name],
     }
+    if args.dynamic_batch:
+        export_kwargs["dynamic_axes"] = {
+            args.input_name: {0: "batch"},
+            args.output_name: {0: "batch"},
+        }
     if use_dynamo:
         export_kwargs["dynamo"] = True
 
-    torch.onnx.export(model, dummy_input, output_path, **export_kwargs)
+    torch.onnx.export(model, dummy_input, str(output_path), **export_kwargs)
 
 
 def main(args: argparse.Namespace) -> None:
@@ -124,13 +103,28 @@ def main(args: argparse.Namespace) -> None:
         print(models)
         return
 
-    model = create_model(args.model, args.backend)
+    model = create_model(
+        args.model,
+        args.backend,
+        hub_repo=args.hub_repo,
+        hub_source=args.hub_source,
+        pretrained=args.pretrained,
+        hub_weights=args.hub_weights,
+        hf_model_id=args.hf_model_id,
+        local_files_only=args.local_files_only,
+    )
     model.eval()
 
-    dummy_input = torch.randn(1, args.channels, args.height, args.width)
-    output_path = args.output if args.output else f"{args.model}.onnx"
+    image_size, size_source = resolve_export_image_size(model, args)
+    dummy_input = make_dummy_input(args, image_size)
+    output_path = Path(args.output) if args.output else Path(f"{args.model}.onnx")
+    if output_path.parent != Path("."):
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"Exporting model '{args.model}' to {output_path} ...")
+    print(
+        f"Exporting model '{args.model}' to {output_path} "
+        f"with input shape {tuple(dummy_input.shape)} ({size_source}) ..."
+    )
 
     if args.exporter == "legacy":
         export_with_onnx(model, dummy_input, output_path, args, use_dynamo=False)
@@ -155,23 +149,33 @@ def main(args: argparse.Namespace) -> None:
         print(f"ONNX file '{output_path}' exported successfully with legacy exporter.")
 
 
-if __name__ == "__main__":
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Export classification models to ONNX")
     parser.add_argument("-m", "--model", type=str, default="alexnet", help="Model name")
     parser.add_argument(
         "-b",
         "--backend",
         type=str,
-        choices=("timm", "torchvision"),
+        choices=MODEL_BACKENDS,
         default="torchvision",
         help="Model provider backend",
     )
     parser.add_argument("-o", "--output", type=str, default="", help="Output ONNX file path")
     parser.add_argument("--input-name", type=str, default="input", help="Input tensor name")
     parser.add_argument("--output-name", type=str, default="output", help="Output tensor name")
+    parser.add_argument("--batch-size", type=int, default=1, help="Input batch size")
     parser.add_argument("--channels", type=int, default=3, help="Input channels")
-    parser.add_argument("--height", type=int, default=224, help="Input height")
-    parser.add_argument("--width", type=int, default=224, help="Input width")
+    parser.add_argument(
+        "--input-size",
+        "--image-size",
+        dest="input_size",
+        type=parse_cli_image_size,
+        default=None,
+        metavar="SIZE",
+        help="Override input image size, e.g. 384, 384x384, 3x384x384, or 1x3x384x384",
+    )
+    parser.add_argument("--height", type=int, default=0, help="Deprecated alias for input height")
+    parser.add_argument("--width", type=int, default=0, help="Deprecated alias for input width")
     parser.add_argument("--opset", type=int, default=17, help="ONNX opset version")
     parser.add_argument(
         "--exporter",
@@ -180,5 +184,47 @@ if __name__ == "__main__":
         default="auto",
         help="Choose ONNX exporter backend",
     )
-    parser.add_argument("-l", "--list-model", action="store_true", help="List supported models")
-    main(parser.parse_args())
+    parser.add_argument("--dynamic-batch", action="store_true", help="Export dynamic batch axes")
+    parser.add_argument("-l", "--list-model", "--list_model", dest="list_model", action="store_true")
+    parser.add_argument(
+        "--hub-repo",
+        type=str,
+        default=None,
+        help="torch.hub repo or local directory; default is inferred from the DINO model name",
+    )
+    parser.add_argument(
+        "--hub-source",
+        type=str,
+        choices=("github", "local"),
+        default="github",
+        help="torch.hub source, used when --backend torchhub",
+    )
+    parser.add_argument(
+        "--hub-weights",
+        type=str,
+        default=None,
+        help="Optional DINO torch.hub weights path or URL, used when --backend torchhub",
+    )
+    parser.add_argument(
+        "--hf-model-id",
+        type=str,
+        default=None,
+        help="Optional Hugging Face model id, used when --backend transformers",
+    )
+    parser.add_argument(
+        "--local-files-only",
+        action="store_true",
+        help="Load Hugging Face models from the local cache only, used when --backend transformers",
+    )
+    parser.add_argument(
+        "--no-pretrained",
+        dest="pretrained",
+        action="store_false",
+        help="Create model without pretrained weights, useful for offline structural checks",
+    )
+    parser.set_defaults(pretrained=True)
+    return parser
+
+
+if __name__ == "__main__":
+    main(build_arg_parser().parse_args())

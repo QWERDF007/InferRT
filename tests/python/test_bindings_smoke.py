@@ -59,6 +59,8 @@ def test_model_config_defaults(irt_module: object) -> None:
     assert config.input_tensor_names == ["input"]
     assert config.output_tensor_names == ["output"]
     assert config.feature_tensor_names == []
+    assert config.backend == irt_module.ModelBackend.TENSORRT
+    assert config.device == irt_module.ModelDevice.GPU
 
 
 def test_model_config_setters_round_trip(irt_module: object) -> None:
@@ -76,6 +78,8 @@ def test_model_config_setters_round_trip(irt_module: object) -> None:
     config.output_tensor_names = ["logits", "aux"]
     config.feature_tensor_names = ["layer1", "layer4"]
     config.feature_only = True
+    config.backend = irt_module.ModelBackend.ONNXRUNTIME
+    config.device = irt_module.ModelDevice.CPU
 
     assert config.num_classes == 7
     assert config.input_shape == [2, 3, 32, 32]
@@ -84,6 +88,8 @@ def test_model_config_setters_round_trip(irt_module: object) -> None:
     assert config.output_tensor_names == ["logits", "aux"]
     assert config.feature_tensor_names == ["layer1", "layer4"]
     assert config.feature_only is True
+    assert config.backend == irt_module.ModelBackend.ONNXRUNTIME
+    assert config.device == irt_module.ModelDevice.CPU
 
 
 def test_model_config_rejects_invalid_shape_rank(irt_module: object) -> None:
@@ -117,6 +123,30 @@ def test_create_model_without_build(irt_module: object) -> None:
     assert model.name() == "VGG11"
     assert model.input_tensor_names()
     assert model.output_tensor_names()
+
+
+def test_create_model_accepts_backend_and_device_options(irt_module: object) -> None:
+    """验证 ``create_model`` 支持字符串和枚举形式的后端/设备参数。
+
+    Args:
+        irt_module: 已导入的 ``inferrt_model_py`` 模块。
+    """
+
+    model = irt_module.create_model("onnx", backend="onnxruntime", device="cpu")
+    assert model.backend() == irt_module.ModelBackend.ONNXRUNTIME
+    assert model.device() == irt_module.ModelDevice.CPU
+
+    enum_model = irt_module.create_model(
+        "onnx",
+        backend=irt_module.ModelBackend.ONNXRUNTIME,
+        device=irt_module.ModelDevice.GPU,
+    )
+    assert enum_model.backend() == irt_module.ModelBackend.ONNXRUNTIME
+    assert enum_model.device() == irt_module.ModelDevice.GPU
+
+    openvino_model = irt_module.create_model("onnx", backend="openvino", device="cpu")
+    assert openvino_model.backend() == irt_module.ModelBackend.OPENVINO
+    assert openvino_model.device() == irt_module.ModelDevice.CPU
 
 
 def test_create_googlenet_without_build(irt_module: object) -> None:

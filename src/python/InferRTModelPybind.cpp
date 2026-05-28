@@ -17,6 +17,7 @@
 #include <pybind11/stl.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -92,6 +93,8 @@ std::unique_ptr<irt::model::IModelConfig> cloneModelConfig(const irt::model::IMo
     cloned->setOutputTensorNames(config.outputTensorNames());
     cloned->setFeatureTensorNames(config.featureTensorNames());
     cloned->setFeatureOnly(config.featureOnly());
+    cloned->setBackend(config.backend());
+    cloned->setDevice(config.device());
     return cloned;
 }
 
@@ -110,13 +113,72 @@ py::dtype dataTypeToPyDType(nvinfer1::DataType data_type)
         return py::dtype("float16");
     case nvinfer1::DataType::kINT8:
         return py::dtype::of<int8_t>();
+    case nvinfer1::DataType::kUINT8:
+        return py::dtype::of<uint8_t>();
     case nvinfer1::DataType::kINT32:
         return py::dtype::of<int32_t>();
+    case nvinfer1::DataType::kINT64:
+        return py::dtype::of<int64_t>();
     case nvinfer1::DataType::kBOOL:
         return py::dtype::of<bool>();
     default:
         throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED, "Unsupported TensorRT data type");
     }
+}
+
+std::string lowerAscii(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
+
+irt::model::ModelBackend parseBackendObject(const py::object &value, irt::model::ModelBackend fallback)
+{
+    if (value.is_none())
+    {
+        return fallback;
+    }
+    if (py::isinstance<py::str>(value))
+    {
+        const auto text = lowerAscii(value.cast<std::string>());
+        if (text == "tensorrt" || text == "trt")
+        {
+            return irt::model::ModelBackend::TensorRT;
+        }
+        if (text == "onnxruntime" || text == "onnx_runtime" || text == "ort")
+        {
+            return irt::model::ModelBackend::ONNXRuntime;
+        }
+        if (text == "openvino" || text == "ov")
+        {
+            return irt::model::ModelBackend::OpenVINO;
+        }
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported model backend: %s", text.c_str());
+    }
+    return value.cast<irt::model::ModelBackend>();
+}
+
+irt::model::ModelDevice parseDeviceObject(const py::object &value, irt::model::ModelDevice fallback)
+{
+    if (value.is_none())
+    {
+        return fallback;
+    }
+    if (py::isinstance<py::str>(value))
+    {
+        const auto text = lowerAscii(value.cast<std::string>());
+        if (text == "cpu")
+        {
+            return irt::model::ModelDevice::CPU;
+        }
+        if (text == "gpu" || text == "cuda")
+        {
+            return irt::model::ModelDevice::GPU;
+        }
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported model device: %s", text.c_str());
+    }
+    return value.cast<irt::model::ModelDevice>();
 }
 
 /**
@@ -502,6 +564,18 @@ private:
     size_t size_{0};       ///< 缓冲区字节数。
 };
 
+struct HostTensorBinding
+{
+    std::string name;
+    py::array   host_array;
+
+    HostTensorBinding(std::string tensor_name, py::array array)
+        : name(std::move(tensor_name))
+        , host_array(std::move(array))
+    {
+    }
+};
+
 /**
  * @brief 保存一次 NumPy 推理所需的宿主侧数组与设备侧缓冲区。
  */
@@ -557,7 +631,8 @@ struct TensorBindingV2
  * @param tensors 输出张量列表。
  * @return 单输出返回 `numpy.ndarray`，多输出返回 `dict[str, numpy.ndarray]`。
  */
-py::object packOutputs(const std::vector<TensorBinding> &tensors)
+template<typename BindingType>
+py::object packOutputs(const std::vector<BindingType> &tensors)
 {
     if (tensors.size() == 1)
     {
@@ -619,6 +694,16 @@ public:
     std::vector<std::string> outputTensorNames() const
     {
         return model_->modelConfig().outputTensorNames();
+    }
+
+    irt::model::ModelBackend backend() const noexcept
+    {
+        return model_->backend();
+    }
+
+    irt::model::ModelDevice device() const noexcept
+    {
+        return model_->device();
     }
 
     /**
@@ -714,6 +799,13 @@ public:
      */
     py::object infer(const py::object &inputs, const py::object &outputs, bool non_blocking = false)
     {
+        if (!usesTensorRTBackend())
+        {
+            (void)non_blocking;
+            return executeHost(inputs, outputs, outputTensorNames(),
+                               [this](const std::vector<void *> &buffers) { model_->infer(buffers); });
+        }
+
         const auto stream = model_->resolveExecutionStream();
         return execute(
             inputs, outputs, outputTensorNames(), [this, stream, non_blocking](const std::vector<void *> &buffers)
@@ -731,6 +823,12 @@ public:
     py::object inferV2(const py::object &inputs, const py::object &outputs, const py::object &stream_ptr,
                        bool non_blocking = false)
     {
+        if (!usesTensorRTBackend())
+        {
+            throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED,
+                                 "infer_v2 is only supported by the TensorRT backend");
+        }
+
         const auto stream_value = parseStreamPtr(stream_ptr);
         return executeV2(inputs, outputs, outputTensorNames(), stream_value,
                          [this, stream_value, non_blocking](const std::vector<void *> &buffers)
@@ -751,6 +849,13 @@ public:
             throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "No output tensors are configured");
         }
 
+        if (!usesTensorRTBackend())
+        {
+            (void)non_blocking;
+            return executeHost(inputs, py::none(), output_names,
+                               [this](const std::vector<void *> &buffers) { model_->forwardFeatures(buffers); });
+        }
+
         const auto stream = model_->resolveExecutionStream();
         return execute(
             inputs, py::none(), output_names, [this, stream, non_blocking](const std::vector<void *> &buffers)
@@ -758,6 +863,11 @@ public:
     }
 
 private:
+    bool usesTensorRTBackend() const noexcept
+    {
+        return model_->backend() == irt::model::ModelBackend::TensorRT;
+    }
+
     /**
      * @brief 将 Python 输入对象规整为有序的输入张量数组列表。
      * @param tensors Python 输入对象。
@@ -959,6 +1069,81 @@ private:
                                                      const std::vector<std::string> &tensor_names)
     {
         std::vector<TensorBinding> bindings;
+        bindings.reserve(tensor_names.size());
+
+        if (outputs.is_none())
+        {
+            for (const auto &tensor_name : tensor_names)
+            {
+                const auto dims      = model_->tensorShape(tensor_name);
+                const auto data_type = model_->tensorDataType(tensor_name);
+                const auto shape     = dimsToVector(dims);
+
+                std::vector<py::ssize_t> py_shape(shape.begin(), shape.end());
+                py::array                array(dataTypeToPyDType(data_type), py_shape);
+                if (static_cast<size_t>(array.nbytes())
+                    != tensorElementCount(shape, tensor_name) * dataTypeSize(data_type))
+                {
+                    throw irt::Exception(irt::Status::ERROR_INTERNAL, "Unexpected numpy buffer size for tensor: %s",
+                                         tensor_name.c_str());
+                }
+
+                bindings.emplace_back(tensor_name, std::move(array));
+            }
+            return bindings;
+        }
+
+        const auto output_values = normalizeTensorObjects(outputs, tensor_names, "output");
+        for (const auto &output_value : output_values)
+        {
+            const auto &tensor_name = output_value.name;
+            if (!py::isinstance<py::array>(output_value.object))
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Output tensor must be numpy.ndarray: %s",
+                                     tensor_name.c_str());
+            }
+
+            py::array  array     = py::reinterpret_borrow<py::array>(output_value.object);
+            const auto data_type = model_->tensorDataType(tensor_name);
+            const auto shape     = dimsToVector(model_->tensorShape(tensor_name));
+            validateOutputArray(tensor_name, array, data_type, shape);
+            bindings.emplace_back(tensor_name, std::move(array));
+        }
+
+        return bindings;
+    }
+
+    std::vector<HostTensorBinding> prepareHostInputBindings(const py::object &inputs)
+    {
+        const auto input_values = normalizeTensorObjects(inputs, inputTensorNames(), "input");
+
+        std::vector<HostTensorBinding> bindings;
+        bindings.reserve(input_values.size());
+
+        for (const auto &input_value : input_values)
+        {
+            const auto &input_name = input_value.name;
+            const auto  data_type  = model_->tensorDataType(input_name);
+            auto        array      = asContiguousArray(input_value.object, data_type);
+
+            std::vector<int64_t> shape;
+            shape.reserve(static_cast<size_t>(array.ndim()));
+            for (py::ssize_t dim_index = 0; dim_index < array.ndim(); ++dim_index)
+            {
+                shape.push_back(array.shape(dim_index));
+            }
+
+            model_->setTensorShape(input_name, vectorToDims(shape));
+            bindings.emplace_back(input_name, std::move(array));
+        }
+
+        return bindings;
+    }
+
+    std::vector<HostTensorBinding> prepareHostOutputBindings(const py::object               &outputs,
+                                                             const std::vector<std::string> &tensor_names)
+    {
+        std::vector<HostTensorBinding> bindings;
         bindings.reserve(tensor_names.size());
 
         if (outputs.is_none())
@@ -1305,6 +1490,22 @@ private:
         return buffers;
     }
 
+    std::vector<void *> buildHostBufferList(std::vector<HostTensorBinding> &inputs,
+                                            std::vector<HostTensorBinding> &outputs) const
+    {
+        std::vector<void *> buffers;
+        buffers.reserve(inputs.size() + outputs.size());
+        for (auto &input : inputs)
+        {
+            buffers.push_back(input.host_array.mutable_data());
+        }
+        for (auto &output : outputs)
+        {
+            buffers.push_back(output.host_array.mutable_data());
+        }
+        return buffers;
+    }
+
     /**
      * @brief 将宿主侧输入拷贝到设备侧（按需跳过已在 GPU 的 V2 输入）。
      * @tparam BindingType `TensorBinding` 或 `TensorBindingV2`。
@@ -1393,6 +1594,22 @@ private:
         return packOutputs(output_bindings);
     }
 
+    py::object executeHost(const py::object &inputs, const py::object &outputs,
+                           const std::vector<std::string>                         &output_names,
+                           const std::function<void(const std::vector<void *> &)> &forward_fn)
+    {
+        auto input_bindings  = prepareHostInputBindings(inputs);
+        auto output_bindings = prepareHostOutputBindings(outputs, output_names);
+        auto buffers         = buildHostBufferList(input_bindings, output_bindings);
+
+        {
+            py::gil_scoped_release release;
+            forward_fn(buffers);
+        }
+
+        return packOutputs(output_bindings);
+    }
+
     /**
      * @brief 执行一次 DLPack / 可选 stream 的通用前向。
      * @param inputs Python 输入对象。
@@ -1444,6 +1661,15 @@ PYBIND11_MODULE(inferrt_model_py, m)
         .value("WARNING", nvinfer1::ILogger::Severity::kWARNING)
         .value("INFO", nvinfer1::ILogger::Severity::kINFO)
         .value("VERBOSE", nvinfer1::ILogger::Severity::kVERBOSE);
+
+    py::enum_<irt::model::ModelBackend>(m, "ModelBackend")
+        .value("TENSORRT", irt::model::ModelBackend::TensorRT)
+        .value("OPENVINO", irt::model::ModelBackend::OpenVINO)
+        .value("ONNXRUNTIME", irt::model::ModelBackend::ONNXRuntime);
+
+    py::enum_<irt::model::ModelDevice>(m, "ModelDevice")
+        .value("CPU", irt::model::ModelDevice::CPU)
+        .value("GPU", irt::model::ModelDevice::GPU);
 
     py::class_<irt::model::IModelConfig>(m, "ModelConfig", "InferRT 模型配置对象。")
         .def(py::init<>(), "构造默认的 ImageNet 分类配置。")
@@ -1499,7 +1725,9 @@ PYBIND11_MODULE(inferrt_model_py, m)
         .def_property("feature_tensor_names", &irt::model::IModelConfig::featureTensorNames,
                       &irt::model::IModelConfig::setFeatureTensorNames, "中间特征层 key 列表。")
         .def_property("feature_only", &irt::model::IModelConfig::featureOnly, &irt::model::IModelConfig::setFeatureOnly,
-                      "是否仅构建特征提取网络。");
+                      "是否仅构建特征提取网络。")
+        .def_property("backend", &irt::model::IModelConfig::backend, &irt::model::IModelConfig::setBackend)
+        .def_property("device", &irt::model::IModelConfig::device, &irt::model::IModelConfig::setDevice);
 
     py::class_<PyModel>(m, "Model", "InferRT Python 模型包装器。")
         .def("name", &PyModel::name, "返回模型名称。")
@@ -1517,6 +1745,8 @@ PYBIND11_MODULE(inferrt_model_py, m)
              "执行一次特征前向，输入支持 ndarray、sequence 或 dict。")
         .def("input_tensor_names", &PyModel::inputTensorNames, "返回输入张量名称列表。")
         .def("output_tensor_names", &PyModel::outputTensorNames, "返回输出张量名称列表（分类 logits 或特征导出名）。")
+        .def("backend", &PyModel::backend)
+        .def("device", &PyModel::device)
         .def("tensor_shape", &PyModel::tensorShape, py::arg("tensor_name"), "返回指定张量的运行时形状。")
         .def("tensor_dtype", &PyModel::tensorDType, py::arg("tensor_name"), "返回指定张量的数据类型名称。")
         .def("set_tensor_shape", &PyModel::setTensorShape, py::arg("tensor_name"), py::arg("shape"),
@@ -1525,7 +1755,8 @@ PYBIND11_MODULE(inferrt_model_py, m)
 
     m.def(
         "create_model",
-        [](const std::string &name, const py::object &config_object)
+        [](const std::string &name, const py::object &config_object, const py::object &backend_object,
+           const py::object &device_object)
         {
             std::unique_ptr<irt::model::IModelConfig> config;
             if (config_object.is_none())
@@ -1538,9 +1769,12 @@ PYBIND11_MODULE(inferrt_model_py, m)
                 config                 = cloneModelConfig(config_ref);
             }
 
+            config->setBackend(parseBackendObject(backend_object, config->backend()));
+            config->setDevice(parseDeviceObject(device_object, config->device()));
             return PyModel(irt::model::CreateModel(name, std::move(config)));
         },
-        py::arg("name"), py::arg("config") = py::none(), "根据注册名称创建模型对象。");
+        py::arg("name"), py::arg("config") = py::none(), py::arg("backend") = py::none(),
+        py::arg("device") = py::none(), "根据注册名称创建模型对象。");
 
     m.def("is_supported_model", &irt::model::isSupportedModel, py::arg("name"), "查询模型名称是否已注册。");
     m.def("get_registered_model_names", &irt::model::getRegisteredModelNames, "返回当前所有已注册模型名称。");

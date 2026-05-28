@@ -54,23 +54,39 @@ def test_load_ultralytics_model_uses_yolo_wrapper(monkeypatch: pytest.MonkeyPatc
     captured: dict[str, object] = {}
 
     class FakeModel(torch.nn.Module):
+        """模拟 Ultralytics 内部的 PyTorch 检测模型。"""
+
         def __init__(self) -> None:
+            """初始化调用标记，便于断言 float/eval 是否执行。"""
+
             super().__init__()
             self.float_called = False
             self.eval_called = False
 
         def float(self) -> "FakeModel":
+            """记录 FP32 转换调用并返回自身。"""
+
             self.float_called = True
             return self
 
         def eval(self) -> "FakeModel":
+            """记录 eval 模式调用并返回自身。"""
+
             self.eval_called = True
             return self
 
     fake_model = FakeModel()
 
     class FakeYOLO:
+        """模拟 ``ultralytics.YOLO`` 包装器。"""
+
         def __init__(self, source: str) -> None:
+            """捕获权重来源并暴露内部模型。
+
+            Args:
+                source: 传给 ``YOLO`` 的模型或权重路径。
+            """
+
             captured["source"] = source
             self.model = fake_model
 
@@ -91,7 +107,15 @@ def test_write_wts_exports_big_endian_float_hex() -> None:
     """``.wts`` 写出格式应与项目中其它权重导出脚本保持一致。"""
 
     class FakeModel:
+        """模拟仅提供 ``state_dict`` 的 YOLO 模型。"""
+
         def state_dict(self) -> dict[str, torch.Tensor]:
+            """返回用于验证 ``.wts`` 写入格式的最小权重表。
+
+            Returns:
+                包含两个 float32 值的 state_dict。
+            """
+
             return {"model.0.conv.weight": torch.tensor([1.0, -2.0], dtype=torch.float32)}
 
     artifact_dir = ROOT / "build" / "python_test_artifacts"

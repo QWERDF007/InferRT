@@ -11,67 +11,9 @@ namespace irt::model::priv {
 
 namespace {
 
-bool HasTensor(const nvinfer1::ICudaEngine *engine, const std::string &tensor_name)
-{
-    if (!engine)
-    {
-        return false;
-    }
-
-    const int32_t num_io_tensors = engine->getNbIOTensors();
-    for (int32_t i = 0; i < num_io_tensors; ++i)
-    {
-        const char *name = engine->getIOTensorName(i);
-        if (name && tensor_name == name)
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 /**
  * @brief 在首次推理或 resolveExecutionStream 时惰性创建内部非阻塞 CUDA stream。
  */
-void EnsureInternalStream(TRTParams &params)
-{
-    if (params.stream)
-    {
-        return;
-    }
-
-    params.stream = MakeCudaStream();
-    if (!params.stream)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create CUDA stream");
-    }
-}
-
-void SaveEngineToFile(const std::string &engine_file, const std::shared_ptr<nvinfer1::ICudaEngine> &engine)
-{
-    if (!engine)
-    {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Engine is not initialized, cannot save");
-    }
-
-    auto serialized = std::unique_ptr<nvinfer1::IHostMemory>(engine->serialize());
-    if (!serialized)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to serialize engine");
-    }
-
-    std::ofstream file(engine_file, std::ios::binary);
-    if (!file.is_open())
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Failed to open file for writing: %s",
-                             engine_file.c_str());
-    }
-
-    file.write(static_cast<const char *>(serialized->data()), serialized->size());
-    file.close();
-}
-
 /**
  * @brief 校验模型的类别数量和输入尺寸配置是否合法。
  * @param config 待校验的模型配置。
@@ -229,6 +171,11 @@ void ValidateModelConfig(const IModelImpl &impl)
     ValidatePrimaryOutputTensorConfig(config);
     ValidateFeatureTensorConfig(config);
     ValidateUniqueOutputTensorNames(config);
+
+    if (config.backend() == ModelBackend::TensorRT && config.device() == ModelDevice::CPU)
+    {
+        throw irt::Exception(Status::ERROR_NOT_IMPLEMENTED, "TensorRT backend requires GPU device");
+    }
 }
 
 /**
@@ -278,9 +225,11 @@ std::string BuildEngineFileName(const IModelImpl &impl, const std::string &weigh
 
 } // namespace
 
+IModelImpl::~IModelImpl() = default;
+
 nvinfer1::ILogger::Severity IModelImpl::logLevel() const noexcept
 {
-    return trt_params_.log_level;
+    return backend_runtime_ ? backend_runtime_->logLevel() : nvinfer1::ILogger::Severity::kWARNING;
 }
 
 std::string IModelImpl::generateSuffix(const IModelConfig &config) const noexcept
@@ -315,13 +264,17 @@ std::string IModelImpl::generateSuffix(const IModelConfig &config) const noexcep
 
 void IModelImpl::setModelConfig(std::unique_ptr<IModelConfig> config)
 {
+    const auto severity = logLevel();
     config_ = config ? std::move(config) : std::make_unique<IModelConfig>();
     normalizeModelConfig(*config_);
-    trt_params_.context.reset();
-    trt_params_.engine.reset();
-    trt_params_.stream.reset();
-    trt_params_.external_stream = nullptr;
-    trt_params_.feature_only    = false;
+    backend_runtime_ = CreateBackendRuntime(config_->backend());
+    backend_runtime_->setLogLevel(severity);
+}
+
+void IModelImpl::replaceModelConfigWithoutReset(std::unique_ptr<IModelConfig> config)
+{
+    config_ = config ? std::move(config) : std::make_unique<IModelConfig>();
+    normalizeModelConfig(*config_);
 }
 
 const IModelConfig &IModelImpl::modelConfig() const noexcept
@@ -329,98 +282,65 @@ const IModelConfig &IModelImpl::modelConfig() const noexcept
     return *config_;
 }
 
+TRTParams &IModelImpl::trtParams()
+{
+    return tensorRTBackend().params();
+}
+
+const TRTParams &IModelImpl::trtParams() const
+{
+    return tensorRTBackend().params();
+}
+
 std::vector<std::string> IModelImpl::ioTensorNames(nvinfer1::TensorIOMode mode) const
 {
-    if (!trt_params_.engine)
+    if (!backend_runtime_)
     {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Engine is not initialized");
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Backend runtime is not initialized");
     }
-
-    std::vector<std::string> names;
-    const int32_t            num_io_tensors = trt_params_.engine->getNbIOTensors();
-    for (int32_t i = 0; i < num_io_tensors; ++i)
-    {
-        const char *tensor_name = trt_params_.engine->getIOTensorName(i);
-        if (trt_params_.engine->getTensorIOMode(tensor_name) == mode)
-        {
-            names.emplace_back(tensor_name);
-        }
-    }
-
-    return names;
+    return backend_runtime_->ioTensorNames(mode);
 }
 
 nvinfer1::Dims IModelImpl::tensorShape(const std::string &tensor_name) const
 {
-    if (trt_params_.context && HasTensor(trt_params_.engine.get(), tensor_name))
+    if (!backend_runtime_)
     {
-        return trt_params_.context->getTensorShape(tensor_name.c_str());
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Backend runtime is not initialized");
     }
-
-    if (trt_params_.engine && HasTensor(trt_params_.engine.get(), tensor_name))
-    {
-        return trt_params_.engine->getTensorShape(tensor_name.c_str());
-    }
-
-    if (!trt_params_.engine)
-    {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Engine is not initialized");
-    }
-
-    throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Tensor not found: %s", tensor_name.c_str());
+    return backend_runtime_->tensorShape(tensor_name);
 }
 
 nvinfer1::DataType IModelImpl::tensorDataType(const std::string &tensor_name) const
 {
-    if (trt_params_.engine && HasTensor(trt_params_.engine.get(), tensor_name))
+    if (!backend_runtime_)
     {
-        return trt_params_.engine->getTensorDataType(tensor_name.c_str());
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Backend runtime is not initialized");
     }
-
-    if (!trt_params_.engine)
-    {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Engine is not initialized");
-    }
-
-    throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Tensor not found: %s", tensor_name.c_str());
+    return backend_runtime_->tensorDataType(tensor_name);
 }
 
 void IModelImpl::setTensorShape(const std::string &tensor_name, const nvinfer1::Dims &dims)
 {
-    if (!trt_params_.context)
+    if (!backend_runtime_)
     {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Execution context is not initialized");
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Backend runtime is not initialized");
     }
-
-    if (!trt_params_.context->setInputShape(tensor_name.c_str(), dims))
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Failed to set input tensor shape: %s",
-                             tensor_name.c_str());
-    }
+    backend_runtime_->setTensorShape(tensor_name, dims);
 }
 
 void IModelImpl::setStream(cudaStream_t stream)
 {
-    if (!stream)
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "stream must not be null; use clearStream to reset");
-    }
-
-    trt_params_.external_stream = stream;
+    backend_runtime_->setStream(stream);
 }
 
 void IModelImpl::clearStream()
 {
-    trt_params_.external_stream = nullptr;
+    backend_runtime_->clearStream();
 }
 
 void IModelImpl::setLogLevel(nvinfer1::ILogger::Severity severity)
 {
-    trt_params_.log_level = severity;
-    if (trt_params_.logger)
-    {
-        trt_params_.logger->setReportableSeverity(severity);
-    }
+    backend_runtime_->setLogLevel(severity);
 }
 
 nvinfer1::ITensor *IModelImpl::addInputTensor(nvinfer1::INetworkDefinition *network, const nvinfer1::Dims &dims,
@@ -521,7 +441,7 @@ bool IModelImpl::tryMarkFeatureOutputTensors(nvinfer1::INetworkDefinition *netwo
 
 void IModelImpl::initLogger()
 {
-    trt_params_.logger = std::make_shared<Logger>(name(), logLevel());
+    tensorRTBackend().initLogger(name());
 }
 
 std::vector<nvinfer1::ITensor *> IModelImpl::resolveFeatureTensors(const NamedTensorMap &named_tensors) const
@@ -551,241 +471,161 @@ std::vector<nvinfer1::ITensor *> IModelImpl::resolveFeatureTensors(const NamedTe
 
 void IModelImpl::infer(const std::vector<void *> &buffers, cudaStream_t stream, bool non_blocking)
 {
+    if (!usesTensorRTBackend())
+    {
+        if (!backend_runtime_)
+        {
+            throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Backend runtime is not initialized");
+        }
+        (void)stream;
+        (void)non_blocking;
+        backend_runtime_->infer(buffers);
+        return;
+    }
+
     execute(buffers, stream, non_blocking);
 }
 
 void IModelImpl::forwardFeatures(const std::vector<void *> &buffers, cudaStream_t stream, bool non_blocking)
 {
+    if (!usesTensorRTBackend())
+    {
+        if (!backend_runtime_)
+        {
+            throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Backend runtime is not initialized");
+        }
+        (void)stream;
+        (void)non_blocking;
+        backend_runtime_->infer(buffers);
+        return;
+    }
+
     execute(buffers, stream, non_blocking);
 }
 
 void IModelImpl::buildRuntimeFromWeights(const std::string                                         &weights_file,
                                          const std::function<void(nvinfer1::INetworkDefinition *)> &build_fn)
 {
-    using namespace nvinfer1;
-    auto &params = trt_params_;
-
-    if (params.logger == nullptr)
-    {
-        if (trt_params_.logger)
-        {
-            params.logger = trt_params_.logger;
-        }
-        else
-        {
-            params.logger = std::make_shared<Logger>(name(), logLevel());
-        }
-    }
-
-    auto builder = std::unique_ptr<IBuilder>(createInferBuilder(*params.logger));
-    if (!builder)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create InferBuilder");
-    }
-
-    const auto flags   = 1U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kSTRONGLY_TYPED);
-    auto       network = std::unique_ptr<INetworkDefinition>(builder->createNetworkV2(flags));
-    if (!network)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create NetworkDefinition");
-    }
-
-    auto config = std::unique_ptr<IBuilderConfig>(builder->createBuilderConfig());
-    if (!config)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create BuilderConfig");
-    }
-
-    LOG_INFO(*params.logger) << "Building TensorRT network from: " << weights_file << std::endl;
-    build_fn(network.get());
-
-    auto buffer = std::unique_ptr<IHostMemory>(builder->buildSerializedNetwork(*network, *config));
-    if (!buffer)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to build serialized network");
-    }
-
-    auto runtime = std::unique_ptr<IRuntime>(nvinfer1::createInferRuntime(*params.logger));
-    if (!runtime)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create InferRuntime");
-    }
-
-    params.engine = std::shared_ptr<ICudaEngine>(runtime->deserializeCudaEngine(buffer->data(), buffer->size()),
-                                                 [](ICudaEngine *engine) { delete engine; });
-    if (!params.engine)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to deserialize CUDA engine");
-    }
-
-    params.context.reset(params.engine->createExecutionContext());
-    if (!params.context)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create execution context");
-    }
+    tensorRTBackend().buildFromNetwork(weights_file, name(), build_fn);
 }
 
 void IModelImpl::loadRuntimeFromFile(const std::string &engine_file)
 {
-    auto &params = trt_params_;
-    params.context.reset();
-    params.engine.reset();
-
-    if (params.logger == nullptr)
-    {
-        if (trt_params_.logger)
-        {
-            params.logger = trt_params_.logger;
-        }
-        else
-        {
-            params.logger = std::make_shared<Logger>(name(), logLevel());
-        }
-    }
-
-    LOG_INFO(*params.logger) << "Loading TensorRT engine from: " << engine_file << std::endl;
-
-    std::ifstream file(engine_file, std::ios::binary);
-    if (!file.is_open())
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Failed to open engine file: %s", engine_file.c_str());
-    }
-
-    file.seekg(0, std::ios::end);
-    size_t file_size = file.tellg();
-    file.seekg(0, std::ios::beg);
-
-    std::vector<char> engine_data(file_size);
-    file.read(engine_data.data(), file_size);
-    file.close();
-
-    auto runtime = std::unique_ptr<nvinfer1::IRuntime>(nvinfer1::createInferRuntime(*params.logger));
-    if (!runtime)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create InferRuntime");
-    }
-
-    params.engine
-        = std::shared_ptr<nvinfer1::ICudaEngine>(runtime->deserializeCudaEngine(engine_data.data(), file_size),
-                                                 [](nvinfer1::ICudaEngine *engine) { delete engine; });
-    if (!params.engine)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to deserialize CUDA engine");
-    }
-
-    params.context.reset(params.engine->createExecutionContext());
-    if (!params.context)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create execution context");
-    }
+    tensorRTBackend().load(engine_file, modelConfig(), name());
 }
 
 void IModelImpl::saveRuntimeToFile(const std::string &engine_file) const
 {
-    SaveEngineToFile(engine_file, trt_params_.engine);
+    tensorRTBackend().save(engine_file);
 }
 
-cudaStream_t IModelImpl::resolveExecutionStream(cudaStream_t stream_override)
+bool IModelImpl::usesTensorRTBackend() const noexcept
 {
-    if (stream_override)
-    {
-        return stream_override;
-    }
-
-    if (trt_params_.external_stream)
-    {
-        return trt_params_.external_stream;
-    }
-
-    if (trt_params_.stream)
-    {
-        return *trt_params_.stream;
-    }
-
-    if (trt_params_.context)
-    {
-        EnsureInternalStream(trt_params_);
-        return *trt_params_.stream;
-    }
-
-    return nullptr;
+    return modelConfig().backend() == ModelBackend::TensorRT;
 }
 
-void IModelImpl::bindTensorAddresses(const std::vector<void *> &buffers)
+TensorRTBackend &IModelImpl::tensorRTBackend()
 {
-    if (!trt_params_.context)
+    auto *backend = backend_runtime_ ? backend_runtime_->asTensorRT() : nullptr;
+    if (!backend)
     {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Execution context is not initialized");
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "TensorRT backend runtime is not initialized");
     }
-
-    const auto &input_names        = modelConfig().inputTensorNames();
-    const auto &output_names       = modelConfig().outputTensorNames();
-    const auto *output_description = trt_params_.feature_only ? "feature outputs" : "outputs";
-    const auto  expected           = input_names.size() + output_names.size();
-    if (buffers.size() != expected)
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Expected %zu buffers (%zu inputs and %zu %s), got %zu",
-                             expected, input_names.size(), output_names.size(), output_description, buffers.size());
-    }
-
-    size_t buffer_index = 0;
-    for (const auto &input_name : input_names)
-    {
-        if (!trt_params_.context->setTensorAddress(input_name.c_str(), buffers[buffer_index++]))
-        {
-            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to set input tensor address: %s", input_name.c_str());
-        }
-    }
-
-    for (const auto &output_name : output_names)
-    {
-        if (!trt_params_.context->setTensorAddress(output_name.c_str(), buffers[buffer_index++]))
-        {
-            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to set output tensor address: %s",
-                                 output_name.c_str());
-        }
-    }
+    return *backend;
 }
 
-void IModelImpl::execute(const std::vector<void *> &buffers, cudaStream_t stream_override, bool non_blocking)
+const TensorRTBackend &IModelImpl::tensorRTBackend() const
 {
-    bindTensorAddresses(buffers);
-
-    const auto stream = resolveExecutionStream(stream_override);
-    if (!trt_params_.context->enqueueV3(stream))
+    auto *backend = backend_runtime_ ? backend_runtime_->asTensorRT() : nullptr;
+    if (!backend)
     {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to execute TensorRT enqueue");
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "TensorRT backend runtime is not initialized");
     }
+    return *backend;
+}
 
-    if (non_blocking)
+void IModelImpl::ensureBackendRuntime()
+{
+    if (backend_runtime_ && backend_runtime_->backend() == modelConfig().backend())
     {
         return;
     }
 
-    const auto status = cudaStreamSynchronize(stream);
-    if (status != cudaSuccess)
+    backend_runtime_ = CreateBackendRuntime(modelConfig().backend());
+}
+
+void IModelImpl::syncModelConfigFromBackendRuntime()
+{
+    if (!backend_runtime_)
     {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to synchronize CUDA stream: %s",
-                             cudaGetErrorString(status));
+        return;
     }
+
+    const auto input_names  = backend_runtime_->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
+    const auto output_names = backend_runtime_->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+    config_->setInputTensorNames(input_names);
+    config_->setOutputTensorNames(output_names);
+
+    std::vector<nvinfer1::Dims4> input_shapes;
+    input_shapes.reserve(input_names.size());
+    bool all_inputs_are_4d = !input_names.empty();
+    for (const auto &input_name : input_names)
+    {
+        const auto dims = backend_runtime_->tensorShape(input_name);
+        if (dims.nbDims != 4)
+        {
+            all_inputs_are_4d = false;
+            break;
+        }
+        input_shapes.emplace_back(dims.d[0], dims.d[1], dims.d[2], dims.d[3]);
+    }
+    if (all_inputs_are_4d)
+    {
+        config_->setInputShapes(std::move(input_shapes));
+    }
+}
+
+void IModelImpl::buildBackendRuntimeFromFile(const std::string &model_file)
+{
+    ValidateModelConfig(*this);
+    ensureBackendRuntime();
+    backend_runtime_->load(model_file, modelConfig(), name());
+    syncModelConfigFromBackendRuntime();
+}
+
+cudaStream_t IModelImpl::resolveExecutionStream(cudaStream_t stream_override)
+{
+    return backend_runtime_->resolveExecutionStream(stream_override);
+}
+
+void IModelImpl::execute(const std::vector<void *> &buffers, cudaStream_t stream_override, bool non_blocking)
+{
+    tensorRTBackend().execute(buffers, stream_override, non_blocking);
 }
 
 void IModelImpl::build(const std::string &weights_file)
 {
+    if (!usesTensorRTBackend())
+    {
+        buildBackendRuntimeFromFile(weights_file);
+        return;
+    }
+
     ValidateModelConfig(*this);
 
-    if (trt_params_.logger == nullptr)
+    auto &trt_params = trtParams();
+    if (trt_params.logger == nullptr)
     {
         initLogger();
     }
 
-    LOG_INFO(*trt_params_.logger) << "Loading weights file: " << weights_file << std::endl;
+    LOG_INFO(*trt_params.logger) << "Loading weights file: " << weights_file << std::endl;
     auto weights_map = loadWeights(weights_file);
     build_variant_   = isFeatureOnlyConfig() ? BuildVariant::Feature : BuildVariant::Primary;
     buildRuntimeFromWeights(weights_file,
                             [&](nvinfer1::INetworkDefinition *network) { buildNetwork(network, weights_map); });
-    trt_params_.feature_only = (build_variant_ == BuildVariant::Feature);
-    build_variant_           = BuildVariant::Primary;
+    tensorRTBackend().setFeatureOnly(build_variant_ == BuildVariant::Feature);
+    build_variant_ = BuildVariant::Primary;
 
     for (auto &wt : weights_map)
     {
@@ -799,11 +639,18 @@ void IModelImpl::build(const std::string &weights_file)
  */
 void IModelImpl::save(const std::string &engine_file)
 {
-    if (trt_params_.logger == nullptr)
+    if (!usesTensorRTBackend())
+    {
+        throw irt::Exception(Status::ERROR_NOT_IMPLEMENTED,
+                             "save() is only supported for TensorRT serialized engines");
+    }
+
+    auto &trt_params = trtParams();
+    if (trt_params.logger == nullptr)
     {
         initLogger();
     }
-    LOG_INFO(*trt_params_.logger) << "Saving TensorRT engine to: " << engine_file << std::endl;
+    LOG_INFO(*trt_params.logger) << "Saving TensorRT engine to: " << engine_file << std::endl;
     saveRuntimeToFile(engine_file);
 }
 
@@ -813,8 +660,14 @@ void IModelImpl::save(const std::string &engine_file)
  */
 void IModelImpl::load(const std::string &engine_file)
 {
+    if (!usesTensorRTBackend())
+    {
+        buildBackendRuntimeFromFile(engine_file);
+        return;
+    }
+
     loadRuntimeFromFile(engine_file);
-    trt_params_.feature_only = isFeatureOnlyConfig();
+    tensorRTBackend().setFeatureOnly(isFeatureOnlyConfig());
 }
 
 /**
@@ -823,9 +676,16 @@ void IModelImpl::load(const std::string &engine_file)
  */
 void IModelImpl::buildOrLoad(const std::string &weights_file)
 {
+    if (!usesTensorRTBackend())
+    {
+        buildBackendRuntimeFromFile(weights_file);
+        return;
+    }
+
     ValidateModelConfig(*this);
 
-    if (trt_params_.logger == nullptr)
+    auto &trt_params = trtParams();
+    if (trt_params.logger == nullptr)
     {
         initLogger();
     }
@@ -838,7 +698,7 @@ void IModelImpl::buildOrLoad(const std::string &weights_file)
 
     if (engine_exists)
     {
-        LOG_INFO(*trt_params_.logger) << "Found existing engine file: " << engine_file << ", loading..." << std::endl;
+        LOG_INFO(*trt_params.logger) << "Found existing engine file: " << engine_file << ", loading..." << std::endl;
         try
         {
             load(engine_file);
@@ -846,12 +706,12 @@ void IModelImpl::buildOrLoad(const std::string &weights_file)
         }
         catch (const std::exception &e)
         {
-            LOG_WARN(*trt_params_.logger) << "Failed to load engine: " << e.what() << std::endl;
-            LOG_INFO(*trt_params_.logger) << "Will rebuild engine from weights file: " << weights_file << std::endl;
+            LOG_WARN(*trt_params.logger) << "Failed to load engine: " << e.what() << std::endl;
+            LOG_INFO(*trt_params.logger) << "Will rebuild engine from weights file: " << weights_file << std::endl;
         }
     }
 
-    LOG_INFO(*trt_params_.logger) << "Building engine from weights file: " << weights_file << std::endl;
+    LOG_INFO(*trt_params.logger) << "Building engine from weights file: " << weights_file << std::endl;
     build(weights_file);
 
     try
@@ -860,7 +720,7 @@ void IModelImpl::buildOrLoad(const std::string &weights_file)
     }
     catch (const std::exception &e)
     {
-        LOG_WARN(*trt_params_.logger) << "Failed to save engine: " << e.what() << std::endl;
+        LOG_WARN(*trt_params.logger) << "Failed to save engine: " << e.what() << std::endl;
     }
 }
 

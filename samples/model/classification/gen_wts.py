@@ -16,7 +16,8 @@ from model_zoo import (
     resolve_input_size,
 )
 
-DEFAULT_IMAGE_PATH = Path(__file__).resolve().parents[3] / "assets" / "pics" / "dog.jpg"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_IMAGE_PATH = PROJECT_ROOT / "assets" / "pics" / "dog.jpg"
 
 
 def elapsed_ms(start: float, end: float) -> float:
@@ -160,7 +161,7 @@ def main(args):
     inference_end = time.perf_counter()
 
     postprocess_start = time.perf_counter()
-    label_path = Path(__file__).resolve().parents[3] / "assets" / "imagenet1000_clsidx_to_labels.txt"
+    label_path = PROJECT_ROOT / "assets" / "imagenet1000_clsidx_to_labels.txt"
     labels = read_imagenet_labels(label_path)
     print_inference_results(output, labels)
     postprocess_end = time.perf_counter()
@@ -177,7 +178,7 @@ def main(args):
         write_wts(model, output_path)
 
 
-if __name__ == "__main__":
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate classification model weights for TensorRT")
     parser.add_argument(
         "-m",
@@ -250,4 +251,8 @@ if __name__ == "__main__":
         help="Create model without pretrained weights, useful for offline structural checks",
     )
     parser.set_defaults(pretrained=True)
-    main(parser.parse_args())
+    return parser
+
+
+if __name__ == "__main__":
+    main(build_arg_parser().parse_args())

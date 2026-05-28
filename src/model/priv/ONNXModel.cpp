@@ -143,7 +143,9 @@ void SyncModelMetadataFromEngine(ONNXModel &model)
     config->setInputTensorNames(std::move(input_names));
     config->setOutputTensorNames(std::move(output_names));
     config->setFeatureOnly(current_config.featureOnly());
-    model.setModelConfig(std::move(config));
+    config->setBackend(current_config.backend());
+    config->setDevice(current_config.device());
+    model.replaceModelConfigWithoutReset(std::move(config));
 }
 
 } // namespace
@@ -158,6 +160,12 @@ void ONNXModel::buildNetwork(nvinfer1::INetworkDefinition *network, const Weight
 void ONNXModel::build(const std::string &onnx_file)
 {
     using namespace nvinfer1;
+
+    if (!usesTensorRTBackend())
+    {
+        priv::IModelImpl::build(onnx_file);
+        return;
+    }
 
     ValidateConfig(*this);
 
@@ -232,12 +240,24 @@ void ONNXModel::build(const std::string &onnx_file)
 
 void ONNXModel::load(const std::string &engine_file)
 {
+    if (!usesTensorRTBackend())
+    {
+        priv::IModelImpl::load(engine_file);
+        return;
+    }
+
     priv::IModelImpl::load(engine_file);
     SyncModelMetadataFromEngine(*this);
 }
 
 void ONNXModel::buildOrLoad(const std::string &onnx_file)
 {
+    if (!usesTensorRTBackend())
+    {
+        priv::IModelImpl::buildOrLoad(onnx_file);
+        return;
+    }
+
     ValidateConfig(*this);
 
     auto &trt_params = trtParams();

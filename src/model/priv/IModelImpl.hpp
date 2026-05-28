@@ -1,5 +1,7 @@
 ﻿#pragma once
 
+#include "BackendRuntime.hpp"
+
 #include <inferrt/model/IModelConfig.hpp>
 #include <inferrt/model/IParams.hpp>
 #include <inferrt/model/Utils.hpp>
@@ -39,13 +41,14 @@ public:
      */
     IModelImpl()
         : config_(std::make_unique<IModelConfig>())
+        , backend_runtime_(CreateBackendRuntime(config_->backend()))
     {
     }
 
     /**
      * @brief 析构内部实现对象。
      */
-    virtual ~IModelImpl() = default;
+    virtual ~IModelImpl();
 
     /**
      * @brief 获取模型显示名称。
@@ -139,6 +142,8 @@ public:
      * @param config 模型配置对象；传入空指针时恢复为默认配置。
      */
     void setModelConfig(std::unique_ptr<IModelConfig> config);
+
+    void replaceModelConfigWithoutReset(std::unique_ptr<IModelConfig> config);
 
     /**
      * @brief 获取当前模型配置。
@@ -243,19 +248,13 @@ public:
      * @brief 获取可写 TensorRT 运行时参数。
      * @return 运行时参数引用。
      */
-    TRTParams &trtParams() noexcept
-    {
-        return trt_params_;
-    }
+    TRTParams &trtParams();
 
     /**
      * @brief 获取只读 TensorRT 运行时参数。
      * @return 运行时参数常量引用。
      */
-    const TRTParams &trtParams() const noexcept
-    {
-        return trt_params_;
-    }
+    const TRTParams &trtParams() const;
 
     /**
      * @brief 判断 buildNetwork 是否正在为特征裁剪网络构建。
@@ -307,6 +306,8 @@ public:
      */
     void saveRuntimeToFile(const std::string &engine_file) const;
 
+    bool usesTensorRTBackend() const noexcept;
+
     /**
      * @brief 解析本次 enqueue 应使用的 CUDA stream。
      * @param stream_override 单次调用覆盖；非空时优先级最高。
@@ -331,23 +332,28 @@ protected:
 
 private:
     /**
-     * @brief 将输入与当前 runtime 的输出张量地址绑定到执行上下文。
-     */
-    void bindTensorAddresses(const std::vector<void *> &buffers);
-
-    /**
      * @brief 绑定当前 runtime 的张量地址并执行 enqueue。
      */
     void execute(const std::vector<void *> &buffers, cudaStream_t stream, bool non_blocking);
 
+    void buildBackendRuntimeFromFile(const std::string &model_file);
+
+    void ensureBackendRuntime();
+
+    void syncModelConfigFromBackendRuntime();
+
+    TensorRTBackend &tensorRTBackend();
+
+    const TensorRTBackend &tensorRTBackend() const;
+
     /// 模型配置对象。
     std::unique_ptr<IModelConfig> config_;
 
-    /// TensorRT 相关运行时对象。
-    TRTParams trt_params_;
-
     /// 当前 buildNetwork 正在构建的 engine 类型。
     BuildVariant build_variant_{BuildVariant::Primary};
+
+    /// 当前后端运行时；由 modelConfig().backend() 决定具体派生实现。
+    std::unique_ptr<IBackendRuntime> backend_runtime_;
 };
 
 } // namespace irt::model::priv

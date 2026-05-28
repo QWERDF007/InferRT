@@ -100,9 +100,10 @@ Common feature keys exposed by built-in models:
 - `dinov2*`: `patch_embed`, `tokens`, `blockN` / `blocks.N`, `x_prenorm`, `norm`, `cls`, `pre_logits`, `x_norm_clstoken`, `x_norm_regtokens`, `x_norm_patchtokens`
 - `dinov3*`: `patch_embed`, `tokens`, `blockN` / `blocks.N`, `x_prenorm`, `norm`, `cls`, `pre_logits`, `x_norm_clstoken`, `x_storage_tokens`, `x_norm_patchtokens`
 
-Current limitation:
+ONNX / OpenVINO note:
 
-- `onnx` models do not support selecting internal feature tensors through this API
+- ONNX graph backends cannot select hidden tensors after export; export the desired features as graph outputs first.
+- Use `onnx/export_feature_onnx.py` to turn `forward_features()` keys such as `x_norm_clstoken` into ONNX/OpenVINO output tensors.
 
 ## SAM Segmentation Sample
 

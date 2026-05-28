@@ -31,6 +31,8 @@ option(${PROJECT_NAME_UPPER}_BUILD_SAMPLES "Build Samples" ON)
 option(${PROJECT_NAME_UPPER}_ENABLE_SANITIZER "Enabled sanitized build" OFF)
 option(${PROJECT_NAME_UPPER}_BUILD_BENCHMARK "Build Benchmark" ON)
 option(${PROJECT_NAME_UPPER}_BUILD_PYTHON "Build Python bindings" ON)
+option(INFERRT_ENABLE_ONNXRUNTIME "Enable ONNX Runtime model backend" ON)
+option(INFERRT_ENABLE_OPENVINO "Enable OpenVINO model backend" ON)
 
 # 配置构建树
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake" )
@@ -48,6 +50,8 @@ include(AddSample)
 include(AddTest)
 include(AddBenchmark)
 include(ConfigTensorRT)
+include(ConfigONNXRuntime)
+include(ConfigOpenVINO)
 include(ConfigFaiss)
 
 # 第三方库

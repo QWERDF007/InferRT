@@ -8,6 +8,19 @@
 
 namespace irt::model {
 
+enum class ModelBackend
+{
+    TensorRT,
+    OpenVINO,
+    ONNXRuntime
+};
+
+enum class ModelDevice
+{
+    CPU,
+    GPU
+};
+
 /**
  * @brief 模型配置基类。
  *
@@ -100,6 +113,16 @@ public:
         feature_only_ = feature_only;
     }
 
+    virtual void setBackend(ModelBackend backend) noexcept
+    {
+        backend_ = backend;
+    }
+
+    virtual void setDevice(ModelDevice device) noexcept
+    {
+        device_ = device;
+    }
+
     /**
      * @brief 获取类别数。
      * @return 当前类别数。
@@ -161,6 +184,16 @@ public:
         return feature_only_;
     }
 
+    virtual ModelBackend backend() const noexcept
+    {
+        return backend_;
+    }
+
+    virtual ModelDevice device() const noexcept
+    {
+        return device_;
+    }
+
 protected:
     /// 类别数，默认对应 ImageNet-1K。
     int num_classes_{1000};
@@ -179,6 +212,10 @@ protected:
     std::vector<std::string> feature_tensor_names_{};
 
     bool feature_only_{false};
+
+    ModelBackend backend_{ModelBackend::TensorRT};
+
+    ModelDevice device_{ModelDevice::GPU};
 };
 
 } // namespace irt::model

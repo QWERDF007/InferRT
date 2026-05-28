@@ -28,6 +28,24 @@ Exporter options:
 - `--exporter dynamo`: force the new exporter.
 - `--exporter legacy`: force the legacy TorchScript-based exporter.
 
+## Export Feature ONNX / OpenVINO IR
+
+`export_feature_onnx.py` wraps `model.forward_features()` and exports selected feature keys as graph outputs.
+Those output names can then be used by the ONNX Runtime or OpenVINO backend through `output_tensor_names` /
+`feature_tensor_names`.
+
+Examples:
+
+```bash
+cd samples/model/onnx
+python export_feature_onnx.py -m dinov2_vits14 -b torchhub -f x_norm_clstoken,x_norm_patchtokens --input-size 518 -o dinov2_vits14_features.onnx
+python export_feature_onnx.py -m dinov2_vits14 -b torchhub -f x_norm_clstoken --input-size 518 -o dinov2_vits14_cls.onnx --emit-openvino
+python export_feature_onnx.py -m dinov3_vitb16 -b transformers -f x_norm_clstoken,x_storage_tokens,x_norm_patchtokens --local-files-only --openvino-output build/openvino_ir
+```
+
+OpenVINO conversion uses the Python OpenVINO API. By default the script also searches
+`D:/Software/openvino_toolkit`; override it with `--openvino-root` when needed.
+
 ## Build sample
 
 ```bash

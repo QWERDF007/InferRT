@@ -23,7 +23,9 @@ add_subdirectory(cxxopts)
 # CMake 的 FindOpenSSL.cmake 模块会在 Windows 注册表中查找 OpenSSL 的安装路径，具体是在：
 # HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\OpenSSL (64-bit)_is1
 # 这是 Inno Setup 安装程序（OpenSSL Windows 安装包使用的安装器）在注册表中记录的安装路径。
-add_subdirectory(vtest)
+if(${PROJECT_NAME_UPPER}_BUILD_TESTS)
+    add_subdirectory(vtest)
+endif()
 
 # benchmark
 if (${PROJECT_NAME_UPPER}_BUILD_BENCHMARK)
