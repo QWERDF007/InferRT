@@ -62,7 +62,8 @@ public:
      * @param rebuild_index 是否强制重建索引。
      */
     void buildOrLoad(const std::filesystem::path &weights_file, const std::filesystem::path &gallery_dir,
-                     const std::filesystem::path &index_file, bool rebuild_index);
+                     const std::filesystem::path &index_file, bool rebuild_index,
+                     ImageSearchBuildProgressCallback progress_callback);
 
     /**
      * @brief 从图库目录构建图像检索索引。
@@ -72,7 +73,7 @@ public:
      * @param index_file Faiss 索引文件路径；为空时使用 ``ImageSearch::defaultIndexPath``。
      */
     void build(const std::filesystem::path &weights_file, const std::filesystem::path &gallery_dir,
-               const std::filesystem::path &index_file);
+               const std::filesystem::path &index_file, ImageSearchBuildProgressCallback progress_callback);
 
     /**
      * @brief 从显式图片路径列表构建图像检索索引。
@@ -86,7 +87,7 @@ public:
      */
     void build(const std::filesystem::path &weights_file,
                const std::vector<std::filesystem::path> &gallery_images,
-               const std::filesystem::path &index_file);
+               const std::filesystem::path &index_file, ImageSearchBuildProgressCallback progress_callback);
 
     /**
      * @brief 为图库目录加载已有图像检索索引。
@@ -151,7 +152,8 @@ private:
      */
     void buildWithImages(const std::filesystem::path &weights_file, const std::filesystem::path &gallery_dir,
                          std::vector<std::filesystem::path> gallery_images,
-                         const std::filesystem::path &index_path, const std::string &metadata_gallery_value);
+                         const std::filesystem::path &index_path, const std::string &metadata_gallery_value,
+                         ImageSearchBuildProgressCallback progress_callback);
 
     /**
      * @brief 按需懒加载特征提取器。

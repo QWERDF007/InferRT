@@ -135,6 +135,11 @@ const char *preprocessBackendName(ImageSearchPreprocessBackend backend)
     return "unknown";
 }
 
+bool usesTensorRtModelBackend(const ImageSearchConfig &config)
+{
+    return config.model_backend == irt::model::ModelBackend::TensorRT;
+}
+
 /**
  * @brief 将特征归一化枚举序列化为元数据文件中的字符串。
  **/
@@ -206,6 +211,30 @@ const char *indexKindName(const ImageSearchConfig &config)
  */
 void validateConfig(const ImageSearchConfig &config)
 {
+    switch (config.model_backend)
+    {
+    case irt::model::ModelBackend::TensorRT:
+    case irt::model::ModelBackend::OpenVINO:
+    case irt::model::ModelBackend::ONNXRuntime:
+        break;
+    default:
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported ImageSearch model backend");
+    }
+
+    switch (config.model_device)
+    {
+    case irt::model::ModelDevice::CPU:
+    case irt::model::ModelDevice::GPU:
+        break;
+    default:
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported ImageSearch model device");
+    }
+
+    if (usesTensorRtModelBackend(config) && config.model_device == irt::model::ModelDevice::CPU)
+    {
+        throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED, "ImageSearch TensorRT backend requires GPU device");
+    }
+
     switch (config.preprocess_backend)
     {
     case ImageSearchPreprocessBackend::CPU:
@@ -467,6 +496,8 @@ void saveMetadata(const fs::path &metadata_path, const std::string &gallery_valu
     output << "model=" << model_name << "\n";
     output << "feature=" << feature_name << "\n";
     output << "gallery_dir=" << gallery_value << "\n";
+    output << "model_backend=" << modelBackendName(config.model_backend) << "\n";
+    output << "model_device=" << modelDeviceName(config.model_device) << "\n";
     output << "preprocess_backend=" << preprocessBackendName(config.preprocess_backend) << "\n";
     output << "norm=" << featureNormName(config.norm) << "\n";
     output << "faiss_backend=" << faissBackendName(config.faiss_backend) << "\n";
@@ -552,6 +583,8 @@ bool existingIndexMatchesConfig(const fs::path &index_path, const fs::path &gall
 
     return metadataValueEquals(metadata, "model", model_name) && metadataValueEquals(metadata, "feature", feature_name)
         && metadataValueEquals(metadata, "gallery_dir", galleryDirectoryMetadataValue(gallery_dir))
+        && metadataConfigValueEquals(metadata, "model_backend", modelBackendName(config.model_backend), "tensorrt")
+        && metadataConfigValueEquals(metadata, "model_device", modelDeviceName(config.model_device), "gpu")
         && metadataConfigValueEquals(metadata, "preprocess_backend", preprocessBackendName(config.preprocess_backend),
                                      "cpu")
         && metadataConfigValueEquals(metadata, "norm", featureNormName(config.norm), "l2")
@@ -592,18 +625,27 @@ public:
         model_config->setFeatureTensorNames({feature_name_});
         model_config->setOutputTensorNames({feature_name_});
         model_config->setFeatureOnly(true);
+        model_config->setBackend(config_.model_backend);
+        model_config->setDevice(config_.model_device);
 
-        model_ = irt::model::CreateModel(model_name_, std::move(model_config));
+        const std::string runtime_model_name = usesTensorRtModelBackend(config_) ? model_name_ : "onnx";
+        model_                               = irt::model::CreateModel(runtime_model_name, std::move(model_config));
         if (!model_)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to create model: %s",
-                                 model_name_.c_str());
+                                 runtime_model_name.c_str());
         }
 
         model_->setLogLevel(nvinfer1::ILogger::Severity::kINFO);
         model_->buildOrLoad(weights_file.string());
 
-        output_name_ = model_->modelConfig().outputTensorNames().front();
+        const auto output_tensor_names = model_->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+        if (output_tensor_names.empty())
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "ImageSearch model must expose at least one output tensor");
+        }
+        output_name_ = output_tensor_names.front();
         output_dims_ = model_->tensorShape(output_name_);
         output_type_ = model_->tensorDataType(output_name_);
         if (output_type_ != nvinfer1::DataType::kFLOAT)
@@ -613,7 +655,7 @@ public:
                                  output_name_.c_str());
         }
 
-        const auto &input_tensor_names = model_->modelConfig().inputTensorNames();
+        const auto input_tensor_names = model_->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
         if (input_tensor_names.empty())
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
@@ -621,6 +663,11 @@ public:
         }
 
         const auto input_shape = model_->tensorShape(input_tensor_names.front());
+        const auto input_type  = model_->tensorDataType(input_tensor_names.front());
+        if (input_type != nvinfer1::DataType::kFLOAT)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch expects float32 input tensor");
+        }
         if (input_shape.nbDims != 4 || input_shape.d[0] != 1 || input_shape.d[1] != 3 || input_shape.d[2] <= 0
             || input_shape.d[3] <= 0)
         {
@@ -631,8 +678,11 @@ public:
         input_height_ = static_cast<int>(input_shape.d[2]);
         input_width_  = static_cast<int>(input_shape.d[3]);
         feature_dim_  = elementCount(output_dims_);
-        device_input_.resize(elementCount(input_shape), nvinfer1::DataType::kFLOAT);
-        device_output_.resize(feature_dim_, nvinfer1::DataType::kFLOAT);
+        if (usesTensorRtModelBackend(config_))
+        {
+            device_input_.resize(elementCount(input_shape), nvinfer1::DataType::kFLOAT);
+            device_output_.resize(feature_dim_, nvinfer1::DataType::kFLOAT);
+        }
     }
 
     /** @brief 析构；先释放 TensorRT 模型再销毁 CUDA 缓冲区。 */
@@ -680,18 +730,27 @@ public:
                                  "ImageSearch GPU preprocessing is not implemented");
         }
 
-        std::vector<float>  feature(feature_dim_);
-        std::vector<void *> buffers{device_input_.data(), device_output_.data()};
-        const auto          stream = model_->resolveExecutionStream();
+        std::vector<float> feature(feature_dim_);
+        if (usesTensorRtModelBackend(config_))
+        {
+            std::vector<void *> buffers{device_input_.data(), device_output_.data()};
+            const auto          stream = model_->resolveExecutionStream();
 
-        checkCuda(cudaMemcpyAsync(device_input_.data(), input_data.data(), input_data.size() * sizeof(float),
-                                  cudaMemcpyHostToDevice, stream),
-                  "cudaMemcpyAsync(H2D input)");
-        model_->forwardFeatures(buffers, stream, true);
-        checkCuda(cudaMemcpyAsync(feature.data(), device_output_.data(), feature.size() * sizeof(float),
-                                  cudaMemcpyDeviceToHost, stream),
-                  "cudaMemcpyAsync(D2H feature)");
-        checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(feature extraction)");
+            checkCuda(cudaMemcpyAsync(device_input_.data(), input_data.data(), input_data.size() * sizeof(float),
+                                      cudaMemcpyHostToDevice, stream),
+                      "cudaMemcpyAsync(H2D input)");
+            model_->forwardFeatures(buffers, stream, true);
+            checkCuda(cudaMemcpyAsync(feature.data(), device_output_.data(), feature.size() * sizeof(float),
+                                      cudaMemcpyDeviceToHost, stream),
+                      "cudaMemcpyAsync(D2H feature)");
+            checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(feature extraction)");
+        }
+        else
+        {
+            std::vector<void *> buffers{input_data.data(), feature.data()};
+            model_->forwardFeatures(buffers, nullptr, false);
+        }
+
         normalizeFeature(feature, config_.norm);
         return feature;
     }
@@ -738,17 +797,34 @@ private:
 
 namespace {
 
+priv::BuildBatchCallback makeBuildBatchCallback(size_t                                  total_count,
+                                                const ImageSearchBuildProgressCallback &progress_callback)
+{
+    if (!progress_callback)
+    {
+        return {};
+    }
+
+    return [total_count, &progress_callback, batch_index = size_t{0}](size_t begin, size_t count) mutable
+    {
+        progress_callback(
+            ImageSearchBuildProgress{batch_index++, begin, count, std::min(total_count, begin + count), total_count});
+    };
+}
+
 /**
  * @brief 构建 CPU 磁盘 IVF 索引并保存路径映射。
  */
 FaissIndexBundle buildCpuOnDiskIndex(const std::vector<fs::path>       &gallery_images,
                                      priv::ImageSearchFeatureExtractor &extractor, const fs::path &index_path,
-                                     const ImageSearchConfig &config)
+                                     const ImageSearchConfig                &config,
+                                     const ImageSearchBuildProgressCallback &progress_callback)
 {
     FaissIndexBundle bundle;
-    bundle.index = priv::buildCpuOnDiskIvfFlatIndex(gallery_images.size(), extractor.featureDim(), index_path,
-                                                    config.disk_build_batch_size, [&](size_t index)
-                                                    { return extractor.extract(gallery_images[index]); });
+    auto             batch_callback = makeBuildBatchCallback(gallery_images.size(), progress_callback);
+    bundle.index                    = priv::buildCpuOnDiskIvfFlatIndex(
+        gallery_images.size(), extractor.featureDim(), index_path, config.disk_build_batch_size,
+        [&](size_t index) { return extractor.extract(gallery_images[index]); }, batch_callback);
     savePathMapping(mappingPathFromIndex(index_path), gallery_images);
     return bundle;
 }
@@ -757,15 +833,15 @@ FaissIndexBundle buildCpuOnDiskIndex(const std::vector<fs::path>       &gallery_
  * @brief 构建内存 IVF-PQ 压缩索引，并按配置保留在 CPU 或迁移到 GPU。
  */
 FaissIndexBundle buildRamIvfPqIndex(const std::vector<fs::path>       &gallery_images,
-                                    priv::ImageSearchFeatureExtractor &extractor,
-                                    const fs::path                    &index_path,
-                                    const ImageSearchConfig           &config)
+                                    priv::ImageSearchFeatureExtractor &extractor, const fs::path &index_path,
+                                    const ImageSearchConfig                &config,
+                                    const ImageSearchBuildProgressCallback &progress_callback)
 {
-    auto cpu_index = priv::buildRamIvfPqIndex(gallery_images.size(), extractor.featureDim(),
-                                              config.disk_build_batch_size,
-                                              [&](size_t index)
-                                              { return extractor.extract(gallery_images[index]); },
-                                              config.faiss_backend == ImageSearchFaissBackend::GPU);
+    auto batch_callback = makeBuildBatchCallback(gallery_images.size(), progress_callback);
+    auto cpu_index      = priv::buildRamIvfPqIndex(
+        gallery_images.size(), extractor.featureDim(), config.disk_build_batch_size,
+        [&](size_t index) { return extractor.extract(gallery_images[index]); },
+        config.faiss_backend == ImageSearchFaissBackend::GPU, batch_callback);
 
     faiss::write_index(cpu_index.get(), index_path.string().c_str());
     savePathMapping(mappingPathFromIndex(index_path), gallery_images);
@@ -778,14 +854,15 @@ FaissIndexBundle buildRamIvfPqIndex(const std::vector<fs::path>       &gallery_i
  * @brief 按配置构建 Faiss 索引（内存 IVF-PQ 或 CPU 磁盘 IVF）。
  */
 FaissIndexBundle buildIndex(const std::vector<fs::path> &gallery_images, priv::ImageSearchFeatureExtractor &extractor,
-                            const fs::path &index_path, const ImageSearchConfig &config)
+                            const fs::path &index_path, const ImageSearchConfig &config,
+                            const ImageSearchBuildProgressCallback &progress_callback)
 {
     if (useCpuDiskIndex(config))
     {
-        return buildCpuOnDiskIndex(gallery_images, extractor, index_path, config);
+        return buildCpuOnDiskIndex(gallery_images, extractor, index_path, config, progress_callback);
     }
 
-    return buildRamIvfPqIndex(gallery_images, extractor, index_path, config);
+    return buildRamIvfPqIndex(gallery_images, extractor, index_path, config, progress_callback);
 }
 
 /**
@@ -846,7 +923,8 @@ ImageSearch::Impl::Impl(ImageSearchConfig config)
 ImageSearch::Impl::~Impl() = default;
 
 void ImageSearch::Impl::buildOrLoad(const fs::path &weights_file, const fs::path &gallery_dir,
-                                    const fs::path &index_file, bool rebuild_index)
+                                    const fs::path &index_file, bool rebuild_index,
+                                    ImageSearchBuildProgressCallback progress_callback)
 {
     const fs::path resolved_index_path = resolveIndexPath(gallery_dir, index_file, config_);
     if (!rebuild_index && fs::exists(resolved_index_path) && fs::exists(mappingPathFromIndex(resolved_index_path))
@@ -857,19 +935,19 @@ void ImageSearch::Impl::buildOrLoad(const fs::path &weights_file, const fs::path
         return;
     }
 
-    build(weights_file, gallery_dir, index_file);
+    build(weights_file, gallery_dir, index_file, std::move(progress_callback));
 }
 
-void ImageSearch::Impl::build(const fs::path &weights_file, const fs::path &gallery_dir,
-                              const fs::path &index_file)
+void ImageSearch::Impl::build(const fs::path &weights_file, const fs::path &gallery_dir, const fs::path &index_file,
+                              ImageSearchBuildProgressCallback progress_callback)
 {
     auto images = ImageSearch::collectGalleryImages(gallery_dir);
     buildWithImages(weights_file, gallery_dir, std::move(images), resolveIndexPath(gallery_dir, index_file, config_),
-                    galleryDirectoryMetadataValue(gallery_dir));
+                    galleryDirectoryMetadataValue(gallery_dir), std::move(progress_callback));
 }
 
 void ImageSearch::Impl::build(const fs::path &weights_file, const std::vector<fs::path> &gallery_images,
-                              const fs::path &index_file)
+                              const fs::path &index_file, ImageSearchBuildProgressCallback progress_callback)
 {
     if (index_file.empty())
     {
@@ -878,7 +956,7 @@ void ImageSearch::Impl::build(const fs::path &weights_file, const std::vector<fs
     }
 
     buildWithImages(weights_file, {}, normalizeExplicitGalleryImages(gallery_images), index_file,
-                    explicitPathListMetadataValue());
+                    explicitPathListMetadataValue(), std::move(progress_callback));
 }
 
 void ImageSearch::Impl::load(const fs::path &weights_file, const fs::path &gallery_dir, const fs::path &index_file)
@@ -917,7 +995,8 @@ void ImageSearch::Impl::load(const fs::path &weights_file, const fs::path &galle
 
 void ImageSearch::Impl::buildWithImages(const fs::path &weights_file, const fs::path &gallery_dir,
                                         std::vector<fs::path> gallery_images, const fs::path &index_path,
-                                        const std::string &metadata_gallery_value)
+                                        const std::string               &metadata_gallery_value,
+                                        ImageSearchBuildProgressCallback progress_callback)
 {
     auto extractor = std::make_unique<priv::ImageSearchFeatureExtractor>(config_.model_name, config_.feature_name,
                                                                          weights_file, config_);
@@ -926,7 +1005,7 @@ void ImageSearch::Impl::buildWithImages(const fs::path &weights_file, const fs::
         fs::create_directories(index_path.parent_path());
     }
 
-    auto built = buildIndex(gallery_images, *extractor, index_path, config_);
+    auto built = buildIndex(gallery_images, *extractor, index_path, config_, progress_callback);
     index_.reset();
     faiss_gpu_resources_.reset();
     weights_file_        = weights_file;

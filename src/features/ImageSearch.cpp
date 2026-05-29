@@ -74,20 +74,21 @@ ImageSearch::ImageSearch(ImageSearch &&other) noexcept = default;
 ImageSearch &ImageSearch::operator=(ImageSearch &&other) noexcept = default;
 
 void ImageSearch::buildOrLoad(const fs::path &weights_file, const fs::path &gallery_dir, const fs::path &index_file,
-                              bool rebuild_index)
+                              bool rebuild_index, ImageSearchBuildProgressCallback progress_callback)
 {
-    impl_->buildOrLoad(weights_file, gallery_dir, index_file, rebuild_index);
+    impl_->buildOrLoad(weights_file, gallery_dir, index_file, rebuild_index, std::move(progress_callback));
 }
 
-void ImageSearch::build(const fs::path &weights_file, const fs::path &gallery_dir, const fs::path &index_file)
+void ImageSearch::build(const fs::path &weights_file, const fs::path &gallery_dir, const fs::path &index_file,
+                        ImageSearchBuildProgressCallback progress_callback)
 {
-    impl_->build(weights_file, gallery_dir, index_file);
+    impl_->build(weights_file, gallery_dir, index_file, std::move(progress_callback));
 }
 
 void ImageSearch::build(const fs::path &weights_file, const std::vector<fs::path> &gallery_images,
-                        const fs::path &index_file)
+                        const fs::path &index_file, ImageSearchBuildProgressCallback progress_callback)
 {
-    impl_->build(weights_file, gallery_images, index_file);
+    impl_->build(weights_file, gallery_images, index_file, std::move(progress_callback));
 }
 
 void ImageSearch::load(const fs::path &weights_file, const fs::path &gallery_dir, const fs::path &index_file)

@@ -21,6 +21,32 @@ enum class ModelDevice
     GPU
 };
 
+INFERRT_MODEL_API inline const char *modelBackendName(irt::model::ModelBackend backend)
+{
+    switch (backend)
+    {
+    case irt::model::ModelBackend::TensorRT:
+        return "tensorrt";
+    case irt::model::ModelBackend::OpenVINO:
+        return "openvino";
+    case irt::model::ModelBackend::ONNXRuntime:
+        return "onnxruntime";
+    }
+    return "unknown";
+}
+
+INFERRT_MODEL_API inline const char *modelDeviceName(irt::model::ModelDevice device)
+{
+    switch (device)
+    {
+    case irt::model::ModelDevice::CPU:
+        return "cpu";
+    case irt::model::ModelDevice::GPU:
+        return "gpu";
+    }
+    return "unknown";
+}
+
 /**
  * @brief 模型配置基类。
  *

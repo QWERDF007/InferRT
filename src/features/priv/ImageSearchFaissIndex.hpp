@@ -50,6 +50,8 @@
 
 namespace irt::features::priv {
 
+using BuildBatchCallback = std::function<void(size_t begin, size_t count)>;
+
 /**
  * @brief 生成 CPU 磁盘 IVF 倒排列表的伴生数据文件路径。
  * @param index_path Faiss 索引文件路径（``.faiss``）。
@@ -512,7 +514,8 @@ inline size_t chooseCpuOnDiskIvfBuildBatchSize(size_t requested_batch_size, size
 inline void writeCpuOnDiskIvfDataFileBatched(const faiss::IndexIVF &index, size_t vector_count, int feature_dim,
                                              const std::filesystem::path &data_path,
                                              const std::vector<float> &centroids, size_t batch_size,
-                                             const std::function<std::vector<float>(size_t)> &load_feature)
+                                             const std::function<std::vector<float>(size_t)> &load_feature,
+                                             const BuildBatchCallback &batch_callback = {})
 {
     if (batch_size == 0)
     {
@@ -604,6 +607,11 @@ inline void writeCpuOnDiskIvfDataFileBatched(const faiss::IndexIVF &index, size_
 
             list_offsets[list_index] += group_count;
             group_begin = group_end;
+        }
+
+        if (batch_callback)
+        {
+            batch_callback(begin, count);
         }
     }
 }
@@ -842,7 +850,7 @@ inline std::unique_ptr<faiss::Index> loadCpuOnDiskIvfFlatIndex(const std::filesy
  */
 inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
     size_t vector_count, int feature_dim, const std::filesystem::path &index_path, size_t batch_size,
-    const std::function<std::vector<float>(size_t)> &load_feature)
+    const std::function<std::vector<float>(size_t)> &load_feature, const BuildBatchCallback &batch_callback = {})
 {
     if (vector_count == 0 || feature_dim <= 0)
     {
@@ -888,13 +896,14 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
     faiss::write_index(index.get(), index_path.string().c_str());
 
     writeCpuOnDiskIvfDataFileBatched(*ivf_index, vector_count, feature_dim, cpuOnDiskIvfDataPath(index_path), centroids,
-                                     batch_size, load_feature);
+                                     batch_size, load_feature, batch_callback);
     return loadCpuOnDiskIvfFlatIndex(index_path);
 }
 
 inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int feature_dim, size_t batch_size,
                                                         const std::function<std::vector<float>(size_t)> &load_feature,
-                                                        bool require_gpu_compatible = false)
+                                                        bool require_gpu_compatible = false,
+                                                        const BuildBatchCallback &batch_callback = {})
 {
     if (vector_count == 0 || feature_dim <= 0)
     {
@@ -990,6 +999,10 @@ inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int
         const size_t count    = std::min(batch_size, vector_count - begin);
         const auto   features = loadFeatureBatch(begin, count, feature_dim, load_cached_feature);
         ivfpq_index->add(static_cast<faiss::idx_t>(count), features.data());
+        if (batch_callback)
+        {
+            batch_callback(begin, count);
+        }
     }
 
     return index;

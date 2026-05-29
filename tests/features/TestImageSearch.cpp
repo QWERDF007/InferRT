@@ -118,6 +118,8 @@ TEST(ImageSearchTest, DefaultConstructsNotReadySearcher)
     EXPECT_TRUE(search.galleryImages().empty());
     EXPECT_EQ(search.featureDim(), 0);
     EXPECT_EQ(search.config().preprocess_backend, irt::features::ImageSearchPreprocessBackend::CPU);
+    EXPECT_EQ(search.config().model_backend, irt::model::ModelBackend::TensorRT);
+    EXPECT_EQ(search.config().model_device, irt::model::ModelDevice::GPU);
     EXPECT_EQ(search.config().norm, irt::features::ImageSearchFeatureNorm::L2);
     EXPECT_EQ(search.config().faiss_backend, irt::features::ImageSearchFaissBackend::CPU);
     EXPECT_EQ(search.config().index_storage, irt::features::ImageSearchIndexStorage::RAM);
@@ -132,6 +134,8 @@ TEST(ImageSearchTest, ConstructorStoresConfig)
     irt::features::ImageSearchConfig config;
     config.model_name = "resnet18";
     config.feature_name = "layer4";
+    config.model_backend = irt::model::ModelBackend::OpenVINO;
+    config.model_device = irt::model::ModelDevice::CPU;
     config.norm = irt::features::ImageSearchFeatureNorm::L1;
     config.index_storage = irt::features::ImageSearchIndexStorage::Disk;
     config.disk_build_batch_size = 3;
@@ -140,6 +144,8 @@ TEST(ImageSearchTest, ConstructorStoresConfig)
 
     EXPECT_EQ(search.config().model_name, "resnet18");
     EXPECT_EQ(search.config().feature_name, "layer4");
+    EXPECT_EQ(search.config().model_backend, irt::model::ModelBackend::OpenVINO);
+    EXPECT_EQ(search.config().model_device, irt::model::ModelDevice::CPU);
     EXPECT_EQ(search.config().preprocess_backend, irt::features::ImageSearchPreprocessBackend::CPU);
     EXPECT_EQ(search.config().norm, irt::features::ImageSearchFeatureNorm::L1);
     EXPECT_EQ(search.config().faiss_backend, irt::features::ImageSearchFaissBackend::CPU);
@@ -151,9 +157,44 @@ TEST(ImageSearchTest, ConstructorStoresConfig)
 
     EXPECT_EQ(default_search.config().model_name, irt::features::ImageSearch::kDefaultModelName);
     EXPECT_EQ(default_search.config().feature_name, irt::features::ImageSearch::kDefaultFeatureName);
+    EXPECT_EQ(default_search.config().model_backend, irt::model::ModelBackend::OpenVINO);
+    EXPECT_EQ(default_search.config().model_device, irt::model::ModelDevice::CPU);
     EXPECT_EQ(default_search.config().norm, irt::features::ImageSearchFeatureNorm::None);
     EXPECT_EQ(default_search.config().index_storage, irt::features::ImageSearchIndexStorage::Disk);
     EXPECT_EQ(default_search.config().disk_build_batch_size, 3U);
+}
+
+/**
+ * @brief ImageSearch config 应允许选择 ONNX Runtime 图后端。
+ */
+TEST(ImageSearchTest, ConstructorAcceptsOnnxRuntimeBackend)
+{
+    irt::features::ImageSearchConfig config;
+    config.model_name = "resnet18";
+    config.feature_name = "layer4";
+    config.model_backend = irt::model::ModelBackend::ONNXRuntime;
+    config.model_device = irt::model::ModelDevice::CPU;
+
+    const irt::features::ImageSearch search(config);
+
+    EXPECT_EQ(search.config().model_backend, irt::model::ModelBackend::ONNXRuntime);
+    EXPECT_EQ(search.config().model_device, irt::model::ModelDevice::CPU);
+    EXPECT_FALSE(search.isReady());
+}
+
+/**
+ * @brief TensorRT 特征提取后端需要 GPU 设备。
+ */
+TEST(ImageSearchTest, ConstructorRejectsTensorRtCpuDevice)
+{
+    irt::features::ImageSearchConfig config;
+    config.model_name = "resnet18";
+    config.feature_name = "layer4";
+    config.model_backend = irt::model::ModelBackend::TensorRT;
+    config.model_device = irt::model::ModelDevice::CPU;
+
+    expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); },
+                           irt::Status::ERROR_NOT_IMPLEMENTED);
 }
 
 /**
@@ -302,6 +343,36 @@ TEST(ImageSearchTest, RamIndexUsesInMemoryIvfPqCompression)
 }
 
 /**
+ * @brief RAM IVF-PQ 构建应在每个写入批次完成后触发回调。
+ */
+TEST(ImageSearchTest, RamIndexBuildInvokesBatchCallback)
+{
+    constexpr int    feature_dim  = 16;
+    constexpr size_t vector_count = 17;
+
+    std::vector<float> features(vector_count * feature_dim, 0.0f);
+    for (size_t row = 0; row < vector_count; ++row)
+    {
+        features[row * feature_dim + (row % feature_dim)] = 1.0f;
+        features[row * feature_dim + ((row * 5 + 3) % feature_dim)] += 0.125f;
+    }
+
+    auto load_feature = [&](size_t row) {
+        const auto begin = features.begin() + static_cast<std::ptrdiff_t>(row * feature_dim);
+        return std::vector<float>(begin, begin + feature_dim);
+    };
+
+    std::vector<std::pair<size_t, size_t>> batches;
+    auto index = irt::features::priv::buildRamIvfPqIndex(
+        vector_count, feature_dim, 5, load_feature, false,
+        [&](size_t begin, size_t count) { batches.emplace_back(begin, count); });
+
+    ASSERT_TRUE(index);
+    const std::vector<std::pair<size_t, size_t>> expected{{0, 5}, {5, 5}, {10, 5}, {15, 2}};
+    EXPECT_EQ(batches, expected);
+}
+
+/**
  * @brief GPU 兼容的 RAM IVF-PQ 索引应固定使用 8 位子码（``require_gpu_compatible=true``）。
  */
 TEST(ImageSearchTest, RamIvfPqGpuCompatibleIndexUsesEightBitCodes)
@@ -352,8 +423,11 @@ TEST(ImageSearchTest, CpuDiskIndexUsesOnDiskIvfInvertedLists)
 
     TempDir temp;
     const auto index_path = temp.path() / "synthetic_disk.faiss";
+    std::vector<std::pair<size_t, size_t>> batches;
     auto index = irt::features::priv::buildCpuOnDiskIvfFlatIndex(vector_count, feature_dim, index_path, 3,
-                                                                 load_feature);
+                                                                 load_feature,
+                                                                 [&](size_t begin, size_t count)
+                                                                 { batches.emplace_back(begin, count); });
     const auto data_path = irt::features::priv::cpuOnDiskIvfDataPath(index_path);
 
     ASSERT_TRUE(index);
@@ -367,6 +441,10 @@ TEST(ImageSearchTest, CpuDiskIndexUsesOnDiskIvfInvertedLists)
     ASSERT_NE(ivf_index->invlists, nullptr);
     EXPECT_EQ(index->metric_type, faiss::METRIC_INNER_PRODUCT);
     EXPECT_GE(ivf_index->nprobe, 1U);
+    const std::vector<std::pair<size_t, size_t>> expected_batches{
+        {0, 3}, {3, 3}, {6, 3}, {9, 3}, {12, 3}, {15, 1}
+    };
+    EXPECT_EQ(batches, expected_batches);
 
     const std::string invlists_type = typeid(*ivf_index->invlists).name();
     EXPECT_NE(invlists_type.find("OnDisk"), std::string::npos) << invlists_type;

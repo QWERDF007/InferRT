@@ -6,9 +6,11 @@
  */
 
 #include <inferrt/features/Export.h>
+#include <inferrt/model/IModelConfig.hpp>
 
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -84,6 +86,12 @@ struct ImageSearchConfig
     ///< 用作检索向量的中间特征名。
     std::string feature_name{kDefaultImageSearchFeatureName};
 
+    ///< 特征提取模型运行时后端。
+    irt::model::ModelBackend model_backend{irt::model::ModelBackend::TensorRT};
+
+    ///< 特征提取模型运行设备。
+    irt::model::ModelDevice model_device{irt::model::ModelDevice::GPU};
+
     ///< 预处理执行后端。
     ImageSearchPreprocessBackend preprocess_backend{ImageSearchPreprocessBackend::CPU};
 
@@ -99,6 +107,23 @@ struct ImageSearchConfig
     ///< CPU disk index build batch size.
     size_t disk_build_batch_size{kDefaultImageSearchDiskBuildBatchSize};
 };
+
+/**
+ * @brief 索引构建批次完成后的进度信息。
+ */
+struct ImageSearchBuildProgress
+{
+    size_t batch_index{0};     ///< 从 0 开始的已完成批次编号。
+    size_t batch_begin{0};     ///< 当前批次第一张图库图片的下标。
+    size_t batch_count{0};     ///< 当前批次包含的图库图片数量。
+    size_t processed_count{0}; ///< 当前批次完成后已写入索引的图库图片数量。
+    size_t total_count{0};     ///< 本次构建需要写入索引的图库图片总数。
+};
+
+/**
+ * @brief 索引构建批次完成后的回调函数类型。
+ */
+using ImageSearchBuildProgressCallback = std::function<void(const ImageSearchBuildProgress &)>;
 
 /**
  * @brief 基于 InferRT 中间特征与 Faiss 的图像检索器。
@@ -159,9 +184,11 @@ public:
      * @param gallery_dir 图库目录。
      * @param index_file Faiss 索引文件路径；为空时使用默认路径。
      * @param rebuild_index 是否强制重建索引。
+     * @param progress_callback 可选回调；每完成一个索引构建批次后调用。
      */
     void buildOrLoad(const std::filesystem::path &weights_file, const std::filesystem::path &gallery_dir,
-                     const std::filesystem::path &index_file = {}, bool rebuild_index = false);
+                     const std::filesystem::path &index_file = {}, bool rebuild_index = false,
+                     ImageSearchBuildProgressCallback progress_callback = {});
 
     /**
      * @brief 从图库目录构建图像检索索引。
@@ -169,9 +196,11 @@ public:
      * @param weights_file 模型 `.wts` 权重文件路径。
      * @param gallery_dir 图库目录。
      * @param index_file Faiss 索引文件路径；为空时使用默认路径。
+     * @param progress_callback 可选回调；每完成一个索引构建批次后调用。
      */
     void build(const std::filesystem::path &weights_file, const std::filesystem::path &gallery_dir,
-               const std::filesystem::path &index_file = {});
+               const std::filesystem::path &index_file = {},
+               ImageSearchBuildProgressCallback progress_callback = {});
 
     /**
      * @brief 从显式图片路径列表构建图像检索索引。
@@ -182,10 +211,12 @@ public:
      * @param weights_file 模型 `.wts` 权重文件路径。
      * @param gallery_images 待加入索引的图片路径列表。
      * @param index_file Faiss 索引文件路径；不可为空。
+     * @param progress_callback 可选回调；每完成一个索引构建批次后调用。
      */
     void build(const std::filesystem::path &weights_file,
                const std::vector<std::filesystem::path> &gallery_images,
-               const std::filesystem::path &index_file);
+               const std::filesystem::path &index_file,
+               ImageSearchBuildProgressCallback progress_callback = {});
 
     /**
      * @brief 为图库目录加载已有图像检索索引。
