@@ -6,7 +6,7 @@ from pathlib import Path
 import cv2
 
 import torch
-from model_zoo import (
+from classification_model_zoo import (
     create_model,
     export_model_state_dict,
     list_supported_models,

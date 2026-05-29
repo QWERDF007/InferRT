@@ -11,7 +11,6 @@
 #include <iostream>
 #include <string>
 
-
 namespace fs = std::filesystem;
 
 namespace {
@@ -83,6 +82,40 @@ irt::features::ImageSearchPreprocessBackend parsePreprocessBackend(std::string v
     }
 
     throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported preprocess backend: %s", value.c_str());
+}
+
+irt::model::ModelBackend parseModelBackend(std::string value)
+{
+    value = toLower(std::move(value));
+    if (value == "tensorrt" || value == "trt")
+    {
+        return irt::model::ModelBackend::TensorRT;
+    }
+    if (value == "openvino" || value == "ov")
+    {
+        return irt::model::ModelBackend::OpenVINO;
+    }
+    if (value == "onnxruntime" || value == "onnx" || value == "ort")
+    {
+        return irt::model::ModelBackend::ONNXRuntime;
+    }
+
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported model backend: %s", value.c_str());
+}
+
+irt::model::ModelDevice parseModelDevice(std::string value)
+{
+    value = toLower(std::move(value));
+    if (value == "cpu")
+    {
+        return irt::model::ModelDevice::CPU;
+    }
+    if (value == "gpu" || value == "cuda")
+    {
+        return irt::model::ModelDevice::GPU;
+    }
+
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported model device: %s", value.c_str());
 }
 
 irt::features::ImageSearchFaissBackend parseFaissBackend(std::string value)
@@ -173,7 +206,8 @@ const char *indexStorageName(irt::features::ImageSearchIndexStorage storage)
 cxxopts::Options makeOptions(const char *program_name)
 {
     cxxopts::Options options(program_name, "Build and query a Faiss image retrieval index from InferRT features");
-    options.add_options()("weights-file,w", "Weights file (.wts)", cxxopts::value<std::string>())(
+    options.add_options()("weights-file,w", "Weights/model file (.wts, .onnx or OpenVINO IR)",
+                          cxxopts::value<std::string>())(
         "gallery-dir,g", "Gallery image directory", cxxopts::value<std::string>())("query-image,q", "Query image path",
                                                                                    cxxopts::value<std::string>())(
         "model,m", "Built-in model name",
@@ -184,6 +218,9 @@ cxxopts::Options makeOptions(const char *program_name)
         cxxopts::value<int>()->default_value(std::to_string(irt::features::ImageSearch::kDefaultTopK)))(
         "index", "Faiss index path", cxxopts::value<std::string>()->default_value(""))(
         "norm", "Feature norm mode: none, l1, l2", cxxopts::value<std::string>()->default_value("l2"))(
+        "backend", "Feature extraction backend: tensorrt, openvino, onnxruntime",
+        cxxopts::value<std::string>()->default_value("tensorrt"))("device", "Feature extraction device: cpu, gpu",
+                                                                  cxxopts::value<std::string>()->default_value("gpu"))(
         "preprocess-backend", "Preprocess backend: cpu, gpu", cxxopts::value<std::string>()->default_value("cpu"))(
         "faiss-backend", "Faiss backend: cpu, gpu", cxxopts::value<std::string>()->default_value("cpu"))(
         "index-storage", "Index storage for CPU Faiss search: ram, disk",
@@ -210,8 +247,9 @@ Arguments parseArguments(int argc, char *argv[])
         std::cout << "Default model: " << irt::features::ImageSearch::kDefaultModelName << std::endl;
         std::cout << "Default feature tensor: " << irt::features::ImageSearch::kDefaultFeatureName << std::endl;
         std::cout << "Default top-k: " << irt::features::ImageSearch::kDefaultTopK << std::endl;
-        std::cout << "Default config: --norm l2 --preprocess-backend cpu --faiss-backend cpu --index-storage ram"
-                  << " --disk-build-batch-size " << irt::features::kDefaultImageSearchDiskBuildBatchSize << std::endl;
+        std::cout << "Default config: --norm l2 --backend tensorrt --device gpu --preprocess-backend cpu"
+                  << " --faiss-backend cpu --index-storage ram --disk-build-batch-size "
+                  << irt::features::kDefaultImageSearchDiskBuildBatchSize << std::endl;
         std::cout << "If --index is omitted, the sample uses <gallery_dir>/<model>_<feature>.faiss" << std::endl;
         std::cout << "DINO feature hint: use x_norm_clstoken for compact image-level retrieval" << std::endl;
         std::cout << "Supported models:";
@@ -238,6 +276,8 @@ Arguments parseArguments(int argc, char *argv[])
     args.config.model_name            = result["model"].as<std::string>();
     args.config.feature_name          = result["feature"].as<std::string>();
     args.config.norm                  = parseNorm(result["norm"].as<std::string>());
+    args.config.model_backend         = parseModelBackend(result["backend"].as<std::string>());
+    args.config.model_device          = parseModelDevice(result["device"].as<std::string>());
     args.config.preprocess_backend    = parsePreprocessBackend(result["preprocess-backend"].as<std::string>());
     args.config.faiss_backend         = parseFaissBackend(result["faiss-backend"].as<std::string>());
     args.config.index_storage         = parseIndexStorage(result["index-storage"].as<std::string>());
@@ -274,8 +314,18 @@ int main(int argc, char *argv[])
 
         irt::features::ImageSearch searcher(args.config);
 
-        const auto build_start = Clock::now();
-        searcher.buildOrLoad(args.weights_file, args.gallery_dir, args.index_file, args.rebuild_index);
+        const auto build_start       = Clock::now();
+        auto       progress_callback = [](const irt::features::ImageSearchBuildProgress &progress)
+        {
+            std::cout << "Index build progress: " << progress.processed_count << "/" << progress.total_count
+                      << " images\r" << std::flush;
+            if (progress.processed_count == progress.total_count)
+            {
+                std::cout << std::endl;
+            }
+        };
+        searcher.buildOrLoad(args.weights_file, args.gallery_dir, args.index_file, args.rebuild_index,
+                             progress_callback);
         const auto build_end = Clock::now();
 
         const auto search_start = Clock::now();
@@ -285,7 +335,9 @@ int main(int argc, char *argv[])
         std::cout << "Query image: " << fs::absolute(args.query_image).string() << std::endl;
         std::cout << "Model: " << searcher.config().model_name << ", feature tensor: " << searcher.config().feature_name
                   << std::endl;
-        std::cout << "Config: norm=" << normName(searcher.config().norm)
+        std::cout << "Config: backend=" << modelBackendName(searcher.config().model_backend)
+                  << ", device=" << modelDeviceName(searcher.config().model_device)
+                  << ", norm=" << normName(searcher.config().norm)
                   << ", preprocess=" << preprocessBackendName(searcher.config().preprocess_backend)
                   << ", faiss=" << faissBackendName(searcher.config().faiss_backend)
                   << ", index_storage=" << indexStorageName(searcher.config().index_storage)

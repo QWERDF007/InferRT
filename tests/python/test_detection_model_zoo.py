@@ -13,7 +13,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 ROOT = Path(__file__).resolve().parents[2]
-YOLO_MODEL_ZOO_PATH = ROOT / "samples" / "model" / "detection" / "yolo_model_zoo.py"
+YOLO_MODEL_ZOO_PATH = ROOT / "samples" / "model" / "python" / "yolo_model_zoo.py"
 
 spec = importlib.util.spec_from_file_location("inferrt_detection_yolo_model_zoo", YOLO_MODEL_ZOO_PATH)
 assert spec is not None and spec.loader is not None

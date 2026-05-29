@@ -12,7 +12,7 @@ np = pytest.importorskip("numpy")
 torch = pytest.importorskip("torch")
 pytest.importorskip("torchvision")
 
-from model_zoo import (  # noqa: E402
+from classification_model_zoo import (  # noqa: E402
     convert_transformers_dinov3_state_dict,
     create_model,
     export_model_state_dict,
@@ -474,7 +474,7 @@ def test_transformers_dinov3_export_state_dict_maps_gated_mlp() -> None:
 
 
 def test_export_model_state_dict_uses_adapter_export() -> None:
-    """``gen_wts.py`` 应通过通用导出入口读取适配器转换后的权重。"""
+    """``classification_gen_wts.py`` 应通过通用导出入口读取适配器转换后的权重。"""
 
     class FakeExportModel(torch.nn.Module):
         """模拟提供自定义导出 state_dict 的模型。"""

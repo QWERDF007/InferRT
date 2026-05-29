@@ -14,8 +14,8 @@ cmake --build build --config Debug --target inferrt_sample_image_search
 ## Run
 
 ```bash
-build/bin/inferrt_sample_image_search.exe --weights-file <weights_file.wts> --gallery-dir <gallery_dir> --query-image <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--norm l2|l1|none] [--preprocess-backend cpu|gpu] [--faiss-backend cpu|gpu] [--index-storage ram|disk] [--disk-build-batch-size N] [--rebuild-index]
-build/bin/inferrt_sample_image_search.exe -w <weights_file.wts> -g <gallery_dir> -q <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--norm l2|l1|none] [--preprocess-backend cpu|gpu] [--faiss-backend cpu|gpu] [--index-storage ram|disk] [--disk-build-batch-size N] [--rebuild-index]
+build/bin/inferrt_sample_image_search.exe --weights-file <weights_or_model_file> --gallery-dir <gallery_dir> --query-image <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--backend tensorrt|openvino|onnxruntime] [--device cpu|gpu] [--norm l2|l1|none] [--preprocess-backend cpu|gpu] [--faiss-backend cpu|gpu] [--index-storage ram|disk] [--disk-build-batch-size N] [--rebuild-index]
+build/bin/inferrt_sample_image_search.exe -w <weights_or_model_file> -g <gallery_dir> -q <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--backend tensorrt|openvino|onnxruntime] [--device cpu|gpu] [--norm l2|l1|none] [--preprocess-backend cpu|gpu] [--faiss-backend cpu|gpu] [--index-storage ram|disk] [--disk-build-batch-size N] [--rebuild-index]
 build/bin/inferrt_sample_image_search.exe --help
 ```
 
@@ -29,13 +29,15 @@ build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classific
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet50.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model resnet50 --feature layer3
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --norm l2 --preprocess-backend cpu --faiss-backend cpu --index-storage disk --disk-build-batch-size 128 --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --norm l2 --preprocess-backend cpu --faiss-backend gpu --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file build/python_test_artifacts/model_dir_parity/dinov2/dinov2_vits14/<case-id>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --backend onnxruntime --device cpu --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file build/python_test_artifacts/model_dir_parity/dinov2/dinov2_vits14/<case-id>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --backend openvino --device cpu --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/dinov2_vits14.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --index build/gallery/dinov2_vits14_x_norm_clstoken.faiss
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/dinov3_vitb16.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov3_vitb16 --feature x_norm_clstoken --index build/gallery/dinov3_vitb16_x_norm_clstoken.faiss
 ```
 
-DINO weights can be exported from `samples/model/classification` with
-`python gen_wts.py -m dinov2_vits14 -b torchhub -o dinov2_vits14.wts` and
-`python gen_wts.py -m dinov3_vitb16 -b transformers -o dinov3_vitb16.wts`.
+DINO weights can be exported from `samples/model/python/classification_gen_wts.py` with
+`python samples/model/python/classification_gen_wts.py -m dinov2_vits14 -b torchhub -o dinov2_vits14.wts` and
+`python samples/model/python/classification_gen_wts.py -m dinov3_vitb16 -b transformers -o dinov3_vitb16.wts`.
 
 ## Index Reuse
 
@@ -47,6 +49,8 @@ Use `--rebuild-index` when the gallery directory has changed and you want to inc
 
 - `--model`: selects the built-in classification model, default is `resnet18`
 - `--feature`: selects the feature tensor name used for retrieval, default is `layer4`
+- `--backend`: selects the feature extraction backend, one of `tensorrt`, `openvino`, `onnxruntime`; `onnx` and `ort` are accepted aliases for ONNX Runtime
+- `--device`: selects the feature extraction device, one of `cpu`, `gpu`; TensorRT requires `gpu`
 - `--norm`: selects feature normalization, one of `l2`, `l1`, `none`; default is `l2`
 - `--preprocess-backend`: selects preprocessing backend, one of `cpu`, `gpu`; default is `cpu`; GPU preprocessing is reserved and currently reports not implemented
 - `--faiss-backend`: selects Faiss backend, one of `cpu`, `gpu`; default is `cpu`
@@ -54,6 +58,8 @@ Use `--rebuild-index` when the gallery directory has changed and you want to inc
 - `--disk-build-batch-size`: controls the batch size used while building CPU disk indexes; default is `256`; lower it to reduce peak RAM during build
 - if `--index` is omitted, the sample writes `<gallery_dir>/<model>_<feature>.faiss`
 - DINO models use the engine input size during preprocessing, so `dinov2_vits14` runs at its registered `518x518` default and `dinov3_*` official keys run at `224x224` unless the model config is overridden.
+- ONNX Runtime and OpenVINO backends use graph outputs directly. Export the feature you want to search, such as `x_norm_clstoken`, as an ONNX/OpenVINO output first.
+- During index construction the sample passes a progress callback to `ImageSearch::buildOrLoad` and prints completed image counts after each build batch.
 
 Common feature keys:
 

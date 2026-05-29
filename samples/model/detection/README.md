@@ -1,21 +1,22 @@
 # YOLO Detection
 
-This directory contains the Python weight exporter for InferRT native YOLOv5 and YOLOv8 detection builders.
+This directory contains the InferRT native YOLOv5 and YOLOv8 detection C++ sample.
+The Python weight exporter lives in `samples/model/python/detection_gen_wts.py`.
 
 ## Export Weights
 
 Use a local Ultralytics checkout when you want the exporter to use `D:/Github/ultralytics` directly:
 
 ```bash
-python gen_wts.py -m yolov5n --weights yolov5nu.pt --ultralytics-repo D:/Github/ultralytics
-python gen_wts.py -m yolov8n --weights yolov8n.pt --ultralytics-repo D:/Github/ultralytics
+python samples/model/python/detection_gen_wts.py -m yolov5n --weights yolov5nu.pt --ultralytics-repo D:/Github/ultralytics
+python samples/model/python/detection_gen_wts.py -m yolov8n --weights yolov8n.pt --ultralytics-repo D:/Github/ultralytics
 ```
 
 If `ultralytics` is already installed, `--ultralytics-repo` is optional:
 
 ```bash
-python gen_wts.py -m yolov8s --weights D:/models/yolov8s.pt -o yolov8s.wts
-python gen_wts.py -l
+python samples/model/python/detection_gen_wts.py -m yolov8s --weights D:/models/yolov8s.pt -o yolov8s.wts
+python samples/model/python/detection_gen_wts.py -l
 ```
 
 The native C++ builders expose three detection outputs:

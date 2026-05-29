@@ -27,9 +27,9 @@ build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w build/python_te
 build/bin/inferrt_sample_feature_extract.exe -m dinov3_vitb16 -w samples/model/classification/dinov3_vitb16.wts -f x_norm_clstoken,x_storage_tokens,x_norm_patchtokens -i assets/pics/dog.jpg -o build/dinov3_feature_dump_cpp
 ```
 
-DINO weights can be exported from `samples/model/classification` with
-`python gen_wts.py -m dinov2_vits14 -b torchhub -o dinov2_vits14.wts` and
-`python gen_wts.py -m dinov3_vitb16 -b transformers -o dinov3_vitb16.wts`.
+DINO weights can be exported from `samples/model/python/classification_gen_wts.py` with
+`python samples/model/python/classification_gen_wts.py -m dinov2_vits14 -b torchhub -o dinov2_vits14.wts` and
+`python samples/model/python/classification_gen_wts.py -m dinov3_vitb16 -b transformers -o dinov3_vitb16.wts`.
 
 The sample always builds the model instance as a truncated feature extractor via
 `IModelConfig::setFeatureOnly(true)`.
@@ -54,8 +54,7 @@ The sample writes:
 ## Compare with Python
 
 ```bash
-cd samples/model/feature_extract
-python compare_features.py --compare_dir ../../../build/feature_dump_cpp
+python samples/model/python/compare_features.py --compare_dir build/feature_dump_cpp
 ```
 
 For TensorRT vs PyTorch intermediate features, the script defaults to `--rtol 1e-2 --atol 1.2e-1`.
@@ -65,13 +64,13 @@ use different FP32 kernels while still producing numerically aligned features.
 You can also select the model and features explicitly:
 
 ```bash
-python compare_features.py -m resnet18 -f layer1,layer4 -i ../../../assets/pics/dog.jpg --compare_dir ../../../build/feature_dump_cpp
+python samples/model/python/compare_features.py -m resnet18 -f layer1,layer4 -i assets/pics/dog.jpg --compare_dir build/feature_dump_cpp
 ```
 
 Optional Python-side dump:
 
 ```bash
-python compare_features.py -m resnet18 -f layer1,layer4 -i ../../../assets/pics/dog.jpg --dump_dir ../../../build/feature_dump_py
+python samples/model/python/compare_features.py -m resnet18 -f layer1,layer4 -i assets/pics/dog.jpg --dump_dir build/feature_dump_py
 ```
 
 ## DINO Feature Keys
@@ -82,7 +81,7 @@ python compare_features.py -m resnet18 -f layer1,layer4 -i ../../../assets/pics/
 
 ## Notes
 
-- The Python script reuses the same ImageNet preprocessing as `gen_wts.py`.
+- The Python script reuses the same ImageNet preprocessing as `classification_gen_wts.py`.
 - `--compare_dir` expects the directory produced by `inferrt_sample_feature_extract`.
 - For `timm` backend comparison, use `-b timm` with a matching timm-exported weight file.
 - For DINO comparison, `compare_features.py` infers `torchhub` for DINOv2 and `transformers` for DINOv3

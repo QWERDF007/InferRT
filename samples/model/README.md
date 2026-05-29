@@ -4,12 +4,12 @@ This directory contains the ImageNet-style classification sample assets provided
 
 ## Layout
 
-- `classification/`: shared weight export and inference entry for all supported classification models
-- `detection/`: YOLOv5/YOLOv8 weight export and single-image detection sample with decode + NMS
-- `feature_extract/`: feature dump sample plus a Python comparator for checking InferRT vs PyTorch feature consistency
+- `classification/`: classification inference sample for all supported classification models
+- `detection/`: YOLOv5/YOLOv8 single-image detection sample with decode + NMS
+- `feature_extract/`: feature dump sample for checking InferRT vs PyTorch feature consistency
 - `image_search/`: Faiss-based image retrieval sample, including CNN and DINO feature tensors
-- `onnx/`: ONNX export script and ONNX -> TensorRT inference sample
-- `python/`: pybind11 Python binding sample for model creation and inference
+- `onnx/`: ONNX -> TensorRT inference sample
+- `python/`: centralized Python scripts, including weight exporters, ONNX exporters, comparators, and pybind11 samples
 - `segmentation/`: TensorRT-native SAM/SAM2/SAM3 prompt segmentation sample
 
 ## Build
@@ -48,21 +48,19 @@ build/bin/inferrt_sample_segmentation.exe -m sam_vit_b -w samples/model/segmenta
 Generate weights with the shared script:
 
 ```bash
-cd samples/model/classification
-python gen_wts.py -m alexnet
-python gen_wts.py -m resnet50
-python gen_wts.py -m vgg16
-python gen_wts.py -m dinov2_vits14 -b torchhub -o dinov2_vits14.wts
-python gen_wts.py -m dinov3_vitb16 -b transformers -o dinov3_vitb16.wts
-cd ../segmentation
-python gen_sam_wts.py -m vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.wts
-python gen_sam2_wts.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.wts
+python samples/model/python/classification_gen_wts.py -m alexnet
+python samples/model/python/classification_gen_wts.py -m resnet50
+python samples/model/python/classification_gen_wts.py -m vgg16
+python samples/model/python/classification_gen_wts.py -m dinov2_vits14 -b torchhub -o dinov2_vits14.wts
+python samples/model/python/classification_gen_wts.py -m dinov3_vitb16 -b transformers -o dinov3_vitb16.wts
+python samples/model/python/gen_sam_wts.py -m vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.wts
+python samples/model/python/gen_sam2_wts.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.wts
 ```
 
 ## Notes
 
 - Input preprocessing is aligned with standard ImageNet classification
-- The shared sample reads input and output tensor shapes from the built engine, so ViT/DINO variants can use their registered default sizes or a custom size exported by `gen_wts.py --input-size`
+- The shared sample reads input and output tensor shapes from the built engine, so ViT/DINO variants can use their registered default sizes or a custom size exported by `classification_gen_wts.py --input-size`
 - DINO backbones output feature vectors; the sample prints feature top values when the primary output is not a 1000-class logits tensor
 - The first run builds an engine from `.wts`, and later runs reuse the generated `.engine`
 
@@ -104,15 +102,15 @@ Common feature keys exposed by built-in models:
 ONNX / OpenVINO note:
 
 - ONNX graph backends cannot select hidden tensors after export; export the desired features as graph outputs first.
-- Use `onnx/export_feature_onnx.py` to turn `forward_features()` keys such as `x_norm_clstoken` into ONNX/OpenVINO output tensors.
+- Use `python/export_feature_onnx.py` to turn `forward_features()` keys such as `x_norm_clstoken` into ONNX/OpenVINO output tensors.
 
 ## SAM Segmentation Sample
 
 The segmentation sample exercises the TensorRT-native SAM-family model path and uses the default prompt contract:
 `image`, `point_coords`, `point_labels`, `mask_input`, `has_mask_input` -> `masks`, `iou_predictions`, `low_res_masks`.
 SAM v1 builds the official ViT image encoder, prompt encoder, and mask decoder from official `segment_anything`
-checkpoints exported by `segmentation/gen_sam_wts.py`. SAM2/SAM2.1 builds the official Hiera image encoder, FPN
-neck, prompt encoder, and high-resolution mask decoder from checkpoints exported by `segmentation/gen_sam2_wts.py`.
+checkpoints exported by `python/gen_sam_wts.py`. SAM2/SAM2.1 builds the official Hiera image encoder, FPN
+neck, prompt encoder, and high-resolution mask decoder from checkpoints exported by `python/gen_sam2_wts.py`.
 SAM3 keys are registered, but their native backbone currently fails explicitly with `ERROR_NOT_IMPLEMENTED`.
 
 ```bash
@@ -133,8 +131,7 @@ build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w samples/model/c
 build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w build/python_test_artifacts/model_dir_parity/dinov2/dinov2_vits14/<case-id>/dinov2_vits14.features.onnx -f x_norm_clstoken -i assets/pics/dog.jpg -o build/dinov2_openvino_cpu_feature_dump --backend openvino --device cpu --warmup 10 --repeat 100
 build/bin/inferrt_sample_feature_extract.exe -m dinov3_vitb16 -w samples/model/classification/dinov3_vitb16.wts -f x_norm_clstoken,x_storage_tokens,x_norm_patchtokens -i assets/pics/dog.jpg -o build/dinov3_feature_dump_cpp
 build/bin/inferrt_sample_feature_extract.exe --help
-cd samples/model/feature_extract
-python compare_features.py --compare_dir ../../../build/feature_dump_cpp
+python samples/model/python/compare_features.py --compare_dir build/feature_dump_cpp
 ```
 
 The dedicated feature sample always configures the model as `featureOnly=true`, so it builds/loads the truncated
@@ -152,6 +149,8 @@ build/bin/inferrt_sample_image_search.exe -w samples/model/classification/resnet
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --topk 5 --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --faiss-backend cpu --index-storage disk --disk-build-batch-size 128 --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --norm l2 --preprocess-backend cpu --faiss-backend gpu --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file build/python_test_artifacts/model_dir_parity/dinov2/dinov2_vits14/<case-id>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --backend onnxruntime --device cpu --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file build/python_test_artifacts/model_dir_parity/dinov2/dinov2_vits14/<case-id>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --backend openvino --device cpu --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet50.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model resnet50 --feature layer3
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/dinov2_vits14.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --index build/gallery/dinov2_vits14_x_norm_clstoken.faiss
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/dinov3_vitb16.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov3_vitb16 --feature x_norm_clstoken --index build/gallery/dinov3_vitb16_x_norm_clstoken.faiss
@@ -163,6 +162,8 @@ Behavior:
 - default model: `resnet18`
 - default feature tensor: `layer4`
 - `--model` and `--feature` can be used to switch to other built-in classification, ViT, and DINO feature tensors
+- `--backend` selects feature extraction runtime: `tensorrt`, `openvino`, or `onnxruntime`; graph backends require the requested feature to be exported as a graph output
+- `--device` selects `cpu` or `gpu`; TensorRT requires `gpu`
 - `--norm` selects `l2`, `l1`, or `none`
 - `--preprocess-backend` selects `cpu` or `gpu`; GPU preprocessing is reserved and currently reports not implemented
 - `--faiss-backend` selects `cpu` or `gpu`
@@ -171,6 +172,7 @@ Behavior:
 - default `top_k`: `5`
 - if the target Faiss index already exists, the sample reuses it by default
 - pass `--rebuild-index` to rescan the gallery and include newly added images
+- the sample prints index build progress through the new batch completion callback
 
 See [`image_search/README.md`](image_search/README.md) for details.
 

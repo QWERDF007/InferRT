@@ -77,7 +77,7 @@ def require_weights(root: Path, relative_weights: str) -> Path:
         Path: 权重文件绝对路径。
 
     Raises:
-        FileNotFoundError: 文件不存在时，消息中含 ``gen_wts.py`` 生成提示。
+        FileNotFoundError: 文件不存在时，消息中含 ``classification_gen_wts.py`` 生成提示。
     """
 
     weights_path = (root / relative_weights).resolve()
@@ -207,7 +207,7 @@ def run_cpp_feature_dump(
 
 
 def run_torch_classification(model_name: str, input_tensor: np.ndarray) -> np.ndarray:
-    """使用 torchvision 预训练模型执行分类前向（与 ``gen_wts.py`` 一致）。
+    """使用 torchvision 预训练模型执行分类前向（与 ``classification_gen_wts.py`` 一致）。
 
     Args:
         model_name: ``model_zoo.TORCHVISION_MODEL_ZOO`` 中的模型名。
@@ -222,7 +222,7 @@ def run_torch_classification(model_name: str, input_tensor: np.ndarray) -> np.nd
     """
 
     import torch
-    from model_zoo import create_model
+    from classification_model_zoo import create_model
 
     model = create_model(model_name, "torchvision")
     model.eval()
@@ -293,7 +293,7 @@ def run_torch_features(model_name: str, input_tensor: np.ndarray, feature_names:
     """
 
     import torch
-    from model_zoo import create_model
+    from classification_model_zoo import create_model
 
     # InferRT 特征名 -> PyTorch ``named_modules`` 键的映射。
     # 同名直接命中的不需要列在这里；不同模型族同名特征需单独处理。

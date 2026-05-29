@@ -1,6 +1,5 @@
 import argparse
 import os
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,11 +10,7 @@ import torch.nn.functional as F
 
 
 THIS_DIR = Path(__file__).resolve().parent
-CLASSIFICATION_DIR = THIS_DIR.parent / "classification"
-if str(CLASSIFICATION_DIR) not in sys.path:
-    sys.path.insert(0, str(CLASSIFICATION_DIR))
-
-from model_zoo import create_model, list_supported_models, preprocess, resolve_input_size
+from classification_model_zoo import create_model, list_supported_models, preprocess, resolve_input_size
 
 
 @dataclass

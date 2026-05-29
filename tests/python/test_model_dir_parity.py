@@ -500,7 +500,7 @@ def _load_case_model(case: ModelDirCase, pytestconfig: pytest.Config):
         已加载并切到 eval 模式的 PyTorch 模型。
     """
 
-    from model_zoo import create_model
+    from classification_model_zoo import create_model
 
     if case.provider == "torchvision_state":
         model = create_model(case.model_name, "torchvision", pretrained=False)
@@ -558,7 +558,7 @@ def _input_tensor_for_model(model: Any) -> np.ndarray:
         连续内存布局的 ``float32`` NCHW 输入。
     """
 
-    from model_zoo import resolve_input_size
+    from classification_model_zoo import resolve_input_size
 
     height, width = resolve_input_size(model)
     values = np.linspace(-1.0, 1.0, num=1 * 3 * height * width, dtype=np.float32)

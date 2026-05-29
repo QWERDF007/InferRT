@@ -32,17 +32,9 @@ import pytest
 # 仓库根目录：tests/python -> tests -> InferRT
 ROOT = Path(__file__).resolve().parents[2]
 SAMPLES_PYTHON = ROOT / "samples" / "model" / "python"
-CLASSIFICATION_SAMPLES = ROOT / "samples" / "model" / "classification"
-ONNX_SAMPLES = ROOT / "samples" / "model" / "onnx"
-DETECTION_SAMPLES = ROOT / "samples" / "model" / "detection"
-SEGMENTATION_SAMPLES = ROOT / "samples" / "model" / "segmentation"
 
 SAMPLE_MODULE_PATHS = (
     SAMPLES_PYTHON,
-    CLASSIFICATION_SAMPLES,
-    ONNX_SAMPLES,
-    DETECTION_SAMPLES,
-    SEGMENTATION_SAMPLES,
 )
 
 for module_path in reversed(SAMPLE_MODULE_PATHS):

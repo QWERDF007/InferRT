@@ -23,9 +23,8 @@ cmake --build build --config Debug --target inferrt_sample_segmentation
 Export official SAM/SAM2 weights first:
 
 ```bash
-cd samples/model/segmentation
-python gen_sam_wts.py -m vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.wts
-python gen_sam2_wts.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.wts
+python samples/model/python/gen_sam_wts.py -m vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.wts
+python samples/model/python/gen_sam2_wts.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.wts
 ```
 
 ```bash

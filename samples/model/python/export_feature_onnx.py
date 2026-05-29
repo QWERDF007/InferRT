@@ -18,12 +18,7 @@ from export_onnx import (
     resolve_export_image_size,
 )
 
-THIS_DIR = Path(__file__).resolve().parent
-CLASSIFICATION_DIR = THIS_DIR.parent / "classification"
-if str(CLASSIFICATION_DIR) not in sys.path:
-    sys.path.insert(0, str(CLASSIFICATION_DIR))
-
-from model_zoo import create_model, list_supported_models
+from classification_model_zoo import create_model, list_supported_models
 
 
 DEFAULT_OPENVINO_ROOT = os.environ.get("OPENVINO_ROOT", "D:/Software/openvino_toolkit")

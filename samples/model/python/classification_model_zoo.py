@@ -286,7 +286,7 @@ class TransformersDINOv3Model(torch.nn.Module):
 
     pipeline 负责按官方模型 id 加载 pretrained 权重；本适配器提供普通
     ``torch.nn.Module`` 风格的 ``forward``、``forward_features`` 和
-    ``export_state_dict``，使 ``gen_wts.py`` 与现有测试无需感知 pipeline 包装层。
+    ``export_state_dict``，使 ``classification_gen_wts.py`` 与现有测试无需感知 pipeline 包装层。
     """
 
     def __init__(self, feature_pipeline: Any, model_name: str, model_id: str):
@@ -313,7 +313,7 @@ class TransformersDINOv3Model(torch.nn.Module):
         return x.to(device=parameter.device)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """返回 DINOv3 CLS pooled 特征，供 ``gen_wts.py`` 打印预测结果。"""
+        """返回 DINOv3 CLS pooled 特征，供 ``classification_gen_wts.py`` 打印预测结果。"""
 
         x = self._to_model_device(x)
         return self.hf_model(pixel_values=x).pooler_output

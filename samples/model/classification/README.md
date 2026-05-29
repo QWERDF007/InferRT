@@ -1,6 +1,7 @@
 # Classification Sample
 
-This directory is the shared entry for classification weight export and inference under `samples/model`.
+This directory contains the classification C++ sample under `samples/model`.
+The Python weight exporter lives in `samples/model/python/classification_gen_wts.py`.
 
 ## Supported models
 
@@ -37,44 +38,43 @@ cmake --build build --config Debug --target inferrt_sample_classification
 Run in a Python environment with `torch`, `torchvision`, and `opencv-python` installed:
 
 ```bash
-cd samples/model/classification
-python gen_wts.py -m alexnet
-python gen_wts.py -m mobilenet_v2
-python gen_wts.py -m mobilenet_v3_large
-python gen_wts.py -m mobilenet_v3_small
-python gen_wts.py -m resnet50
-python gen_wts.py -m vgg16
+python samples/model/python/classification_gen_wts.py -m alexnet
+python samples/model/python/classification_gen_wts.py -m mobilenet_v2
+python samples/model/python/classification_gen_wts.py -m mobilenet_v3_large
+python samples/model/python/classification_gen_wts.py -m mobilenet_v3_small
+python samples/model/python/classification_gen_wts.py -m resnet50
+python samples/model/python/classification_gen_wts.py -m vgg16
 ```
 
 For timm-backed ResNet, ViT, and DINO variants:
 
 ```bash
-python gen_wts.py -b timm -m resnet18
-python gen_wts.py -b timm -m vit_base_patch16_384 --input-size 384
-python gen_wts.py -b timm -m vit_base_patch16_dinov3
+python samples/model/python/classification_gen_wts.py -b timm -m resnet18
+python samples/model/python/classification_gen_wts.py -b timm -m vit_base_patch16_384 --input-size 384
+python samples/model/python/classification_gen_wts.py -b timm -m vit_base_patch16_dinov3
 ```
 
 For official DINO weights:
 
 ```bash
-python gen_wts.py -b torchhub -m dinov2_vits14
-python gen_wts.py -b torchhub -m dinov2_vits14 --hub-repo <local-dinov2-repo> --hub-source local
-python gen_wts.py -b torchhub -m dinov2_vits14 --hub-repo <local-dinov2-repo> --hub-source local --hub-weights <dinov2-vits14-pretrain.pth>
-python gen_wts.py -b transformers -m dinov3_vitb16
-python gen_wts.py -b transformers -m dinov3_vitb16 --hf-model-id facebook/dinov3-vitb16-pretrain-lvd1689m
-python gen_wts.py -b transformers -m dinov3_vitb16 --local-files-only
+python samples/model/python/classification_gen_wts.py -b torchhub -m dinov2_vits14
+python samples/model/python/classification_gen_wts.py -b torchhub -m dinov2_vits14 --hub-repo <local-dinov2-repo> --hub-source local
+python samples/model/python/classification_gen_wts.py -b torchhub -m dinov2_vits14 --hub-repo <local-dinov2-repo> --hub-source local --hub-weights <dinov2-vits14-pretrain.pth>
+python samples/model/python/classification_gen_wts.py -b transformers -m dinov3_vitb16
+python samples/model/python/classification_gen_wts.py -b transformers -m dinov3_vitb16 --hf-model-id facebook/dinov3-vitb16-pretrain-lvd1689m
+python samples/model/python/classification_gen_wts.py -b transformers -m dinov3_vitb16 --local-files-only
 ```
 
 DINOv2 uses PyTorch Hub. DINOv3 uses Hugging Face `pipeline(model="facebook/dinov3-vitb16-pretrain-lvd1689m", task="image-feature-extraction")` by default and converts the Transformers state dict to the InferRT DINOv3 weight names during `.wts` export. In offline environments, use `--local-files-only` after the Hugging Face model is cached.
 
-DINO models export feature-vector backbones rather than 1000-class logits. `gen_wts.py` and the C++ sample print feature top values when the output dimension does not match the ImageNet label count.
+DINO models export feature-vector backbones rather than 1000-class logits. `classification_gen_wts.py` and the C++ sample print feature top values when the output dimension does not match the ImageNet label count.
 
 List supported models for a backend:
 
 ```bash
-python gen_wts.py -l
-python gen_wts.py -b timm -l
-python gen_wts.py -b transformers -l
+python samples/model/python/classification_gen_wts.py -l
+python samples/model/python/classification_gen_wts.py -b timm -l
+python samples/model/python/classification_gen_wts.py -b transformers -l
 ```
 
 ## Run
@@ -108,5 +108,5 @@ Defaults:
 When a new ImageNet-style classification model is added:
 
 1. register the model in `inferrt_model`
-2. add its builder to `TORCHVISION_MODEL_ZOO` or handle it in `create_model()` inside `model_zoo.py`
+2. add its builder to `TORCHVISION_MODEL_ZOO` or handle it in `create_model()` inside `samples/model/python/classification_model_zoo.py`
 3. add a smoke test for the model key in `tests/model` and `tests/python`

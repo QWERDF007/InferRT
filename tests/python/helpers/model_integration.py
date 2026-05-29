@@ -149,15 +149,15 @@ def ensure_yolo_wts(
     output = artifact_dir(build_dir, family) / f"{model_name}.wts"
     exporter_sources = [
         checkpoint,
-        repo_root / "samples" / "model" / "detection" / "gen_wts.py",
-        repo_root / "samples" / "model" / "detection" / "yolo_model_zoo.py",
+        repo_root / "samples" / "model" / "python" / "detection_gen_wts.py",
+        repo_root / "samples" / "model" / "python" / "yolo_model_zoo.py",
     ]
     if is_fresh_against_all(output, exporter_sources):
         return output
 
     command = [
         sys.executable,
-        "samples/model/detection/gen_wts.py",
+        "samples/model/python/detection_gen_wts.py",
         "--model",
         model_name,
         "--weights",
@@ -197,7 +197,7 @@ def ensure_sam_v1_wts(*, repo_root: Path, build_dir: Path, checkpoint: Path, sam
 
     command = [
         sys.executable,
-        "samples/model/segmentation/gen_sam_wts.py",
+        "samples/model/python/gen_sam_wts.py",
         "--model",
         "vit_b",
         "--checkpoint",
@@ -245,7 +245,7 @@ def ensure_sam2_wts(
 
     command = [
         sys.executable,
-        "samples/model/segmentation/gen_sam2_wts.py",
+        "samples/model/python/gen_sam2_wts.py",
         "--model",
         "sam2_1_hiera_tiny",
         "--checkpoint",
