@@ -637,7 +637,7 @@ def _ensure_wts(case: ModelDirCase, model: Any, output_dir: Path) -> Path:
         ``.wts`` 文件路径。
     """
 
-    from gen_wts import write_wts
+    from classification_gen_wts import write_wts
 
     output = output_dir / f"{case.model_name}.wts"
     if is_fresh_against_all(output, list(case.source_files)):

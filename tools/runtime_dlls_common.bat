@@ -1,34 +1,37 @@
 @echo off
-rem 运行时 DLL 公共脚本：将 ONNX Runtime / OpenVINO / CUDA / TensorRT / OpenCV 等依赖
-rem 链接或复制到构建目录或安装目录，供 inferrt_model、inferrt_model_py 及样例程序加载。
-rem 由 link_runtime_dlls.bat（link）和 package_runtime_dlls.bat（copy）调用。
+rem Shared runtime DLL helper: link or copy ONNX Runtime / OpenVINO / CUDA /
+rem TensorRT / OpenCV / Faiss dependencies into the build or install bin directory
+rem for inferrt_model, inferrt_model_py, and sample executables.
+rem Called by link_runtime_dlls.bat (link) and package_runtime_dlls.bat (copy).
 
 setlocal EnableExtensions EnableDelayedExpansion
 
-rem 第一个参数：link = 链接到 build\bin；copy = 复制到安装目录 bin。
+rem First argument: link = link into build\bin; copy = copy into install bin.
 set "ACTION=%~1"
 if /I not "%ACTION%"=="link" if /I not "%ACTION%"=="copy" (
     echo Usage: runtime_dlls_common.bat link^|copy
     exit /b 2
 )
 
-rem 默认路径与模式；调用方可通过环境变量覆盖。
+rem Default paths and mode; callers may override via environment variables.
 if not defined SCRIPT_DIR set "SCRIPT_DIR=%~dp0"
 if not defined PROJECT_ROOT for %%I in ("%SCRIPT_DIR%..") do set "PROJECT_ROOT=%%~fI"
 if not defined BUILD_DIR set "BUILD_DIR=%PROJECT_ROOT%\build"
 if not defined BUILD_CONFIG set "BUILD_CONFIG=Release"
 if not defined LINK_MODE set "LINK_MODE=symlink"
 
-rem 从 cmake/Config*.cmake 解析各依赖根目录（若环境变量已设置则跳过）。
+rem Read dependency roots from cmake/Config*.cmake unless already set.
 call :read_cmake_set "%PROJECT_ROOT%\cmake\ConfigONNXRuntime.cmake" "ONNXRUNTIME_ROOT" ONNXRUNTIME_ROOT
 call :read_cmake_set "%PROJECT_ROOT%\cmake\ConfigOpenVINO.cmake" "INFERRT_OPENVINO_ROOT" OPENVINO_ROOT
 call :read_cmake_set "%PROJECT_ROOT%\cmake\ConfigCUDA.cmake" "INFERRT_CUDA_ROOT" CUDA_ROOT
 call :read_cmake_set "%PROJECT_ROOT%\cmake\ConfigTensorRT.cmake" "TRT_ROOT" TENSORRT_ROOT
 call :read_cmake_set "%PROJECT_ROOT%\cmake\ConfigOpenCV.cmake" "OpenCV_HOME" OPENCV_HOME
 call :read_cmake_set "%PROJECT_ROOT%\cmake\ConfigPython.cmake" "INFERRT_PYTHON_ROOT" PYTHON_ROOT
+call :read_cmake_set "%PROJECT_ROOT%\cmake\ConfigFaiss.cmake" "Faiss_HOME" FAISS_HOME
 
-rem 派生路径与兜底默认值。
+rem Derive paths and apply fallback defaults.
 if not defined OPENCV_BIN_DIR if defined OPENCV_HOME set "OPENCV_BIN_DIR=%OPENCV_HOME:/=\%\bin"
+if not defined FAISS_BIN_DIR if defined FAISS_HOME set "FAISS_BIN_DIR=%FAISS_HOME:/=\%\bin"
 if not defined TENSORRT_ROOT if defined TRT_ROOT set "TENSORRT_ROOT=%TRT_ROOT%"
 if not defined CUDA_ROOT if defined CUDA_PATH set "CUDA_ROOT=%CUDA_PATH%"
 if not defined PYTHON_ROOT if defined INFERRT_PYTHON_ROOT set "PYTHON_ROOT=%INFERRT_PYTHON_ROOT%"
@@ -40,7 +43,7 @@ for %%I in ("%PROJECT_ROOT%") do set "PROJECT_ROOT=%%~fI"
 for %%I in ("%BUILD_DIR%") do set "BUILD_DIR=%%~fI"
 for %%I in ("%INSTALL_DIR%") do set "INSTALL_DIR=%%~fI"
 
-rem link 写入 build\bin；copy 写入安装目录 bin（可由 INSTALL_BIN_DIR 覆盖）。
+rem link writes to build\bin; copy writes to install bin (override with INSTALL_BIN_DIR).
 if /I "%ACTION%"=="link" (
     set "DEST_DIR=%BUILD_DIR%\bin"
 ) else (
@@ -57,7 +60,7 @@ if errorlevel 1 exit /b 1
 set /a RUNTIME_COUNT=0
 set "FAILED="
 
-rem copy 模式下先收集 InferRT 自身产物，再补齐第三方运行时 DLL。
+rem In copy mode, collect InferRT artifacts first, then third-party runtime DLLs.
 if /I "%ACTION%"=="copy" (
     call :handle_dir "%BUILD_DIR%\bin" "inferrt*.dll"
     call :handle_dir "%BUILD_DIR%\bin" "inferrt_model_py*.pyd"
@@ -66,8 +69,9 @@ if /I "%ACTION%"=="copy" (
 if defined ONNXRUNTIME_ROOT call :handle_dir "%ONNXRUNTIME_ROOT%\lib" "*.dll"
 if defined TENSORRT_ROOT call :handle_dir "%TENSORRT_ROOT%\bin" "*.dll"
 if defined OPENCV_BIN_DIR call :handle_dir "%OPENCV_BIN_DIR%" "*.dll"
+if defined FAISS_BIN_DIR call :handle_dir "%FAISS_BIN_DIR%" "*.dll"
 
-rem OpenVINO 主运行时、cache.json 与 TBB 依赖。
+rem OpenVINO runtime, cache.json, and TBB dependencies.
 if defined OPENVINO_ROOT call :handle_dir "%OPENVINO_ROOT%\runtime\bin\intel64\%BUILD_CONFIG%" "*.dll"
 if defined OPENVINO_ROOT call :handle_file "%OPENVINO_ROOT%\runtime\bin\intel64\%BUILD_CONFIG%\cache.json"
 if defined OPENVINO_ROOT call :handle_dir "%OPENVINO_ROOT%\runtime\3rdparty\tbb\bin" "tbb12.dll"
@@ -75,7 +79,7 @@ if defined OPENVINO_ROOT call :handle_dir "%OPENVINO_ROOT%\runtime\3rdparty\tbb\
 if defined OPENVINO_ROOT call :handle_dir "%OPENVINO_ROOT%\runtime\3rdparty\tbb\bin" "tbbmalloc.dll"
 if defined OPENVINO_ROOT call :handle_dir "%OPENVINO_ROOT%\runtime\3rdparty\tbb\bin" "tbbmalloc_proxy.dll"
 
-rem CUDA / cuDNN 及 ORT GPU provider 可能需要的 zlibwapi.dll。
+rem CUDA / cuDNN and zlibwapi.dll for ORT GPU provider.
 if defined CUDA_ROOT call :handle_dir "%CUDA_ROOT%\bin" "cudart64_*.dll"
 if defined CUDA_ROOT call :handle_dir "%CUDA_ROOT%\bin" "cublas64_*.dll"
 if defined CUDA_ROOT call :handle_dir "%CUDA_ROOT%\bin" "cublasLt64_*.dll"
@@ -95,7 +99,7 @@ echo Runtime %ACTION% finished. Files processed: %RUNTIME_COUNT%
 echo Destination: %DEST_DIR%
 exit /b 0
 
-rem 遍历目录下匹配模式的文件，逐个交给 :handle_file。
+rem Iterate files matching PATTERN under SRC_DIR and pass each to :handle_file.
 :handle_dir
 set "SRC_DIR=%~1"
 set "PATTERN=%~2"
@@ -109,15 +113,16 @@ for %%F in ("%SRC_DIR%\%PATTERN%") do (
 )
 exit /b 0
 
-rem 将单个源文件链接或复制到 DEST_DIR；同名文件只处理一次。
+rem Link or copy a single source file into DEST_DIR; process each name once.
 :handle_file
 set "SRC=%~1"
 if "%SRC%"=="" exit /b 0
 if not exist "%SRC%" exit /b 0
 for %%F in ("%SRC%") do set "NAME=%%~nxF"
-rem Release 构建跳过 inferrt_*d.dll、opencv_*d.dll 等 Debug 变体。
+rem Skip Debug variants such as inferrt_*d.dll, opencv_*d.dll, and faissd.dll in Release builds.
 if /I "!BUILD_CONFIG!"=="Release" if /I "!NAME:~0,8!"=="inferrt_" if /I "!NAME:~-5!"=="d.dll" exit /b 0
 if /I "!BUILD_CONFIG!"=="Release" if /I "!NAME:~0,7!"=="opencv_" if /I "!NAME:~-5!"=="d.dll" exit /b 0
+if /I "!BUILD_CONFIG!"=="Release" if /I "!NAME!"=="faissd.dll" exit /b 0
 if defined SEEN_!NAME! exit /b 0
 set "DST=!DEST_DIR!\!NAME!"
 
@@ -134,7 +139,7 @@ if /I "!ACTION!"=="copy" (
     exit /b 0
 )
 
-rem link 模式：先删除已有目标，再按 LINK_MODE 创建符号链接或硬链接。
+rem In link mode, remove an existing target, then link with automatic fallback.
 if exist "!DST!" del /F /Q "!DST!" >nul 2>nul
 if exist "!DST!" (
     echo [error] cannot replace: !DST!
@@ -142,22 +147,58 @@ if exist "!DST!" (
     exit /b 0
 )
 
-if /I "!LINK_MODE!"=="hardlink" (
-    mklink /H "!DST!" "!SRC!" >nul 2>nul
-) else if /I "!LINK_MODE!"=="copy" (
-    copy /Y "!SRC!" "!DST!" >nul
-) else (
-    mklink "!DST!" "!SRC!" >nul 2>nul
-)
-
-rem 链接失败时回退为复制。
-if errorlevel 1 (
-    echo [warn] link failed, copying: !NAME!
+if /I "!LINK_MODE!"=="copy" (
     copy /Y "!SRC!" "!DST!" >nul
     if errorlevel 1 (
-        echo [error] copy fallback failed: !SRC!
+        echo [error] copy failed: !SRC!
         set "FAILED=1"
     ) else (
+        echo [copy] !NAME!
+        set "SEEN_!NAME!=1"
+        set /a RUNTIME_COUNT+=1
+    )
+    exit /b 0
+)
+
+if /I "!LINK_MODE!"=="hardlink" (
+    mklink /H "!DST!" "!SRC!" >nul 2>nul
+    if errorlevel 1 (
+        echo [warn] hardlink failed, copying: !NAME!
+        copy /Y "!SRC!" "!DST!" >nul
+        if errorlevel 1 (
+            echo [error] copy fallback failed: !SRC!
+            set "FAILED=1"
+        ) else (
+            echo [copy] !NAME!
+            set "SEEN_!NAME!=1"
+            set /a RUNTIME_COUNT+=1
+        )
+    ) else (
+        echo [hardlink] !NAME!
+        set "SEEN_!NAME!=1"
+        set /a RUNTIME_COUNT+=1
+    )
+    exit /b 0
+)
+
+rem Default: symlink, then hardlink, then copy.
+mklink "!DST!" "!SRC!" >nul 2>nul
+if errorlevel 1 (
+    echo [warn] symlink failed, trying hardlink: !NAME!
+    mklink /H "!DST!" "!SRC!" >nul 2>nul
+    if errorlevel 1 (
+        echo [warn] hardlink failed, copying: !NAME!
+        copy /Y "!SRC!" "!DST!" >nul
+        if errorlevel 1 (
+            echo [error] copy fallback failed: !SRC!
+            set "FAILED=1"
+        ) else (
+            echo [copy] !NAME!
+            set "SEEN_!NAME!=1"
+            set /a RUNTIME_COUNT+=1
+        )
+    ) else (
+        echo [hardlink] !NAME!
         set "SEEN_!NAME!=1"
         set /a RUNTIME_COUNT+=1
     )
@@ -168,7 +209,7 @@ if errorlevel 1 (
 )
 exit /b 0
 
-rem 从 Config*.cmake 中解析 set(KEY "value") 或 set(KEY value) 形式的默认值。
+rem Parse set(KEY "value") or set(KEY value) defaults from Config*.cmake.
 :read_cmake_set
 set "CFG_FILE=%~1"
 set "CFG_KEY=%~2"
@@ -194,7 +235,7 @@ set "CFG_VALUE_TEXT=!CFG_FOUND_LINE:*%CFG_KEY%=!"
 for /f "tokens=1 delims= )" %%V in ("!CFG_VALUE_TEXT!") do set "%CFG_OUT%=%%V"
 exit /b 0
 
-rem 从 CMakeCache.txt 读取 KEY=VALUE 配置项。
+rem Read KEY=VALUE entries from CMakeCache.txt.
 :read_cache_set
 set "CACHE_FILE=%~1"
 set "CACHE_KEY=%~2"

@@ -5,13 +5,14 @@ endif()
 
 add_plugin_library(features
     PRIVATE_LIBS
-        inferrt_core
-        inferrt_model
-        opencv_core
-        opencv_imgcodecs
-        opencv_imgproc
+
+    PUBLIC_LIBS
+        opencv_core opencv_imgcodecs opencv_imgproc
         CUDA::cudart
         ${Faiss_LIBS}
+
+        inferrt_core
+        inferrt_model
 )
 
 target_include_directories(${PROJECT_NAME_LOWER}_features
