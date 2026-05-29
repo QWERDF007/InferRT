@@ -13,6 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+set(INFERRT_CUDA_ROOT "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8" CACHE PATH
+    "CUDA Toolkit root directory used by CMake and runtime packaging scripts")
+if(INFERRT_CUDA_ROOT)
+    set(CUDAToolkit_ROOT "${INFERRT_CUDA_ROOT}" CACHE PATH "CUDA Toolkit root directory" FORCE)
+endif()
+
 string(REPLACE "." ";" CUDA_VERSION_LIST ${CMAKE_CUDA_COMPILER_VERSION})
 list(GET CUDA_VERSION_LIST 0 CUDA_VERSION_MAJOR)
 list(GET CUDA_VERSION_LIST 1 CUDA_VERSION_MINOR)
@@ -23,8 +29,8 @@ find_package(CUDAToolkit ${CUDA_VERSION_MAJOR}.${CUDA_VERSION_MINOR} REQUIRED)
 # CUDA version requirement:
 # - to use gcc-9 (11.4)
 
-if(CMAKE_CUDA_COMPILER_VERSION VERSION_LESS "12.2")
-    message(FATAL_ERROR "Minimum CUDA version supported is 12.2")
+if(CMAKE_CUDA_COMPILER_VERSION VERSION_LESS "11.8")
+    message(FATAL_ERROR "Minimum CUDA version supported is 11.8")
 endif()
 
 set(CMAKE_CUDA_STANDARD ${CMAKE_CXX_STANDARD})

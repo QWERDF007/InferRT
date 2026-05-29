@@ -184,7 +184,7 @@ cmake --build build --config Debug --target inferrt_model_py
 D:/Software/anaconda3/envs/py312/python.exe samples/model/python/SamplePythonClassification.py
 ```
 
-The Python extension is generated under `build/lib`, and the dependent InferRT DLLs remain under `build/bin`.
+The Python extension is generated under `build/bin` together with the dependent InferRT DLLs.
 
 Feature extraction from Python:
 

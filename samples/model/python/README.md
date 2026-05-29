@@ -13,7 +13,7 @@ cmake --build build --config Debug --target inferrt_model_py
 
 构建完成后，模块默认位于：
 
-- `build/lib/inferrt_model_py.cp312-win_amd64.pyd`（Windows）
+- `build/bin/inferrt_model_py.cp312-win_amd64.pyd`（Windows）
 
 同时，运行时依赖的 InferRT DLL 位于：
 

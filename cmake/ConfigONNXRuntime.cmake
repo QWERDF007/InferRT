@@ -1,9 +1,10 @@
-# ONNX Runtime 发现与导入：定位头文件/库，并创建 ONNXRuntime::ONNXRuntime 导入目标。
-
-# 用户可通过 -DONNXRUNTIME_ROOT=... 覆盖默认安装路径。
+# ONNX Runtime 发现与导入：
+# - 定位 C++ API 头文件和链接库；
+# - 创建 ONNXRuntime::ONNXRuntime 导入目标；
+# - tools/*.bat 也会读取 ONNXRUNTIME_ROOT，用同一份配置收集运行时 DLL。
 set(ONNXRUNTIME_ROOT "D:/Software/onnxruntime-gpu-1.19.0" CACHE PATH "ONNX Runtime installation directory")
 
-# 清除历史缓存，避免修改 ONNXRUNTIME_ROOT 后仍沿用旧的探测结果。
+# 清除历史缓存，避免修改 ONNXRUNTIME_ROOT 后仍沿用旧探测结果。
 unset(ONNXRUNTIME_DLL CACHE)
 unset(ONNXRUNTIME_BIN_DIR CACHE)
 unset(INFERRT_ONNXRUNTIME_EXTRA_DLL_DIRS CACHE)
@@ -19,12 +20,13 @@ find_path(ONNXRUNTIME_INCLUDE_DIR_FOUND
     HINTS "${ONNXRUNTIME_INCLUDE_DIR}"
     NO_DEFAULT_PATH)
 
-# 在指定根目录下查找链接库（Windows 为 .lib，Linux 为 .so）。
+# 在指定根目录下查找链接库；Windows 下为 .lib，Linux 下为 .so。
 find_library(ONNXRUNTIME_LIBRARY
     NAMES onnxruntime
     HINTS "${ONNXRUNTIME_LIBRARY_DIR}"
     NO_DEFAULT_PATH)
 
+# ONNX Runtime 是强制依赖，未找到时中止配置。
 if(NOT ONNXRUNTIME_INCLUDE_DIR_FOUND OR NOT ONNXRUNTIME_LIBRARY)
     message(FATAL_ERROR
         "ONNX Runtime is required. "
@@ -32,7 +34,7 @@ if(NOT ONNXRUNTIME_INCLUDE_DIR_FOUND OR NOT ONNXRUNTIME_LIBRARY)
         "Current ONNXRUNTIME_ROOT=${ONNXRUNTIME_ROOT}")
 endif()
 
-# 创建 CMake 导入目标，供 inferrt_model 等模块链接；运行时 DLL 由后端代码按需加载。
+# 创建导入目标。运行时 DLL 由系统 loader 解析，不再由 C++ 代码手动加载。
 add_library(ONNXRuntime::ONNXRuntime UNKNOWN IMPORTED)
 set_target_properties(ONNXRuntime::ONNXRuntime PROPERTIES
     IMPORTED_LOCATION "${ONNXRUNTIME_LIBRARY}"
