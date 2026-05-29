@@ -80,23 +80,28 @@ python gen_wts.py -b transformers -l
 ## Run
 
 ```bash
-build/bin/inferrt_sample_classification.exe <model_name> <weights_file.wts> [image_path] [label_file]
+build/bin/inferrt_sample_classification.exe --model <model_name> --weights-file <weights_or_model_file> [--image-path PATH] [--label-file PATH] [--backend tensorrt|openvino|onnxruntime] [--device cpu|gpu] [--warmup N] [--repeat N]
 build/bin/inferrt_sample_classification.exe --help
 ```
 
 Examples:
 
 ```bash
-build/bin/inferrt_sample_classification.exe alexnet samples/model/classification/alexnet.wts assets/pics/dog.jpg
-build/bin/inferrt_sample_classification.exe mobilenet_v2 samples/model/classification/mobilenet_v2.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
-build/bin/inferrt_sample_classification.exe resnet50 samples/model/classification/resnet50.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
-build/bin/inferrt_sample_classification.exe vgg16 samples/model/classification/vgg16.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
+build/bin/inferrt_sample_classification.exe --model alexnet --weights-file samples/model/classification/alexnet.wts --image-path assets/pics/dog.jpg
+build/bin/inferrt_sample_classification.exe --model mobilenet_v2 --weights-file samples/model/classification/mobilenet_v2.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt
+build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file samples/model/classification/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt
+build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file build/python_test_artifacts/model_dir_parity/resnet/resnet50/<case-id>/resnet50.onnx --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend openvino --device cpu
+build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file samples/model/classification/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend tensorrt --device gpu --warmup 10 --repeat 100
 ```
 
 Defaults:
 
 - `image_path`: `assets/pics/dog.jpg`
 - `label_file`: `assets/imagenet1000_clsidx_to_labels.txt`
+- `backend`: `tensorrt`
+- `device`: `gpu`
+- `warmup`: `0`
+- `repeat`: `1`
 
 ## Extend
 

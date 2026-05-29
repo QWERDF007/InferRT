@@ -28,16 +28,17 @@ cmake --build build --config Debug --target inferrt_model_py
 ## Run
 
 ```bash
-build/bin/inferrt_sample_classification.exe <model_name> <weights_file.wts> [image_path] [label_file]
+build/bin/inferrt_sample_classification.exe --model <model_name> --weights-file <weights_or_model_file> [--image-path PATH] [--label-file PATH] [--backend tensorrt|openvino|onnxruntime] [--device cpu|gpu] [--warmup N] [--repeat N]
 build/bin/inferrt_sample_classification.exe --help
 ```
 
 Examples:
 
 ```bash
-build/bin/inferrt_sample_classification.exe alexnet samples/model/classification/alexnet.wts assets/pics/dog.jpg
-build/bin/inferrt_sample_classification.exe resnet50 samples/model/classification/resnet50.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
-build/bin/inferrt_sample_classification.exe vgg16 samples/model/classification/vgg16.wts assets/pics/dog.jpg assets/imagenet1000_clsidx_to_labels.txt
+build/bin/inferrt_sample_classification.exe --model alexnet --weights-file samples/model/classification/alexnet.wts --image-path assets/pics/dog.jpg
+build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file samples/model/classification/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt
+build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file build/python_test_artifacts/model_dir_parity/resnet/resnet50/<case-id>/resnet50.onnx --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend openvino --device cpu
+build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file samples/model/classification/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend tensorrt --device gpu --warmup 10 --repeat 100
 build/bin/inferrt_sample_detection.exe -m yolov8n -w samples/model/detection/yolov8n.wts -i assets/pics/dog.jpg -l assets/coco80.names -o build/yolov8n_result.jpg
 build/bin/inferrt_sample_segmentation.exe -m sam_vit_b -w samples/model/segmentation/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_mask.jpg --point-x 0.5 --point-y 0.5
 ```
@@ -129,6 +130,7 @@ Use the dedicated feature sample to dump InferRT tensors and compare them with a
 ```bash
 build/bin/inferrt_sample_feature_extract.exe -m resnet18 -w samples/model/classification/resnet18.wts -f layer1,layer4 -i assets/pics/dog.jpg -o build/feature_dump_cpp
 build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w samples/model/classification/dinov2_vits14.wts -f x_norm_clstoken,x_norm_patchtokens -i assets/pics/dog.jpg -o build/dinov2_feature_dump_cpp
+build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w build/python_test_artifacts/model_dir_parity/dinov2/dinov2_vits14/<case-id>/dinov2_vits14.features.onnx -f x_norm_clstoken -i assets/pics/dog.jpg -o build/dinov2_openvino_cpu_feature_dump --backend openvino --device cpu --warmup 10 --repeat 100
 build/bin/inferrt_sample_feature_extract.exe -m dinov3_vitb16 -w samples/model/classification/dinov3_vitb16.wts -f x_norm_clstoken,x_storage_tokens,x_norm_patchtokens -i assets/pics/dog.jpg -o build/dinov3_feature_dump_cpp
 build/bin/inferrt_sample_feature_extract.exe --help
 cd samples/model/feature_extract

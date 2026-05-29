@@ -1,47 +1,17 @@
 #include "BackendRuntime.hpp"
+#include "BackendUtils.hpp"
 
 #include <inferrt/core/Exception.hpp>
-#include <inferrt/model/Utils.hpp>
 
 #include <filesystem>
 #include <limits>
 #include <unordered_map>
 
-#ifndef INFERRT_WITH_OPENVINO
-#define INFERRT_WITH_OPENVINO 0
-#endif
-
-#if INFERRT_WITH_OPENVINO
 #include <openvino/openvino.hpp>
-#endif
 
 namespace irt::model::priv {
 
 namespace {
-
-size_t TensorElementCount(const nvinfer1::Dims &dims, const std::string &tensor_name)
-{
-    size_t count = 1;
-    for (int32_t i = 0; i < dims.nbDims; ++i)
-    {
-        if (dims.d[i] <= 0)
-        {
-            throw irt::Exception(Status::ERROR_INVALID_OPERATION,
-                                 "Tensor shape is not fully resolved: %s dim[%d]=%d", tensor_name.c_str(), i,
-                                 dims.d[i]);
-        }
-        count *= static_cast<size_t>(dims.d[i]);
-    }
-    return count;
-}
-
-bool IsDefaultOutputConfig(const IModelConfig &config)
-{
-    const auto &outputs = config.outputTensorNames();
-    return outputs.size() == 1 && outputs.front() == "output" && !config.featureOnly();
-}
-
-#if INFERRT_WITH_OPENVINO
 
 struct TensorInfo
 {
@@ -119,23 +89,6 @@ nvinfer1::Dims PartialShapeToDims(const ov::PartialShape &shape)
         dims.d[i] = static_cast<int32_t>(value);
     }
     return dims;
-}
-
-ov::Shape DimsToOvShape(const nvinfer1::Dims &dims, const std::string &tensor_name)
-{
-    ov::Shape shape;
-    shape.reserve(static_cast<size_t>(dims.nbDims));
-    for (int32_t i = 0; i < dims.nbDims; ++i)
-    {
-        if (dims.d[i] <= 0)
-        {
-            throw irt::Exception(Status::ERROR_INVALID_OPERATION,
-                                 "Tensor shape is not fully resolved: %s dim[%d]=%d", tensor_name.c_str(), i,
-                                 dims.d[i]);
-        }
-        shape.push_back(static_cast<size_t>(dims.d[i]));
-    }
-    return shape;
 }
 
 std::string PortName(const ov::Output<const ov::Node> &port)
@@ -262,8 +215,8 @@ public:
                                          input_name.c_str());
                 }
                 const auto &info = input_info_.at(input_name);
-                TensorElementCount(info.shape, input_name);
-                tensors.emplace_back(info.element_type, DimsToOvShape(info.shape, input_name), buffer);
+                const ov::Shape shape = DimsToSizeTShape(info.shape, input_name);
+                tensors.emplace_back(info.element_type, shape, buffer);
                 infer_request_.set_tensor(input_name, tensors.back());
             }
 
@@ -276,8 +229,8 @@ public:
                                          output_name.c_str());
                 }
                 const auto &info = output_info_.at(output_name);
-                TensorElementCount(info.shape, output_name);
-                tensors.emplace_back(info.element_type, DimsToOvShape(info.shape, output_name), buffer);
+                const ov::Shape shape = DimsToSizeTShape(info.shape, output_name);
+                tensors.emplace_back(info.element_type, shape, buffer);
                 infer_request_.set_tensor(output_name, tensors.back());
             }
 
@@ -365,18 +318,11 @@ private:
     std::unordered_map<std::string, TensorInfo> output_info_;
 };
 
-#endif
-
 } // namespace
 
 std::unique_ptr<IBackendRuntime> CreateOpenVINOBackend()
 {
-#if INFERRT_WITH_OPENVINO
     return std::make_unique<OpenVINOBackend>();
-#else
-    throw irt::Exception(Status::ERROR_NOT_IMPLEMENTED,
-                         "OpenVINO backend is not enabled. Configure with INFERRT_ENABLE_OPENVINO=ON and OpenVINO_DIR.");
-#endif
 }
 
 } // namespace irt::model::priv

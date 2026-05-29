@@ -1,168 +1,19 @@
 #include "BackendRuntime.hpp"
+#include "BackendUtils.hpp"
 
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/Utils.hpp>
 
-#include <algorithm>
-#include <cstdint>
 #include <filesystem>
-#include <limits>
-#include <mutex>
-#include <numeric>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
-#if defined(_WIN32)
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <windows.h>
-#ifdef ERROR_INVALID_OPERATION
-#undef ERROR_INVALID_OPERATION
-#endif
-#endif
-
-#ifndef INFERRT_WITH_ONNXRUNTIME
-#define INFERRT_WITH_ONNXRUNTIME 0
-#endif
-
-#if INFERRT_WITH_ONNXRUNTIME
-#define ORT_API_MANUAL_INIT
 #include <onnxruntime_cxx_api.h>
-#undef ORT_API_MANUAL_INIT
-#endif
 
 namespace irt::model::priv {
 
 namespace {
-
-size_t TensorElementCount(const nvinfer1::Dims &dims, const std::string &tensor_name)
-{
-    if (dims.nbDims < 0)
-    {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Tensor rank is invalid: %s", tensor_name.c_str());
-    }
-
-    size_t count = 1;
-    for (int32_t i = 0; i < dims.nbDims; ++i)
-    {
-        if (dims.d[i] <= 0)
-        {
-            throw irt::Exception(Status::ERROR_INVALID_OPERATION,
-                                 "Tensor shape is not fully resolved: %s dim[%d]=%d", tensor_name.c_str(), i,
-                                 dims.d[i]);
-        }
-        count *= static_cast<size_t>(dims.d[i]);
-    }
-    return count;
-}
-
-std::vector<int64_t> DimsToInt64Shape(const nvinfer1::Dims &dims, const std::string &tensor_name)
-{
-    if (dims.nbDims < 0)
-    {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Tensor rank is invalid: %s", tensor_name.c_str());
-    }
-
-    std::vector<int64_t> shape;
-    shape.reserve(static_cast<size_t>(dims.nbDims));
-    for (int32_t i = 0; i < dims.nbDims; ++i)
-    {
-        if (dims.d[i] <= 0)
-        {
-            throw irt::Exception(Status::ERROR_INVALID_OPERATION,
-                                 "Tensor shape is not fully resolved: %s dim[%d]=%d", tensor_name.c_str(), i,
-                                 dims.d[i]);
-        }
-        shape.push_back(static_cast<int64_t>(dims.d[i]));
-    }
-    return shape;
-}
-
-nvinfer1::Dims Int64ShapeToDims(const std::vector<int64_t> &shape)
-{
-    if (shape.size() > static_cast<size_t>(nvinfer1::Dims::MAX_DIMS))
-    {
-        throw irt::Exception(Status::ERROR_NOT_IMPLEMENTED, "Tensor rank %zu exceeds TensorRT Dims capacity",
-                             shape.size());
-    }
-
-    nvinfer1::Dims dims{};
-    dims.nbDims = static_cast<int32_t>(shape.size());
-    for (size_t i = 0; i < shape.size(); ++i)
-    {
-        const auto value = shape[i];
-        if (value > std::numeric_limits<int32_t>::max())
-        {
-            throw irt::Exception(Status::ERROR_NOT_IMPLEMENTED, "Tensor dimension exceeds int32: %lld",
-                                 static_cast<long long>(value));
-        }
-        dims.d[i] = static_cast<int32_t>(value);
-    }
-    return dims;
-}
-
-bool IsDefaultOutputConfig(const IModelConfig &config)
-{
-    const auto &outputs = config.outputTensorNames();
-    return outputs.size() == 1 && outputs.front() == "output" && !config.featureOnly();
-}
-
-#if INFERRT_WITH_ONNXRUNTIME
-
-#if defined(_WIN32)
-std::filesystem::path OrtDllPath()
-{
-#if defined(INFERRT_ONNXRUNTIME_DLL_PATH)
-    return std::filesystem::path{INFERRT_ONNXRUNTIME_DLL_PATH};
-#else
-    return std::filesystem::path{"onnxruntime.dll"};
-#endif
-}
-
-void EnsureOrtDllLoaded()
-{
-    static std::once_flag load_flag;
-    static HMODULE        ort_module = nullptr;
-    static DWORD          load_error = ERROR_SUCCESS;
-    static const auto     dll_path   = OrtDllPath();
-
-    std::call_once(load_flag,
-                   []
-                   {
-                       const auto native_path = dll_path.native();
-                       ort_module            = LoadLibraryW(native_path.c_str());
-                       if (!ort_module)
-                       {
-                           load_error = GetLastError();
-                       }
-                   });
-
-    if (!ort_module)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to load ONNX Runtime DLL: %s (Windows error %lu)",
-                             dll_path.string().c_str(), static_cast<unsigned long>(load_error));
-    }
-}
-#endif
-
-void EnsureOrtApiInitialized()
-{
-    static std::once_flag init_flag;
-    std::call_once(init_flag,
-                   []
-                   {
-#if defined(_WIN32)
-                       EnsureOrtDllLoaded();
-#endif
-                       Ort::InitApi();
-                       if (Ort::Global<void>::api_ == nullptr)
-                       {
-                           throw irt::Exception(Status::ERROR_INTERNAL,
-                                                "Failed to initialize ONNX Runtime C API for API version %d",
-                                                ORT_API_VERSION);
-                       }
-                   });
-}
 
 struct TensorInfo
 {
@@ -219,8 +70,6 @@ public:
 
         try
         {
-            EnsureOrtApiInitialized();
-
             env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, model_name.c_str());
 
             Ort::SessionOptions session_options;
@@ -312,8 +161,8 @@ public:
         {
             const auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 
-            std::vector<Ort::Value> input_values;
-            std::vector<Ort::Value> output_values;
+            std::vector<Ort::Value>   input_values;
+            std::vector<Ort::Value>   output_values;
             std::vector<const char *> input_name_ptrs;
             std::vector<const char *> output_name_ptrs;
             input_values.reserve(input_names_.size());
@@ -335,8 +184,8 @@ public:
                 const auto  shape = DimsToInt64Shape(info.shape, input_name);
                 const auto  bytes
                     = TensorElementCount(info.shape, input_name) * elementSize(OrtTypeToTrt(info.element_type));
-                input_values.emplace_back(
-                    Ort::Value::CreateTensor(memory_info, buffer, bytes, shape.data(), shape.size(), info.element_type));
+                input_values.emplace_back(Ort::Value::CreateTensor(memory_info, buffer, bytes, shape.data(),
+                                                                   shape.size(), info.element_type));
                 input_name_ptrs.push_back(input_name.c_str());
             }
 
@@ -354,7 +203,7 @@ public:
                 const auto  bytes
                     = TensorElementCount(info.shape, output_name) * elementSize(OrtTypeToTrt(info.element_type));
                 output_values.emplace_back(Ort::Value::CreateTensor(memory_info, buffer, bytes, shape.data(),
-                                                                     shape.size(), info.element_type));
+                                                                    shape.size(), info.element_type));
                 output_name_ptrs.push_back(output_name.c_str());
             }
 
@@ -384,7 +233,7 @@ private:
         output_info_.clear();
 
         Ort::AllocatorWithDefaultOptions allocator;
-        const size_t input_count = session_->GetInputCount();
+        const size_t                     input_count = session_->GetInputCount();
         for (size_t i = 0; i < input_count; ++i)
         {
             auto name = session_->GetInputNameAllocated(i, allocator);
@@ -393,7 +242,7 @@ private:
         }
 
         std::vector<std::string> graph_output_names;
-        const size_t output_count = session_->GetOutputCount();
+        const size_t             output_count = session_->GetOutputCount();
         graph_output_names.reserve(output_count);
         for (size_t i = 0; i < output_count; ++i)
         {
@@ -403,7 +252,7 @@ private:
         }
 
         const bool use_graph_outputs = IsDefaultOutputConfig(config);
-        output_names_ = use_graph_outputs ? graph_output_names : config.outputTensorNames();
+        output_names_                = use_graph_outputs ? graph_output_names : config.outputTensorNames();
         for (const auto &output_name : output_names_)
         {
             if (output_info_.find(output_name) == output_info_.end())
@@ -431,24 +280,17 @@ private:
     std::unique_ptr<Ort::Env>     env_;
     std::unique_ptr<Ort::Session> session_;
 
-    std::vector<std::string> input_names_;
-    std::vector<std::string> output_names_;
+    std::vector<std::string>                    input_names_;
+    std::vector<std::string>                    output_names_;
     std::unordered_map<std::string, TensorInfo> input_info_;
     std::unordered_map<std::string, TensorInfo> output_info_;
 };
-
-#endif
 
 } // namespace
 
 std::unique_ptr<IBackendRuntime> CreateONNXRuntimeBackend()
 {
-#if INFERRT_WITH_ONNXRUNTIME
     return std::make_unique<ONNXRuntimeBackend>();
-#else
-    throw irt::Exception(Status::ERROR_NOT_IMPLEMENTED,
-                         "ONNX Runtime backend is not enabled. Configure with INFERRT_ENABLE_ONNXRUNTIME=ON.");
-#endif
 }
 
 } // namespace irt::model::priv
