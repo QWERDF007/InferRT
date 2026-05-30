@@ -6,6 +6,7 @@
  */
 
 #include <inferrt/core/Exception.hpp>
+#include <inferrt/features/ImageSearch.hpp>
 
 #pragma warning(push)
 #pragma warning(disable : 4244)
@@ -50,7 +51,20 @@
 
 namespace irt::features::priv {
 
-using BuildBatchCallback = std::function<void(size_t begin, size_t count)>;
+using BuildProgressCallback = ImageSearchBuildProgressCallback;
+
+inline void reportBuildProgress(const BuildProgressCallback &progress_callback, ImageSearchBuildStage stage,
+                                size_t batch_index = 0, size_t batch_begin = 0, size_t batch_count = 0,
+                                size_t processed_count = 0, size_t total_count = 0)
+{
+    if (!progress_callback)
+    {
+        return;
+    }
+
+    progress_callback(ImageSearchBuildProgress{stage, batch_index, batch_begin, batch_count, processed_count,
+                                               total_count});
+}
 
 /**
  * @brief 生成 CPU 磁盘 IVF 倒排列表的伴生数据文件路径。
@@ -395,6 +409,41 @@ inline std::vector<float> loadFeatureBatch(size_t begin, size_t count, int featu
     return features;
 }
 
+struct TrainingFeatureSample
+{
+    std::vector<float>  features;
+    std::vector<size_t> indices;
+    size_t              count{0};
+};
+
+inline TrainingFeatureSample loadTrainingFeatures(size_t vector_count, int feature_dim, size_t training_count,
+                                                  size_t stride,
+                                                  const std::function<std::vector<float>(size_t)> &load_feature,
+                                                  const BuildProgressCallback &progress_callback)
+{
+    reportBuildProgress(progress_callback, ImageSearchBuildStage::TrainingFeatures, 0, 0, 0, 0, training_count);
+
+    TrainingFeatureSample sample;
+    sample.features.reserve(training_count * static_cast<size_t>(feature_dim));
+    sample.indices.reserve(training_count);
+    for (size_t index_in_gallery = 0; index_in_gallery < vector_count && sample.count < training_count;
+         index_in_gallery += stride)
+    {
+        auto feature = load_feature(index_in_gallery);
+        if (feature.size() != static_cast<size_t>(feature_dim))
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected ImageSearch feature size");
+        }
+
+        sample.features.insert(sample.features.end(), feature.begin(), feature.end());
+        sample.indices.push_back(index_in_gallery);
+        ++sample.count;
+        reportBuildProgress(progress_callback, ImageSearchBuildStage::TrainingFeatures, sample.count - 1,
+                            index_in_gallery, 1, sample.count, training_count);
+    }
+    return sample;
+}
+
 /**
  * @brief 将一批特征按内积最近邻分配到 IVF 聚类中心。
  * @param features 平面特征数组，布局为 ``count × feature_dim``。
@@ -515,7 +564,7 @@ inline void writeCpuOnDiskIvfDataFileBatched(const faiss::IndexIVF &index, size_
                                              const std::filesystem::path &data_path,
                                              const std::vector<float> &centroids, size_t batch_size,
                                              const std::function<std::vector<float>(size_t)> &load_feature,
-                                             const BuildBatchCallback &batch_callback = {})
+                                             const BuildProgressCallback &progress_callback = {})
 {
     if (batch_size == 0)
     {
@@ -533,7 +582,10 @@ inline void writeCpuOnDiskIvfDataFileBatched(const faiss::IndexIVF &index, size_
 
     batch_size = chooseCpuOnDiskIvfBuildBatchSize(batch_size, vector_count, feature_dim);
 
+    reportBuildProgress(progress_callback, ImageSearchBuildStage::AssigningVectors, 0, 0, 0, 0, vector_count);
+
     std::vector<uint64_t> list_sizes(index.nlist, 0);
+    size_t                assign_batch_index = 0;
     for (size_t begin = 0; begin < vector_count; begin += batch_size)
     {
         const size_t count       = std::min(batch_size, vector_count - begin);
@@ -543,6 +595,8 @@ inline void writeCpuOnDiskIvfDataFileBatched(const faiss::IndexIVF &index, size_
         {
             ++list_sizes[static_cast<size_t>(list_no)];
         }
+        reportBuildProgress(progress_callback, ImageSearchBuildStage::AssigningVectors, assign_batch_index++, begin,
+                            count, std::min(vector_count, begin + count), vector_count);
     }
 
     CpuOnDiskIvfHeader header;
@@ -560,7 +614,10 @@ inline void writeCpuOnDiskIvfDataFileBatched(const faiss::IndexIVF &index, size_
                              data_path.string().c_str());
     }
 
+    reportBuildProgress(progress_callback, ImageSearchBuildStage::AddingVectors, 0, 0, 0, 0, vector_count);
+
     std::vector<uint64_t> list_offsets(index.nlist, 0);
+    size_t                add_batch_index = 0;
     for (size_t begin = 0; begin < vector_count; begin += batch_size)
     {
         const size_t count       = std::min(batch_size, vector_count - begin);
@@ -609,10 +666,8 @@ inline void writeCpuOnDiskIvfDataFileBatched(const faiss::IndexIVF &index, size_
             group_begin = group_end;
         }
 
-        if (batch_callback)
-        {
-            batch_callback(begin, count);
-        }
+        reportBuildProgress(progress_callback, ImageSearchBuildStage::AddingVectors, add_batch_index++, begin, count,
+                            std::min(vector_count, begin + count), vector_count);
     }
 }
 
@@ -850,7 +905,8 @@ inline std::unique_ptr<faiss::Index> loadCpuOnDiskIvfFlatIndex(const std::filesy
  */
 inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
     size_t vector_count, int feature_dim, const std::filesystem::path &index_path, size_t batch_size,
-    const std::function<std::vector<float>(size_t)> &load_feature, const BuildBatchCallback &batch_callback = {})
+    const std::function<std::vector<float>(size_t)> &load_feature,
+    const BuildProgressCallback &progress_callback = {})
 {
     if (vector_count == 0 || feature_dim <= 0)
     {
@@ -862,28 +918,18 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
     const size_t training_count = chooseCpuOnDiskIvfTrainingCount(vector_count, feature_dim, nlist);
     const size_t stride         = std::max<size_t>(1, vector_count / training_count);
 
-    std::vector<float> training_features;
-    training_features.reserve(training_count * static_cast<size_t>(feature_dim));
-    for (size_t index_in_gallery = 0; index_in_gallery < vector_count
-                                      && training_features.size() / static_cast<size_t>(feature_dim) < training_count;
-         index_in_gallery += stride)
-    {
-        auto feature = load_feature(index_in_gallery);
-        if (feature.size() != static_cast<size_t>(feature_dim))
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected ImageSearch feature size");
-        }
-        training_features.insert(training_features.end(), feature.begin(), feature.end());
-    }
-
-    const size_t actual_training_count = training_features.size() / static_cast<size_t>(feature_dim);
+    const auto   training              = loadTrainingFeatures(vector_count, feature_dim, training_count, stride,
+                                                              load_feature, progress_callback);
+    const size_t actual_training_count = training.count;
     if (actual_training_count < nlist)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Not enough training features for IVF index");
     }
 
+    reportBuildProgress(progress_callback, ImageSearchBuildStage::TrainingIndex, 0, 0, 0, 0, 1);
+
     auto quantizer = std::make_unique<faiss::IndexFlatIP>(feature_dim);
-    auto centroids = makeCpuOnDiskIvfCentroids(training_features, actual_training_count, feature_dim, nlist);
+    auto centroids = makeCpuOnDiskIvfCentroids(training.features, actual_training_count, feature_dim, nlist);
     quantizer->add(static_cast<faiss::idx_t>(nlist), centroids.data());
 
     auto  index = std::make_unique<faiss::IndexIVFFlat>(quantizer.release(), static_cast<size_t>(feature_dim), nlist,
@@ -893,17 +939,20 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
     ivf_index->is_trained = true;
     ivf_index->nprobe     = chooseCpuOnDiskIvfProbeCount(nlist);
 
+    reportBuildProgress(progress_callback, ImageSearchBuildStage::TrainingIndex, 0, 0, 0, 1, 1);
+    reportBuildProgress(progress_callback, ImageSearchBuildStage::WritingIndex, 0, 0, 0, 0, 1);
     faiss::write_index(index.get(), index_path.string().c_str());
+    reportBuildProgress(progress_callback, ImageSearchBuildStage::WritingIndex, 0, 0, 0, 1, 1);
 
     writeCpuOnDiskIvfDataFileBatched(*ivf_index, vector_count, feature_dim, cpuOnDiskIvfDataPath(index_path), centroids,
-                                     batch_size, load_feature, batch_callback);
+                                     batch_size, load_feature, progress_callback);
     return loadCpuOnDiskIvfFlatIndex(index_path);
 }
 
 inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int feature_dim, size_t batch_size,
                                                         const std::function<std::vector<float>(size_t)> &load_feature,
-                                                        bool require_gpu_compatible = false,
-                                                        const BuildBatchCallback &batch_callback = {})
+                                                        const BuildProgressCallback &progress_callback = {},
+                                                        bool require_gpu_compatible = false)
 {
     if (vector_count == 0 || feature_dim <= 0)
     {
@@ -919,24 +968,9 @@ inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int
     const size_t training_count = chooseRamIvfPqTrainingCount(vector_count, feature_dim, nlist);
     const size_t stride         = std::max<size_t>(1, vector_count / training_count);
 
-    std::vector<float>  training_features;
-    std::vector<size_t> training_indices;
-    training_features.reserve(training_count * static_cast<size_t>(feature_dim));
-    training_indices.reserve(training_count);
-    for (size_t index_in_gallery = 0; index_in_gallery < vector_count
-                                      && training_features.size() / static_cast<size_t>(feature_dim) < training_count;
-         index_in_gallery += stride)
-    {
-        auto feature = load_feature(index_in_gallery);
-        if (feature.size() != static_cast<size_t>(feature_dim))
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected ImageSearch feature size");
-        }
-        training_features.insert(training_features.end(), feature.begin(), feature.end());
-        training_indices.push_back(index_in_gallery);
-    }
-
-    const size_t actual_training_count = training_features.size() / static_cast<size_t>(feature_dim);
+    auto         training              = loadTrainingFeatures(vector_count, feature_dim, training_count, stride,
+                                                              load_feature, progress_callback);
+    const size_t actual_training_count = training.count;
     if (actual_training_count < nlist)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Not enough training features for IVF-PQ index");
@@ -946,7 +980,7 @@ inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int
     const size_t bits_per_code  = chooseRamIvfPqBitsPerCode(actual_training_count, require_gpu_compatible);
     const size_t pq_centroids   = size_t{1} << bits_per_code;
 
-    const float  *faiss_training_data  = training_features.data();
+    const float  *faiss_training_data  = training.features.data();
     faiss::idx_t  faiss_training_count = static_cast<faiss::idx_t>(actual_training_count);
     std::vector<float> padded_training_features;
     if (actual_training_count < pq_centroids)
@@ -956,16 +990,18 @@ inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int
         {
             const size_t source_index = i % actual_training_count;
             padded_training_features.insert(padded_training_features.end(),
-                                            training_features.begin()
+                                            training.features.begin()
                                                 + static_cast<std::ptrdiff_t>(source_index
                                                                               * static_cast<size_t>(feature_dim)),
-                                            training_features.begin()
+                                            training.features.begin()
                                                 + static_cast<std::ptrdiff_t>((source_index + 1)
                                                                               * static_cast<size_t>(feature_dim)));
         }
         faiss_training_data  = padded_training_features.data();
         faiss_training_count = static_cast<faiss::idx_t>(pq_centroids);
     }
+
+    reportBuildProgress(progress_callback, ImageSearchBuildStage::TrainingIndex, 0, 0, 0, 0, 1);
 
     auto coarse_quantizer = std::make_unique<faiss::IndexFlatIP>(feature_dim);
     auto         index
@@ -981,28 +1017,29 @@ inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int
         std::max(ivfpq_index->pq.cp.max_points_per_centroid, points_per_pq_centroid);
     ivfpq_index->train(faiss_training_count, faiss_training_data);
     ivfpq_index->nprobe = chooseCpuOnDiskIvfProbeCount(nlist);
+    reportBuildProgress(progress_callback, ImageSearchBuildStage::TrainingIndex, 0, 0, 0, 1, 1);
 
     auto load_cached_feature = [&](size_t index_in_gallery) {
-        const auto found = std::lower_bound(training_indices.begin(), training_indices.end(), index_in_gallery);
-        if (found != training_indices.end() && *found == index_in_gallery)
+        const auto found = std::lower_bound(training.indices.begin(), training.indices.end(), index_in_gallery);
+        if (found != training.indices.end() && *found == index_in_gallery)
         {
-            const auto  training_index = static_cast<size_t>(std::distance(training_indices.begin(), found));
-            const auto *begin = training_features.data() + training_index * static_cast<size_t>(feature_dim);
+            const auto  training_index = static_cast<size_t>(std::distance(training.indices.begin(), found));
+            const auto *begin = training.features.data() + training_index * static_cast<size_t>(feature_dim);
             return std::vector<float>(begin, begin + static_cast<size_t>(feature_dim));
         }
         return load_feature(index_in_gallery);
     };
 
     batch_size = chooseCpuOnDiskIvfBuildBatchSize(batch_size, vector_count, feature_dim);
+    reportBuildProgress(progress_callback, ImageSearchBuildStage::AddingVectors, 0, 0, 0, 0, vector_count);
+    size_t add_batch_index = 0;
     for (size_t begin = 0; begin < vector_count; begin += batch_size)
     {
         const size_t count    = std::min(batch_size, vector_count - begin);
         const auto   features = loadFeatureBatch(begin, count, feature_dim, load_cached_feature);
         ivfpq_index->add(static_cast<faiss::idx_t>(count), features.data());
-        if (batch_callback)
-        {
-            batch_callback(begin, count);
-        }
+        reportBuildProgress(progress_callback, ImageSearchBuildStage::AddingVectors, add_batch_index++, begin, count,
+                            std::min(vector_count, begin + count), vector_count);
     }
 
     return index;

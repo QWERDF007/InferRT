@@ -798,21 +798,6 @@ private:
 
 namespace {
 
-priv::BuildBatchCallback makeBuildBatchCallback(size_t                                  total_count,
-                                                const ImageSearchBuildProgressCallback &progress_callback)
-{
-    if (!progress_callback)
-    {
-        return {};
-    }
-
-    return [total_count, &progress_callback, batch_index = size_t{0}](size_t begin, size_t count) mutable
-    {
-        progress_callback(
-            ImageSearchBuildProgress{batch_index++, begin, count, std::min(total_count, begin + count), total_count});
-    };
-}
-
 /**
  * @brief 构建 CPU 磁盘 IVF 索引并保存路径映射。
  */
@@ -822,10 +807,9 @@ FaissIndexBundle buildCpuOnDiskIndex(const std::vector<fs::path>       &gallery_
                                      const ImageSearchBuildProgressCallback &progress_callback)
 {
     FaissIndexBundle bundle;
-    auto             batch_callback = makeBuildBatchCallback(gallery_images.size(), progress_callback);
-    bundle.index                    = priv::buildCpuOnDiskIvfFlatIndex(
+    bundle.index      = priv::buildCpuOnDiskIvfFlatIndex(
         gallery_images.size(), extractor.featureDim(), index_path, config.disk_build_batch_size,
-        [&](size_t index) { return extractor.extract(gallery_images[index]); }, batch_callback);
+        [&](size_t index) { return extractor.extract(gallery_images[index]); }, progress_callback);
     savePathMapping(mappingPathFromIndex(index_path), gallery_images);
     return bundle;
 }
@@ -838,16 +822,19 @@ FaissIndexBundle buildRamIvfPqIndex(const std::vector<fs::path>       &gallery_i
                                     const ImageSearchConfig                &config,
                                     const ImageSearchBuildProgressCallback &progress_callback)
 {
-    auto batch_callback = makeBuildBatchCallback(gallery_images.size(), progress_callback);
-    auto cpu_index      = priv::buildRamIvfPqIndex(
+    auto cpu_index = priv::buildRamIvfPqIndex(
         gallery_images.size(), extractor.featureDim(), config.disk_build_batch_size,
         [&](size_t index) { return extractor.extract(gallery_images[index]); },
-        config.faiss_backend == ImageSearchFaissBackend::GPU, batch_callback);
+        progress_callback, config.faiss_backend == ImageSearchFaissBackend::GPU);
 
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::WritingIndex, 0, 0, 0, 0, 1);
     faiss::write_index(cpu_index.get(), index_path.string().c_str());
     savePathMapping(mappingPathFromIndex(index_path), gallery_images);
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::WritingIndex, 0, 0, 0, 1, 1);
 
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 0, 1);
     auto bundle = moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend);
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 1, 1);
     return bundle;
 }
 
@@ -932,7 +919,12 @@ void ImageSearch::Impl::buildOrLoad(const fs::path &weights_file, const fs::path
         && existingIndexMatchesConfig(resolved_index_path, gallery_dir, config_.model_name, config_.feature_name,
                                       config_))
     {
+        priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Started);
+        priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 0, 1);
         load(weights_file, gallery_dir, index_file);
+        priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 1, 1);
+        priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Finished, 0, 0, 0, gallery_images_.size(),
+                                  gallery_images_.size());
         return;
     }
 
@@ -942,7 +934,11 @@ void ImageSearch::Impl::buildOrLoad(const fs::path &weights_file, const fs::path
 void ImageSearch::Impl::build(const fs::path &weights_file, const fs::path &gallery_dir, const fs::path &index_file,
                               ImageSearchBuildProgressCallback progress_callback)
 {
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Started);
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::CollectingImages);
     auto images = ImageSearch::collectGalleryImages(gallery_dir);
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::CollectingImages, 0, 0, 0, images.size(),
+                              images.size());
     buildWithImages(weights_file, gallery_dir, std::move(images), resolveIndexPath(gallery_dir, index_file, config_),
                     galleryDirectoryMetadataValue(gallery_dir), std::move(progress_callback));
 }
@@ -956,8 +952,13 @@ void ImageSearch::Impl::build(const fs::path &weights_file, const std::vector<fs
                              "index_file must not be empty when building from explicit image paths");
     }
 
-    buildWithImages(weights_file, {}, normalizeExplicitGalleryImages(gallery_images), index_file,
-                    explicitPathListMetadataValue(), std::move(progress_callback));
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Started);
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::CollectingImages);
+    auto normalized_images = normalizeExplicitGalleryImages(gallery_images);
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::CollectingImages, 0, 0, 0,
+                              normalized_images.size(), normalized_images.size());
+    buildWithImages(weights_file, {}, std::move(normalized_images), index_file, explicitPathListMetadataValue(),
+                    std::move(progress_callback));
 }
 
 void ImageSearch::Impl::load(const fs::path &weights_file, const fs::path &gallery_dir, const fs::path &index_file)
@@ -999,8 +1000,10 @@ void ImageSearch::Impl::buildWithImages(const fs::path &weights_file, const fs::
                                         const std::string               &metadata_gallery_value,
                                         ImageSearchBuildProgressCallback progress_callback)
 {
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingModel, 0, 0, 0, 0, 1);
     auto extractor = std::make_unique<priv::ImageSearchFeatureExtractor>(config_.model_name, config_.feature_name,
                                                                          weights_file, config_);
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingModel, 0, 0, 0, 1, 1);
     if (!index_path.parent_path().empty())
     {
         fs::create_directories(index_path.parent_path());
@@ -1017,8 +1020,12 @@ void ImageSearch::Impl::buildWithImages(const fs::path &weights_file, const fs::
     gallery_images_      = std::move(gallery_images);
     feature_dim_         = extractor->featureDim();
     extractor_           = std::move(extractor);
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::SavingMetadata, 0, 0, 0, 0, 1);
     saveMetadata(metadataPathFromIndex(index_path_), metadata_gallery_value, config_.model_name, config_.feature_name,
                  config_);
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::SavingMetadata, 0, 0, 0, 1, 1);
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Finished, 0, 0, 0, gallery_images_.size(),
+                              gallery_images_.size());
 }
 
 std::vector<ImageSearchResult> ImageSearch::Impl::search(const fs::path &query_image, int top_k)

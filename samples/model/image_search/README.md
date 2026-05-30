@@ -59,7 +59,7 @@ Use `--rebuild-index` when the gallery directory has changed and you want to inc
 - if `--index` is omitted, the sample writes `<gallery_dir>/<model>_<feature>.faiss`
 - DINO models use the engine input size during preprocessing, so `dinov2_vits14` runs at its registered `518x518` default and `dinov3_*` official keys run at `224x224` unless the model config is overridden.
 - ONNX Runtime and OpenVINO backends use graph outputs directly. Export the feature you want to search, such as `x_norm_clstoken`, as an ONNX/OpenVINO output first.
-- During index construction the sample passes a progress callback to `ImageSearch::buildOrLoad` and prints completed image counts after each build batch.
+- During index construction the sample passes a progress callback to `ImageSearch::buildOrLoad` and prints the current stage plus counts when a stage has measurable progress.
 
 Common feature keys:
 

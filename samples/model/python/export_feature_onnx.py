@@ -93,6 +93,7 @@ def export_features_with_onnx(
         "do_constant_folding": True,
         "input_names": [args.input_name],
         "output_names": list(args.features),
+        'external_data': False, # 不要拆分成两个文件, .data 和 .onnx
     }
     if args.dynamic_batch:
         export_kwargs["dynamic_axes"] = {

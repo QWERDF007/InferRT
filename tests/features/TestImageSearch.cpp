@@ -343,9 +343,9 @@ TEST(ImageSearchTest, RamIndexUsesInMemoryIvfPqCompression)
 }
 
 /**
- * @brief RAM IVF-PQ 构建应在每个写入批次完成后触发回调。
+ * @brief RAM IVF-PQ build reports early training progress and vector add batches through one callback.
  */
-TEST(ImageSearchTest, RamIndexBuildInvokesBatchCallback)
+TEST(ImageSearchTest, RamIndexBuildReportsStagesAndAddBatches)
 {
     constexpr int    feature_dim  = 16;
     constexpr size_t vector_count = 17;
@@ -362,18 +362,45 @@ TEST(ImageSearchTest, RamIndexBuildInvokesBatchCallback)
         return std::vector<float>(begin, begin + feature_dim);
     };
 
-    std::vector<std::pair<size_t, size_t>> batches;
-    auto index = irt::features::priv::buildRamIvfPqIndex(
-        vector_count, feature_dim, 5, load_feature, false,
-        [&](size_t begin, size_t count) { batches.emplace_back(begin, count); });
+    std::vector<irt::features::ImageSearchBuildStage> stages;
+    std::vector<std::pair<size_t, size_t>>             add_batches;
+    size_t                                            training_progress = 0;
+    size_t                                            add_progress      = 0;
+    auto progress_callback = [&](const irt::features::ImageSearchBuildProgress &progress)
+    {
+        stages.push_back(progress.stage);
+        if (progress.stage == irt::features::ImageSearchBuildStage::TrainingFeatures)
+        {
+            training_progress = std::max(training_progress, progress.processed_count);
+        }
+        if (progress.stage == irt::features::ImageSearchBuildStage::AddingVectors)
+        {
+            add_progress = std::max(add_progress, progress.processed_count);
+            if (progress.batch_count > 0)
+            {
+                add_batches.emplace_back(progress.batch_begin, progress.batch_count);
+            }
+        }
+    };
+
+    auto index = irt::features::priv::buildRamIvfPqIndex(vector_count, feature_dim, 5, load_feature,
+                                                         progress_callback);
 
     ASSERT_TRUE(index);
-    const std::vector<std::pair<size_t, size_t>> expected{{0, 5}, {5, 5}, {10, 5}, {15, 2}};
-    EXPECT_EQ(batches, expected);
+    EXPECT_NE(std::find(stages.begin(), stages.end(), irt::features::ImageSearchBuildStage::TrainingFeatures),
+              stages.end());
+    EXPECT_NE(std::find(stages.begin(), stages.end(), irt::features::ImageSearchBuildStage::TrainingIndex),
+              stages.end());
+    EXPECT_NE(std::find(stages.begin(), stages.end(), irt::features::ImageSearchBuildStage::AddingVectors),
+              stages.end());
+    const std::vector<std::pair<size_t, size_t>> expected_add_batches{{0, 5}, {5, 5}, {10, 5}, {15, 2}};
+    EXPECT_EQ(add_batches, expected_add_batches);
+    EXPECT_EQ(training_progress, vector_count);
+    EXPECT_EQ(add_progress, vector_count);
 }
 
 /**
- * @brief GPU 兼容的 RAM IVF-PQ 索引应固定使用 8 位子码（``require_gpu_compatible=true``）。
+ * @brief GPU-compatible RAM IVF-PQ indexes use fixed 8-bit PQ codes.
  */
 TEST(ImageSearchTest, RamIvfPqGpuCompatibleIndexUsesEightBitCodes)
 {
@@ -392,7 +419,7 @@ TEST(ImageSearchTest, RamIvfPqGpuCompatibleIndexUsesEightBitCodes)
         return std::vector<float>(begin, begin + feature_dim);
     };
 
-    auto index = irt::features::priv::buildRamIvfPqIndex(vector_count, feature_dim, 16, load_feature, true);
+    auto index = irt::features::priv::buildRamIvfPqIndex(vector_count, feature_dim, 16, load_feature, {}, true);
     ASSERT_TRUE(index);
     EXPECT_EQ(index->ntotal, static_cast<faiss::idx_t>(vector_count));
 
@@ -424,10 +451,16 @@ TEST(ImageSearchTest, CpuDiskIndexUsesOnDiskIvfInvertedLists)
     TempDir temp;
     const auto index_path = temp.path() / "synthetic_disk.faiss";
     std::vector<std::pair<size_t, size_t>> batches;
-    auto index = irt::features::priv::buildCpuOnDiskIvfFlatIndex(vector_count, feature_dim, index_path, 3,
-                                                                 load_feature,
-                                                                 [&](size_t begin, size_t count)
-                                                                 { batches.emplace_back(begin, count); });
+    auto index = irt::features::priv::buildCpuOnDiskIvfFlatIndex(
+        vector_count, feature_dim, index_path, 3, load_feature,
+        [&](const irt::features::ImageSearchBuildProgress &progress)
+        {
+            if (progress.stage == irt::features::ImageSearchBuildStage::AddingVectors
+                && progress.batch_count > 0)
+            {
+                batches.emplace_back(progress.batch_begin, progress.batch_count);
+            }
+        });
     const auto data_path = irt::features::priv::cpuOnDiskIvfDataPath(index_path);
 
     ASSERT_TRUE(index);

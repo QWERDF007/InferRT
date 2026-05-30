@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <iostream>
+#include <sstream>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -315,13 +316,28 @@ int main(int argc, char *argv[])
         irt::features::ImageSearch searcher(args.config);
 
         const auto build_start       = Clock::now();
-        auto       progress_callback = [](const irt::features::ImageSearchBuildProgress &progress)
+        auto       progress_callback =
+            [last_width = size_t{0}](const irt::features::ImageSearchBuildProgress &progress) mutable
         {
-            std::cout << "Index build progress: " << progress.processed_count << "/" << progress.total_count
-                      << " images\r" << std::flush;
-            if (progress.processed_count == progress.total_count)
+            std::ostringstream line;
+            line << "Index build [" << irt::features::imageSearchBuildStageName(progress.stage) << "]";
+            if (progress.total_count > 0)
+            {
+                line << ": " << progress.processed_count << "/" << progress.total_count;
+            }
+
+            const auto text = line.str();
+            std::cout << '\r' << text;
+            if (last_width > text.size())
+            {
+                std::cout << std::string(last_width - text.size(), ' ');
+            }
+            std::cout << std::flush;
+            last_width = std::max(last_width, text.size());
+            if (progress.stage == irt::features::ImageSearchBuildStage::Finished)
             {
                 std::cout << std::endl;
+                last_width = 0;
             }
         };
         searcher.buildOrLoad(args.weights_file, args.gallery_dir, args.index_file, args.rebuild_index,
