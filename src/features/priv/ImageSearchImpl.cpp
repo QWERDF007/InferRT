@@ -582,7 +582,8 @@ bool existingIndexMatchesConfig(const fs::path &index_path, const fs::path &gall
     }
 
     return metadataValueEquals(metadata, "model", model_name) && metadataValueEquals(metadata, "feature", feature_name)
-        && metadataValueEquals(metadata, "gallery_dir", galleryDirectoryMetadataValue(gallery_dir))
+        && (metadataValueEquals(metadata, "gallery_dir", galleryDirectoryMetadataValue(gallery_dir))
+            || metadataValueEquals(metadata, "gallery_dir", explicitPathListMetadataValue()))
         && metadataConfigValueEquals(metadata, "model_backend", modelBackendName(config.model_backend), "tensorrt")
         && metadataConfigValueEquals(metadata, "model_device", modelDeviceName(config.model_device), "gpu")
         && metadataConfigValueEquals(metadata, "preprocess_backend", preprocessBackendName(config.preprocess_backend),
