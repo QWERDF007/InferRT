@@ -1,6 +1,6 @@
 # SAM Segmentation Sample
 
-This sample runs the TensorRT-native SAM/SAM2 model path from `inferrt_model` on a single image.
+This sample runs SAM/SAM2 through the selected InferRT backend on a single image.
 It uses the official SAM-style five-input contract:
 
 - `image`: `1x3xHxW`
@@ -24,14 +24,38 @@ Export official SAM/SAM2 weights first:
 
 ```bash
 python samples/model/python/gen_sam_wts.py -m vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.wts
-python samples/model/python/gen_sam2_wts.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.wts
+python samples/model/python/gen_sam_wts.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.wts
+python samples/model/python/gen_sam_wts.py -m sam3 -c D:/Models/sam3 -o sam3.wts --skip-forward
 ```
 
+Export SAM v1/SAM2/SAM3 to ONNX for ONNX Runtime or OpenVINO:
+
 ```bash
-build/bin/inferrt_sample_segmentation.exe -m sam_vit_b -w samples/model/segmentation/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_mask.jpg --point-x 0.5 --point-y 0.5
+python samples/model/python/export_sam_onnx.py -m sam_vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.onnx
+python samples/model/python/export_sam_onnx.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.onnx
+python samples/model/python/export_sam_onnx.py -m sam3 -c D:/Models/sam3 -o sam3.onnx
+```
+
+For SAM3, `--checkpoint` is a Hugging Face `Sam3Model` id or local model directory, and the exporter uses
+`transformers` to bake a static text embedding while keeping the runtime graph on the same SAM five-input contract.
+SAM3 `.wts` export writes the Hugging Face `Sam3Model.state_dict()` for inspection and future native TensorRT
+integration; the current SAM3 TensorRT model entry still returns `ERROR_NOT_IMPLEMENTED`.
+
+```bash
+build/bin/inferrt_sample_segmentation.exe -m sam_vit_b -w samples/model/segmentation/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_mask.jpg --point-x 0.5 --point-y 0.5 --backend tensorrt --device gpu --warmup 5 --repeat 20
 build/bin/inferrt_sample_segmentation.exe -m sam_vit_b -w samples/model/segmentation/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_box_mask.jpg --box 0.2,0.2,0.8,0.8
 build/bin/inferrt_sample_segmentation.exe -m sam2_1_hiera_tiny -w samples/model/segmentation/sam2_1_hiera_tiny.wts -i assets/pics/dog.jpg -o build/sam2_mask.jpg --point-x 0.5 --point-y 0.5
+build/bin/inferrt_sample_segmentation.exe -m sam2_1_hiera_tiny -w sam2_1_hiera_tiny.onnx -i assets/pics/dog.jpg -o build/sam2_onnx_mask.jpg --point-x 0.5 --point-y 0.5 --backend onnxruntime --device cpu
 ```
+
+Backend options:
+
+- `--backend`: `tensorrt`, `openvino`, or `onnxruntime`; `onnx` and `ort` are accepted aliases for ONNX Runtime.
+- `--device`: `cpu` or `gpu`; TensorRT requires `gpu`.
+- `--warmup`: iterations to run before measurement.
+- `--repeat`: measured iterations used for total/avg/min/max timing.
+
+The timing line reports `build_or_load`, `preprocess`, H2D, inference, D2H, end-to-end, timed-loop wall time, and postprocess. ONNX Runtime and OpenVINO use graph inputs and outputs directly; the graph must expose the same five-input/three-output SAM contract listed above.
 
 SAM v1 builds the official ViT image encoder, prompt encoder, and mask decoder graph from exported official weights.
 SAM2/SAM2.1 builds the official Hiera image encoder, FPN neck, prompt encoder, and high-resolution mask decoder graph.

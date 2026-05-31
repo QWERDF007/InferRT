@@ -84,9 +84,9 @@ def _torch_device() -> Any:
 def _import_sam_v1_export_helpers(repo_root: Path):
     """导入 SAM v1 导出脚本中的官方构建与预处理 helper。"""
 
-    segmentation_samples = repo_root / "samples" / "model" / "segmentation"
-    if str(segmentation_samples) not in sys.path:
-        sys.path.insert(0, str(segmentation_samples))
+    samples_python = repo_root / "samples" / "model" / "python"
+    if str(samples_python) not in sys.path:
+        sys.path.insert(0, str(samples_python))
 
     from gen_sam_wts import SAM_IMAGE_SIZE, import_segment_anything, preprocess_image
 
@@ -96,13 +96,13 @@ def _import_sam_v1_export_helpers(repo_root: Path):
 def _import_sam2_export_helpers(repo_root: Path):
     """导入 SAM2 导出脚本中的官方构建与预处理 helper。"""
 
-    segmentation_samples = repo_root / "samples" / "model" / "segmentation"
-    if str(segmentation_samples) not in sys.path:
-        sys.path.insert(0, str(segmentation_samples))
+    samples_python = repo_root / "samples" / "model" / "python"
+    if str(samples_python) not in sys.path:
+        sys.path.insert(0, str(samples_python))
 
-    from gen_sam2_wts import SAM2_IMAGE_SIZE, build_sam2_without_hydra, preprocess_image
+    from gen_sam_wts import SAM2_IMAGE_SIZE, build_sam2_without_hydra, preprocess_sam2_image
 
-    return SAM2_IMAGE_SIZE, build_sam2_without_hydra, preprocess_image
+    return SAM2_IMAGE_SIZE, build_sam2_without_hydra, preprocess_sam2_image
 
 
 def _make_point_prompt(x: float, y: float) -> tuple[np.ndarray, np.ndarray]:
@@ -370,24 +370,6 @@ def _build_graph_model_or_skip(model: Any, model_file: Path, *, label: str) -> N
         raise
 
 
-def _sam_input_tensors(inputs: dict[str, np.ndarray], device: Any) -> tuple[Any, Any, Any, Any, Any]:
-    """按 SAM 输入契约将 NumPy 输入转换为 PyTorch 张量元组。
-
-    Args:
-        inputs: 以 SAM 输入名为 key 的 NumPy 输入字典。
-        device: PyTorch 设备。
-
-    Returns:
-        按 ``SAM_INPUT_NAMES`` 排列的张量元组。
-    """
-
-    torch = pytest.importorskip("torch")
-    return tuple(
-        torch.from_numpy(np.ascontiguousarray(inputs[name], dtype=np.float32)).to(device=device)
-        for name in SAM_INPUT_NAMES
-    )
-
-
 def _export_sam_v1_onnx(
     *,
     repo_root: Path,
@@ -406,69 +388,18 @@ def _export_sam_v1_onnx(
         output_path: ONNX 输出路径。
     """
 
-    torch = pytest.importorskip("torch")
     pytest.importorskip("onnx")
-    device = torch.device("cpu")
-    model = _load_torch_sam_v1_model(repo_root=repo_root, checkpoint=checkpoint, sam_root=sam_root, device=device)
+    pytest.importorskip("torch")
 
-    class _SAMV1Wrapper(torch.nn.Module):
-        """把官方 SAM v1 拆分前向包装为 5 输入、3 输出的 ONNX 模块。"""
+    from export_sam_onnx import export_sam_v1_onnx
 
-        def __init__(self, wrapped: Any) -> None:
-            """保存官方 SAM v1 模型实例。
-
-            Args:
-                wrapped: 官方 SAM v1 PyTorch 模型。
-            """
-
-            super().__init__()
-            self.wrapped = wrapped
-
-        def forward(self, image, point_coords, point_labels, mask_input, has_mask_input):
-            """执行 SAM v1 图导出的完整前向。
-
-            Args:
-                image: 预处理后的图像张量。
-                point_coords: 点提示坐标张量。
-                point_labels: 点提示标签张量。
-                mask_input: mask 输入占位张量。
-                has_mask_input: mask 标志占位张量。
-
-            Returns:
-                ``masks``、``iou_predictions``、``low_res_masks`` 三个输出。
-            """
-
-            point_coords = point_coords.reshape(point_coords.shape[0], SAM2_MAX_POINTS, 2)
-            point_labels = point_labels.reshape(point_labels.shape[0], SAM2_MAX_POINTS).to(torch.int64)
-            image_embeddings = self.wrapped.image_encoder(image)
-            sparse_embeddings, dense_embeddings = self.wrapped.prompt_encoder(
-                points=(point_coords, point_labels),
-                boxes=None,
-                masks=None,
-            )
-            low_res_masks, iou_predictions = self.wrapped.mask_decoder(
-                image_embeddings=image_embeddings,
-                image_pe=self.wrapped.prompt_encoder.get_dense_pe(),
-                sparse_prompt_embeddings=sparse_embeddings,
-                dense_prompt_embeddings=dense_embeddings,
-                multimask_output=True,
-            )
-            keep_inputs = (mask_input.sum() + has_mask_input.sum()) * 0.0
-            low_res_masks = low_res_masks + keep_inputs
-            iou_predictions = iou_predictions.reshape(iou_predictions.shape[0], 3, 1, 1) + keep_inputs
-            return low_res_masks, iou_predictions, low_res_masks
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    wrapper = _SAMV1Wrapper(model).eval()
-    torch.onnx.export(
-        wrapper,
-        _sam_input_tensors(inputs, device),
-        str(output_path),
-        export_params=True,
-        opset_version=17,
-        do_constant_folding=True,
-        input_names=SAM_INPUT_NAMES,
-        output_names=SAM_OUTPUT_NAMES,
+    export_sam_v1_onnx(
+        model_name=SAM_V1_MODEL_NAME,
+        checkpoint=checkpoint,
+        output_path=output_path,
+        sam_root=sam_root,
+        inputs=inputs,
+        device="cpu",
     )
 
 
@@ -490,71 +421,18 @@ def _export_sam2_onnx(
         output_path: ONNX 输出路径。
     """
 
-    torch = pytest.importorskip("torch")
     pytest.importorskip("onnx")
-    device = torch.device("cpu")
-    model = _load_torch_sam2_model(repo_root=repo_root, checkpoint=checkpoint, sam2_root=sam2_root, device=device)
+    pytest.importorskip("torch")
 
-    class _SAM2Wrapper(torch.nn.Module):
-        """把官方 SAM2 拆分前向包装为 5 输入、3 输出的 ONNX 模块。"""
+    from export_sam_onnx import export_sam2_onnx
 
-        def __init__(self, wrapped: Any) -> None:
-            """保存官方 SAM2 模型实例。
-
-            Args:
-                wrapped: 官方 SAM2 PyTorch 模型。
-            """
-
-            super().__init__()
-            self.wrapped = wrapped
-
-        def forward(self, image, point_coords, point_labels, mask_input, has_mask_input):
-            """执行 SAM2 图导出的完整前向。
-
-            Args:
-                image: 预处理后的图像张量。
-                point_coords: 点提示坐标张量。
-                point_labels: 点提示标签张量。
-                mask_input: mask 输入占位张量。
-                has_mask_input: mask 标志占位张量。
-
-            Returns:
-                ``masks``、``iou_predictions``、``low_res_masks`` 三个输出。
-            """
-
-            point_coords = point_coords.reshape(point_coords.shape[0], SAM2_MAX_POINTS, 2)
-            point_labels = point_labels.reshape(point_labels.shape[0], SAM2_MAX_POINTS).to(torch.int64)
-            backbone_out = self.wrapped.forward_image(image)
-            sparse_embeddings, dense_embeddings = self.wrapped.sam_prompt_encoder(
-                points=(point_coords, point_labels),
-                boxes=None,
-                masks=None,
-            )
-            low_res_masks, iou_predictions, _, _ = self.wrapped.sam_mask_decoder(
-                image_embeddings=backbone_out["vision_features"],
-                image_pe=self.wrapped.sam_prompt_encoder.get_dense_pe(),
-                sparse_prompt_embeddings=sparse_embeddings,
-                dense_prompt_embeddings=dense_embeddings,
-                multimask_output=True,
-                repeat_image=False,
-                high_res_features=[backbone_out["backbone_fpn"][0], backbone_out["backbone_fpn"][1]],
-            )
-            keep_inputs = (mask_input.sum() + has_mask_input.sum()) * 0.0
-            low_res_masks = low_res_masks + keep_inputs
-            iou_predictions = iou_predictions.reshape(iou_predictions.shape[0], 3, 1, 1) + keep_inputs
-            return low_res_masks, iou_predictions, low_res_masks
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    wrapper = _SAM2Wrapper(model).eval()
-    torch.onnx.export(
-        wrapper,
-        _sam_input_tensors(inputs, device),
-        str(output_path),
-        export_params=True,
-        opset_version=17,
-        do_constant_folding=True,
-        input_names=SAM_INPUT_NAMES,
-        output_names=SAM_OUTPUT_NAMES,
+    export_sam2_onnx(
+        model_name=SAM2_MODEL_NAME,
+        checkpoint=checkpoint,
+        output_path=output_path,
+        sam2_root=sam2_root,
+        inputs=inputs,
+        device="cpu",
     )
 
 

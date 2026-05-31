@@ -10,7 +10,7 @@ This directory contains the ImageNet-style classification sample assets provided
 - `image_search/`: Faiss-based image retrieval sample, including CNN and DINO feature tensors
 - `onnx/`: ONNX -> TensorRT inference sample
 - `python/`: centralized Python scripts, including weight exporters, ONNX exporters, comparators, and pybind11 samples
-- `segmentation/`: TensorRT-native SAM/SAM2/SAM3 prompt segmentation sample
+- `segmentation/`: SAM/SAM2/SAM3 prompt segmentation sample
 
 ## Build
 
@@ -39,8 +39,8 @@ build/bin/inferrt_sample_classification.exe --model alexnet --weights-file sampl
 build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file samples/model/classification/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt
 build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file D:/Models/resnet/<checkpoint-stem-or-dir>/resnet50.onnx --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend openvino --device cpu
 build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file samples/model/classification/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend tensorrt --device gpu --warmup 10 --repeat 100
-build/bin/inferrt_sample_detection.exe -m yolov8n -w samples/model/detection/yolov8n.wts -i assets/pics/dog.jpg -l assets/coco80.names -o build/yolov8n_result.jpg
-build/bin/inferrt_sample_segmentation.exe -m sam_vit_b -w samples/model/segmentation/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_mask.jpg --point-x 0.5 --point-y 0.5
+build/bin/inferrt_sample_detection.exe -m yolov8n -w samples/model/detection/yolov8n.wts -i assets/pics/dog.jpg -l assets/coco80.names -o build/yolov8n_result.jpg --backend tensorrt --device gpu --warmup 10 --repeat 100
+build/bin/inferrt_sample_segmentation.exe -m sam_vit_b -w samples/model/segmentation/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_mask.jpg --point-x 0.5 --point-y 0.5 --backend tensorrt --device gpu --warmup 5 --repeat 20
 ```
 
 ## Weight export
@@ -54,8 +54,17 @@ python samples/model/python/classification_gen_wts.py -m vgg16
 python samples/model/python/classification_gen_wts.py -m dinov2_vits14 -b torchhub -o dinov2_vits14.wts
 python samples/model/python/classification_gen_wts.py -m dinov3_vitb16 -b transformers -o dinov3_vitb16.wts
 python samples/model/python/gen_sam_wts.py -m vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.wts
-python samples/model/python/gen_sam2_wts.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.wts
+python samples/model/python/gen_sam_wts.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.wts
+python samples/model/python/gen_sam_wts.py -m sam3 -c D:/Models/sam3 -o sam3.wts --skip-forward
+python samples/model/python/export_sam_onnx.py -m sam_vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.onnx
+python samples/model/python/export_sam_onnx.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.onnx
+python samples/model/python/export_sam_onnx.py -m sam3 -c D:/Models/sam3 -o sam3.onnx
 ```
+
+SAM3 ONNX export uses `transformers.Sam3Model`; pass a Hugging Face model id or local model directory as
+`--checkpoint`.
+SAM3 `.wts` export writes the Hugging Face `Sam3Model.state_dict()` for inspection and future native TensorRT
+integration; the current SAM3 TensorRT model entry still returns `ERROR_NOT_IMPLEMENTED`.
 
 ## Notes
 
@@ -106,20 +115,20 @@ ONNX / OpenVINO note:
 
 ## SAM Segmentation Sample
 
-The segmentation sample exercises the TensorRT-native SAM-family model path and uses the default prompt contract:
+The segmentation sample exercises the selected InferRT backend and uses the default prompt contract:
 `image`, `point_coords`, `point_labels`, `mask_input`, `has_mask_input` -> `masks`, `iou_predictions`, `low_res_masks`.
 SAM v1 builds the official ViT image encoder, prompt encoder, and mask decoder from official `segment_anything`
 checkpoints exported by `python/gen_sam_wts.py`. SAM2/SAM2.1 builds the official Hiera image encoder, FPN
-neck, prompt encoder, and high-resolution mask decoder from checkpoints exported by `python/gen_sam2_wts.py`.
+neck, prompt encoder, and high-resolution mask decoder from checkpoints exported by `python/gen_sam_wts.py`.
 SAM3 keys are registered, but their native backbone currently fails explicitly with `ERROR_NOT_IMPLEMENTED`.
 
 ```bash
-build/bin/inferrt_sample_segmentation.exe -m sam_vit_b -w samples/model/segmentation/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_vit_b_mask.jpg --box 0.2,0.2,0.8,0.8
-build/bin/inferrt_sample_segmentation.exe -m sam2_1_hiera_tiny -w samples/model/segmentation/sam2_1_hiera_tiny.wts -i assets/pics/dog.jpg -o build/sam2_mask.jpg
+build/bin/inferrt_sample_segmentation.exe -m sam_vit_b -w samples/model/segmentation/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_vit_b_mask.jpg --box 0.2,0.2,0.8,0.8 --backend tensorrt --device gpu --warmup 5 --repeat 20
+build/bin/inferrt_sample_segmentation.exe -m sam2_1_hiera_tiny -w samples/model/segmentation/sam2_1_hiera_tiny.wts -i assets/pics/dog.jpg -o build/sam2_mask.jpg --backend tensorrt --device gpu
 build/bin/inferrt_sample_segmentation.exe --help
 ```
 
-See [`segmentation/README.md`](segmentation/README.md) for supported keys and details.
+Both detection and segmentation report `build_or_load`, `preprocess`, H2D, inference, D2H, end-to-end, timed-loop wall time, and postprocess. See [`detection/README.md`](detection/README.md) and [`segmentation/README.md`](segmentation/README.md) for backend/device options and graph backend contracts.
 
 ## Feature Comparison Sample
 

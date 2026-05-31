@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -18,6 +19,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <numeric>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -70,6 +72,10 @@ struct Arguments
     int         max_detections{100};
     float       conf_threshold{0.25F};
     float       nms_threshold{0.45F};
+    irt::model::ModelBackend backend{irt::model::ModelBackend::TensorRT};
+    irt::model::ModelDevice  device{irt::model::ModelDevice::GPU};
+    int         warmup{0};
+    int         repeat{1};
 };
 
 /**
@@ -98,6 +104,99 @@ struct Detection
     float confidence{0.0F};
     int   class_id{0};
 };
+
+struct IterationTiming
+{
+    double h2d_ms{0.0};
+    double inference_ms{0.0};
+    double d2h_ms{0.0};
+
+    double totalMs() const noexcept
+    {
+        return h2d_ms + inference_ms + d2h_ms;
+    }
+};
+
+struct TimingStats
+{
+    double total_ms{0.0};
+    double avg_ms{0.0};
+    double min_ms{0.0};
+    double max_ms{0.0};
+};
+
+std::string trim(std::string value)
+{
+    auto not_space = [](unsigned char ch)
+    {
+        return !std::isspace(ch);
+    };
+    value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
+    value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
+    return value;
+}
+
+std::string toLower(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char ch)
+                   {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+    return value;
+}
+
+irt::model::ModelBackend parseBackend(std::string value)
+{
+    value = toLower(trim(std::move(value)));
+    if (value == "tensorrt" || value == "trt")
+    {
+        return irt::model::ModelBackend::TensorRT;
+    }
+    if (value == "openvino" || value == "ov")
+    {
+        return irt::model::ModelBackend::OpenVINO;
+    }
+    if (value == "onnxruntime" || value == "onnx" || value == "ort")
+    {
+        return irt::model::ModelBackend::ONNXRuntime;
+    }
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported backend: %s", value.c_str());
+}
+
+irt::model::ModelDevice parseDevice(std::string value)
+{
+    value = toLower(trim(std::move(value)));
+    if (value == "cpu")
+    {
+        return irt::model::ModelDevice::CPU;
+    }
+    if (value == "gpu" || value == "cuda")
+    {
+        return irt::model::ModelDevice::GPU;
+    }
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported device: %s", value.c_str());
+}
+
+TimingStats summarizeTimings(const std::vector<double> &values)
+{
+    if (values.empty())
+    {
+        return {};
+    }
+
+    const auto [min_it, max_it] = std::minmax_element(values.begin(), values.end());
+    const double total          = std::accumulate(values.begin(), values.end(), 0.0);
+    return TimingStats{total, total / static_cast<double>(values.size()), *min_it, *max_it};
+}
+
+void printTimingStats(const char *name, const TimingStats &stats)
+{
+    std::cout << ", " << name << "_total=" << stats.total_ms
+              << " ms, " << name << "_avg=" << stats.avg_ms
+              << " ms, " << name << "_min=" << stats.min_ms
+              << " ms, " << name << "_max=" << stats.max_ms << " ms";
+}
 
 float sigmoid(float value)
 {
@@ -197,7 +296,8 @@ cxxopts::Options makeOptions(const char *program_name)
     cxxopts::Options options(program_name, "Run InferRT YOLO detection models on a single image");
     options.add_options()("model,m", "YOLO model name, e.g. yolov5n/yolov8n (required)",
                           cxxopts::value<std::string>())(
-        "weights-file,w", "Weights file (.wts) (required)", cxxopts::value<std::string>())(
+        "weights-file,w", "Weights/model file (.wts, .onnx or OpenVINO IR) (required)",
+        cxxopts::value<std::string>())(
         "image-path,i", "Input image path", cxxopts::value<std::string>()->default_value(""))(
         "label-file,l", "Class label file", cxxopts::value<std::string>()->default_value(""))(
         "output-image,o", "Optional path to save image with boxes", cxxopts::value<std::string>()->default_value(""))(
@@ -209,7 +309,12 @@ cxxopts::Options makeOptions(const char *program_name)
         "max-detections", "Maximum detections printed after NMS", cxxopts::value<int>()->default_value("100"))(
         "legacy-anchors",
         "Legacy YOLOv5 anchors as 18 comma-separated numbers; empty uses COCO defaults",
-        cxxopts::value<std::string>()->default_value(""))("h,help", "Show help");
+        cxxopts::value<std::string>()->default_value(""))(
+        "backend", "Inference backend: tensorrt, openvino, onnxruntime",
+        cxxopts::value<std::string>()->default_value("tensorrt"))(
+        "device", "Inference device: cpu or gpu", cxxopts::value<std::string>()->default_value("gpu"))(
+        "warmup", "Warmup iterations before timing", cxxopts::value<int>()->default_value("0"))(
+        "repeat", "Timed inference iterations", cxxopts::value<int>()->default_value("1"))("h,help", "Show help");
     return options;
 }
 
@@ -245,6 +350,10 @@ Arguments parseArguments(int argc, char *argv[])
     args.nms_threshold   = result["nms-threshold"].as<float>();
     args.max_detections  = result["max-detections"].as<int>();
     args.legacy_anchors  = result["legacy-anchors"].as<std::string>();
+    args.backend         = parseBackend(result["backend"].as<std::string>());
+    args.device          = parseDevice(result["device"].as<std::string>());
+    args.warmup          = result["warmup"].as<int>();
+    args.repeat          = result["repeat"].as<int>();
 
     if (args.input_size <= 0 || args.input_size % 32 != 0)
     {
@@ -262,6 +371,14 @@ Arguments parseArguments(int argc, char *argv[])
     if (args.max_detections <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--max-detections must be positive");
+    }
+    if (args.warmup < 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--warmup must be >= 0");
+    }
+    if (args.repeat <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--repeat must be > 0");
     }
     return args;
 }
@@ -641,20 +758,29 @@ int main(int argc, char *argv[])
         fs::path label_path   = args.label_file.empty() ? project_root / kDefaultLabelPath : args.label_file;
 
         auto config = std::make_unique<irt::model::IModelConfig>();
-        config->setInputShape(nvinfer1::Dims4{1, 3, args.input_size, args.input_size});
-        config->setNumClasses(args.num_classes);
-        config->setOutputTensorNames({"output0", "output1", "output2"});
+        config->setBackend(args.backend);
+        config->setDevice(args.device);
+        if (args.backend == irt::model::ModelBackend::TensorRT)
+        {
+            config->setInputShape(nvinfer1::Dims4{1, 3, args.input_size, args.input_size});
+            config->setNumClasses(args.num_classes);
+            config->setOutputTensorNames({"output0", "output1", "output2"});
+        }
 
-        auto model = irt::model::CreateModel(args.model_name, std::move(config));
+        const std::string runtime_model_name
+            = args.backend == irt::model::ModelBackend::TensorRT ? args.model_name : "onnx";
+        auto model = irt::model::CreateModel(runtime_model_name, std::move(config));
         if (!model)
         {
-            std::cerr << "Failed to create model: " << args.model_name << std::endl;
+            std::cerr << "Failed to create model: " << runtime_model_name << std::endl;
             return -1;
         }
         model->setLogLevel(nvinfer1::ILogger::Severity::kINFO);
 
         std::cout << "Building or loading model..." << std::endl;
+        const auto build_start = Clock::now();
         model->buildOrLoad(args.weights_file.string());
+        const auto build_end = Clock::now();
         std::cout << "Model loaded successfully." << std::endl;
 
         std::cout << "Loading image: " << image_path.generic_string() << std::endl;
@@ -665,8 +791,8 @@ int main(int argc, char *argv[])
                                  image_path.string().c_str());
         }
 
-        const auto &input_names  = model->modelConfig().inputTensorNames();
-        const auto &output_names = model->modelConfig().outputTensorNames();
+        const auto input_names  = model->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
+        const auto output_names = model->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
         if (input_names.size() != 1 || output_names.size() != 3)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
@@ -686,10 +812,14 @@ int main(int argc, char *argv[])
                                                               static_cast<int>(input_dims.d[2]), letterbox);
         const auto preprocess_end = Clock::now();
 
-        DeviceBuffer device_input(elementCount(input_dims), nvinfer1::DataType::kFLOAT);
-        checkCuda(cudaMemcpyAsync(device_input.data(), input_tensor.data(), device_input.sizeBytes(),
-                                  cudaMemcpyHostToDevice, model->resolveExecutionStream()),
-                  "cudaMemcpyAsync(H2D input)");
+        const bool uses_tensorrt = args.backend == irt::model::ModelBackend::TensorRT;
+        const auto stream        = uses_tensorrt ? model->resolveExecutionStream() : nullptr;
+
+        DeviceBuffer device_input;
+        if (uses_tensorrt)
+        {
+            device_input.resize(elementCount(input_dims), nvinfer1::DataType::kFLOAT);
+        }
 
         std::vector<nvinfer1::Dims> output_dims;
         std::vector<DeviceBuffer>   device_outputs;
@@ -707,30 +837,85 @@ int main(int argc, char *argv[])
                 throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "YOLO sample expects float32 outputs");
             }
             output_dims.push_back(dims);
-            device_outputs.emplace_back(elementCount(dims), type);
+            if (uses_tensorrt)
+            {
+                device_outputs.emplace_back(elementCount(dims), type);
+            }
             host_outputs.emplace_back(elementCount(dims), type);
             std::cout << "Output " << output_name << " shape: " << dimsToCsv(dims) << std::endl;
         }
 
         std::vector<void *> buffers;
-        buffers.reserve(1 + device_outputs.size());
-        buffers.push_back(device_input.data());
-        for (auto &output : device_outputs)
+        buffers.reserve(1 + output_names.size());
+        buffers.push_back(uses_tensorrt ? device_input.data() : input_tensor.data());
+        for (size_t i = 0; i < output_names.size(); ++i)
         {
-            buffers.push_back(output.data());
+            buffers.push_back(uses_tensorrt ? device_outputs[i].data() : host_outputs[i].data());
         }
 
-        const auto stream = model->resolveExecutionStream();
-        std::cout << "Running inference..." << std::endl;
-        const auto infer_start = Clock::now();
-        model->infer(buffers, stream, true);
-        for (size_t i = 0; i < host_outputs.size(); ++i)
+        auto run_inference_once = [&]() -> IterationTiming
         {
-            checkCuda(cudaMemcpyAsync(host_outputs[i].data(), device_outputs[i].data(), host_outputs[i].sizeBytes(),
-                                      cudaMemcpyDeviceToHost, stream),
-                      "cudaMemcpyAsync(D2H output)");
+            IterationTiming timing;
+
+            const auto h2d_start = Clock::now();
+            if (uses_tensorrt)
+            {
+                checkCuda(cudaMemcpyAsync(device_input.data(), input_tensor.data(), device_input.sizeBytes(),
+                                          cudaMemcpyHostToDevice, stream),
+                          "cudaMemcpyAsync(H2D input)");
+                checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(H2D input)");
+            }
+            const auto h2d_end = Clock::now();
+            timing.h2d_ms      = elapsedMs(h2d_start, h2d_end);
+
+            const auto inference_start = Clock::now();
+            model->infer(buffers, stream, true);
+            if (uses_tensorrt)
+            {
+                checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(inference)");
+            }
+            const auto inference_end = Clock::now();
+            timing.inference_ms      = elapsedMs(inference_start, inference_end);
+
+            const auto d2h_start = Clock::now();
+            if (uses_tensorrt)
+            {
+                for (size_t i = 0; i < host_outputs.size(); ++i)
+                {
+                    checkCuda(cudaMemcpyAsync(host_outputs[i].data(), device_outputs[i].data(),
+                                              host_outputs[i].sizeBytes(), cudaMemcpyDeviceToHost, stream),
+                              "cudaMemcpyAsync(D2H output)");
+                }
+                checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(D2H output)");
+            }
+            const auto d2h_end = Clock::now();
+            timing.d2h_ms      = elapsedMs(d2h_start, d2h_end);
+            return timing;
+        };
+
+        std::cout << "Running inference warmup=" << args.warmup << ", repeat=" << args.repeat << "..." << std::endl;
+        for (int i = 0; i < args.warmup; ++i)
+        {
+            (void)run_inference_once();
         }
-        checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(inference)");
+
+        std::vector<double> h2d_times_ms;
+        std::vector<double> inference_times_ms;
+        std::vector<double> d2h_times_ms;
+        std::vector<double> end_to_end_times_ms;
+        h2d_times_ms.reserve(static_cast<size_t>(args.repeat));
+        inference_times_ms.reserve(static_cast<size_t>(args.repeat));
+        d2h_times_ms.reserve(static_cast<size_t>(args.repeat));
+        end_to_end_times_ms.reserve(static_cast<size_t>(args.repeat));
+        const auto infer_start = Clock::now();
+        for (int i = 0; i < args.repeat; ++i)
+        {
+            const auto timing = run_inference_once();
+            h2d_times_ms.push_back(timing.h2d_ms);
+            inference_times_ms.push_back(timing.inference_ms);
+            d2h_times_ms.push_back(timing.d2h_ms);
+            end_to_end_times_ms.push_back(timing.totalMs());
+        }
         const auto infer_end = Clock::now();
 
         const auto postprocess_start = Clock::now();
@@ -741,8 +926,19 @@ int main(int argc, char *argv[])
         printDetections(detections, labels);
         drawDetections(image, detections, labels, args.output_image);
 
-        std::cout << "Timing: preprocess=" << elapsedMs(preprocess_start, preprocess_end)
-                  << " ms, inference=" << elapsedMs(infer_start, infer_end)
+        std::cout << "Backend: " << irt::model::modelBackendName(args.backend)
+                  << ", device=" << irt::model::modelDeviceName(args.device) << std::endl;
+        const auto h2d_stats        = summarizeTimings(h2d_times_ms);
+        const auto inference_stats  = summarizeTimings(inference_times_ms);
+        const auto d2h_stats        = summarizeTimings(d2h_times_ms);
+        const auto end_to_end_stats = summarizeTimings(end_to_end_times_ms);
+        std::cout << "Timing: build_or_load=" << elapsedMs(build_start, build_end)
+                  << " ms, preprocess=" << elapsedMs(preprocess_start, preprocess_end) << " ms";
+        printTimingStats("h2d", h2d_stats);
+        printTimingStats("inference", inference_stats);
+        printTimingStats("d2h", d2h_stats);
+        printTimingStats("end_to_end", end_to_end_stats);
+        std::cout << ", timed_loop_wall=" << elapsedMs(infer_start, infer_end)
                   << " ms, postprocess=" << elapsedMs(postprocess_start, postprocess_end) << " ms" << std::endl;
         std::cout << "Done!" << std::endl;
         return 0;

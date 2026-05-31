@@ -43,7 +43,11 @@ build/bin/inferrt_sample_detection.exe ^
   -w samples/model/detection/yolov8n.wts ^
   -i assets/pics/dog.jpg ^
   -l assets/coco80.names ^
-  -o build/yolov8n_result.jpg
+  -o build/yolov8n_result.jpg ^
+  --backend tensorrt ^
+  --device gpu ^
+  --warmup 10 ^
+  --repeat 100
 
 build/bin/inferrt_sample_detection.exe ^
   -m yolov5n ^
@@ -52,7 +56,16 @@ build/bin/inferrt_sample_detection.exe ^
   --nms-threshold 0.45
 ```
 
-The sample uses letterbox preprocessing, runs TensorRT inference, decodes YOLO heads, applies class-wise NMS, prints detections, and optionally writes a visualized image.
+The sample uses letterbox preprocessing, runs the selected backend, decodes YOLO heads, applies class-wise NMS, prints detections, and optionally writes a visualized image. The timing line reports `build_or_load`, `preprocess`, H2D, inference, D2H, end-to-end, timed-loop wall time, and postprocess.
+
+Backend options:
+
+- `--backend`: `tensorrt`, `openvino`, or `onnxruntime`; `onnx` and `ort` are accepted aliases for ONNX Runtime.
+- `--device`: `cpu` or `gpu`; TensorRT requires `gpu`.
+- `--warmup`: iterations to run before measurement.
+- `--repeat`: measured iterations used for total/avg/min/max timing.
+
+ONNX Runtime and OpenVINO use graph inputs and outputs directly. The graph must expose one image input and the same three YOLO output tensors expected by this sample.
 
 For legacy YOLOv5 weights with `model.24.m.*` outputs, the sample uses the standard COCO anchors by default. Custom anchors can be supplied as 18 comma-separated numbers:
 

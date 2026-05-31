@@ -265,7 +265,7 @@ def ensure_sam2_wts(
 
     command = [
         sys.executable,
-        "samples/model/python/gen_sam2_wts.py",
+        "samples/model/python/gen_sam_wts.py",
         "--model",
         "sam2_1_hiera_tiny",
         "--checkpoint",
