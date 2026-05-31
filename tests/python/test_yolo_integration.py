@@ -47,11 +47,11 @@ def test_yolo_sample_runs_with_models_root(
     weights = ensure_yolo_wts(
         repo_root=repo_root,
         build_dir=build_dir,
+        model_root=model_root,
         model_name=model_name,
         checkpoint=model_root / relative_checkpoint,
         ultralytics_repo=ultralytics_repo,
         yolov5_repo=yolov5_repo,
-        family=f"yolo_sample_{relative_checkpoint.stem}",
     )
     output_image = artifact_dir(build_dir, "yolo") / f"{model_name}_dog_{os.getpid()}.jpg"
 

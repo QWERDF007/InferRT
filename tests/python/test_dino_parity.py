@@ -55,7 +55,6 @@ def test_dino_pybind_matches_pytorch_forward_and_features(
     pytestconfig: pytest.Config,
     compare_runtimes: list[str],
     compare_devices: list[str],
-    build_dir: Path,
     irt_module: Any,
     model_root: Path,
     tolerances: tuple[float, float],
@@ -67,7 +66,6 @@ def test_dino_pybind_matches_pytorch_forward_and_features(
         pytestconfig: pytest 配置对象。
         compare_runtimes: 用户选择的后端列表。
         compare_devices: 用户选择的设备列表。
-        build_dir: CMake 构建目录。
         irt_module: 已导入的 ``inferrt_model_py`` 模块。
         model_root: 真实模型根目录。
         tolerances: 主输出默认容差。
@@ -86,7 +84,7 @@ def test_dino_pybind_matches_pytorch_forward_and_features(
         torch_primary = _torch_primary(model, input_tensor)
         torch_features = _torch_features(case, model, input_tensor)
 
-        output_dir = _case_artifact_dir(build_dir, case)
+        output_dir = _case_artifact_dir(model_root, case)
         wts_path = _ensure_wts(case, model, output_dir)
         primary_onnx, feature_onnx = _ensure_onnx_artifacts(case, model, input_tensor, output_dir)
 

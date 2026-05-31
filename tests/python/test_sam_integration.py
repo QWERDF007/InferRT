@@ -21,7 +21,6 @@ from helpers.runtime import run_process_capture
 
 def test_sam_v1_checkpoint_exports_with_models_root(
     repo_root: Path,
-    build_dir: Path,
     model_root: Path,
     sam_root: Path,
 ) -> None:
@@ -33,7 +32,7 @@ def test_sam_v1_checkpoint_exports_with_models_root(
 
     weights = ensure_sam_v1_wts(
         repo_root=repo_root,
-        build_dir=build_dir,
+        model_root=model_root,
         checkpoint=model_root / "sam" / "sam_vit_b_01ec64.pth",
         sam_root=sam_root,
     )
@@ -55,7 +54,7 @@ def test_sam2_sample_runs_with_models_root(
     executable = require_sample(build_dir, "segmentation")
     weights = ensure_sam2_wts(
         repo_root=repo_root,
-        build_dir=build_dir,
+        model_root=model_root,
         checkpoint=model_root / "sam" / "sam2.1_hiera_tiny.pt",
         sam2_root=sam2_root,
     )

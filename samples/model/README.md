@@ -37,7 +37,7 @@ Examples:
 ```bash
 build/bin/inferrt_sample_classification.exe --model alexnet --weights-file samples/model/classification/alexnet.wts --image-path assets/pics/dog.jpg
 build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file samples/model/classification/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt
-build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file build/python_test_artifacts/model_dir_parity/resnet/resnet50/<case-id>/resnet50.onnx --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend openvino --device cpu
+build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file D:/Models/resnet/<checkpoint-stem-or-dir>/resnet50.onnx --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend openvino --device cpu
 build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file samples/model/classification/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend tensorrt --device gpu --warmup 10 --repeat 100
 build/bin/inferrt_sample_detection.exe -m yolov8n -w samples/model/detection/yolov8n.wts -i assets/pics/dog.jpg -l assets/coco80.names -o build/yolov8n_result.jpg
 build/bin/inferrt_sample_segmentation.exe -m sam_vit_b -w samples/model/segmentation/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_mask.jpg --point-x 0.5 --point-y 0.5
@@ -128,7 +128,7 @@ Use the dedicated feature sample to dump InferRT tensors and compare them with a
 ```bash
 build/bin/inferrt_sample_feature_extract.exe -m resnet18 -w samples/model/classification/resnet18.wts -f layer1,layer4 -i assets/pics/dog.jpg -o build/feature_dump_cpp
 build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w samples/model/classification/dinov2_vits14.wts -f x_norm_clstoken,x_norm_patchtokens -i assets/pics/dog.jpg -o build/dinov2_feature_dump_cpp
-build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w build/python_test_artifacts/model_dir_parity/dinov2/dinov2_vits14/<case-id>/dinov2_vits14.features.onnx -f x_norm_clstoken -i assets/pics/dog.jpg -o build/dinov2_openvino_cpu_feature_dump --backend openvino --device cpu --warmup 10 --repeat 100
+build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx -f x_norm_clstoken -i assets/pics/dog.jpg -o build/dinov2_openvino_cpu_feature_dump --backend openvino --device cpu --warmup 10 --repeat 100
 build/bin/inferrt_sample_feature_extract.exe -m dinov3_vitb16 -w samples/model/classification/dinov3_vitb16.wts -f x_norm_clstoken,x_storage_tokens,x_norm_patchtokens -i assets/pics/dog.jpg -o build/dinov3_feature_dump_cpp
 build/bin/inferrt_sample_feature_extract.exe --help
 python samples/model/python/compare_features.py --compare_dir build/feature_dump_cpp
@@ -149,8 +149,8 @@ build/bin/inferrt_sample_image_search.exe -w samples/model/classification/resnet
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --topk 5 --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --faiss-backend cpu --index-storage disk --disk-build-batch-size 128 --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --norm l2 --preprocess-backend cpu --faiss-backend gpu --rebuild-index
-build/bin/inferrt_sample_image_search.exe --weights-file build/python_test_artifacts/model_dir_parity/dinov2/dinov2_vits14/<case-id>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --backend onnxruntime --device cpu --rebuild-index
-build/bin/inferrt_sample_image_search.exe --weights-file build/python_test_artifacts/model_dir_parity/dinov2/dinov2_vits14/<case-id>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --backend openvino --device cpu --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --backend onnxruntime --device cpu --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --backend openvino --device cpu --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet50.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model resnet50 --feature layer3
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/dinov2_vits14.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --index build/gallery/dinov2_vits14_x_norm_clstoken.faiss
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/dinov3_vitb16.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov3_vitb16 --feature x_norm_clstoken --index build/gallery/dinov3_vitb16_x_norm_clstoken.faiss

@@ -13,17 +13,38 @@ from helpers.runtime import run_process_capture, sample_executable
 
 
 def artifact_dir(build_dir: Path, family: str) -> Path:
-    """返回真实模型集成测试的产物目录。
+    """返回真实模型集成测试的临时产物目录。
 
     Args:
         build_dir: CMake 构建目录。
         family: 模型族名称，例如 ``yolo`` 或 ``sam``。
 
     Returns:
-        存放导出 ``.wts``、engine cache 与输出图片的目录。
+        存放 engine cache、输出图片与 sample dump 等临时产物的目录。
     """
 
     path = build_dir / "python_test_artifacts" / family
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def conversion_artifact_dir(model_root: Path, checkpoint: Path) -> Path:
+    """返回真实模型转换产物在模型根目录下的目录。
+
+    文件 checkpoint 会映射到去掉后缀后的同名子目录，例如
+    ``<root>/yolov8/yolov8n.pt`` 映射为 ``<root>/yolov8/yolov8n``；
+    目录 checkpoint 会直接映射到该目录本身。
+    """
+
+    root = model_root.expanduser().resolve()
+    source = checkpoint.expanduser().resolve()
+    try:
+        relative_source = source.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"Checkpoint must be under model root: checkpoint={source}, model_root={root}") from exc
+
+    relative_output = relative_source if source.is_dir() else relative_source.with_suffix("")
+    path = root / relative_output
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -122,21 +143,22 @@ def ensure_yolo_wts(
     *,
     repo_root: Path,
     build_dir: Path,
+    model_root: Path,
     model_name: str,
     checkpoint: Path,
     ultralytics_repo: Path,
     yolov5_repo: Path | None = None,
-    family: str = "yolo",
 ) -> Path:
     """使用 Ultralytics checkpoint 导出 InferRT YOLO ``.wts``。
 
     Args:
         repo_root: 仓库根目录。
         build_dir: CMake 构建目录。
+        model_root: 真实模型根目录。
         model_name: InferRT YOLO 模型 key。
         checkpoint: ``--inferrt-model-root`` 下的 ``.pt`` 权重。
         ultralytics_repo: 本地 ultralytics 仓库；未安装包时用于导入。
-        family: 测试产物子目录，便于 sample 与 parity 用例隔离 engine cache。
+        yolov5_repo: 本地 YOLOv5 仓库；旧版 YOLOv5 checkpoint 导出时使用。
 
     Returns:
         导出的 ``.wts`` 路径。
@@ -146,7 +168,7 @@ def ensure_yolo_wts(
     os.environ.setdefault("YOLO_AUTOINSTALL", "False")
     os.environ.setdefault("ULTRALYTICS_SKIP_REQUIREMENTS_CHECKS", "1")
     os.environ.setdefault("YOLO_CONFIG_DIR", str(build_dir / "ultralytics_config"))
-    output = artifact_dir(build_dir, family) / f"{model_name}.wts"
+    output = conversion_artifact_dir(model_root, checkpoint) / f"{model_name}.wts"
     exporter_sources = [
         checkpoint,
         repo_root / "samples" / "model" / "python" / "detection_gen_wts.py",
@@ -177,12 +199,12 @@ def ensure_yolo_wts(
     return require_file(output, f"{model_name} exported .wts")
 
 
-def ensure_sam_v1_wts(*, repo_root: Path, build_dir: Path, checkpoint: Path, sam_root: Path) -> Path:
+def ensure_sam_v1_wts(*, repo_root: Path, model_root: Path, checkpoint: Path, sam_root: Path) -> Path:
     """使用官方 Segment Anything v1 checkpoint 导出 ``sam_vit_b`` 的 ``.wts``。
 
     Args:
         repo_root: 仓库根目录。
-        build_dir: CMake 构建目录。
+        model_root: 真实模型根目录。
         checkpoint: SAM v1 官方 ``.pth`` checkpoint。
         sam_root: 本地 Segment Anything v1 仓库路径。
 
@@ -191,7 +213,7 @@ def ensure_sam_v1_wts(*, repo_root: Path, build_dir: Path, checkpoint: Path, sam
     """
 
     checkpoint = require_file(checkpoint, "SAM ViT-B checkpoint")
-    output = artifact_dir(build_dir, "sam") / "sam_vit_b.wts"
+    output = conversion_artifact_dir(model_root, checkpoint) / "sam_vit_b.wts"
     if is_fresh(output, checkpoint):
         return output
 
@@ -220,26 +242,24 @@ def ensure_sam_v1_wts(*, repo_root: Path, build_dir: Path, checkpoint: Path, sam
 def ensure_sam2_wts(
     *,
     repo_root: Path,
-    build_dir: Path,
+    model_root: Path,
     checkpoint: Path,
     sam2_root: Path,
-    family: str = "sam",
 ) -> Path:
     """使用官方 SAM2.1 Hiera-Tiny checkpoint 导出 InferRT ``.wts``。
 
     Args:
         repo_root: 仓库根目录。
-        build_dir: CMake 构建目录。
+        model_root: 真实模型根目录。
         checkpoint: SAM2.1 官方 ``.pt`` checkpoint。
         sam2_root: 本地 SAM2 仓库路径。
-        family: 测试产物子目录，便于 sample 与 parity 用例隔离 engine cache。
 
     Returns:
         导出的 ``.wts`` 路径。
     """
 
     checkpoint = require_file(checkpoint, "SAM2.1 Hiera-Tiny checkpoint")
-    output = artifact_dir(build_dir, family) / "sam2_1_hiera_tiny.wts"
+    output = conversion_artifact_dir(model_root, checkpoint) / "sam2_1_hiera_tiny.wts"
     if is_fresh(output, checkpoint):
         return output
 

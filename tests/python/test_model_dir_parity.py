@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-import hashlib
 import os
 from pathlib import Path
 import re
@@ -17,7 +16,7 @@ import pytest
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 from helpers.manifest import assert_tensors_close
-from helpers.model_integration import artifact_dir, is_fresh_against_all
+from helpers.model_integration import conversion_artifact_dir, is_fresh_against_all
 
 
 CHECKPOINT_EXTENSIONS = {".pt", ".pth", ".safetensors"}
@@ -610,19 +609,18 @@ def _torch_features(case: ModelDirCase, model: Any, input_tensor: np.ndarray) ->
     return {name: output.detach().cpu().numpy() for name, output in zip(case.feature_names, outputs)}
 
 
-def _case_artifact_dir(build_dir: Path, case: ModelDirCase) -> Path:
-    """计算当前用例导出产物的缓存目录。
+def _case_artifact_dir(model_root: Path, case: ModelDirCase) -> Path:
+    """计算当前用例导出产物在模型根目录下的目录。
 
     Args:
-        build_dir: CMake 构建目录。
+        model_root: 用户传入的模型根目录。
         case: 模型目录测试用例。
 
     Returns:
         当前 checkpoint 对应的产物目录。
     """
 
-    digest = hashlib.sha1(str(case.checkpoint.resolve()).encode("utf-8")).hexdigest()[:10]
-    return artifact_dir(build_dir, "model_dir_parity") / case.family / case.model_name / digest
+    return conversion_artifact_dir(model_root, case.checkpoint)
 
 
 def _ensure_wts(case: ModelDirCase, model: Any, output_dir: Path) -> Path:
@@ -1063,7 +1061,6 @@ def test_model_root_checkpoints_export_and_match_pytorch(
     pytestconfig: pytest.Config,
     compare_runtimes: list[str],
     compare_devices: list[str],
-    build_dir: Path,
     irt_module: Any,
     tolerances: tuple[float, float],
     feature_tolerances: tuple[float, float],
@@ -1088,7 +1085,7 @@ def test_model_root_checkpoints_export_and_match_pytorch(
         torch_primary = _torch_primary(model, input_tensor)
         torch_features = _torch_features(case, model, input_tensor)
 
-        output_dir = _case_artifact_dir(build_dir, case)
+        output_dir = _case_artifact_dir(model_root, case)
         wts_path = _ensure_wts(case, model, output_dir)
         primary_onnx, feature_onnx = _ensure_onnx_artifacts(case, model, input_tensor, output_dir)
 

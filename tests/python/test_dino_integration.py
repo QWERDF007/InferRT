@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from helpers.manifest import load_tensor_from_dump, parse_manifest
-from helpers.model_integration import require_sample
+from helpers.model_integration import artifact_dir, require_sample
 from helpers.runtime import run_process_capture
 from test_dino_parity import DINO_FAMILIES, _discover_dino_cases
 from test_model_dir_parity import ModelDirCase, _case_artifact_dir, _ensure_wts, _load_case_model
@@ -81,9 +81,9 @@ def test_dino_feature_extract_sample_runs_with_models_root(
 
     for case in _representative_dino_cases(model_root, pytestconfig):
         model = _load_case_model(case, pytestconfig)
-        output_dir = _case_artifact_dir(build_dir, case)
+        output_dir = _case_artifact_dir(model_root, case)
         weights_path = _ensure_wts(case, model, output_dir)
-        dump_dir = output_dir / "feature_extract_sample"
+        dump_dir = artifact_dir(build_dir, "dino_feature_extract") / case.family / case.model_name
 
         completed = run_process_capture(
             [

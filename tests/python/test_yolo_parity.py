@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from helpers.manifest import assert_tensors_close
-from helpers.model_integration import artifact_dir, ensure_yolo_wts, is_fresh_against_all
+from helpers.model_integration import conversion_artifact_dir, ensure_yolo_wts, is_fresh_against_all
 from util import allocate_output_tensors
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
@@ -540,7 +540,7 @@ def test_yolo_pybind_matches_ultralytics_forward(
         input_tensor=input_tensor,
     )
 
-    output_dir = artifact_dir(build_dir, f"yolo_parity_{relative_checkpoint.stem}")
+    output_dir = conversion_artifact_dir(model_root, checkpoint)
     weights: Path | None = None
     onnx_path: Path | None = None
 
@@ -551,11 +551,11 @@ def test_yolo_pybind_matches_ultralytics_forward(
                 weights = ensure_yolo_wts(
                     repo_root=repo_root,
                     build_dir=build_dir,
+                    model_root=model_root,
                     model_name=model_name,
                     checkpoint=checkpoint,
                     ultralytics_repo=ultralytics_repo,
                     yolov5_repo=yolov5_repo,
-                    family=f"yolo_parity_{relative_checkpoint.stem}",
                 )
             inferrt_outputs = _run_inferrt_yolo(
                 irt_module,

@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from helpers.manifest import assert_tensors_close
-from helpers.model_integration import artifact_dir, ensure_sam2_wts, ensure_sam_v1_wts, is_fresh_against_all
+from helpers.model_integration import conversion_artifact_dir, ensure_sam2_wts, ensure_sam_v1_wts, is_fresh_against_all
 from util import allocate_output_tensors
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
@@ -671,7 +671,6 @@ def test_sam_v1_pybind_matches_official_pytorch_forward(
     compare_devices: list[str],
     irt_module: Any,
     repo_root: Path,
-    build_dir: Path,
     model_root: Path,
     default_image: Path,
     sam_root: Path,
@@ -694,7 +693,7 @@ def test_sam_v1_pybind_matches_official_pytorch_forward(
         image_path=default_image,
     )
 
-    output_dir = artifact_dir(build_dir, "sam_parity") / SAM_V1_MODEL_NAME
+    output_dir = conversion_artifact_dir(model_root, checkpoint)
     weights: Path | None = None
     onnx_path: Path | None = None
 
@@ -704,7 +703,7 @@ def test_sam_v1_pybind_matches_official_pytorch_forward(
             if weights is None:
                 weights = ensure_sam_v1_wts(
                     repo_root=repo_root,
-                    build_dir=build_dir,
+                    model_root=model_root,
                     checkpoint=checkpoint,
                     sam_root=sam_root,
                 )
@@ -750,7 +749,6 @@ def test_sam2_pybind_matches_official_pytorch_forward(
     compare_devices: list[str],
     irt_module: Any,
     repo_root: Path,
-    build_dir: Path,
     model_root: Path,
     default_image: Path,
     sam2_root: Path,
@@ -773,7 +771,7 @@ def test_sam2_pybind_matches_official_pytorch_forward(
         image_path=default_image,
     )
 
-    output_dir = artifact_dir(build_dir, "sam_parity") / SAM2_MODEL_NAME
+    output_dir = conversion_artifact_dir(model_root, checkpoint)
     weights: Path | None = None
     onnx_path: Path | None = None
 
@@ -783,7 +781,7 @@ def test_sam2_pybind_matches_official_pytorch_forward(
             if weights is None:
                 weights = ensure_sam2_wts(
                     repo_root=repo_root,
-                    build_dir=build_dir,
+                    model_root=model_root,
                     checkpoint=checkpoint,
                     sam2_root=sam2_root,
                 )
