@@ -807,7 +807,7 @@ FaissIndexBundle buildCpuOnDiskIndex(const std::vector<fs::path>       &gallery_
                                      const ImageSearchBuildProgressCallback &progress_callback)
 {
     FaissIndexBundle bundle;
-    bundle.index      = priv::buildCpuOnDiskIvfFlatIndex(
+    bundle.index = priv::buildCpuOnDiskIvfFlatIndex(
         gallery_images.size(), extractor.featureDim(), index_path, config.disk_build_batch_size,
         [&](size_t index) { return extractor.extract(gallery_images[index]); }, progress_callback);
     savePathMapping(mappingPathFromIndex(index_path), gallery_images);
@@ -824,8 +824,8 @@ FaissIndexBundle buildRamIvfPqIndex(const std::vector<fs::path>       &gallery_i
 {
     auto cpu_index = priv::buildRamIvfPqIndex(
         gallery_images.size(), extractor.featureDim(), config.disk_build_batch_size,
-        [&](size_t index) { return extractor.extract(gallery_images[index]); },
-        progress_callback, config.faiss_backend == ImageSearchFaissBackend::GPU);
+        [&](size_t index) { return extractor.extract(gallery_images[index]); }, progress_callback,
+        config.faiss_backend == ImageSearchFaissBackend::GPU);
 
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::WritingIndex, 0, 0, 0, 0, 1);
     faiss::write_index(cpu_index.get(), index_path.string().c_str());

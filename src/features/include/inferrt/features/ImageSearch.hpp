@@ -161,12 +161,23 @@ struct ImageSearchConfig
  */
 struct ImageSearchBuildProgress
 {
-    ImageSearchBuildStage stage{ImageSearchBuildStage::Unknown}; ///< 当前构建阶段。
-    size_t batch_index{0};     ///< 从 0 开始的已完成批次编号。
-    size_t batch_begin{0};     ///< 当前批次第一张图库图片的下标。
-    size_t batch_count{0};     ///< 当前批次包含的图库图片数量。
-    size_t processed_count{0}; ///< 当前阶段已处理的工作单元数量。
-    size_t total_count{0};     ///< 当前阶段需要处理的工作单元总数；不可度量时为 0。
+    ///< 当前构建阶段。
+    ImageSearchBuildStage stage{ImageSearchBuildStage::Unknown};
+
+    ///< 从 0 开始的已完成批次编号。
+    size_t batch_index{0};
+
+    ///< 当前批次第一张图库图片的下标。
+    size_t batch_begin{0};
+
+    ///< 当前批次包含的图库图片数量。
+    size_t batch_count{0};
+
+    ///< 当前阶段已处理的工作单元数量。
+    size_t processed_count{0};
+
+    ///< 当前阶段需要处理的工作单元总数；不可度量时为 0。
+    size_t total_count{0};
 };
 
 /**
@@ -248,8 +259,7 @@ public:
      * @param progress_callback 可选回调；构建阶段切换或可度量进度推进时调用。
      */
     void build(const std::filesystem::path &weights_file, const std::filesystem::path &gallery_dir,
-               const std::filesystem::path &index_file = {},
-               ImageSearchBuildProgressCallback progress_callback = {});
+               const std::filesystem::path &index_file = {}, ImageSearchBuildProgressCallback progress_callback = {});
 
     /**
      * @brief 从显式图片路径列表构建图像检索索引。
@@ -262,10 +272,8 @@ public:
      * @param index_file Faiss 索引文件路径；不可为空。
      * @param progress_callback 可选回调；构建阶段切换或可度量进度推进时调用。
      */
-    void build(const std::filesystem::path &weights_file,
-               const std::vector<std::filesystem::path> &gallery_images,
-               const std::filesystem::path &index_file,
-               ImageSearchBuildProgressCallback progress_callback = {});
+    void build(const std::filesystem::path &weights_file, const std::vector<std::filesystem::path> &gallery_images,
+               const std::filesystem::path &index_file, ImageSearchBuildProgressCallback progress_callback = {});
 
     /**
      * @brief 为图库目录加载已有图像检索索引。

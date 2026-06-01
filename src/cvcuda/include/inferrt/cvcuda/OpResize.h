@@ -5,7 +5,6 @@
 #include <inferrt/cvcuda/Export.h>
 #include <opencv2/opencv.hpp>
 
-
 namespace irt::cvcuda {
 
 template<typename T>

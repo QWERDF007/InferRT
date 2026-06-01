@@ -14,6 +14,7 @@
 
 namespace faiss {
 struct Index;
+
 namespace gpu {
 class StandardGpuResources;
 } // namespace gpu
@@ -85,8 +86,7 @@ public:
      * @param gallery_images 待加入索引的图片路径列表。
      * @param index_file Faiss 索引文件路径；不可为空。
      */
-    void build(const std::filesystem::path &weights_file,
-               const std::vector<std::filesystem::path> &gallery_images,
+    void build(const std::filesystem::path &weights_file, const std::vector<std::filesystem::path> &gallery_images,
                const std::filesystem::path &index_file, ImageSearchBuildProgressCallback progress_callback);
 
     /**
@@ -151,9 +151,8 @@ private:
      * @param metadata_gallery_value 写入 ``gallery_dir`` 元数据字段的值（目录 canonical 路径或占位哨兵）。
      */
     void buildWithImages(const std::filesystem::path &weights_file, const std::filesystem::path &gallery_dir,
-                         std::vector<std::filesystem::path> gallery_images,
-                         const std::filesystem::path &index_path, const std::string &metadata_gallery_value,
-                         ImageSearchBuildProgressCallback progress_callback);
+                         std::vector<std::filesystem::path> gallery_images, const std::filesystem::path &index_path,
+                         const std::string &metadata_gallery_value, ImageSearchBuildProgressCallback progress_callback);
 
     /**
      * @brief 按需懒加载特征提取器。
