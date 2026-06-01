@@ -295,11 +295,6 @@ void validateConfig(const ImageSearchConfig &config)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch model batch size is too large");
     }
-    if (config.model_batch_size > 1 && !usesTensorRtModelBackend(config))
-    {
-        throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED,
-                             "ImageSearch model batch size greater than 1 currently requires TensorRT backend");
-    }
 }
 
 /**
@@ -668,6 +663,22 @@ public:
         model_->setLogLevel(nvinfer1::ILogger::Severity::kINFO);
         model_->buildOrLoad(weights_file.string());
 
+        const auto input_tensor_names = model_->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
+        if (input_tensor_names.empty())
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "ImageSearch model must expose at least one input tensor");
+        }
+
+        input_name_            = input_tensor_names.front();
+        const auto input_shape = model_->tensorShape(input_name_);
+        const auto input_type  = model_->tensorDataType(input_tensor_names.front());
+        if (input_type != nvinfer1::DataType::kFLOAT)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch expects float32 input tensor");
+        }
+        input_shape_ = resolveInputShape(input_shape);
+
         const auto output_tensor_names = model_->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
         if (output_tensor_names.empty())
         {
@@ -683,49 +694,16 @@ public:
                                  "Expected float feature tensor for %s, got unsupported data type",
                                  output_name_.c_str());
         }
-
-        const auto input_tensor_names = model_->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
-        if (input_tensor_names.empty())
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "ImageSearch model must expose at least one input tensor");
-        }
-
-        input_name_            = input_tensor_names.front();
-        const auto input_shape = model_->tensorShape(input_name_);
-        const auto input_type  = model_->tensorDataType(input_tensor_names.front());
-        if (input_type != nvinfer1::DataType::kFLOAT)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch expects float32 input tensor");
-        }
-        if (input_shape.nbDims != 4 || input_shape.d[0] <= 0 || input_shape.d[1] != 3 || input_shape.d[2] <= 0
-            || input_shape.d[3] <= 0)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch expects input shape Nx3xHxW, got %s",
-                                 dimsToCsv(input_shape).c_str());
-        }
-        const auto runtime_batch = static_cast<size_t>(input_shape.d[0]);
-        if (usesTensorRtModelBackend(config_) && runtime_batch != config_.model_batch_size)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "ImageSearch TensorRT model batch does not match configured model batch size");
-        }
-        if (runtime_batch > config_.model_batch_size)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "ImageSearch model runtime batch exceeds configured model batch size");
-        }
-        if (output_dims_.nbDims <= 0 || output_dims_.d[0] != input_shape.d[0])
+        if (output_dims_.nbDims <= 0 || output_dims_.d[0] != input_shape_.d[0])
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                                  "ImageSearch feature output must preserve model batch dimension");
         }
 
-        input_shape_               = input_shape;
-        input_height_              = static_cast<int>(input_shape.d[2]);
-        input_width_               = static_cast<int>(input_shape.d[3]);
-        max_batch_size_            = runtime_batch;
-        input_elements_per_sample_ = elementCount(input_shape) / max_batch_size_;
+        max_batch_size_            = static_cast<size_t>(input_shape_.d[0]);
+        input_height_              = static_cast<int>(input_shape_.d[2]);
+        input_width_               = static_cast<int>(input_shape_.d[3]);
+        input_elements_per_sample_ = elementCount(input_shape_) / max_batch_size_;
         feature_dim_               = elementCount(output_dims_) / max_batch_size_;
         if (usesTensorRtModelBackend(config_))
         {
@@ -829,6 +807,59 @@ public:
     }
 
 private:
+    /**
+     * @brief 解析模型输入 batch，并把动态 graph 后端设置到配置的最大 batch。
+     *
+     * TensorRT 通过 dynamic profile 支持 ``1..model_batch_size``；ONNX Runtime/OpenVINO
+     * 只有在图输入第 0 维为动态维时才能同时服务图库 batch 和单图查询。固定 batch 的
+     * graph 模型只能安全使用 batch=1。
+     *
+     * @param input_shape 后端暴露的原始输入形状。
+     * @return 已解析到可分配缓冲区的输入形状。
+     */
+    nvinfer1::Dims resolveInputShape(nvinfer1::Dims input_shape)
+    {
+        if (input_shape.nbDims != 4 || input_shape.d[1] != 3 || input_shape.d[2] <= 0 || input_shape.d[3] <= 0)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch expects input shape Nx3xHxW, got %s",
+                                 dimsToCsv(input_shape).c_str());
+        }
+
+        if (input_shape.d[0] < 0)
+        {
+            input_shape.d[0] = static_cast<int32_t>(config_.model_batch_size);
+            model_->setTensorShape(input_name_, input_shape);
+            return model_->tensorShape(input_name_);
+        }
+
+        if (input_shape.d[0] <= 0)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch expects input shape Nx3xHxW, got %s",
+                                 dimsToCsv(input_shape).c_str());
+        }
+
+        const auto runtime_batch = static_cast<size_t>(input_shape.d[0]);
+        if (usesTensorRtModelBackend(config_))
+        {
+            if (runtime_batch != config_.model_batch_size)
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                     "ImageSearch TensorRT model batch does not match configured model batch size");
+            }
+            return input_shape;
+        }
+
+        if (runtime_batch != 1 || config_.model_batch_size != 1)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "ImageSearch graph backends require dynamic batch to use model batch size %zu; "
+                                 "export the ONNX/OpenVINO model with dynamic batch",
+                                 config_.model_batch_size);
+        }
+        model_->setTensorShape(input_name_, input_shape);
+        return model_->tensorShape(input_name_);
+    }
+
     /**
      * @brief 读取并预处理一个连续图像区间，拼接为 NCHW batch。
      */

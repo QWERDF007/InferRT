@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ import pytest
 np = pytest.importorskip("numpy")
 
 from helpers.manifest import assert_tensors_close
+from helpers.runtime import run_process_capture, sample_executable
 
 
 FEATURE_NAMES = ["tiny_cls", "tiny_patch"]
@@ -188,15 +190,19 @@ def test_onnx_graph_backends_reject_missing_output_name(
         model.build_or_load(str(tiny_onnx_path))
 
 
-def _make_feature_input() -> np.ndarray:
+def _make_feature_input(batch_size: int = 1) -> np.ndarray:
     """生成固定形状和数值范围的特征导出测试输入。
 
+    Args:
+        batch_size: 输入 batch 大小。
+
     Returns:
-        形状为 ``FEATURE_INPUT_SHAPE`` 的 ``float32`` 输入数组。
+        形状为 ``(batch_size, 3, 8, 10)`` 的 ``float32`` 输入数组。
     """
 
-    values = np.linspace(-1.0, 1.0, num=np.prod(FEATURE_INPUT_SHAPE), dtype=np.float32)
-    return values.reshape(FEATURE_INPUT_SHAPE)
+    shape = (batch_size, *FEATURE_INPUT_SHAPE[1:])
+    values = np.linspace(-1.0, 1.0, num=np.prod(shape), dtype=np.float32)
+    return values.reshape(shape)
 
 
 def _make_tiny_feature_model():
@@ -274,13 +280,20 @@ def _reference_features(model, input_tensor: np.ndarray) -> dict[str, np.ndarray
     return {name: output.detach().cpu().numpy() for name, output in zip(FEATURE_NAMES, outputs)}
 
 
-def _export_feature_onnx(model, input_tensor: np.ndarray, output_path: Path) -> None:
+def _export_feature_onnx(
+    model,
+    input_tensor: np.ndarray,
+    output_path: Path,
+    *,
+    dynamic_batch: bool = False,
+) -> None:
     """将测试特征模型导出为多输出 ONNX 图。
 
     Args:
         model: 待导出的 PyTorch 模型。
         input_tensor: 导出时使用的示例输入。
         output_path: ONNX 输出路径。
+        dynamic_batch: 是否把输入和输出第 0 维导出为动态 batch。
     """
 
     pytest.importorskip("onnx")
@@ -291,7 +304,7 @@ def _export_feature_onnx(model, input_tensor: np.ndarray, output_path: Path) -> 
         input_name="input",
         features=FEATURE_NAMES,
         opset=17,
-        dynamic_batch=False,
+        dynamic_batch=dynamic_batch,
     )
     wrapper = FeatureOutputWrapper(model, FEATURE_NAMES)
     wrapper.eval()
@@ -371,6 +384,88 @@ def _assert_feature_dicts_close(reference: dict[str, np.ndarray], actual: dict[s
         )
 
 
+def _write_bmp(path: Path, rgb: np.ndarray) -> None:
+    """写入 24-bit BMP 测试图，避免额外依赖 Pillow/cv2。
+
+    Args:
+        path: 输出图片路径。
+        rgb: ``uint8`` RGB 图像，形状为 ``HWC``。
+    """
+
+    if rgb.dtype != np.uint8 or rgb.ndim != 3 or rgb.shape[2] != 3:
+        raise ValueError("rgb must be a uint8 HWC image")
+
+    height, width, _channels = rgb.shape
+    row_bytes = width * 3
+    padding = (4 - row_bytes % 4) % 4
+    pixel_data = bytearray()
+    for row in rgb[::-1]:
+        pixel_data.extend(row[:, ::-1].tobytes())
+        pixel_data.extend(b"\0" * padding)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    file_size = 14 + 40 + len(pixel_data)
+    with path.open("wb") as output:
+        output.write(b"BM")
+        output.write(struct.pack("<IHHI", file_size, 0, 0, 54))
+        output.write(
+            struct.pack(
+                "<IIIHHIIIIII",
+                40,
+                width,
+                height,
+                1,
+                24,
+                0,
+                len(pixel_data),
+                2835,
+                2835,
+                0,
+                0,
+            )
+        )
+        output.write(pixel_data)
+
+
+def _make_image_search_gallery(gallery_dir: Path, count: int = 8) -> list[Path]:
+    """生成图像检索 sample 使用的小图库。
+
+    Args:
+        gallery_dir: 图库目录。
+        count: 图片数量。
+
+    Returns:
+        已写入的图片路径列表。
+    """
+
+    paths: list[Path] = []
+    y_grid, x_grid = np.indices((12, 10), dtype=np.uint16)
+    for index in range(count):
+        rgb = np.empty((12, 10, 3), dtype=np.uint8)
+        rgb[..., 0] = (x_grid * 19 + index * 23) % 256
+        rgb[..., 1] = (y_grid * 17 + index * 31) % 256
+        rgb[..., 2] = ((x_grid + y_grid) * 13 + index * 7) % 256
+        path = gallery_dir / f"image_{index:02d}.bmp"
+        _write_bmp(path, rgb)
+        paths.append(path)
+    return paths
+
+
+def _skip_unavailable_graph_sample(exc: RuntimeError, backend_attr: str) -> None:
+    """图后端运行时缺失时跳过 sample 集成测试。"""
+
+    message = str(exc)
+    unavailable_markers = (
+        "backend is not enabled",
+        "Failed to load ONNX Runtime DLL",
+        "OpenVINO backend is not enabled",
+        "OpenVINO error while loading",
+    )
+    if any(marker in message for marker in unavailable_markers):
+        pytest.skip(f"{backend_attr} backend unavailable: {message}")
+    raise exc
+
+
 @pytest.mark.integration
 @pytest.mark.slow
 def test_feature_graph_backend_matches_pytorch(
@@ -395,6 +490,91 @@ def test_feature_graph_backend_matches_pytorch(
     )
     label = "onnx" if graph_backend_attr == "ONNXRUNTIME" else "openvino"
     _assert_feature_dicts_close(reference, outputs, label)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_feature_graph_backend_dynamic_batch_matches_pytorch(
+    graph_backend_attr: str,
+    irt_module: object,
+    tmp_path: Path,
+) -> None:
+    """验证图后端能在动态 batch ONNX 上按输入 batch 自动分配输出。"""
+
+    model = _make_tiny_feature_model()
+    input_tensor = _make_feature_input(batch_size=2)
+    reference = _reference_features(model, input_tensor)
+
+    onnx_path = tmp_path / "tiny_feature_dynamic.onnx"
+    _export_feature_onnx(model, _make_feature_input(batch_size=1), onnx_path, dynamic_batch=True)
+
+    outputs = _run_feature_backend_outputs_or_skip(
+        irt_module,
+        model_path=onnx_path,
+        backend_attr=graph_backend_attr,
+        input_tensor=input_tensor,
+    )
+    label = "onnx.dynamic_batch" if graph_backend_attr == "ONNXRUNTIME" else "openvino.dynamic_batch"
+    _assert_feature_dicts_close(reference, outputs, label)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_image_search_sample_graph_backend_uses_dynamic_model_batch(
+    graph_backend_attr: str,
+    build_dir: Path,
+    repo_root: Path,
+    tmp_path: Path,
+) -> None:
+    """验证图像检索 sample 可用 ONNX Runtime/OpenVINO 动态 batch 构建图库索引。"""
+
+    backend_cli = "onnxruntime" if graph_backend_attr == "ONNXRUNTIME" else "openvino"
+    try:
+        executable = sample_executable(build_dir, "image_search")
+    except FileNotFoundError as exc:
+        pytest.skip(str(exc))
+
+    model = _make_tiny_feature_model()
+    onnx_path = tmp_path / "tiny_image_search_dynamic.onnx"
+    _export_feature_onnx(model, _make_feature_input(batch_size=1), onnx_path, dynamic_batch=True)
+
+    gallery_paths = _make_image_search_gallery(tmp_path / "gallery")
+    index_path = tmp_path / f"{backend_cli}.faiss"
+    command = [
+        str(executable),
+        "--weights-file",
+        str(onnx_path),
+        "--gallery-dir",
+        str(gallery_paths[0].parent),
+        "--query-image",
+        str(gallery_paths[0]),
+        "--index",
+        str(index_path),
+        "--backend",
+        backend_cli,
+        "--device",
+        "cpu",
+        "--model",
+        "resnet18",
+        "--feature",
+        "tiny_cls",
+        "--model-batch-size",
+        "2",
+        "--disk-build-batch-size",
+        "2",
+        "--topk",
+        "2",
+        "--rebuild-index",
+    ]
+
+    try:
+        completed = run_process_capture(command, cwd=repo_root)
+    except RuntimeError as exc:
+        _skip_unavailable_graph_sample(exc, graph_backend_attr)
+
+    assert "model_batch_size=2" in completed.stdout
+    assert "Top 2 similar images:" in completed.stdout
+    assert index_path.exists()
 
 
 @pytest.mark.integration

@@ -18,6 +18,7 @@ struct TensorInfo
 {
     nvinfer1::Dims            shape{};
     ONNXTensorElementDataType element_type{ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED};
+    bool                      dynamic_batch{false};
 };
 
 nvinfer1::DataType OrtTypeToTrt(ONNXTensorElementDataType type)
@@ -47,7 +48,8 @@ nvinfer1::DataType OrtTypeToTrt(ONNXTensorElementDataType type)
 TensorInfo ReadTensorInfo(const Ort::TypeInfo &type_info)
 {
     auto tensor_info = type_info.GetTensorTypeAndShapeInfo();
-    return TensorInfo{Int64ShapeToDims(tensor_info.GetShape()), tensor_info.GetElementType()};
+    auto dims        = Int64ShapeToDims(tensor_info.GetShape());
+    return TensorInfo{dims, tensor_info.GetElementType(), dims.nbDims > 0 && dims.d[0] < 0};
 }
 
 class ONNXRuntimeBackend final : public IBackendRuntime
@@ -142,6 +144,7 @@ public:
         }
 
         input_info_[tensor_name].shape = dims;
+        PropagateResolvedBatchDimToDynamicOutputs(output_info_, dims);
     }
 
     void infer(const std::vector<void *> &buffers) override

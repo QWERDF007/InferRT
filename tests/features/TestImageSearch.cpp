@@ -270,18 +270,30 @@ TEST(ImageSearchTest, ConstructorRejectsZeroModelBatchSize)
 }
 
 /**
- * @brief 图像检索当前只对 TensorRT 后端暴露大于 1 的模型 batch。
+ * @brief 图后端也应保留用户配置的模型 batch，实际动态性在加载图模型时校验。
  */
-TEST(ImageSearchTest, ConstructorRejectsGraphBackendModelBatchSize)
+TEST(ImageSearchTest, ConstructorStoresGraphBackendModelBatchSize)
 {
-    irt::features::ImageSearchConfig config;
-    config.model_name       = "resnet18";
-    config.feature_name     = "layer4";
-    config.model_backend    = irt::model::ModelBackend::ONNXRuntime;
-    config.model_device     = irt::model::ModelDevice::CPU;
-    config.model_batch_size = 2;
+    const std::vector<irt::model::ModelBackend> graph_backends{
+        irt::model::ModelBackend::ONNXRuntime,
+        irt::model::ModelBackend::OpenVINO,
+    };
 
-    expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); }, irt::Status::ERROR_NOT_IMPLEMENTED);
+    for (const auto backend : graph_backends)
+    {
+        irt::features::ImageSearchConfig config;
+        config.model_name       = "resnet18";
+        config.feature_name     = "layer4";
+        config.model_backend    = backend;
+        config.model_device     = irt::model::ModelDevice::CPU;
+        config.model_batch_size = 2;
+
+        const irt::features::ImageSearch search(config);
+
+        EXPECT_EQ(search.config().model_backend, backend);
+        EXPECT_EQ(search.config().model_batch_size, 2U);
+        EXPECT_FALSE(search.isReady());
+    }
 }
 
 /**

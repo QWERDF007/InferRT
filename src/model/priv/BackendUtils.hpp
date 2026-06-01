@@ -51,4 +51,33 @@ nvinfer1::Dims Int64ShapeToDims(const std::vector<int64_t> &shape);
  */
 bool IsDefaultOutputConfig(const IModelConfig &config);
 
+/**
+ * @brief 将已解析的输入 batch 维同步到动态 batch 输出。
+ *
+ * ONNX Runtime / OpenVINO 的图元数据会把符号 batch 读成 ``-1``。调用方在运行时通过
+ * ``setTensorShape`` 解析输入形状后，输出的第 0 维也需要同步，否则自动分配输出缓冲区时
+ * 仍会看到未解析维度。
+ *
+ * @tparam TensorInfoMap value 类型需包含 ``shape`` 与 ``dynamic_batch`` 字段。
+ * @param output_info 输出张量元数据表。
+ * @param input_dims 已解析的输入张量形状。
+ */
+template<typename TensorInfoMap>
+void PropagateResolvedBatchDimToDynamicOutputs(TensorInfoMap &output_info, const nvinfer1::Dims &input_dims)
+{
+    if (input_dims.nbDims <= 0 || input_dims.d[0] <= 0)
+    {
+        return;
+    }
+
+    for (auto &entry : output_info)
+    {
+        auto &info = entry.second;
+        if (info.dynamic_batch && info.shape.nbDims > 0)
+        {
+            info.shape.d[0] = input_dims.d[0];
+        }
+    }
+}
+
 } // namespace irt::model::priv

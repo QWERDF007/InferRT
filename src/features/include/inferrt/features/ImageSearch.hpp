@@ -158,7 +158,7 @@ struct ImageSearchConfig
     ///< CPU disk index build batch size.
     size_t disk_build_batch_size{kDefaultImageSearchDiskBuildBatchSize};
 
-    ///< 特征提取模型推理 batch；当前用于 TensorRT 动态 batch。
+    ///< 特征提取模型推理 batch；TensorRT 使用动态 profile，图后端要求导出动态 batch。
     size_t model_batch_size{kDefaultImageSearchModelBatchSize};
 };
 

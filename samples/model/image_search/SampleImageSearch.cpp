@@ -228,7 +228,7 @@ cxxopts::Options makeOptions(const char *program_name)
         cxxopts::value<std::string>()->default_value("ram"))(
         "disk-build-batch-size", "Batch size used while building CPU disk indexes",
         cxxopts::value<size_t>()->default_value(std::to_string(irt::features::kDefaultImageSearchDiskBuildBatchSize)))(
-        "model-batch-size", "Feature extraction model inference batch size (TensorRT dynamic batch)",
+        "model-batch-size", "Feature extraction model inference batch size",
         cxxopts::value<size_t>()->default_value(std::to_string(irt::features::kDefaultImageSearchModelBatchSize)))(
         "rebuild-index", "Force rebuild of the Faiss index")("h,help", "Show help");
     return options;

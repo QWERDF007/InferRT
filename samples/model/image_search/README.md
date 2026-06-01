@@ -57,7 +57,7 @@ Use `--rebuild-index` when the gallery directory has changed and you want to inc
 - `--faiss-backend`: selects Faiss backend, one of `cpu`, `gpu`; default is `cpu`
 - `--index-storage`: selects CPU Faiss search storage, one of `ram`, `disk`; default is `ram`; `disk` uses IVF with an on-disk inverted-list sidecar for large galleries; GPU Faiss currently keeps the default RAM behavior
 - `--disk-build-batch-size`: controls the batch size used while building CPU disk indexes; default is `256`; lower it to reduce peak RAM during build
-- `--model-batch-size`: controls the TensorRT feature extraction model batch size; default is `1`; increase it for gallery indexing when the selected model supports dynamic batch
+- `--model-batch-size`: controls the feature extraction model batch size; default is `1`; TensorRT uses a dynamic profile, while ONNX Runtime/OpenVINO require an exported graph with dynamic batch
 - if `--index` is omitted, the sample writes `<gallery_dir>/<model>_<feature>.faiss`
 - DINO models use the engine input size during preprocessing, so `dinov2_vits14` runs at its registered `518x518` default and `dinov3_*` official keys run at `224x224` unless the model config is overridden.
 - ONNX Runtime and OpenVINO backends use graph outputs directly. Export the feature you want to search, such as `x_norm_clstoken`, as an ONNX/OpenVINO output first.

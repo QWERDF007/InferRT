@@ -16,6 +16,7 @@ struct TensorInfo
 {
     nvinfer1::Dims    shape{};
     ov::element::Type element_type{};
+    bool              dynamic_batch{false};
 };
 
 std::string DeviceName(ModelDevice device)
@@ -186,6 +187,7 @@ public:
             throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Input tensor not found: %s", tensor_name.c_str());
         }
         input_info_[tensor_name].shape = dims;
+        PropagateResolvedBatchDimToDynamicOutputs(output_info_, dims);
     }
 
     void infer(const std::vector<void *> &buffers) override
@@ -268,7 +270,8 @@ private:
         {
             auto name = PortName(input);
             input_names_.push_back(name);
-            input_info_[name] = TensorInfo{PartialShapeToDims(input.get_partial_shape()), input.get_element_type()};
+            auto dims         = PartialShapeToDims(input.get_partial_shape());
+            input_info_[name] = TensorInfo{dims, input.get_element_type(), dims.nbDims > 0 && dims.d[0] < 0};
         }
 
         std::vector<std::string> graph_output_names;
@@ -276,7 +279,8 @@ private:
         {
             auto name = PortName(output);
             graph_output_names.push_back(name);
-            output_info_[name] = TensorInfo{PartialShapeToDims(output.get_partial_shape()), output.get_element_type()};
+            auto dims          = PartialShapeToDims(output.get_partial_shape());
+            output_info_[name] = TensorInfo{dims, output.get_element_type(), dims.nbDims > 0 && dims.d[0] < 0};
         }
 
         const auto &configured_inputs = config.inputTensorNames();
