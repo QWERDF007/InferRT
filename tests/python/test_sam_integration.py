@@ -12,6 +12,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.slow]
 from helpers.model_integration import (
     artifact_dir,
     assert_output_image,
+    ensure_edge_sam_wts,
     ensure_sam2_wts,
     ensure_sam_v1_wts,
     require_sample,
@@ -40,6 +41,26 @@ def test_sam_v1_checkpoint_exports_with_models_root(
     with weights.open("r", encoding="utf-8") as file:
         first_line = file.readline().strip()
     assert int(first_line) > 100
+
+
+def test_edge_sam_checkpoint_exports_with_models_root(
+    repo_root: Path,
+    model_root: Path,
+    edge_sam_root: Path,
+    edge_sam_checkpoint: Path,
+) -> None:
+    """使用本地 EdgeSAM checkpoint 验证 ``.wts`` 导出。"""
+
+    weights = ensure_edge_sam_wts(
+        repo_root=repo_root,
+        model_root=model_root,
+        checkpoint=edge_sam_checkpoint,
+        edge_sam_root=edge_sam_root,
+    )
+
+    with weights.open("r", encoding="utf-8") as file:
+        first_line = file.readline().strip()
+    assert int(first_line) > 500
 
 
 def test_sam2_sample_runs_with_models_root(

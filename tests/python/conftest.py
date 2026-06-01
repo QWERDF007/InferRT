@@ -15,6 +15,10 @@
     --inferrt-sam-root: 本地 Segment Anything v1 仓库。默认 ``INFERRT_SAM_ROOT`` 或
         ``D:/Github/SAM/segment-anything``。
     --inferrt-sam2-root: 本地 SAM2 仓库。默认 ``INFERRT_SAM2_ROOT`` 或 ``D:/Github/SAM/sam2``。
+    --inferrt-edge-sam-root: 本地 EdgeSAM 仓库。默认 ``INFERRT_EDGE_SAM_ROOT`` 或
+        ``F:/Github/SAM-based/EdgeSAM``。
+    --inferrt-edge-sam-checkpoint: EdgeSAM checkpoint。默认 ``INFERRT_EDGE_SAM_CHECKPOINT`` 或
+        ``<model-root>/SAM/edge_sam.pth``。
 
 环境变量:
     INFERRT_BUILD_DIR: 未传 ``--inferrt-build-dir`` 时使用的构建目录路径。
@@ -151,6 +155,18 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store",
         default="",
         help="本地 SAM2 仓库路径；默认 INFERRT_SAM2_ROOT 或 D:/Github/SAM/sam2",
+    )
+    parser.addoption(
+        "--inferrt-edge-sam-root",
+        action="store",
+        default="",
+        help="本地 EdgeSAM 仓库路径；默认 INFERRT_EDGE_SAM_ROOT 或 F:/Github/SAM-based/EdgeSAM",
+    )
+    parser.addoption(
+        "--inferrt-edge-sam-checkpoint",
+        action="store",
+        default="",
+        help="EdgeSAM checkpoint 路径；默认 INFERRT_EDGE_SAM_CHECKPOINT 或 <model-root>/SAM/edge_sam.pth",
     )
 
 
@@ -376,5 +392,30 @@ def sam2_root(pytestconfig: pytest.Config) -> Path:
     """本地 SAM2 仓库路径，用于导出 SAM2/SAM2.1 权重。"""
 
     return _configured_path(pytestconfig, "--inferrt-sam2-root", "INFERRT_SAM2_ROOT", "D:/Github/SAM/sam2")
+
+
+@pytest.fixture(scope="session")
+def edge_sam_root(pytestconfig: pytest.Config) -> Path:
+    """本地 EdgeSAM 仓库路径，用于 PyTorch 参考前向。"""
+
+    return _configured_path(
+        pytestconfig,
+        "--inferrt-edge-sam-root",
+        "INFERRT_EDGE_SAM_ROOT",
+        "F:/Github/SAM-based/EdgeSAM",
+    )
+
+
+@pytest.fixture(scope="session")
+def edge_sam_checkpoint(pytestconfig: pytest.Config, model_root: Path) -> Path:
+    """EdgeSAM 官方 checkpoint 路径。"""
+
+    configured = pytestconfig.getoption("--inferrt-edge-sam-checkpoint") or os.environ.get(
+        "INFERRT_EDGE_SAM_CHECKPOINT"
+    )
+    path = Path(configured).expanduser().resolve() if configured else model_root / "SAM" / "edge_sam.pth"
+    if not path.exists():
+        pytest.skip(f"EdgeSAM checkpoint not found: {path}")
+    return path
 
 

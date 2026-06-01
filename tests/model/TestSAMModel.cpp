@@ -74,6 +74,19 @@ TEST(SAMModelFactoryTest, SAMDefaultKeyCreatesViTHContract)
 }
 
 /**
+ * @brief EdgeSAM key 应创建 RepViT-M1 入口并复用 SAM prompt 输入契约。
+ */
+TEST(SAMModelFactoryTest, EdgeSAMKeyCreatesRepViTContract)
+{
+    auto model = irt::model::CreateModel("edge_sam");
+    ASSERT_NE(model, nullptr);
+
+    EXPECT_EQ(model->name(), "EdgeSAM");
+    expectSAMContract(*model, 1024);
+    EXPECT_EQ(model->modelConfig().numClasses(), 3);
+}
+
+/**
  * @brief SAM2 默认 key 应创建 Hiera-L 入口并复用 SAM prompt 输入契约。
  */
 TEST(SAMModelFactoryTest, SAM2DefaultKeyCreatesHieraLargeContract)
@@ -106,6 +119,7 @@ TEST(SAMModelFactoryTest, RegistersSAMFamilyVariants)
         {"sam_vit_b", "SAMViTB"},
         {"sam_vit_l", "SAMViTL"},
         {"sam_vit_h", "SAMViTH"},
+        {"edge_sam", "EdgeSAM"},
         {"sam2_hiera_tiny", "SAM2HieraTiny"},
         {"sam2_hiera_small", "SAM2HieraSmall"},
         {"sam2_hiera_base_plus", "SAM2HieraBasePlus"},
@@ -228,6 +242,18 @@ TEST(SAMModelBuildTest, BuildRequiresOfficialSAMWeights)
     ASSERT_NE(model, nullptr);
 
     const TempWeightsFile weights("inferrt_sam_build_");
+    ExpectIrtExceptionCode([&] { model->build(weights.path().string()); }, irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+/**
+ * @brief EdgeSAM TensorRT 路径必须使用官方 EdgeSAM state_dict 导出的权重。
+ */
+TEST(SAMModelBuildTest, BuildEdgeSAMRequiresOfficialWeights)
+{
+    auto model = irt::model::CreateModel("edge_sam");
+    ASSERT_NE(model, nullptr);
+
+    const TempWeightsFile weights("inferrt_edge_sam_build_");
     ExpectIrtExceptionCode([&] { model->build(weights.path().string()); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 

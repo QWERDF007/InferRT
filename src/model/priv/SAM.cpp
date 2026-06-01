@@ -40,6 +40,7 @@ constexpr int   kSamTwoWayDepth      = 2;
 constexpr int   kSamTwoWayHeads      = 8;
 constexpr int   kSamTwoWayMlpDim     = 2048;
 constexpr float kLayerNormEps        = 1.0e-6F;
+constexpr float kBatchNormEps        = 1.0e-5F;
 
 constexpr std::array<const char *, 5> kDefaultInputNames{
     "image",
@@ -79,6 +80,18 @@ struct SAM2HieraSpec
     std::vector<int> backbone_channels;    ///< FPN neck 输入通道，按低分辨率到高分辨率排列。
     int              pos_embed_size;       ///< 背景位置编码参数的空间边长。
     int              q_pool;               ///< 执行 q pooling 的 stage 数。
+};
+
+/**
+ * @brief EdgeSAM RepViT-M1 block 的结构参数。
+ */
+struct EdgeSAMRepViTBlockSpec
+{
+    int  kernel_size;  ///< depthwise token mixer 的卷积核边长。
+    int  expansion;    ///< channel mixer 的扩展倍率。
+    int  out_channels; ///< block 输出通道数。
+    bool use_se;       ///< 是否启用 Squeeze-Excite。
+    int  stride;       ///< token mixer 的空间步长。
 };
 
 /**
@@ -250,6 +263,123 @@ nvinfer1::ITensor *addLayerNorm2d(nvinfer1::INetworkDefinition *network, const W
     return requireLayer(network->addElementWise(*scaled->getOutput(0), *bias->getOutput(0), E::kSUM),
                         "Failed to add SAM LayerNorm2d bias add")
         ->getOutput(0);
+}
+
+/**
+ * @brief 将 EdgeSAM 的 Conv2d_BN 在构建期折叠为单个卷积权重。
+ *
+ * PyTorch 推理时 BatchNorm2d 使用 running_mean/running_var，本函数按同一公式
+ * `conv_weight * gamma / sqrt(var + eps)` 生成 TensorRT 卷积权重，减少运行图层数。
+ *
+ * @param weights_map `.wts` 权重表。
+ * @param prefix EdgeSAM `Conv2d_BN` 模块前缀。
+ * @param conv_count 卷积权重元素数量。
+ * @param out_channels 输出通道数，也是 BN 参数长度。
+ * @return 已融合 BN scale 的卷积权重。
+ */
+nvinfer1::Weights makeFusedConvBNWeight(const WeightsMap &weights_map, const std::string &prefix, int64_t conv_count,
+                                        int out_channels)
+{
+    const auto &conv = requireWeight(weights_map, prefix + ".c.weight", conv_count);
+    const auto &gamma = requireWeight(weights_map, prefix + ".bn.weight", out_channels);
+    const auto &var = requireWeight(weights_map, prefix + ".bn.running_var", out_channels);
+
+    const auto *conv_values = static_cast<const float *>(conv.values);
+    const auto *gamma_values = static_cast<const float *>(gamma.values);
+    const auto *var_values = static_cast<const float *>(var.values);
+    const auto  per_output = static_cast<int64_t>(conv_count / out_channels);
+
+    std::vector<float> fused(static_cast<size_t>(conv_count));
+    for (int oc = 0; oc < out_channels; ++oc)
+    {
+        const float scale = gamma_values[oc] / std::sqrt(var_values[oc] + kBatchNormEps);
+        const auto  base = static_cast<int64_t>(oc) * per_output;
+        for (int64_t i = 0; i < per_output; ++i)
+        {
+            fused[static_cast<size_t>(base + i)] = conv_values[base + i] * scale;
+        }
+    }
+    return ownedFloatVector(std::move(fused));
+}
+
+/**
+ * @brief 将 EdgeSAM 的 Conv2d_BN 在构建期折叠为单个卷积 bias。
+ *
+ * EdgeSAM 的 `Conv2d_BN` 中 Conv2d 无 bias，因此融合后的 bias 为
+ * `beta - running_mean * gamma / sqrt(running_var + eps)`。
+ *
+ * @param weights_map `.wts` 权重表。
+ * @param prefix EdgeSAM `Conv2d_BN` 模块前缀。
+ * @param out_channels 输出通道数。
+ * @return 已融合 BN offset 的卷积 bias。
+ */
+nvinfer1::Weights makeFusedConvBNBias(const WeightsMap &weights_map, const std::string &prefix, int out_channels)
+{
+    const auto &gamma = requireWeight(weights_map, prefix + ".bn.weight", out_channels);
+    const auto &beta = requireWeight(weights_map, prefix + ".bn.bias", out_channels);
+    const auto &mean = requireWeight(weights_map, prefix + ".bn.running_mean", out_channels);
+    const auto &var = requireWeight(weights_map, prefix + ".bn.running_var", out_channels);
+
+    const auto *gamma_values = static_cast<const float *>(gamma.values);
+    const auto *beta_values = static_cast<const float *>(beta.values);
+    const auto *mean_values = static_cast<const float *>(mean.values);
+    const auto *var_values = static_cast<const float *>(var.values);
+
+    std::vector<float> fused(static_cast<size_t>(out_channels));
+    for (int oc = 0; oc < out_channels; ++oc)
+    {
+        const float scale = gamma_values[oc] / std::sqrt(var_values[oc] + kBatchNormEps);
+        fused[static_cast<size_t>(oc)] = beta_values[oc] - mean_values[oc] * scale;
+    }
+    return ownedFloatVector(std::move(fused));
+}
+
+/**
+ * @brief 添加 EdgeSAM 中的 Conv2d_BN，并在权重侧完成 BN 融合。
+ *
+ * @param prefix `Conv2d_BN` 模块前缀，内部使用 `.c` 和 `.bn` 子模块。
+ * @param in_channels 输入通道数。
+ * @param out_channels 输出通道数。
+ * @param kernel_size 卷积核边长。
+ * @param stride 卷积步长。
+ * @param padding 卷积 padding。
+ * @param groups 分组卷积组数。
+ * @return TensorRT 卷积层输出。
+ */
+nvinfer1::ITensor *addEdgeSAMConvBN(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
+                                    nvinfer1::ITensor &input, const std::string &prefix, int in_channels,
+                                    int out_channels, int kernel_size, int stride, int padding, int groups = 1)
+{
+    const auto per_group_in = in_channels / groups;
+    const auto conv_count = static_cast<int64_t>(out_channels) * per_group_in * kernel_size * kernel_size;
+    auto *conv = requireLayer(
+        network->addConvolutionNd(input, out_channels, nvinfer1::DimsHW{kernel_size, kernel_size},
+                                  makeFusedConvBNWeight(weights_map, prefix, conv_count, out_channels),
+                                  makeFusedConvBNBias(weights_map, prefix, out_channels)),
+        "Failed to add EdgeSAM fused Conv2d_BN");
+    conv->setStrideNd(nvinfer1::DimsHW{stride, stride});
+    conv->setPaddingNd(nvinfer1::DimsHW{padding, padding});
+    conv->setNbGroups(groups);
+    return conv->getOutput(0);
+}
+
+/**
+ * @brief 添加 EdgeSAM 中无 bias 的普通卷积。
+ */
+nvinfer1::ITensor *addEdgeSAMConvNoBias(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
+                                        nvinfer1::ITensor &input, const std::string &key, int in_channels,
+                                        int out_channels, int kernel_size, int stride = 1, int padding = 0)
+{
+    auto *conv = requireLayer(
+        network->addConvolutionNd(input, out_channels, nvinfer1::DimsHW{kernel_size, kernel_size},
+                                  requireWeight(weights_map, key,
+                                                static_cast<int64_t>(out_channels) * in_channels * kernel_size
+                                                    * kernel_size),
+                                  emptyWeights()),
+        "Failed to add EdgeSAM bias-free convolution");
+    conv->setStrideNd(nvinfer1::DimsHW{stride, stride});
+    conv->setPaddingNd(nvinfer1::DimsHW{padding, padding});
+    return conv->getOutput(0);
 }
 
 /**
@@ -622,6 +752,28 @@ nvinfer1::ITensor *addNearestResizeLike(nvinfer1::INetworkDefinition *network, n
 }
 
 /**
+ * @brief 将 NCHW 特征图按 PyTorch bicubic/align_corners=False 语义上采样到参考大小。
+ */
+nvinfer1::ITensor *addCubicResizeLike(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input,
+                                      const nvinfer1::ITensor &reference)
+{
+    auto *resize = requireLayer(network->addResize(input), "Failed to add EdgeSAM bicubic resize");
+    auto  dims   = input.getDimensions();
+    const auto ref_dims = reference.getDimensions();
+    if (dims.nbDims != 4 || ref_dims.nbDims != 4)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "EdgeSAM bicubic resize expects NCHW tensors");
+    }
+    dims.d[2] = ref_dims.d[2];
+    dims.d[3] = ref_dims.d[3];
+    resize->setResizeMode(nvinfer1::InterpolationMode::kCUBIC);
+    resize->setCoordinateTransformation(nvinfer1::ResizeCoordinateTransformation::kHALF_PIXEL);
+    resize->setCubicCoeff(-0.75F);
+    resize->setOutputDimensions(dims);
+    return resize->getOutput(0);
+}
+
+/**
  * @brief 生成 SAM2 Hiera 官方窗口位置编码。
  */
 nvinfer1::ITensor *addSAM2HieraPositionEmbedding(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
@@ -915,6 +1067,214 @@ nvinfer1::ITensor *addSAM2ImageEncoder(const SAMSegmentationModel &impl, nvinfer
     named_tensors["high_res_s1"]     = high_res_s1;
     named_tensors["image_embedding"] = fpn[2];
     return fpn[2];
+}
+
+/**
+ * @brief 返回 EdgeSAM 官方 RepViT-M1 block 配置。
+ */
+const std::vector<EdgeSAMRepViTBlockSpec> &edgeSAMRepViTM1Blocks()
+{
+    static const std::vector<EdgeSAMRepViTBlockSpec> blocks{
+        {3, 2, 48, true, 1},   {3, 2, 48, false, 1},  {3, 2, 48, false, 1},
+        {3, 2, 96, false, 2},  {3, 2, 96, true, 1},   {3, 2, 96, false, 1},
+        {3, 2, 96, false, 1},  {3, 2, 192, false, 2}, {3, 2, 192, true, 1},
+        {3, 2, 192, false, 1}, {3, 2, 192, true, 1},  {3, 2, 192, false, 1},
+        {3, 2, 192, true, 1},  {3, 2, 192, false, 1}, {3, 2, 192, true, 1},
+        {3, 2, 192, false, 1}, {3, 2, 192, true, 1},  {3, 2, 192, false, 1},
+        {3, 2, 192, true, 1},  {3, 2, 192, false, 1}, {3, 2, 192, true, 1},
+        {3, 2, 192, false, 1}, {3, 2, 192, false, 1}, {3, 2, 384, false, 2},
+        {3, 2, 384, true, 1},  {3, 2, 384, false, 1},
+    };
+    return blocks;
+}
+
+/**
+ * @brief 计算 RepViT 配置中的通道数对齐结果。
+ */
+int makeDivisibleBy8(int value)
+{
+    constexpr int divisor = 8;
+    int           result  = std::max(divisor, (value + divisor / 2) / divisor * divisor);
+    if (result < static_cast<int>(0.9F * static_cast<float>(value)))
+    {
+        result += divisor;
+    }
+    return result;
+}
+
+/**
+ * @brief 添加 EdgeSAM Squeeze-Excite 分支。
+ *
+ * 官方使用 timm 的 `SqueezeExcite(channels, 0.25)`，即全局均值池化、
+ * `1x1 Conv + ReLU + 1x1 Conv + Sigmoid` 后乘回输入特征。
+ */
+nvinfer1::ITensor *addEdgeSAMSE(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
+                                nvinfer1::ITensor &input, const std::string &prefix, int channels)
+{
+    const int reduced_channels = makeDivisibleBy8(static_cast<int>(static_cast<float>(channels) * 0.25F));
+    auto     *pool = requireLayer(network->addReduce(input, nvinfer1::ReduceOperation::kAVG, (1U << 2) | (1U << 3),
+                                                     true),
+                                  "Failed to add EdgeSAM SE global average pooling");
+    auto *fc1 = requireLayer(
+        network->addConvolutionNd(*pool->getOutput(0), reduced_channels, nvinfer1::DimsHW{1, 1},
+                                  requireWeight(weights_map, prefix + ".fc1.weight",
+                                                static_cast<int64_t>(reduced_channels) * channels),
+                                  requireWeight(weights_map, prefix + ".fc1.bias", reduced_channels)),
+        "Failed to add EdgeSAM SE fc1");
+    auto *relu = requireLayer(network->addActivation(*fc1->getOutput(0), nvinfer1::ActivationType::kRELU),
+                              "Failed to add EdgeSAM SE ReLU");
+    auto *fc2 = requireLayer(
+        network->addConvolutionNd(*relu->getOutput(0), channels, nvinfer1::DimsHW{1, 1},
+                                  requireWeight(weights_map, prefix + ".fc2.weight",
+                                                static_cast<int64_t>(channels) * reduced_channels),
+                                  requireWeight(weights_map, prefix + ".fc2.bias", channels)),
+        "Failed to add EdgeSAM SE fc2");
+    auto *gate = requireLayer(network->addActivation(*fc2->getOutput(0), nvinfer1::ActivationType::kSIGMOID),
+                              "Failed to add EdgeSAM SE sigmoid");
+    return requireLayer(network->addElementWise(input, *gate->getOutput(0), E::kPROD),
+                        "Failed to apply EdgeSAM SE gate")
+        ->getOutput(0);
+}
+
+/**
+ * @brief 添加 EdgeSAM stride=1 block 中的 RepVGG depthwise token mixer。
+ */
+nvinfer1::ITensor *addEdgeSAMRepVGGDW(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
+                                      nvinfer1::ITensor &input, const std::string &prefix, int channels)
+{
+    auto *conv3 = addEdgeSAMConvBN(network, weights_map, input, prefix + ".conv", channels, channels, 3, 1, 1,
+                                   channels);
+    auto *conv1 = addEdgeSAMConvBN(network, weights_map, input, prefix + ".conv1", channels, channels, 1, 1, 0,
+                                   channels);
+    auto *sum = requireLayer(network->addElementWise(*conv3, *conv1, E::kSUM),
+                             "Failed to add EdgeSAM RepVGG depthwise branches");
+    return requireLayer(network->addElementWise(*sum->getOutput(0), input, E::kSUM),
+                        "Failed to add EdgeSAM RepVGG identity")
+        ->getOutput(0);
+}
+
+/**
+ * @brief 添加 EdgeSAM block 中的 channel mixer 残差分支。
+ */
+nvinfer1::ITensor *addEdgeSAMChannelMixer(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
+                                          nvinfer1::ITensor &input, const std::string &prefix, int channels,
+                                          int hidden_channels)
+{
+    auto *expand = addEdgeSAMConvBN(network, weights_map, input, prefix + ".channel_mixer.m.0", channels,
+                                    hidden_channels, 1, 1, 0);
+    auto *gelu = addGeluExact(network, *expand);
+    auto *project = addEdgeSAMConvBN(network, weights_map, *gelu, prefix + ".channel_mixer.m.2", hidden_channels,
+                                     channels, 1, 1, 0);
+    return requireLayer(network->addElementWise(input, *project, E::kSUM),
+                        "Failed to add EdgeSAM channel mixer residual")
+        ->getOutput(0);
+}
+
+/**
+ * @brief 添加 EdgeSAM RepViT-M1 的一个 block。
+ */
+nvinfer1::ITensor *addEdgeSAMRepViTBlock(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
+                                         nvinfer1::ITensor &input, int feature_index, int input_channels,
+                                         const EdgeSAMRepViTBlockSpec &spec)
+{
+    const std::string prefix = "image_encoder.features." + std::to_string(feature_index);
+    const int         output_channels = makeDivisibleBy8(spec.out_channels);
+    const int         hidden_channels = makeDivisibleBy8(output_channels * spec.expansion);
+
+    nvinfer1::ITensor *mixed = nullptr;
+    if (spec.stride == 2)
+    {
+        mixed = addEdgeSAMConvBN(network, weights_map, input, prefix + ".token_mixer.0", input_channels,
+                                 input_channels, spec.kernel_size, spec.stride, (spec.kernel_size - 1) / 2,
+                                 input_channels);
+        if (spec.use_se)
+        {
+            mixed = addEdgeSAMSE(network, weights_map, *mixed, prefix + ".token_mixer.1", input_channels);
+        }
+        mixed = addEdgeSAMConvBN(network, weights_map, *mixed, prefix + ".token_mixer.2", input_channels,
+                                 output_channels, 1, 1, 0);
+    }
+    else
+    {
+        if (input_channels != output_channels)
+        {
+            throw irt::Exception(Status::ERROR_INTERNAL, "EdgeSAM stride=1 RepViT block requires identity channels");
+        }
+        mixed = addEdgeSAMRepVGGDW(network, weights_map, input, prefix + ".token_mixer.0", input_channels);
+        if (spec.use_se)
+        {
+            mixed = addEdgeSAMSE(network, weights_map, *mixed, prefix + ".token_mixer.1", input_channels);
+        }
+    }
+    return addEdgeSAMChannelMixer(network, weights_map, *mixed, prefix, output_channels, hidden_channels);
+}
+
+/**
+ * @brief 构建 EdgeSAM 官方 RepViT-M1 image encoder。
+ */
+nvinfer1::ITensor *addEdgeSAMImageEncoder(const SAMSegmentationModel &impl, nvinfer1::INetworkDefinition *network,
+                                          const WeightsMap &weights_map, const SAMGeometry &geometry,
+                                          priv::IModelImpl::NamedTensorMap &named_tensors)
+{
+    auto *image = impl.addInputTensor(network, nvinfer1::DataType::kFLOAT, 0);
+    named_tensors["image"] = image;
+
+    const auto &blocks = edgeSAMRepViTM1Blocks();
+    int         channels = makeDivisibleBy8(blocks.front().out_channels);
+    auto *x = addEdgeSAMConvBN(network, weights_map, *image, "image_encoder.features.0.0", geometry.channels,
+                               channels / 2, 3, 2, 1);
+    x = addGeluExact(network, *x);
+    x = addEdgeSAMConvBN(network, weights_map, *x, "image_encoder.features.0.2", channels / 2, channels, 3, 2, 1);
+    named_tensors["image_encoder.stem"] = x;
+
+    nvinfer1::ITensor *stage2 = nullptr;
+    nvinfer1::ITensor *stage3 = nullptr;
+    int                stage = 0;
+    for (size_t i = 0; i < blocks.size(); ++i)
+    {
+        x = addEdgeSAMRepViTBlock(network, weights_map, *x, static_cast<int>(i) + 1, channels, blocks[i]);
+        channels = makeDivisibleBy8(blocks[i].out_channels);
+        named_tensors["image_encoder.features." + std::to_string(i + 1)] = x;
+
+        const bool is_stage_end = i + 1 == blocks.size() || blocks[i + 1].out_channels != blocks[i].out_channels;
+        if (is_stage_end)
+        {
+            const auto stage_name = "image_encoder.stage" + std::to_string(stage);
+            named_tensors[stage_name] = x;
+            if (stage == 2)
+            {
+                stage2 = x;
+            }
+            else if (stage == 3)
+            {
+                stage3 = x;
+            }
+            ++stage;
+        }
+    }
+    if (stage2 == nullptr || stage3 == nullptr)
+    {
+        throw irt::Exception(Status::ERROR_INTERNAL, "EdgeSAM RepViT-M1 expected stage2 and stage3 features");
+    }
+
+    auto *fuse_stage2 = addEdgeSAMConvNoBias(network, weights_map, *stage2, "image_encoder.fuse_stage2.weight", 192,
+                                             kSamPromptDim, 1);
+    auto *fuse_stage3_conv = addEdgeSAMConvNoBias(network, weights_map, *stage3,
+                                                 "image_encoder.fuse_stage3.op_list.0.weight", 384, kSamPromptDim, 1);
+    auto *fuse_stage3 = addCubicResizeLike(network, *fuse_stage3_conv, *fuse_stage2);
+    auto *fused = requireLayer(network->addElementWise(*fuse_stage2, *fuse_stage3, E::kSUM),
+                               "Failed to add EdgeSAM fused RepViT features")
+                      ->getOutput(0);
+    named_tensors["image_encoder.fused_features"] = fused;
+
+    auto *neck0 = addEdgeSAMConvNoBias(network, weights_map, *fused, "image_encoder.neck.0.weight", kSamPromptDim,
+                                       kSamPromptDim, 1);
+    auto *neck1 = addLayerNorm2d(network, weights_map, *neck0, "image_encoder.neck.1", kSamPromptDim);
+    auto *neck2 = addEdgeSAMConvNoBias(network, weights_map, *neck1, "image_encoder.neck.2.weight", kSamPromptDim,
+                                       kSamPromptDim, 3, 1, 1);
+    auto *embedding = addLayerNorm2d(network, weights_map, *neck2, "image_encoder.neck.3", kSamPromptDim);
+    named_tensors["image_embedding"] = embedding;
+    return embedding;
 }
 
 /**
@@ -1629,6 +1989,15 @@ SAMSpec makeSAM2Spec(const char *display_name, int embed_dim, int heads, std::ve
 }
 
 /**
+ * @brief 构造 EdgeSAM RepViT-M1 结构参数。
+ */
+SAMSpec makeEdgeSAMSpec()
+{
+    return {"EdgeSAM", kSamImageSize, kSamMaskSize, kSamMaxPoints, kSamOutputMasks, kSamPromptDim,
+            static_cast<int>(edgeSAMRepViTM1Blocks().size()), 0, {}, {}, {}, {}, 0, 0, SAMFamily::EdgeSAM};
+}
+
+/**
  * @brief 构造尚未完整接入的 SAM3 结构参数。
  */
 SAMSpec makeSAM3Spec(const char *display_name)
@@ -1695,6 +2064,11 @@ void SAMSegmentationModel::buildNetwork(nvinfer1::INetworkDefinition *network, c
         image_embedding = addSAMImageEncoder(*this, network, weights_map, geometry, vit_spec, named_tensors);
         decoder_options = {{"prompt_encoder", "mask_decoder"}, kSamEmbedGrid, false, false, false};
     }
+    else if (spec_.family == SAMFamily::EdgeSAM)
+    {
+        image_embedding = addEdgeSAMImageEncoder(*this, network, weights_map, geometry, named_tensors);
+        decoder_options = {{"prompt_encoder", "mask_decoder"}, kSamEmbedGrid, false, false, false};
+    }
     else
     {
         SAM2HieraSpec hiera_spec{spec_.encoder_embed_dim,
@@ -1750,6 +2124,11 @@ SAMViTL::SAMViTL()
 
 SAMViTH::SAMViTH()
     : SAMSegmentationModel(makeSAMSpec("SAMViTH", 1280, 32, 16, {7, 15, 23, 31}))
+{
+}
+
+EdgeSAM::EdgeSAM()
+    : SAMSegmentationModel(makeEdgeSAMSpec())
 {
 }
 
@@ -1814,6 +2193,7 @@ INFERRT_REGISTER_MODEL(SAM)
 INFERRT_REGISTER_MODEL(SAMViTB)
 INFERRT_REGISTER_MODEL(SAMViTL)
 INFERRT_REGISTER_MODEL(SAMViTH)
+INFERRT_REGISTER_MODEL(EdgeSAM)
 INFERRT_REGISTER_MODEL(SAM2)
 INFERRT_REGISTER_MODEL(SAM2HieraTiny)
 INFERRT_REGISTER_MODEL(SAM2HieraSmall)

@@ -283,3 +283,47 @@ def ensure_sam2_wts(
 
     run_export_or_skip(command, cwd=repo_root)
     return require_file(output, "SAM2.1 Hiera-Tiny exported .wts")
+
+
+def ensure_edge_sam_wts(*, repo_root: Path, model_root: Path, checkpoint: Path, edge_sam_root: Path) -> Path:
+    """使用官方 EdgeSAM checkpoint 导出 InferRT ``.wts``。
+
+    Args:
+        repo_root: 仓库根目录。
+        model_root: 真实模型根目录。
+        checkpoint: EdgeSAM 官方 ``.pth`` checkpoint。
+        edge_sam_root: 本地 EdgeSAM 仓库路径。
+
+    Returns:
+        导出的 ``.wts`` 路径。
+    """
+
+    checkpoint = require_file(checkpoint, "EdgeSAM checkpoint")
+    try:
+        output_dir = conversion_artifact_dir(model_root, checkpoint)
+    except ValueError:
+        output_dir = checkpoint.with_suffix("")
+        output_dir.mkdir(parents=True, exist_ok=True)
+    output = output_dir / "edge_sam.wts"
+    exporter_sources = [checkpoint, repo_root / "samples" / "model" / "python" / "gen_sam_wts.py"]
+    if is_fresh_against_all(output, exporter_sources):
+        return output
+
+    command = [
+        sys.executable,
+        "samples/model/python/gen_sam_wts.py",
+        "--model",
+        "edge_sam",
+        "--checkpoint",
+        str(checkpoint),
+        "--output",
+        str(output),
+        "--device",
+        "cpu",
+        "--skip-forward",
+    ]
+    if edge_sam_root.exists():
+        command.extend(["--edge-sam-root", str(edge_sam_root)])
+
+    run_export_or_skip(command, cwd=repo_root)
+    return require_file(output, "EdgeSAM exported .wts")

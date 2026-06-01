@@ -114,7 +114,8 @@ SAM2_MODEL_SPECS = {
 }
 
 SAM3_MODEL_NAMES = ("sam3", "sam3_image")
-SAM_MODEL_NAMES = tuple(SAM_V1_ALIASES) + tuple(SAM2_MODEL_CONFIGS) + SAM3_MODEL_NAMES
+EDGE_SAM_MODEL_NAMES = ("edge_sam",)
+SAM_MODEL_NAMES = tuple(SAM_V1_ALIASES) + EDGE_SAM_MODEL_NAMES + tuple(SAM2_MODEL_CONFIGS) + SAM3_MODEL_NAMES
 
 
 def elapsed_ms(start: float, end: float) -> float:
@@ -143,6 +144,19 @@ def import_sam2_builder(sam2_root: str | None) -> Any:
     from sam2.build_sam import build_sam2  # type: ignore
 
     return build_sam2
+
+
+def import_edge_sam_builder(edge_sam_root: str | None) -> Any:
+    if edge_sam_root:
+        root = Path(edge_sam_root).resolve()
+        if not root.exists():
+            raise FileNotFoundError(f"EdgeSAM root does not exist: {root}")
+        sys.path.insert(0, str(root))
+    install_edge_sam_optional_dependency_shims()
+
+    from edge_sam.build_sam import build_edge_sam  # type: ignore
+
+    return build_edge_sam
 
 
 def install_optional_dependency_shims() -> None:
@@ -180,6 +194,85 @@ def install_optional_dependency_shims() -> None:
         sys.modules["iopath"] = iopath
         sys.modules["iopath.common"] = common
         sys.modules["iopath.common.file_io"] = file_io
+
+
+class _CfgNode(dict):
+    """EdgeSAM 配置导入所需的最小 yacs CfgNode 兼容层。"""
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self[name]
+        except KeyError as exc:
+            raise AttributeError(name) from exc
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        self[name] = value
+
+    def clone(self) -> "_CfgNode":
+        clone = _CfgNode()
+        for key, value in self.items():
+            clone[key] = value.clone() if isinstance(value, _CfgNode) else value
+        return clone
+
+    def defrost(self) -> None:
+        return None
+
+    def freeze(self) -> None:
+        return None
+
+    def merge_from_file(self, _path: str) -> None:
+        return None
+
+    def merge_from_list(self, _values: list[str]) -> None:
+        return None
+
+
+def install_edge_sam_optional_dependency_shims() -> None:
+    """安装 EdgeSAM 推理路径不会实际用到的训练/RPN 依赖占位模块。"""
+
+    if "loralib" not in sys.modules:
+        loralib = types.ModuleType("loralib")
+        loralib.Linear = torch.nn.Linear
+        sys.modules["loralib"] = loralib
+
+    if "yacs.config" not in sys.modules:
+        yacs = types.ModuleType("yacs")
+        config = types.ModuleType("yacs.config")
+        config.CfgNode = _CfgNode
+        sys.modules["yacs"] = yacs
+        sys.modules["yacs.config"] = config
+
+    if "mmengine" not in sys.modules:
+        mmengine = types.ModuleType("mmengine")
+        mmengine.ConfigDict = dict
+        sys.modules["mmengine"] = mmengine
+
+    class _UnusedRPNModule:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("EdgeSAM RPN dependencies are not available in this lightweight test path")
+
+    if "mmdet.models.dense_heads" not in sys.modules:
+        mmdet = types.ModuleType("mmdet")
+        models = types.ModuleType("mmdet.models")
+        dense_heads = types.ModuleType("mmdet.models.dense_heads")
+        necks = types.ModuleType("mmdet.models.necks")
+        dense_heads.RPNHead = _UnusedRPNModule
+        dense_heads.CenterNetUpdateHead = _UnusedRPNModule
+        necks.FPN = _UnusedRPNModule
+        sys.modules["mmdet"] = mmdet
+        sys.modules["mmdet.models"] = models
+        sys.modules["mmdet.models.dense_heads"] = dense_heads
+        sys.modules["mmdet.models.necks"] = necks
+
+    if "projects.EfficientDet.efficientdet" not in sys.modules:
+        projects = types.ModuleType("projects")
+        efficient_det = types.ModuleType("projects.EfficientDet")
+        efficientdet = types.ModuleType("projects.EfficientDet.efficientdet")
+        efficientdet.BiFPN = _UnusedRPNModule
+        efficientdet.EfficientDetSepBNHead = _UnusedRPNModule
+        sys.modules["projects"] = projects
+        sys.modules["projects.EfficientDet"] = efficient_det
+        sys.modules["projects.EfficientDet.efficientdet"] = efficientdet
 
 
 def write_wts(state_dict: dict[str, torch.Tensor], output_path: Path, *, verbose: bool = False) -> None:
@@ -431,6 +524,26 @@ def load_sam2_model(model_name: str, checkpoint: Path, sam2_root: str | None, de
     return model
 
 
+def load_checkpoint_state_dict(checkpoint: Path) -> dict[str, torch.Tensor]:
+    """读取 PyTorch checkpoint 中实际的 state_dict。"""
+
+    checkpoint_obj = torch.load(checkpoint, map_location="cpu")
+    if isinstance(checkpoint_obj, dict):
+        if "model" in checkpoint_obj:
+            return checkpoint_obj["model"]
+        if "state_dict" in checkpoint_obj:
+            return checkpoint_obj["state_dict"]
+        return checkpoint_obj
+    raise TypeError(f"Unsupported checkpoint object type: {type(checkpoint_obj)!r}")
+
+
+def load_edge_sam_model(checkpoint: Path, edge_sam_root: str | None, device: torch.device) -> torch.nn.Module:
+    build_edge_sam = import_edge_sam_builder(edge_sam_root)
+    model = build_edge_sam(str(checkpoint)).to(device)
+    model.eval()
+    return model
+
+
 def load_sam3_model(checkpoint: str, device: torch.device, *, local_files_only: bool = False) -> torch.nn.Module:
     if importlib.util.find_spec("transformers") is None:
         raise RuntimeError("SAM3 .wts export requires the 'transformers' Python package")
@@ -465,6 +578,51 @@ def run_sam_v1_reference_forward(
         sparse_prompt_embeddings=sparse_embeddings,
         dense_prompt_embeddings=dense_embeddings,
         multimask_output=True,
+    )
+    decoder_end = time.perf_counter()
+
+    post_start = time.perf_counter()
+    masks_out = model.postprocess_masks(low_res_masks, input_size=resized_size, original_size=original_size)
+    post_end = time.perf_counter()
+
+    print(f"image_embeddings: {tuple(image_embeddings.shape)}")
+    print(f"sparse_embeddings: {tuple(sparse_embeddings.shape)}")
+    print(f"dense_embeddings: {tuple(dense_embeddings.shape)}")
+    print(f"low_res_masks: {tuple(low_res_masks.shape)}")
+    print(f"iou_predictions: {tuple(iou_predictions.shape)}")
+    print(f"postprocessed_masks: {tuple(masks_out.shape)}")
+    print(
+        "Timing: "
+        f"image_encoder={elapsed_ms(encoder_start, encoder_end):.3f} ms, "
+        f"prompt_encoder={elapsed_ms(prompt_start, prompt_end):.3f} ms, "
+        f"mask_decoder={elapsed_ms(decoder_start, decoder_end):.3f} ms, "
+        f"postprocess={elapsed_ms(post_start, post_end):.3f} ms"
+    )
+
+
+@torch.no_grad()
+def run_edge_sam_reference_forward(
+    model: torch.nn.Module,
+    image: torch.Tensor,
+    original_size: tuple[int, int],
+    resized_size: tuple[int, int],
+) -> None:
+    encoder_start = time.perf_counter()
+    image_embeddings = model.image_encoder(image)
+    encoder_end = time.perf_counter()
+
+    prompt_start = time.perf_counter()
+    points, boxes, masks = make_sam_v1_default_prompts(image.device, resized_size)
+    sparse_embeddings, dense_embeddings = model.prompt_encoder(points=points, boxes=boxes, masks=masks)
+    prompt_end = time.perf_counter()
+
+    decoder_start = time.perf_counter()
+    low_res_masks, iou_predictions = model.mask_decoder(
+        image_embeddings=image_embeddings,
+        image_pe=model.prompt_encoder.get_dense_pe(),
+        sparse_prompt_embeddings=sparse_embeddings,
+        dense_prompt_embeddings=dense_embeddings,
+        num_multimask_outputs=3,
     )
     decoder_end = time.perf_counter()
 
@@ -619,6 +777,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--sam-root", type=str, default="", help="Path to official segment-anything repository root")
     parser.add_argument("--sam2-root", type=str, default="", help="Path to official SAM2 repository root")
+    parser.add_argument("--edge-sam-root", type=str, default="", help="Path to official EdgeSAM repository root")
     parser.add_argument("-o", "--output", type=Path, default=None, help="Output .wts path")
     parser.add_argument("-i", "--img-path", type=Path, default=DEFAULT_IMAGE_PATH, help="Image for forward smoke")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
@@ -634,11 +793,19 @@ def main() -> None:
     validate_model_checkpoint_pair(args.model, args.checkpoint)
     output_path = args.output if args.output is not None else default_output_path(args.model)
     device = torch.device(args.device)
+    state_dict: dict[str, torch.Tensor] | None = None
 
     load_start = time.perf_counter()
-    if args.model in SAM_V1_ALIASES:
+    if args.model == "edge_sam" and args.skip_forward:
+        state_dict = load_checkpoint_state_dict(Path(args.checkpoint))
+        model = None
+        family = "EdgeSAM"
+    elif args.model in SAM_V1_ALIASES:
         model = load_sam_v1_model(args.model, Path(args.checkpoint), args.sam_root or None, device)
         family = "SAM v1"
+    elif args.model == "edge_sam":
+        model = load_edge_sam_model(Path(args.checkpoint), args.edge_sam_root or None, device)
+        family = "EdgeSAM"
     elif args.model in SAM2_MODEL_CONFIGS:
         model = load_sam2_model(args.model, Path(args.checkpoint), args.sam2_root or None, device)
         family = "SAM2"
@@ -648,7 +815,7 @@ def main() -> None:
     load_end = time.perf_counter()
     print(f"Loaded {family} {args.model} in {elapsed_ms(load_start, load_end):.3f} ms on {device}")
 
-    if not args.skip_forward:
+    if not args.skip_forward and model is not None:
         preprocess_start = time.perf_counter()
         if args.model in SAM_V1_ALIASES:
             image, original_size, resized_size = preprocess_image(args.img_path, device)
@@ -658,6 +825,14 @@ def main() -> None:
                 f"original={original_size}, resized={resized_size}, padded={(SAM_IMAGE_SIZE, SAM_IMAGE_SIZE)}"
             )
             run_sam_v1_reference_forward(model, image, original_size, resized_size)
+        elif args.model == "edge_sam":
+            image, original_size, resized_size = preprocess_image(args.img_path, device)
+            preprocess_end = time.perf_counter()
+            print(
+                f"Preprocess: {elapsed_ms(preprocess_start, preprocess_end):.3f} ms, "
+                f"original={original_size}, resized={resized_size}, padded={(SAM_IMAGE_SIZE, SAM_IMAGE_SIZE)}"
+            )
+            run_edge_sam_reference_forward(model, image, original_size, resized_size)
         elif args.model in SAM2_MODEL_CONFIGS:
             image, original_size = preprocess_sam2_image(args.img_path, device)
             preprocess_end = time.perf_counter()
@@ -674,7 +849,10 @@ def main() -> None:
             run_sam3_reference_forward(model, image, args.sam3_text_length)
 
     export_start = time.perf_counter()
-    state_dict = model.state_dict()
+    if state_dict is None:
+        if model is None:
+            raise RuntimeError("No model or checkpoint state_dict available for export")
+        state_dict = model.state_dict()
     write_wts(state_dict, output_path, verbose=args.verbose)
     export_end = time.perf_counter()
     print(f"Exported {len(state_dict)} tensors to {output_path}")

@@ -10,12 +10,19 @@ import numpy as np
 import pytest
 
 from helpers.manifest import assert_tensors_close
-from helpers.model_integration import conversion_artifact_dir, ensure_sam2_wts, ensure_sam_v1_wts, is_fresh_against_all
+from helpers.model_integration import (
+    conversion_artifact_dir,
+    ensure_edge_sam_wts,
+    ensure_sam2_wts,
+    ensure_sam_v1_wts,
+    is_fresh_against_all,
+)
 from util import allocate_output_tensors
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 SAM_V1_MODEL_NAME = "sam_vit_b"
+EDGE_SAM_MODEL_NAME = "edge_sam"
 SAM2_MODEL_NAME = "sam2_1_hiera_tiny"
 SAM2_INPUT_SIZE = 1024
 SAM2_MASK_SIZE = 256
@@ -26,6 +33,10 @@ SAM_MASK_RTOL = 1e-3
 SAM_MASK_ATOL = 1e-2
 SAM_V1_IOU_RTOL = 5e-3
 SAM_V1_IOU_ATOL = 3e-3
+EDGE_SAM_MASK_RTOL = 2e-2
+EDGE_SAM_MASK_ATOL = 2e-1
+EDGE_SAM_IOU_RTOL = 1e-2
+EDGE_SAM_IOU_ATOL = 1e-2
 SAM_IOU_RTOL = 1e-3
 SAM_IOU_ATOL = 1e-3
 SAM_INPUT_NAMES = ["image", "point_coords", "point_labels", "mask_input", "has_mask_input"]
@@ -105,6 +116,18 @@ def _import_sam2_export_helpers(repo_root: Path):
     return SAM2_IMAGE_SIZE, build_sam2_without_hydra, preprocess_sam2_image
 
 
+def _import_edge_sam_export_helpers(repo_root: Path):
+    """导入 EdgeSAM 导出脚本中的官方构建与预处理 helper。"""
+
+    samples_python = repo_root / "samples" / "model" / "python"
+    if str(samples_python) not in sys.path:
+        sys.path.insert(0, str(samples_python))
+
+    from gen_sam_wts import SAM_IMAGE_SIZE, load_edge_sam_model, preprocess_image
+
+    return SAM_IMAGE_SIZE, load_edge_sam_model, preprocess_image
+
+
 def _make_point_prompt(x: float, y: float) -> tuple[np.ndarray, np.ndarray]:
     """构造与 segmentation sample 输入契约一致的单个正样本点提示。"""
 
@@ -145,6 +168,31 @@ def _load_torch_sam_v1_model(
     model = registry["vit_b"](checkpoint=str(checkpoint)).to(device)
     model.eval()
     return model
+
+
+def _load_torch_edge_sam_model(
+    *,
+    repo_root: Path,
+    checkpoint: Path,
+    edge_sam_root: Path,
+    device: Any,
+) -> Any:
+    """加载官方 EdgeSAM PyTorch 模型。
+
+    Args:
+        repo_root: InferRT 仓库根目录，用于导入 sample helper。
+        checkpoint: EdgeSAM ``.pth`` checkpoint。
+        edge_sam_root: 本地 EdgeSAM 仓库路径。
+        device: PyTorch 设备。
+
+    Returns:
+        已加载并切到 eval 模式的 EdgeSAM 模型。
+    """
+
+    if not edge_sam_root.exists():
+        pytest.skip(f"EdgeSAM repository not found: {edge_sam_root}")
+    _sam_image_size, load_edge_sam_model, _preprocess_image = _import_edge_sam_export_helpers(repo_root)
+    return load_edge_sam_model(checkpoint, str(edge_sam_root), device)
 
 
 def _load_torch_sam2_model(
@@ -207,6 +255,71 @@ def _run_torch_sam_v1_reference(
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
             multimask_output=True,
+        )
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+
+    inputs = {
+        "image": image.detach().cpu().numpy().astype(np.float32, copy=False),
+        "point_coords": point_coords_np,
+        "point_labels": point_labels_np,
+        "mask_input": np.zeros((1, 1, SAM2_MASK_SIZE, SAM2_MASK_SIZE), dtype=np.float32),
+        "has_mask_input": np.zeros((1, 1, 1, 1), dtype=np.float32),
+    }
+    outputs = {
+        "masks": low_res_masks.detach().cpu().numpy().astype(np.float32, copy=False),
+        "low_res_masks": low_res_masks.detach().cpu().numpy().astype(np.float32, copy=False),
+        "iou_predictions": iou_predictions.detach().cpu().numpy().astype(np.float32, copy=False).reshape(1, 3, 1, 1),
+    }
+
+    del model, image, point_coords, point_labels, image_embeddings, low_res_masks, iou_predictions
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+    return inputs, outputs
+
+
+def _run_torch_edge_sam_reference(
+    *,
+    repo_root: Path,
+    checkpoint: Path,
+    edge_sam_root: Path,
+    image_path: Path,
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    """运行官方 EdgeSAM image encoder / prompt encoder / mask decoder 全链路。"""
+
+    torch = pytest.importorskip("torch")
+    device = _torch_device()
+
+    sam_image_size, _load_edge_sam_model, preprocess_image = _import_edge_sam_export_helpers(repo_root)
+    if sam_image_size != SAM2_INPUT_SIZE:
+        raise AssertionError(f"Unexpected EdgeSAM image size: {sam_image_size}")
+
+    model = _load_torch_edge_sam_model(
+        repo_root=repo_root,
+        checkpoint=checkpoint,
+        edge_sam_root=edge_sam_root,
+        device=device,
+    )
+
+    image, _original_size, resized_size = preprocess_image(image_path, device)
+    resized_h, resized_w = resized_size
+    point_coords_np, point_labels_np = _make_point_prompt(resized_w / 2.0, resized_h / 2.0)
+    point_coords = torch.from_numpy(point_coords_np.reshape(1, SAM2_MAX_POINTS, 2)).to(device=device)
+    point_labels = torch.from_numpy(point_labels_np.reshape(1, SAM2_MAX_POINTS)).to(device=device, dtype=torch.int64)
+
+    with torch.inference_mode():
+        image_embeddings = model.image_encoder(image)
+        sparse_embeddings, dense_embeddings = model.prompt_encoder(
+            points=(point_coords, point_labels),
+            boxes=None,
+            masks=None,
+        )
+        low_res_masks, iou_predictions = model.mask_decoder(
+            image_embeddings=image_embeddings,
+            image_pe=model.prompt_encoder.get_dense_pe(),
+            sparse_prompt_embeddings=sparse_embeddings,
+            dense_prompt_embeddings=dense_embeddings,
+            num_multimask_outputs=3,
         )
     if device.type == "cuda":
         torch.cuda.synchronize()
@@ -621,6 +734,51 @@ def test_sam_v1_pybind_matches_official_pytorch_forward(
             iou_atol=SAM_V1_IOU_ATOL,
             label=label,
         )
+
+
+def test_edge_sam_pybind_matches_official_pytorch_forward(
+    compare_runtimes: list[str],
+    compare_devices: list[str],
+    irt_module: Any,
+    repo_root: Path,
+    model_root: Path,
+    default_image: Path,
+    edge_sam_root: Path,
+    edge_sam_checkpoint: Path,
+) -> None:
+    """运行 EdgeSAM TensorRT 原生图，并与官方 PyTorch 输出逐项比较。"""
+
+    if "TENSORRT" not in compare_runtimes or "gpu" not in compare_devices:
+        pytest.skip("EdgeSAM native parity requires --inferrt-compare-runtime=tensorrt and GPU device")
+
+    inputs, torch_outputs = _run_torch_edge_sam_reference(
+        repo_root=repo_root,
+        checkpoint=edge_sam_checkpoint,
+        edge_sam_root=edge_sam_root,
+        image_path=default_image,
+    )
+    weights = ensure_edge_sam_wts(
+        repo_root=repo_root,
+        model_root=model_root,
+        checkpoint=edge_sam_checkpoint,
+        edge_sam_root=edge_sam_root,
+    )
+    outputs = _run_inferrt_sam(
+        irt_module,
+        model_name=EDGE_SAM_MODEL_NAME,
+        weights_path=weights,
+        inputs=inputs,
+    )
+    _assert_sam_outputs_close(
+        torch_outputs,
+        outputs,
+        mask_rtol=EDGE_SAM_MASK_RTOL,
+        mask_atol=EDGE_SAM_MASK_ATOL,
+        iou_rtol=EDGE_SAM_IOU_RTOL,
+        iou_atol=EDGE_SAM_IOU_ATOL,
+        label=f"{EDGE_SAM_MODEL_NAME}.tensorrt.gpu",
+    )
+
 
 def test_sam2_pybind_matches_official_pytorch_forward(
     compare_runtimes: list[str],

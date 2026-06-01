@@ -13,9 +13,10 @@ namespace irt::model {
  */
 enum class SAMFamily
 {
-    SAM,  ///< Segment Anything v1，ViT image encoder + prompt/mask decoder。
-    SAM2, ///< SAM2，Hiera image encoder + SAM prompt/mask heads。
-    SAM3, ///< SAM3，视觉语言/交互分割体系中的图像分割入口。
+    SAM,     ///< Segment Anything v1，ViT image encoder + prompt/mask decoder。
+    EdgeSAM, ///< EdgeSAM，RepViT image encoder + SAM prompt/mask heads。
+    SAM2,    ///< SAM2，Hiera image encoder + SAM prompt/mask heads。
+    SAM3,    ///< SAM3，视觉语言/交互分割体系中的图像分割入口。
 };
 
 /**
@@ -41,11 +42,11 @@ struct SAMSpec
 };
 
 /**
- * @brief SAM/SAM2/SAM3 的手写 TensorRT 分割模型基类。
+ * @brief SAM/EdgeSAM/SAM2/SAM3 的手写 TensorRT 分割模型基类。
  *
  * 当前实现固定采用官方 SAM 常见的五输入契约：
  * `image`、`point_coords`、`point_labels`、`mask_input` 和 `has_mask_input`。
- * 输出契约为 `masks`、`iou_predictions`、`low_res_masks`。SAM v1 和 SAM2 使用
+ * 输出契约为 `masks`、`iou_predictions`、`low_res_masks`。SAM v1、EdgeSAM 和 SAM2 使用
  * 手写 TensorRT 子图接入官方 image encoder、prompt encoder 和 mask decoder；
  * SAM3 保留工厂入口，未完成原生主干前会在构建期显式报错。
  */
@@ -119,6 +120,16 @@ class SAMViTH : public SAMSegmentationModel
 public:
     SAMViTH();
     static const char *key() noexcept { return "sam_vit_h"; }
+};
+
+/**
+ * @brief EdgeSAM RepViT-M1 变体。
+ */
+class EdgeSAM : public SAMSegmentationModel
+{
+public:
+    EdgeSAM();
+    static const char *key() noexcept { return "edge_sam"; }
 };
 
 /**

@@ -46,19 +46,19 @@ struct HelpRequested
  */
 struct Arguments
 {
-    std::string          model_name;
-    fs::path             weights_file;
-    fs::path             image_path;
-    fs::path             output_image;
-    float                point_x{0.5F};
-    float                point_y{0.5F};
-    float                threshold{0.0F};
-    bool                 has_box{false};
-    std::array<float, 4> box{0.0F, 0.0F, 1.0F, 1.0F};
+    std::string              model_name;
+    fs::path                 weights_file;
+    fs::path                 image_path;
+    fs::path                 output_image;
+    float                    point_x{0.5F};
+    float                    point_y{0.5F};
+    float                    threshold{0.0F};
+    bool                     has_box{false};
+    std::array<float, 4>     box{0.0F, 0.0F, 1.0F, 1.0F};
     irt::model::ModelBackend backend{irt::model::ModelBackend::TensorRT};
     irt::model::ModelDevice  device{irt::model::ModelDevice::GPU};
-    int                  warmup{0};
-    int                  repeat{1};
+    int                      warmup{0};
+    int                      repeat{1};
 };
 
 /**
@@ -110,10 +110,7 @@ std::string trim(std::string value)
 std::string toLower(std::string value)
 {
     std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char ch)
-                   {
-                       return static_cast<char>(std::tolower(ch));
-                   });
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return value;
 }
 
@@ -163,10 +160,8 @@ TimingStats summarizeTimings(const std::vector<double> &values)
 
 void printTimingStats(const char *name, const TimingStats &stats)
 {
-    std::cout << ", " << name << "_total=" << stats.total_ms
-              << " ms, " << name << "_avg=" << stats.avg_ms
-              << " ms, " << name << "_min=" << stats.min_ms
-              << " ms, " << name << "_max=" << stats.max_ms << " ms";
+    std::cout << ", " << name << "_total=" << stats.total_ms << " ms, " << name << "_avg=" << stats.avg_ms << " ms, "
+              << name << "_min=" << stats.min_ms << " ms, " << name << "_max=" << stats.max_ms << " ms";
 }
 
 /**
@@ -177,6 +172,16 @@ bool isSAM2Model(std::string model_name)
     std::transform(model_name.begin(), model_name.end(), model_name.begin(),
                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return model_name.rfind("sam2", 0) == 0;
+}
+
+/**
+ * @brief 判断模型 key 是否属于当前 sample 支持的 SAM 分割族。
+ */
+bool isSAMFamilyModel(std::string model_name)
+{
+    std::transform(model_name.begin(), model_name.end(), model_name.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return model_name.rfind("sam", 0) == 0 || model_name == "edge_sam";
 }
 
 /**
@@ -202,20 +207,19 @@ cxxopts::Options makeOptions(const char *program_name)
     cxxopts::Options options(program_name, "Run InferRT SAM/SAM2 segmentation models");
     options.add_options()("model,m", "SAM/SAM2 model name, e.g. sam_vit_b/sam2_1_hiera_tiny (required)",
                           cxxopts::value<std::string>())(
-        "weights-file,w", "Weights/model file (.wts, .onnx or OpenVINO IR) (required)",
-        cxxopts::value<std::string>())("image-path,i", "Input image path",
-                                       cxxopts::value<std::string>()->default_value(""))(
+        "weights-file,w", "Weights/model file (.wts, .onnx or OpenVINO IR) (required)", cxxopts::value<std::string>())(
+        "image-path,i", "Input image path", cxxopts::value<std::string>()->default_value(""))(
         "output-image,o", "Path to save mask overlay", cxxopts::value<std::string>()->default_value(""))(
         "point-x,x", "Positive point prompt x; <=1 means normalized coordinate",
         cxxopts::value<float>()->default_value("0.5"))("point-y,y",
                                                        "Positive point prompt y; <=1 means normalized coordinate",
                                                        cxxopts::value<float>()->default_value("0.5"))(
         "box", "Optional box prompt x0,y0,x1,y1; <=1 means normalized coordinate",
-        cxxopts::value<std::string>()->default_value(""))(
-        "threshold", "Mask logit threshold", cxxopts::value<float>()->default_value("0.0"))(
+        cxxopts::value<std::string>()->default_value(""))("threshold", "Mask logit threshold",
+                                                          cxxopts::value<float>()->default_value("0.0"))(
         "backend", "Inference backend: tensorrt, openvino, onnxruntime",
-        cxxopts::value<std::string>()->default_value("tensorrt"))(
-        "device", "Inference device: cpu or gpu", cxxopts::value<std::string>()->default_value("gpu"))(
+        cxxopts::value<std::string>()->default_value("tensorrt"))("device", "Inference device: cpu or gpu",
+                                                                  cxxopts::value<std::string>()->default_value("gpu"))(
         "warmup", "Warmup iterations before timing", cxxopts::value<int>()->default_value("0"))(
         "repeat", "Timed inference iterations", cxxopts::value<int>()->default_value("1"))("h,help", "Show help");
     return options;
@@ -235,7 +239,7 @@ Arguments parseArguments(int argc, char *argv[])
         std::cout << "Supported SAM models:";
         for (const auto &model_name : irt::model::getRegisteredModelNames())
         {
-            if (model_name.rfind("sam", 0) == 0)
+            if (isSAMFamilyModel(model_name))
             {
                 std::cout << ' ' << model_name;
             }
@@ -486,7 +490,7 @@ int main(int argc, char *argv[])
             &image_tensor, &point_coords, &point_labels, &mask_input, &has_mask_input,
         };
 
-        const auto                stream = model->resolveExecutionStream();
+        const auto                stream        = model->resolveExecutionStream();
         const bool                uses_tensorrt = args.backend == irt::model::ModelBackend::TensorRT;
         std::vector<DeviceBuffer> device_inputs;
         std::vector<DeviceBuffer> device_outputs;
@@ -592,7 +596,7 @@ int main(int argc, char *argv[])
         }
         const auto infer_end = Clock::now();
 
-        const auto post_start = Clock::now();
+        const auto  post_start  = Clock::now();
         const auto *mask_values = static_cast<const float *>(host_outputs.front().data());
         saveMaskOverlay(image, mask_values, output_mask_h, output_mask_w, input_h, input_w, preprocessed.resized_h,
                         preprocessed.resized_w, args.threshold, output_path);
