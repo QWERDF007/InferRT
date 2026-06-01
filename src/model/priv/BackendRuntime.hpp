@@ -193,9 +193,11 @@ public:
      * @brief 通过回调构建网络并生成 engine。
      * @param source_file 权重或源文件路径，仅用于日志。
      * @param model_name 模型显示名称。
+     * @param config 模型配置，用于生成动态 batch profile 和默认运行时形状。
      * @param build_fn 向 ``INetworkDefinition`` 填充层的构建函数。
      */
-    void buildFromNetwork(const std::string &source_file, const std::string &model_name, NetworkBuildFn build_fn);
+    void buildFromNetwork(const std::string &source_file, const std::string &model_name, const IModelConfig &config,
+                          NetworkBuildFn build_fn);
 
     /**
      * @brief 在指定 CUDA stream 上执行推理。

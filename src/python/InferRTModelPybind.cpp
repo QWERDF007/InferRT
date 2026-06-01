@@ -93,6 +93,10 @@ std::unique_ptr<irt::model::IModelConfig> cloneModelConfig(const irt::model::IMo
     cloned->setOutputTensorNames(config.outputTensorNames());
     cloned->setFeatureTensorNames(config.featureTensorNames());
     cloned->setFeatureOnly(config.featureOnly());
+    if (config.dynamicBatch())
+    {
+        cloned->setDynamicBatchRange(config.minBatchSize(), config.optBatchSize(), config.maxBatchSize());
+    }
     cloned->setBackend(config.backend());
     cloned->setDevice(config.device());
     return cloned;
@@ -1726,6 +1730,21 @@ PYBIND11_MODULE(inferrt_model_py, m)
                       &irt::model::IModelConfig::setFeatureTensorNames, "中间特征层 key 列表。")
         .def_property("feature_only", &irt::model::IModelConfig::featureOnly, &irt::model::IModelConfig::setFeatureOnly,
                       "是否仅构建特征提取网络。")
+        .def_property("dynamic_batch", &irt::model::IModelConfig::dynamicBatch,
+                      &irt::model::IModelConfig::setDynamicBatch)
+        .def_property(
+            "dynamic_batch_range", [](const irt::model::IModelConfig &self)
+            { return std::vector<int64_t>{self.minBatchSize(), self.optBatchSize(), self.maxBatchSize()}; },
+            [](irt::model::IModelConfig &self, const std::vector<int64_t> &range)
+            {
+                if (range.size() != 3)
+                {
+                    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                         "dynamic_batch_range must contain exactly 3 values: min, opt, max");
+                }
+                self.setDynamicBatchRange(static_cast<int32_t>(range[0]), static_cast<int32_t>(range[1]),
+                                          static_cast<int32_t>(range[2]));
+            })
         .def_property("backend", &irt::model::IModelConfig::backend, &irt::model::IModelConfig::setBackend)
         .def_property("device", &irt::model::IModelConfig::device, &irt::model::IModelConfig::setDevice);
 

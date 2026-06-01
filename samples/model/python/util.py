@@ -127,17 +127,18 @@ def ensure_module_path(build_dir: Path) -> None:
     os.environ["PATH"] = os.pathsep.join(path_entries)
 
 
-def preprocess_image(image_path: Path) -> np.ndarray:
+def preprocess_image(image_path: Path, image_size: tuple[int, int] = (224, 224)) -> np.ndarray:
     """按仓库中的 ImageNet 分类预处理约定处理输入图片。
 
-    处理流程包括读取图片、BGR 转 RGB、缩放到 `224x224`、归一化，
+    处理流程包括读取图片、BGR 转 RGB、缩放到目标尺寸、归一化，
     再转换为 `NCHW` 布局并补齐 batch 维度。
 
     Args:
         image_path: 输入图片路径。
+        image_size: OpenCV resize 使用的 `(width, height)` 目标尺寸。
 
     Returns:
-        np.ndarray: 预处理后的四维浮点张量，形状为 `(1, 3, 224, 224)`。
+        np.ndarray: 预处理后的四维浮点张量，形状为 `(1, 3, H, W)`。
 
     Raises:
         FileNotFoundError: 图片读取失败时抛出。
@@ -148,7 +149,7 @@ def preprocess_image(image_path: Path) -> np.ndarray:
         raise FileNotFoundError(f"Failed to read image: {image_path}")
 
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    image = cv2.resize(image, (224, 224), interpolation=cv2.INTER_LINEAR)
+    image = cv2.resize(image, image_size, interpolation=cv2.INTER_LINEAR)
     image = image.astype(np.float32) * (1.0 / 255.0)
 
     image = cv2.subtract(image, (0.485, 0.456, 0.406, 0.0))
@@ -156,6 +157,29 @@ def preprocess_image(image_path: Path) -> np.ndarray:
 
     chw = np.transpose(image, (2, 0, 1))
     return np.expand_dims(chw, axis=0).astype(np.float32, copy=False)
+
+
+def preprocess_images(image_paths: list[Path], image_size: tuple[int, int] = (224, 224)) -> np.ndarray:
+    """将多张图片预处理并拼接为一个 NCHW batch。
+
+    Args:
+        image_paths: 输入图片路径列表。
+        image_size: OpenCV resize 使用的 `(width, height)` 目标尺寸。
+
+    Returns:
+        np.ndarray: 形状为 `(N, 3, H, W)` 的 float32 batch。
+    """
+
+    if not image_paths:
+        raise ValueError("At least one image path is required")
+    tensors = [preprocess_image(path, image_size=image_size) for path in image_paths]
+    return np.ascontiguousarray(np.concatenate(tensors, axis=0), dtype=np.float32)
+
+
+def split_path_list(value: str) -> list[str]:
+    """拆分逗号或分号分隔的路径列表。"""
+
+    return [token.strip() for token in re.split(r"[,;]", value) if token.strip()]
 
 
 def load_labels(label_path: Path) -> list[str]:

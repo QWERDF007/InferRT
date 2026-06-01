@@ -1,6 +1,7 @@
 #include "MobileNet.hpp"
 
 #include "BatchNorm.hpp"
+#include "Layers.hpp"
 #include "Weights.hpp"
 
 #include <cuda_runtime_api.h>
@@ -10,7 +11,6 @@
 #include <array>
 #include <string>
 #include <vector>
-
 
 namespace irt::model {
 
@@ -112,9 +112,7 @@ nvinfer1::ITensor *addLinear(nvinfer1::INetworkDefinition *network, nvinfer1::IT
 nvinfer1::ITensor *addAvgFlatten(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input)
 {
     auto *pool = network->addReduce(input, nvinfer1::ReduceOperation::kAVG, (1U << 2U) | (1U << 3U), true);
-    auto *flat = network->addShuffle(*pool->getOutput(0));
-    flat->setReshapeDimensions(nvinfer1::Dims2{1, -1});
-    return flat->getOutput(0);
+    return flattenPreserveBatch(network, *pool->getOutput(0));
 }
 
 nvinfer1::ITensor *addMobileNetV2Block(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,

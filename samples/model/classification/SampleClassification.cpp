@@ -1,5 +1,5 @@
-#include <cxxopts.hpp>
 #include <cuda_runtime_api.h>
+#include <cxxopts.hpp>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/IModel.h>
 #include <inferrt/model/Utils.hpp>
@@ -7,13 +7,15 @@
 #include <opencv2/opencv.hpp>
 
 #include <algorithm>
-#include <chrono>
 #include <cctype>
+#include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <string>
 #include <vector>
@@ -48,7 +50,7 @@ struct Arguments
 {
     std::string              model_name;
     fs::path                 weights_file;
-    fs::path                 image_path;
+    std::vector<fs::path>    image_paths;
     fs::path                 label_file;
     fs::path                 dump_dir;
     irt::model::ModelBackend backend{irt::model::ModelBackend::TensorRT};
@@ -120,11 +122,71 @@ std::string trim(std::string value)
 std::string toLower(std::string value)
 {
     std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char ch)
-                   {
-                       return static_cast<char>(std::tolower(ch));
-                   });
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return value;
+}
+
+std::vector<fs::path> splitPathList(const std::string &value)
+{
+    std::vector<fs::path> paths;
+    size_t                start = 0;
+    while (start <= value.size())
+    {
+        const size_t end   = value.find_first_of(",;", start);
+        auto         token = trim(value.substr(start, end == std::string::npos ? std::string::npos : end - start));
+        if (!token.empty())
+        {
+            paths.emplace_back(std::move(token));
+        }
+        if (end == std::string::npos)
+        {
+            break;
+        }
+        start = end + 1;
+    }
+    return paths;
+}
+
+std::vector<fs::path> resolveImagePaths(const fs::path &project_root, const std::vector<fs::path> &configured_paths)
+{
+    if (configured_paths.empty())
+    {
+        return {project_root / irt::model::ImageNetUtil::kDefaultImagePath};
+    }
+
+    std::vector<fs::path> resolved;
+    resolved.reserve(configured_paths.size());
+    for (const auto &path : configured_paths)
+    {
+        resolved.push_back(path.is_absolute() ? path : project_root / path);
+    }
+    return resolved;
+}
+
+std::vector<float> preprocessBatch(const std::vector<cv::Mat> &images, const nvinfer1::Dims &input_dims)
+{
+    if (input_dims.nbDims != 4 || input_dims.d[1] != 3 || input_dims.d[2] <= 0 || input_dims.d[3] <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "Classification sample expects input shape Nx3xHxW, got %s",
+                             dimsToCsv(input_dims).c_str());
+    }
+
+    const size_t image_elements = static_cast<size_t>(input_dims.d[1]) * static_cast<size_t>(input_dims.d[2])
+                                * static_cast<size_t>(input_dims.d[3]);
+    std::vector<float> batch_data(images.size() * image_elements);
+    for (size_t i = 0; i < images.size(); ++i)
+    {
+        const cv::Mat preprocessed = irt::model::ImageNetUtil::preprocess(
+            images[i], cv::Size(static_cast<int>(input_dims.d[3]), static_cast<int>(input_dims.d[2])));
+        const auto single = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
+        if (single.size() != image_elements)
+        {
+            throw irt::Exception(irt::Status::ERROR_INTERNAL, "Unexpected preprocessed image tensor size");
+        }
+        std::memcpy(batch_data.data() + i * image_elements, single.data(), image_elements * sizeof(float));
+    }
+    return batch_data;
 }
 
 irt::model::ModelBackend parseBackend(std::string value)
@@ -163,9 +225,12 @@ const char *backendName(irt::model::ModelBackend backend)
 {
     switch (backend)
     {
-    case irt::model::ModelBackend::TensorRT: return "tensorrt";
-    case irt::model::ModelBackend::OpenVINO: return "openvino";
-    case irt::model::ModelBackend::ONNXRuntime: return "onnxruntime";
+    case irt::model::ModelBackend::TensorRT:
+        return "tensorrt";
+    case irt::model::ModelBackend::OpenVINO:
+        return "openvino";
+    case irt::model::ModelBackend::ONNXRuntime:
+        return "onnxruntime";
     }
     return "unknown";
 }
@@ -174,8 +239,10 @@ const char *deviceName(irt::model::ModelDevice device)
 {
     switch (device)
     {
-    case irt::model::ModelDevice::CPU: return "cpu";
-    case irt::model::ModelDevice::GPU: return "gpu";
+    case irt::model::ModelDevice::CPU:
+        return "cpu";
+    case irt::model::ModelDevice::GPU:
+        return "gpu";
     }
     return "unknown";
 }
@@ -194,10 +261,8 @@ TimingStats summarizeTimings(const std::vector<double> &values)
 
 void printTimingStats(const char *name, const TimingStats &stats)
 {
-    std::cout << ", " << name << "_total=" << stats.total_ms
-              << " ms, " << name << "_avg=" << stats.avg_ms
-              << " ms, " << name << "_min=" << stats.min_ms
-              << " ms, " << name << "_max=" << stats.max_ms << " ms";
+    std::cout << ", " << name << "_total=" << stats.total_ms << " ms, " << name << "_avg=" << stats.avg_ms << " ms, "
+              << name << "_min=" << stats.min_ms << " ms, " << name << "_max=" << stats.max_ms << " ms";
 }
 
 /**
@@ -229,8 +294,8 @@ void printTopOutputs(const std::vector<std::pair<float, size_t>> &scores, size_t
         const float  value = scores[i].first;
         if (classification_output)
         {
-            std::cout << "top: " << (i + 1) << ", confidence: " << value << ", label[" << idx
-                      << "]: " << labels[idx] << std::endl;
+            std::cout << "top: " << (i + 1) << ", confidence: " << value << ", label[" << idx << "]: " << labels[idx]
+                      << std::endl;
         }
         else
         {
@@ -246,15 +311,16 @@ void printTopOutputs(const std::vector<std::pair<float, size_t>> &scores, size_t
  */
 cxxopts::Options makeOptions(const char *program_name)
 {
-    cxxopts::Options options(program_name, "Run InferRT classification models on a single image");
+    cxxopts::Options options(program_name, "Run InferRT classification models on one image or an image batch");
     options.add_options()("model,m", "Built-in model name (required)", cxxopts::value<std::string>())(
         "weights-file,w", "Weights/model file (.wts, .onnx or OpenVINO IR) (required)", cxxopts::value<std::string>())(
-        "image-path,i", "Input image path", cxxopts::value<std::string>()->default_value(""))(
-        "label-file,l", "ImageNet label file", cxxopts::value<std::string>()->default_value(""))(
+        "image-path,i", "Input image path, or comma/semicolon-separated image paths",
+        cxxopts::value<std::string>()->default_value(""))("label-file,l", "ImageNet label file",
+                                                          cxxopts::value<std::string>()->default_value(""))(
         "dump-dir,o", "Optional directory to dump input/output tensors for parity tests",
-        cxxopts::value<std::string>()->default_value(""))(
-        "backend", "Inference backend: tensorrt, openvino, onnxruntime",
-        cxxopts::value<std::string>()->default_value("tensorrt"))(
+        cxxopts::value<std::string>()->default_value(""))("backend",
+                                                          "Inference backend: tensorrt, openvino, onnxruntime",
+                                                          cxxopts::value<std::string>()->default_value("tensorrt"))(
         "device", "Inference device: cpu or gpu", cxxopts::value<std::string>()->default_value("gpu"))(
         "warmup", "Warmup iterations before timing", cxxopts::value<int>()->default_value("0"))(
         "repeat", "Timed inference iterations", cxxopts::value<int>()->default_value("1"))("h,help", "Show help");
@@ -269,8 +335,8 @@ cxxopts::Options makeOptions(const char *program_name)
  */
 Arguments parseArguments(int argc, char *argv[])
 {
-    auto options = makeOptions(argv[0]);
-    const auto result = options.parse(argc, argv);
+    auto       options = makeOptions(argv[0]);
+    const auto result  = options.parse(argc, argv);
     if (result.count("help"))
     {
         std::cout << options.help() << std::endl;
@@ -293,7 +359,7 @@ Arguments parseArguments(int argc, char *argv[])
     Arguments args;
     args.model_name   = result["model"].as<std::string>();
     args.weights_file = result["weights-file"].as<std::string>();
-    args.image_path   = result["image-path"].as<std::string>();
+    args.image_paths  = splitPathList(result["image-path"].as<std::string>());
     args.label_file   = result["label-file"].as<std::string>();
     args.dump_dir     = result["dump-dir"].as<std::string>();
     args.backend      = parseBackend(result["backend"].as<std::string>());
@@ -314,7 +380,7 @@ Arguments parseArguments(int argc, char *argv[])
 } // namespace
 
 /**
- * @brief 运行单张图片推理，并打印分类 logits 或特征向量的 Top-3 结果。
+ * @brief 运行单张或批量图片推理，并打印分类 logits 或特征向量的 Top-3 结果。
  * @param argc 命令行参数个数。
  * @param argv 命令行参数数组。
  * @return 成功返回 0，失败返回非 0。
@@ -333,12 +399,25 @@ int main(int argc, char *argv[])
         fs::path project_root = irt::util::findProjectRoot(
             argv[0], {irt::model::ImageNetUtil::kDefaultImagePath, irt::model::ImageNetUtil::kDefaultLabelPath},
             __FILE__);
-        fs::path img_path = args.image_path.empty() ? project_root / irt::model::ImageNetUtil::kDefaultImagePath
-                                                    : args.image_path;
-        fs::path label_file = args.label_file.empty() ? project_root / irt::model::ImageNetUtil::kDefaultLabelPath
-                                                      : args.label_file;
+        std::vector<fs::path> image_paths = resolveImagePaths(project_root, args.image_paths);
+        if (image_paths.empty())
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "At least one image path is required");
+        }
+        if (image_paths.size() > static_cast<size_t>(std::numeric_limits<int>::max()))
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Batch size is too large: %zu",
+                                 image_paths.size());
+        }
+        fs::path label_file
+            = args.label_file.empty() ? project_root / irt::model::ImageNetUtil::kDefaultLabelPath : args.label_file;
 
         auto config = std::make_unique<irt::model::IModelConfig>();
+        if (image_paths.size() > 1)
+        {
+            const int batch_size = static_cast<int>(image_paths.size());
+            config->setDynamicBatchRange(1, batch_size, batch_size);
+        }
         config->setBackend(args.backend);
         config->setDevice(args.device);
 
@@ -359,12 +438,18 @@ int main(int argc, char *argv[])
         const auto build_end = Clock::now();
         std::cout << "Model loaded successfully." << std::endl;
 
-        std::cout << "Loading image: " << img_path.generic_string() << std::endl;
-        cv::Mat img = cv::imread(img_path.generic_string());
-        if (img.empty())
+        std::vector<cv::Mat> images;
+        images.reserve(image_paths.size());
+        for (const auto &image_path : image_paths)
         {
-            std::cerr << "Failed to load image: " << img_path.generic_string() << std::endl;
-            return -1;
+            std::cout << "Loading image: " << image_path.generic_string() << std::endl;
+            cv::Mat img = cv::imread(image_path.generic_string());
+            if (img.empty())
+            {
+                std::cerr << "Failed to load image: " << image_path.generic_string() << std::endl;
+                return -1;
+            }
+            images.push_back(std::move(img));
         }
 
         const auto input_tensor_names  = model->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
@@ -382,28 +467,30 @@ int main(int argc, char *argv[])
         }
 
         const std::string &input_tensor_name = input_tensor_names.front();
-        const nvinfer1::Dims input_dims      = model->tensorShape(input_tensor_name);
-        const auto input_type                = model->tensorDataType(input_tensor_name);
+        nvinfer1::Dims     input_dims        = model->tensorShape(input_tensor_name);
+        const auto         input_type        = model->tensorDataType(input_tensor_name);
         if (input_type != nvinfer1::DataType::kFLOAT)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                                  "Classification sample expects float32 input tensor");
         }
-        if (input_dims.nbDims != 4 || input_dims.d[0] != 1 || input_dims.d[1] != 3 || input_dims.d[2] <= 0
-            || input_dims.d[3] <= 0)
+        if (input_dims.nbDims != 4 || input_dims.d[1] != 3 || input_dims.d[2] <= 0 || input_dims.d[3] <= 0)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "Classification sample expects input shape 1x3xHxW, got %s",
+                                 "Classification sample expects input shape Nx3xHxW, got %s",
                                  dimsToCsv(input_dims).c_str());
         }
+        if (input_dims.d[0] != static_cast<int64_t>(images.size()))
+        {
+            input_dims.d[0] = static_cast<int64_t>(images.size());
+            model->setTensorShape(input_tensor_name, input_dims);
+        }
 
-        const auto preprocess_start = Clock::now();
-        const cv::Mat preprocessed = irt::model::ImageNetUtil::preprocess(
-            img, cv::Size(static_cast<int>(input_dims.d[3]), static_cast<int>(input_dims.d[2])));
-        const std::vector<float> input_data = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
-        const auto preprocess_end = Clock::now();
+        const auto               preprocess_start = Clock::now();
+        const std::vector<float> input_data       = preprocessBatch(images, input_dims);
+        const auto               preprocess_end   = Clock::now();
 
-        const size_t         input_num_bytes = elementCount(input_dims) * elementSize(nvinfer1::DataType::kFLOAT);
+        const size_t input_num_bytes = elementCount(input_dims) * elementSize(nvinfer1::DataType::kFLOAT);
         if (input_num_bytes != input_data.size() * sizeof(float))
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
@@ -419,12 +506,12 @@ int main(int argc, char *argv[])
             checkCuda(cudaMalloc(&d_input, input_num_bytes), "cudaMalloc(input)");
         }
 
-        std::vector<std::string> output_names;
-        std::vector<nvinfer1::Dims> output_dims;
-        std::vector<nvinfer1::DataType> output_types;
-        std::vector<size_t> output_num_bytes;
-        std::vector<void *> device_outputs;
-        std::vector<std::vector<char>> host_outputs;
+        std::vector<std::string>                   output_names;
+        std::vector<nvinfer1::Dims>                output_dims;
+        std::vector<nvinfer1::DataType>            output_types;
+        std::vector<size_t>                        output_num_bytes;
+        std::vector<void *>                        device_outputs;
+        std::vector<std::vector<char>>             host_outputs;
         std::vector<std::vector<std::max_align_t>> graph_output_storage;
 
         output_names.reserve(output_tensor_names.size());
@@ -538,7 +625,7 @@ int main(int argc, char *argv[])
         }
         const auto infer_end = Clock::now();
 
-        const auto postprocess_start = Clock::now();
+        const auto               postprocess_start = Clock::now();
         std::vector<std::string> labels;
         if (!label_file.empty() && fs::exists(label_file))
         {
@@ -553,19 +640,14 @@ int main(int argc, char *argv[])
                                  "Classification sample expects float32 primary output");
         }
 
-        const size_t num_scores = elementCount(output_dims[primary_index]);
-        const auto  *output_data = reinterpret_cast<const float *>(host_outputs[primary_index].data());
-
-        std::vector<std::pair<float, size_t>> scores;
-        scores.reserve(num_scores);
-        for (size_t i = 0; i < num_scores; ++i)
-        {
-            scores.push_back({output_data[i], i});
-        }
-        const size_t topk = std::min<size_t>(3, scores.size());
-        std::partial_sort(scores.begin(), scores.begin() + static_cast<std::ptrdiff_t>(topk), scores.end(),
-                          [](const auto &a, const auto &b) { return a.first > b.first; });
-        const auto postprocess_end = Clock::now();
+        const size_t num_scores   = elementCount(output_dims[primary_index]);
+        const auto  *output_data  = reinterpret_cast<const float *>(host_outputs[primary_index].data());
+        const size_t batch_size   = images.size();
+        const bool   split_output = output_dims[primary_index].nbDims >= 1 && output_dims[primary_index].d[0] > 0
+                               && static_cast<size_t>(output_dims[primary_index].d[0]) == batch_size
+                               && num_scores % batch_size == 0;
+        const size_t per_sample_scores = split_output ? num_scores / batch_size : num_scores;
+        const auto   postprocess_end   = Clock::now();
 
         if (!args.dump_dir.empty())
         {
@@ -585,7 +667,12 @@ int main(int argc, char *argv[])
             manifest << "repeat=" << args.repeat << "\n";
             manifest << "model_name=" << args.model_name << "\n";
             manifest << "weights_file=" << fs::absolute(args.weights_file).generic_string() << "\n";
-            manifest << "image_path=" << fs::absolute(img_path).generic_string() << "\n";
+            manifest << "image_count=" << image_paths.size() << "\n";
+            manifest << "image_path=" << fs::absolute(image_paths.front()).generic_string() << "\n";
+            for (size_t i = 0; i < image_paths.size(); ++i)
+            {
+                manifest << "image_path_" << i << "=" << fs::absolute(image_paths[i]).generic_string() << "\n";
+            }
             manifest << "tensor|input|float32|" << dimsToCsv(input_dims) << "|input.bin\n";
 
             for (size_t i = 0; i < output_names.size(); ++i)
@@ -606,8 +693,7 @@ int main(int argc, char *argv[])
         const auto d2h_stats        = summarizeTimings(d2h_times_ms);
         const auto end_to_end_stats = summarizeTimings(end_to_end_times_ms);
         std::cout << "Timing: build_or_load=" << elapsedMs(build_start, build_end)
-                  << " ms, preprocess=" << elapsedMs(preprocess_start, preprocess_end)
-                  << " ms";
+                  << " ms, preprocess=" << elapsedMs(preprocess_start, preprocess_end) << " ms";
         printTimingStats("h2d", h2d_stats);
         printTimingStats("inference", inference_stats);
         printTimingStats("d2h", d2h_stats);
@@ -615,7 +701,26 @@ int main(int argc, char *argv[])
         std::cout << ", timed_loop_wall=" << elapsedMs(infer_start, infer_end)
                   << " ms, postprocess=" << elapsedMs(postprocess_start, postprocess_end) << " ms" << std::endl;
 
-        printTopOutputs(scores, topk, labels);
+        const size_t samples_to_print = split_output ? batch_size : 1;
+        for (size_t batch_index = 0; batch_index < samples_to_print; ++batch_index)
+        {
+            const auto                           *sample_data = output_data + batch_index * per_sample_scores;
+            std::vector<std::pair<float, size_t>> scores;
+            scores.reserve(per_sample_scores);
+            for (size_t i = 0; i < per_sample_scores; ++i)
+            {
+                scores.push_back({sample_data[i], i});
+            }
+            const size_t topk = std::min<size_t>(3, scores.size());
+            std::partial_sort(scores.begin(), scores.begin() + static_cast<std::ptrdiff_t>(topk), scores.end(),
+                              [](const auto &a, const auto &b) { return a.first > b.first; });
+            if (split_output)
+            {
+                std::cout << "\nBatch " << batch_index << " image: " << image_paths[batch_index].generic_string()
+                          << std::endl;
+            }
+            printTopOutputs(scores, topk, labels);
+        }
 
         if (uses_tensorrt)
         {

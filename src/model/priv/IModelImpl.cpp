@@ -139,6 +139,50 @@ void ValidateFeatureTensorConfig(const IModelConfig &config)
 }
 
 /**
+ * @brief 校验动态 batch profile 配置是否可用于当前模型。
+ * @param impl 模型内部实现对象。
+ */
+void ValidateDynamicBatchConfig(const IModelImpl &impl)
+{
+    const auto &config = impl.modelConfig();
+    if (config.backend() != ModelBackend::TensorRT || !config.dynamicBatch())
+    {
+        return;
+    }
+
+    if (!impl.supportsDynamicBatch())
+    {
+        throw irt::Exception(Status::ERROR_NOT_IMPLEMENTED, "%s TensorRT network does not support dynamic batch yet",
+                             impl.name().c_str());
+    }
+
+    if (config.minBatchSize() <= 0 || config.optBatchSize() <= 0 || config.maxBatchSize() <= 0)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                             "dynamic batch range must be positive, got min=%d opt=%d max=%d", config.minBatchSize(),
+                             config.optBatchSize(), config.maxBatchSize());
+    }
+
+    if (config.minBatchSize() > config.optBatchSize() || config.optBatchSize() > config.maxBatchSize())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                             "dynamic batch range must satisfy min <= opt <= max, got min=%d opt=%d max=%d",
+                             config.minBatchSize(), config.optBatchSize(), config.maxBatchSize());
+    }
+
+    for (size_t i = 0; i < config.inputShapes().size(); ++i)
+    {
+        const auto &shape = config.inputShapes()[i];
+        if (shape.d[0] < config.minBatchSize() || shape.d[0] > config.maxBatchSize())
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                                 "input shape batch at index %zu must be within dynamic batch range [%d, %d], got %lld",
+                                 i, config.minBatchSize(), config.maxBatchSize(), static_cast<long long>(shape.d[0]));
+        }
+    }
+}
+
+/**
  * @brief 校验主输出张量名称不存在重复项。
  * @param config 待校验的模型配置。
  */
@@ -168,6 +212,7 @@ void ValidateModelConfig(const IModelImpl &impl)
     ValidatePrimaryOutputTensorConfig(config);
     ValidateFeatureTensorConfig(config);
     ValidateUniqueOutputTensorNames(config);
+    ValidateDynamicBatchConfig(impl);
 
     if (config.backend() == ModelBackend::TensorRT && config.device() == ModelDevice::CPU)
     {
@@ -201,6 +246,10 @@ std::string BuildEngineFileName(const IModelImpl &impl, const std::string &weigh
     cache_config.setInputShapes(config.inputShapes());
     cache_config.setInputTensorNames(config.inputTensorNames());
     cache_config.setOutputTensorNames(config.outputTensorNames());
+    if (config.dynamicBatch())
+    {
+        cache_config.setDynamicBatchRange(config.minBatchSize(), config.optBatchSize(), config.maxBatchSize());
+    }
     if (config.featureOnly())
     {
         cache_config.setFeatureTensorNames(config.featureTensorNames());
@@ -249,6 +298,11 @@ std::string IModelImpl::generateSuffix(const IModelConfig &config) const noexcep
                 + std::to_string(input_shape.d[2]) + "x" + std::to_string(input_shape.d[3]);
     }
     suffix += "_" + std::to_string(config.numClasses());
+    if (config.dynamicBatch())
+    {
+        suffix += "_dynb_" + std::to_string(config.minBatchSize()) + "x" + std::to_string(config.optBatchSize()) + "x"
+                + std::to_string(config.maxBatchSize());
+    }
     if (config.featureOnly())
     {
         for (const auto &output_tensor_name : config.outputTensorNames())
@@ -351,7 +405,13 @@ nvinfer1::ITensor *IModelImpl::addInputTensor(nvinfer1::INetworkDefinition *netw
                              tensor_names.size());
     }
 
-    return network->addInput(tensor_names[input_index].c_str(), data_type, dims);
+    auto network_dims = dims;
+    if (modelConfig().dynamicBatch() && network_dims.nbDims > 0)
+    {
+        network_dims.d[0] = -1;
+    }
+
+    return network->addInput(tensor_names[input_index].c_str(), data_type, network_dims);
 }
 
 nvinfer1::ITensor *IModelImpl::addInputTensor(nvinfer1::INetworkDefinition *network, nvinfer1::DataType data_type,
@@ -503,7 +563,7 @@ void IModelImpl::forwardFeatures(const std::vector<void *> &buffers, cudaStream_
 void IModelImpl::buildRuntimeFromWeights(const std::string                                         &weights_file,
                                          const std::function<void(nvinfer1::INetworkDefinition *)> &build_fn)
 {
-    tensorRTBackend().buildFromNetwork(weights_file, name(), build_fn);
+    tensorRTBackend().buildFromNetwork(weights_file, name(), modelConfig(), build_fn);
 }
 
 void IModelImpl::loadRuntimeFromFile(const std::string &engine_file)

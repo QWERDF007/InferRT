@@ -3,6 +3,7 @@
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/Utils.hpp>
 
+#include <algorithm>
 #include <fstream>
 
 namespace irt::model::priv {
@@ -67,6 +68,133 @@ void SaveEngineToFile(const std::string &engine_file, const std::shared_ptr<nvin
     file.close();
 }
 
+bool HasDynamicDimension(const nvinfer1::Dims &dims)
+{
+    for (int32_t i = 0; i < dims.nbDims; ++i)
+    {
+        if (dims.d[i] < 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+size_t ResolveConfiguredInputIndex(const IModelConfig &config, const std::string &tensor_name, size_t fallback_index)
+{
+    const auto &input_names = config.inputTensorNames();
+    const auto  it          = std::find(input_names.begin(), input_names.end(), tensor_name);
+    if (it != input_names.end())
+    {
+        return static_cast<size_t>(std::distance(input_names.begin(), it));
+    }
+
+    if (fallback_index < config.inputShapes().size())
+    {
+        return fallback_index;
+    }
+
+    throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Cannot resolve configured shape for input tensor: %s",
+                         tensor_name.c_str());
+}
+
+nvinfer1::Dims MakeProfileDims(nvinfer1::Dims dims, int batch)
+{
+    if (dims.nbDims <= 0)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Dynamic batch requires an explicit batch dimension");
+    }
+    dims.d[0] = batch;
+    return dims;
+}
+
+void ConfigureDynamicBatchProfile(nvinfer1::IBuilder &builder, nvinfer1::IBuilderConfig &builder_config,
+                                  nvinfer1::INetworkDefinition &network, const IModelConfig &config)
+{
+    if (!config.dynamicBatch())
+    {
+        return;
+    }
+
+    auto *profile = builder.createOptimizationProfile();
+    if (!profile)
+    {
+        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create TensorRT optimization profile");
+    }
+
+    for (int32_t i = 0; i < network.getNbInputs(); ++i)
+    {
+        auto *input = network.getInput(i);
+        if (!input)
+        {
+            throw irt::Exception(Status::ERROR_INTERNAL, "TensorRT network input at index %d is null", i);
+        }
+
+        const auto  input_name  = std::string(input->getName());
+        const auto  shape_index = ResolveConfiguredInputIndex(config, input_name, static_cast<size_t>(i));
+        const auto &base_shape  = config.inputShapes().at(shape_index);
+
+        const auto min_dims = MakeProfileDims(base_shape, config.minBatchSize());
+        const auto opt_dims = MakeProfileDims(base_shape, config.optBatchSize());
+        const auto max_dims = MakeProfileDims(base_shape, config.maxBatchSize());
+
+        if (!profile->setDimensions(input_name.c_str(), nvinfer1::OptProfileSelector::kMIN, min_dims)
+            || !profile->setDimensions(input_name.c_str(), nvinfer1::OptProfileSelector::kOPT, opt_dims)
+            || !profile->setDimensions(input_name.c_str(), nvinfer1::OptProfileSelector::kMAX, max_dims))
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                                 "Failed to set dynamic batch profile for input tensor: %s", input_name.c_str());
+        }
+    }
+
+    if (!profile->isValid())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                             "TensorRT dynamic batch profile is invalid, min=%d opt=%d max=%d", config.minBatchSize(),
+                             config.optBatchSize(), config.maxBatchSize());
+    }
+
+    if (builder_config.addOptimizationProfile(profile) < 0)
+    {
+        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to add TensorRT optimization profile");
+    }
+}
+
+void SetConfiguredInputShapes(nvinfer1::ICudaEngine &engine, nvinfer1::IExecutionContext &context,
+                              const IModelConfig &config)
+{
+    size_t input_index = 0;
+    for (int32_t i = 0; i < engine.getNbIOTensors(); ++i)
+    {
+        const char *tensor_name = engine.getIOTensorName(i);
+        if (!tensor_name || engine.getTensorIOMode(tensor_name) != nvinfer1::TensorIOMode::kINPUT)
+        {
+            continue;
+        }
+
+        const auto engine_dims = engine.getTensorShape(tensor_name);
+        if (!HasDynamicDimension(engine_dims))
+        {
+            ++input_index;
+            continue;
+        }
+
+        const auto shape_index = ResolveConfiguredInputIndex(config, tensor_name, input_index);
+        auto       dims        = config.inputShapes().at(shape_index);
+        if (config.dynamicBatch())
+        {
+            dims.d[0] = config.optBatchSize();
+        }
+
+        if (!context.setInputShape(tensor_name, dims))
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                                 "Failed to set default dynamic input shape for tensor: %s", tensor_name);
+        }
+        ++input_index;
+    }
+}
+
 } // namespace
 
 ModelBackend TensorRTBackend::backend() const noexcept
@@ -76,7 +204,6 @@ ModelBackend TensorRTBackend::backend() const noexcept
 
 void TensorRTBackend::load(const std::string &engine_file, const IModelConfig &config, const std::string &model_name)
 {
-    (void)config;
     params_.context.reset();
     params_.engine.reset();
 
@@ -120,6 +247,8 @@ void TensorRTBackend::load(const std::string &engine_file, const IModelConfig &c
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create execution context");
     }
+
+    SetConfiguredInputShapes(*params_.engine, *params_.context, config);
 }
 
 void TensorRTBackend::save(const std::string &engine_file) const
@@ -284,7 +413,7 @@ void TensorRTBackend::initLogger(const std::string &model_name)
 }
 
 void TensorRTBackend::buildFromNetwork(const std::string &source_file, const std::string &model_name,
-                                       NetworkBuildFn build_fn)
+                                       const IModelConfig &model_config, NetworkBuildFn build_fn)
 {
     using namespace nvinfer1;
     if (params_.logger == nullptr)
@@ -305,8 +434,8 @@ void TensorRTBackend::buildFromNetwork(const std::string &source_file, const std
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create NetworkDefinition");
     }
 
-    auto config = std::unique_ptr<IBuilderConfig>(builder->createBuilderConfig());
-    if (!config)
+    auto builder_config = std::unique_ptr<IBuilderConfig>(builder->createBuilderConfig());
+    if (!builder_config)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create BuilderConfig");
     }
@@ -314,7 +443,9 @@ void TensorRTBackend::buildFromNetwork(const std::string &source_file, const std
     LOG_INFO(*params_.logger) << "Building TensorRT network from: " << source_file << std::endl;
     build_fn(network.get());
 
-    auto buffer = std::unique_ptr<IHostMemory>(builder->buildSerializedNetwork(*network, *config));
+    ConfigureDynamicBatchProfile(*builder, *builder_config, *network, model_config);
+
+    auto buffer = std::unique_ptr<IHostMemory>(builder->buildSerializedNetwork(*network, *builder_config));
     if (!buffer)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to build serialized network");
@@ -338,6 +469,8 @@ void TensorRTBackend::buildFromNetwork(const std::string &source_file, const std
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create execution context");
     }
+
+    SetConfiguredInputShapes(*params_.engine, *params_.context, model_config);
 }
 
 void TensorRTBackend::execute(const std::vector<void *> &buffers, cudaStream_t stream_override, bool non_blocking)

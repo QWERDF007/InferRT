@@ -255,7 +255,10 @@ def run_python_classification(
         RuntimeError: 模型输入张量数量不为 1 时。
     """
 
-    model = irt_module.create_model(model_name)
+    config = irt_module.ModelConfig()
+    if input_tensor.shape[0] > 1:
+        config.dynamic_batch_range = [1, int(input_tensor.shape[0]), int(input_tensor.shape[0])]
+    model = irt_module.create_model(model_name, config)
     model.build_or_load(str(weights_path))
 
     input_names = model.input_tensor_names()
@@ -399,6 +402,9 @@ def run_python_features(
     config.feature_tensor_names = feature_names
     config.output_tensor_names = feature_names
     config.feature_only = True
+
+    if input_tensor.shape[0] > 1:
+        config.dynamic_batch_range = [1, int(input_tensor.shape[0]), int(input_tensor.shape[0])]
 
     model = irt_module.create_model(model_name, config)
     model.build_or_load(str(weights_path))

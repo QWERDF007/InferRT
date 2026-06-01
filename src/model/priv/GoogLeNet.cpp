@@ -1,6 +1,7 @@
 #include "GoogLeNet.hpp"
 
 #include "BatchNorm.hpp"
+#include "Layers.hpp"
 #include "Weights.hpp"
 
 #include <inferrt/model/IModel.h>
@@ -8,7 +9,6 @@
 #include <array>
 #include <initializer_list>
 #include <string>
-
 
 namespace irt::model {
 
@@ -163,9 +163,8 @@ bool recordFeature(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *n
 PoolFlatten addGlobalAvgFlatten(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input)
 {
     auto *avgpool = network->addReduce(input, nvinfer1::ReduceOperation::kAVG, (1U << 2U) | (1U << 3U), true);
-    auto *flatten = network->addShuffle(*avgpool->getOutput(0));
-    flatten->setReshapeDimensions(nvinfer1::Dims2{1, -1});
-    return {avgpool->getOutput(0), flatten->getOutput(0)};
+    auto *flatten = flattenPreserveBatch(network, *avgpool->getOutput(0));
+    return {avgpool->getOutput(0), flatten};
 }
 
 /**

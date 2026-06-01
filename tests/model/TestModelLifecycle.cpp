@@ -7,9 +7,9 @@
 #include <string>
 #include <vector>
 
-using test::model::RegisteredModelsTest;
 using test::model::ExpectIrtExceptionCode;
 using test::model::kRegisteredModels;
+using test::model::RegisteredModelsTest;
 
 namespace {
 
@@ -29,7 +29,7 @@ class ModelLifecycleRegisteredModelsTest : public RegisteredModelsTest
 void SetModelTensorNames(irt::model::IModel &model, std::vector<std::string> input_names,
                          std::vector<std::string> output_names)
 {
-    const auto &config = model.modelConfig();
+    const auto &config     = model.modelConfig();
     auto        new_config = std::make_unique<irt::model::IModelConfig>();
     new_config->setNumClasses(config.numClasses());
     new_config->setInputShapes(config.inputShapes());
@@ -37,6 +37,10 @@ void SetModelTensorNames(irt::model::IModel &model, std::vector<std::string> inp
     new_config->setOutputTensorNames(std::move(output_names));
     new_config->setFeatureTensorNames(config.featureTensorNames());
     new_config->setFeatureOnly(config.featureOnly());
+    if (config.dynamicBatch())
+    {
+        new_config->setDynamicBatchRange(config.minBatchSize(), config.optBatchSize(), config.maxBatchSize());
+    }
     new_config->setBackend(config.backend());
     new_config->setDevice(config.device());
     model.setModelConfig(std::move(new_config));
@@ -141,6 +145,10 @@ TEST(IModelConfigTest, DefaultConfigMatchesImageNetClassificationContract)
     EXPECT_FALSE(config.featureOnly());
     EXPECT_EQ(config.backend(), irt::model::ModelBackend::TensorRT);
     EXPECT_EQ(config.device(), irt::model::ModelDevice::GPU);
+    EXPECT_FALSE(config.dynamicBatch());
+    EXPECT_EQ(config.minBatchSize(), 1);
+    EXPECT_EQ(config.optBatchSize(), 1);
+    EXPECT_EQ(config.maxBatchSize(), 1);
     ASSERT_EQ(config.inputShapes().size(), 1U);
     EXPECT_EQ(config.inputShape().nbDims, 4);
     EXPECT_EQ(config.inputShape().d[0], 1);
@@ -161,6 +169,7 @@ TEST(IModelConfigTest, SettersUpdateAllPublicConfigFields)
     config.setOutputTensorNames({"logits", "aux"});
     config.setFeatureTensorNames({"layer1", "layer2"});
     config.setFeatureOnly(true);
+    config.setDynamicBatchRange(1, 2, 4);
     config.setBackend(irt::model::ModelBackend::ONNXRuntime);
     config.setDevice(irt::model::ModelDevice::CPU);
 
@@ -169,10 +178,33 @@ TEST(IModelConfigTest, SettersUpdateAllPublicConfigFields)
     EXPECT_EQ(config.outputTensorNames(), (std::vector<std::string>{"logits", "aux"}));
     EXPECT_EQ(config.featureTensorNames(), (std::vector<std::string>{"layer1", "layer2"}));
     EXPECT_TRUE(config.featureOnly());
+    EXPECT_TRUE(config.dynamicBatch());
+    EXPECT_EQ(config.minBatchSize(), 1);
+    EXPECT_EQ(config.optBatchSize(), 2);
+    EXPECT_EQ(config.maxBatchSize(), 4);
     EXPECT_EQ(config.backend(), irt::model::ModelBackend::ONNXRuntime);
     EXPECT_EQ(config.device(), irt::model::ModelDevice::CPU);
     EXPECT_EQ(config.inputShape().d[0], 2);
     EXPECT_EQ(config.inputShape().d[2], 32);
+}
+
+/**
+ * @brief 动态 batch 支持按模型声明，尚未改造的手写网络应明确拒绝。
+ */
+TEST(IModelConfigTest, DynamicBatchSupportIsModelScoped)
+{
+    auto supported_config = std::make_unique<irt::model::IModelConfig>();
+    supported_config->setDynamicBatchRange(1, 2, 4);
+    auto resnet = irt::model::CreateModel("resnet18", std::move(supported_config));
+    ASSERT_NE(resnet, nullptr);
+    EXPECT_TRUE(resnet->modelConfig().dynamicBatch());
+    EXPECT_EQ(resnet->modelConfig().maxBatchSize(), 4);
+
+    auto unsupported_config = std::make_unique<irt::model::IModelConfig>();
+    unsupported_config->setDynamicBatchRange(1, 2, 2);
+    auto sam = irt::model::CreateModel("sam", std::move(unsupported_config));
+    ASSERT_NE(sam, nullptr);
+    ExpectIrtExceptionCode([&] { sam->build("/non/existent/path/model.wts"); }, irt::Status::ERROR_NOT_IMPLEMENTED);
 }
 
 /**
@@ -199,7 +231,10 @@ TEST(IModelConfigTest, CreateModelPreservesBackendAndDeviceFromConfig)
 TEST(IModelConfigTest, SetInputShapesReplacesShapeListAndUpdatesFirstShape)
 {
     irt::model::IModelConfig config;
-    config.setInputShapes({nvinfer1::Dims4{1, 3, 64, 64}, nvinfer1::Dims4{1, 1, 16, 16}});
+    config.setInputShapes({
+        nvinfer1::Dims4{1, 3, 64, 64},
+        nvinfer1::Dims4{1, 1, 16, 16}
+    });
 
     ASSERT_EQ(config.inputShapes().size(), 2U);
     EXPECT_EQ(config.inputShape().d[2], 64);
@@ -240,7 +275,8 @@ TEST(IModelConfigTest, CreateModelPreservesCustomTensorNamesFromConfig)
     ASSERT_NE(model, nullptr);
 
     EXPECT_EQ(model->modelConfig().inputTensorNames(), (std::vector<std::string>{"custom_input_0", "custom_input_1"}));
-    EXPECT_EQ(model->modelConfig().outputTensorNames(), (std::vector<std::string>{"custom_output_0", "custom_output_1"}));
+    EXPECT_EQ(model->modelConfig().outputTensorNames(),
+              (std::vector<std::string>{"custom_output_0", "custom_output_1"}));
 }
 
 /**
@@ -319,8 +355,7 @@ TEST(IModelBuildTest, BuildWithNonExistentWeightsThrowsInvalidArgument)
     auto model = irt::model::CreateModel("alexnet");
     ASSERT_NE(model, nullptr);
 
-    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); },
-                           irt::Status::ERROR_INVALID_ARGUMENT);
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -333,8 +368,7 @@ TEST(IModelBuildTest, BuildWithEmptyInputTensorNamesThrowsInvalidArgument)
 
     SetModelInputTensorNames(*model, {});
 
-    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); },
-                           irt::Status::ERROR_INVALID_ARGUMENT);
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -347,8 +381,7 @@ TEST(IModelBuildTest, BuildWithEmptyOutputTensorNamesThrowsInvalidArgument)
 
     SetModelOutputTensorNames(*model, {});
 
-    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); },
-                           irt::Status::ERROR_INVALID_ARGUMENT);
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -361,8 +394,7 @@ TEST(IModelBuildTest, BuildWithEmptyInputTensorNameThrowsInvalidArgument)
 
     SetModelInputTensorNames(*model, {""});
 
-    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); },
-                           irt::Status::ERROR_INVALID_ARGUMENT);
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -375,8 +407,7 @@ TEST(IModelBuildTest, BuildWithEmptyOutputTensorNameThrowsInvalidArgument)
 
     SetModelOutputTensorNames(*model, {""});
 
-    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); },
-                           irt::Status::ERROR_INVALID_ARGUMENT);
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -391,8 +422,7 @@ TEST(IModelBuildTest, BuildWithEmptyFeatureTensorNameThrowsInvalidArgument)
     config->setFeatureTensorNames({""});
     model->setModelConfig(std::move(config));
 
-    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); },
-                           irt::Status::ERROR_INVALID_ARGUMENT);
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -409,8 +439,7 @@ TEST(IModelBuildTest, BuildWithMismatchedOutputTensorCountInFeatureOnlyModeThrow
     config->setFeatureOnly(true);
     model->setModelConfig(std::move(config));
 
-    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); },
-                           irt::Status::ERROR_INVALID_ARGUMENT);
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -426,8 +455,7 @@ TEST(IModelBuildTest, BuildWithFeatureOnlyAndNoFeatureTensorNamesThrowsInvalidAr
     config->setOutputTensorNames({"layer1"});
     model->setModelConfig(std::move(config));
 
-    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); },
-                           irt::Status::ERROR_INVALID_ARGUMENT);
+    ExpectIrtExceptionCode([&] { model->build("/non/existent/path/model.wts"); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**

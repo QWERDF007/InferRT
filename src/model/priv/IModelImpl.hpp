@@ -121,6 +121,15 @@ public:
     virtual void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) = 0;
 
     /**
+     * @brief 查询当前手写 TensorRT 网络是否支持动态 batch。
+     * @return 支持时返回 true；默认实现保持静态 batch 约束。
+     */
+    virtual bool supportsDynamicBatch() const noexcept
+    {
+        return false;
+    }
+
+    /**
      * @brief 在指定 CUDA stream 上执行一次推理。
      * @param buffers 输入输出缓冲区地址列表。
      * @param stream 调用方提供的 CUDA stream；为空时使用模型当前默认 stream。

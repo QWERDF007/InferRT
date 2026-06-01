@@ -12,10 +12,11 @@ from util import (
     dims_to_csv,
     ensure_module_path,
     numpy_dtype_name,
-    preprocess_image,
+    preprocess_images,
     resolve_project_root,
     sanitize_file_stem,
     split_csv_names,
+    split_path_list,
 )
 
 
@@ -26,7 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-m", "--model", default="resnet18", help="Built-in model name")
     parser.add_argument("-w", "--weights", default="samples/model/classification/resnet18.wts", help="Path to .wts file")
     parser.add_argument("-f", "--features", required=True, help="Comma-separated feature names, e.g. layer1,layer4")
-    parser.add_argument("-i", "--image", default="assets/pics/dog.jpg", help="Input image path")
+    parser.add_argument("-i", "--image", default="assets/pics/dog.jpg", help="Input image path(s), comma-separated")
     parser.add_argument("-o", "--output-dir", default="feature_dump_py", help="Output directory for dumped features")
     parser.add_argument("-b", "--build-dir", default="build", help="CMake build directory used to locate .pyd and DLLs")
     return parser.parse_args()
@@ -36,7 +37,7 @@ def write_manifest(
     manifest_path: Path,
     model_name: str,
     weights_path: Path,
-    image_path: Path,
+    image_paths: list[Path],
     feature_names: list[str],
     input_tensor: np.ndarray,
     outputs: dict[str, np.ndarray],
@@ -48,7 +49,9 @@ def write_manifest(
         "backend=inferrt_python",
         f"model_name={model_name}",
         f"weights_file={weights_path.resolve().as_posix()}",
-        f"image_path={image_path.resolve().as_posix()}",
+        f"image_count={len(image_paths)}",
+        f"image_path={image_paths[0].resolve().as_posix()}",
+        *(f"image_path_{index}={path.resolve().as_posix()}" for index, path in enumerate(image_paths)),
         "feature_only=true",
         f"feature_tensor_names={','.join(feature_names)}",
         f"tensor|input|{numpy_dtype_name(input_tensor)}|{dims_to_csv(input_tensor.shape)}|input.bin",
@@ -87,13 +90,17 @@ def main() -> int:
 
     model_name = args.model
     weights_path = project_root / args.weights
-    image_path = project_root / args.image
+    image_paths = [project_root / path for path in split_path_list(args.image)]
+    if not image_paths:
+        raise ValueError("At least one input image is required")
     output_dir = project_root / args.output_dir
 
     config = irt.ModelConfig()
     config.feature_tensor_names = feature_names
     config.output_tensor_names = feature_names
     config.feature_only = True
+    if len(image_paths) > 1:
+        config.dynamic_batch_range = [1, len(image_paths), len(image_paths)]
 
     print(f"Creating feature-only model: {model_name}")
     model = irt.create_model(model_name, config)
@@ -110,16 +117,22 @@ def main() -> int:
     if not input_tensor_names:
         raise RuntimeError("Model has no configured input tensors")
 
-    preprocess_start = time.perf_counter()
-    input_tensor = preprocess_image(image_path)
-    preprocess_ms = (time.perf_counter() - preprocess_start) * 1000.0
-    print(f"Running feature forward for image: {image_path}")
     if len(input_tensor_names) != 1:
         raise RuntimeError(
             f"This feature extraction sample expects exactly one input tensor, got: {input_tensor_names}"
         )
 
-    input_tensors = {name: input_tensor for name in input_tensor_names}
+    input_name = input_tensor_names[0]
+    input_shape = list(model.tensor_shape(input_name))
+    input_shape[0] = len(image_paths)
+    model.set_tensor_shape(input_name, input_shape)
+
+    preprocess_start = time.perf_counter()
+    input_tensor = preprocess_images(image_paths, image_size=(int(input_shape[3]), int(input_shape[2])))
+    preprocess_ms = (time.perf_counter() - preprocess_start) * 1000.0
+    print(f"Running feature forward for batch size {len(image_paths)}")
+
+    input_tensors = {input_name: input_tensor}
     infer_start = time.perf_counter()
     output = model.forward_features(input_tensors)
     infer_ms = (time.perf_counter() - infer_start) * 1000.0
@@ -138,7 +151,9 @@ def main() -> int:
         file_name = output_dir / f"{sanitize_file_stem(tensor_name)}.bin"
         np.ascontiguousarray(tensor).tofile(file_name)
 
-    write_manifest(output_dir / "manifest.txt", model_name, weights_path, image_path, feature_names, input_tensor, output_dict)
+    write_manifest(
+        output_dir / "manifest.txt", model_name, weights_path, image_paths, feature_names, input_tensor, output_dict
+    )
     postprocess_ms = (time.perf_counter() - postprocess_start) * 1000.0
 
     print(f"Saved feature dump to: {output_dir.resolve()}")

@@ -7,14 +7,14 @@ import time
 
 import numpy as np
 
-from util import ensure_module_path, load_labels, preprocess_image, resolve_project_root
+from util import ensure_module_path, load_labels, preprocess_images, resolve_project_root, split_path_list
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run InferRT classification with infer_v2 and DLPack tensors")
     parser.add_argument("-m", "--model", default="resnet18", help="Built-in model name")
     parser.add_argument("-w", "--weights", default="samples/model/classification/resnet18.wts", help="Path to .wts file")
-    parser.add_argument("-i", "--image", default="assets/pics/dog.jpg", help="Input image path")
+    parser.add_argument("-i", "--image", default="assets/pics/dog.jpg", help="Input image path(s), comma-separated")
     parser.add_argument("-l", "--labels", default="assets/imagenet1000_clsidx_to_labels.txt", help="Label file path")
     parser.add_argument("-k", "--topk", type=int, default=3, help="Number of top results to print")
     parser.add_argument("-b", "--build-dir", default="build", help="CMake build directory used to locate .pyd and DLLs")
@@ -49,11 +49,17 @@ def main() -> int:
 
     model_name = args.model
     weights_path = project_root / args.weights
-    image_path = project_root / args.image
+    image_paths = [project_root / path for path in split_path_list(args.image)]
+    if not image_paths:
+        raise ValueError("At least one input image is required")
     label_path = project_root / args.labels
 
+    config = irt.ModelConfig()
+    if len(image_paths) > 1:
+        config.dynamic_batch_range = [1, len(image_paths), len(image_paths)]
+
     print(f"Creating model: {model_name}")
-    model = irt.create_model(model_name)
+    model = irt.create_model(model_name, config)
     model.log_level = irt.LogLevel.INFO
 
     print(f"Building or loading engine from: {weights_path}")
@@ -69,9 +75,16 @@ def main() -> int:
     if not output_tensor_names:
         raise RuntimeError("Model has no configured output tensors")
 
+    input_name = input_tensor_names[0]
+    input_shape = list(model.tensor_shape(input_name))
+    input_shape[0] = len(image_paths)
+    model.set_tensor_shape(input_name, input_shape)
+
     preprocess_start = time.perf_counter()
-    input_array = preprocess_image(image_path)
-    input_tensor = torch.from_numpy(np.ascontiguousarray(input_array)).to(device=args.device, non_blocking=False).contiguous()
+    input_array = preprocess_images(image_paths, image_size=(int(input_shape[3]), int(input_shape[2])))
+    input_tensor = torch.from_numpy(np.ascontiguousarray(input_array)).to(
+        device=args.device, non_blocking=False
+    ).contiguous()
     preprocess_ms = (time.perf_counter() - preprocess_start) * 1000.0
 
     output_tensors: dict[str, torch.Tensor] = {}
@@ -81,9 +94,9 @@ def main() -> int:
         output_tensors[output_name] = torch.empty(output_shape, dtype=output_dtype, device=args.device)
 
     stream = torch.cuda.Stream()
-    input_tensors = {input_tensor_names[0]: input_tensor}
+    input_tensors = {input_name: input_tensor}
 
-    print(f"Running infer_v2 for image: {image_path}")
+    print(f"Running infer_v2 for batch size {len(image_paths)}")
     infer_start = time.perf_counter()
     with torch.cuda.stream(stream):
         model.infer_v2(input_tensors, output_tensors, stream_ptr=stream.cuda_stream, non_blocking=True)
@@ -95,23 +108,23 @@ def main() -> int:
     output = output_tensors[output_name].detach().cpu().numpy()
     print(f"Using output tensor for classification scores: {output_name}")
 
-    scores = output.reshape(-1)
-    topk = min(args.topk, scores.shape[0])
-    indices = np.argsort(scores)[::-1][:topk]
-
     labels = load_labels(label_path) if label_path.exists() else []
     postprocess_ms = (time.perf_counter() - postprocess_start) * 1000.0
     print(
         f"Timing: preprocess={preprocess_ms:.3f} ms, "
         f"inference={infer_ms:.3f} ms, postprocess={postprocess_ms:.3f} ms"
     )
-    print("\nTop results:")
-    for rank, index in enumerate(indices, start=1):
-        score = float(scores[index])
-        if labels and index < len(labels):
-            print(f"top: {rank}, score: {score:.6f}, label[{index}]: {labels[index]}")
-        else:
-            print(f"top: {rank}, score: {score:.6f}, label[{index}]")
+    batched_output = output.reshape((len(image_paths), -1)) if output.shape[0] == len(image_paths) else output.reshape(1, -1)
+    for batch_index, scores in enumerate(batched_output):
+        topk = min(args.topk, scores.shape[0])
+        indices = np.argsort(scores)[::-1][:topk]
+        print(f"\nTop results for batch {batch_index}:")
+        for rank, index in enumerate(indices, start=1):
+            score = float(scores[index])
+            if labels and index < len(labels):
+                print(f"top: {rank}, score: {score:.6f}, label[{index}]: {labels[index]}")
+            else:
+                print(f"top: {rank}, score: {score:.6f}, label[{index}]")
 
     return 0
 

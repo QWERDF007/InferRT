@@ -39,6 +39,21 @@ inline nvinfer1::Dims scalarDimsLike(const nvinfer1::ITensor &input)
 // ============================================================================
 
 /**
+ * @brief 保留 batch 维并将其余维度展平为二维张量。
+ * @param network TensorRT 网络定义。
+ * @param input 待展平的输入张量，约定第 0 维为 batch。
+ * @return 形状为 `[N, -1]` 的张量。
+ *
+ * TensorRT shuffle 中的 0 表示复制输入对应维度，因此静态 batch 与动态 batch 均可复用。
+ */
+inline nvinfer1::ITensor *flattenPreserveBatch(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input)
+{
+    auto *shuffle = network->addShuffle(input);
+    shuffle->setReshapeDimensions(nvinfer1::Dims2{0, -1});
+    return shuffle->getOutput(0);
+}
+
+/**
  * @brief 添加 GeLU tanh 近似激活：0.5*x*(1+tanh(sqrt(2/pi)*(x+0.044715*x^3)))。
  */
 inline nvinfer1::ITensor *addGeluApprox(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input)

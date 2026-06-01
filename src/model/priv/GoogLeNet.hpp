@@ -45,6 +45,15 @@ public:
     }
 
     /**
+     * @brief GoogLeNet 主干支持仅 batch 维动态的 TensorRT profile。
+     * @return 始终返回 true。
+     */
+    bool supportsDynamicBatch() const noexcept override
+    {
+        return true;
+    }
+
+    /**
      * @brief 构建 GoogLeNet 的 TensorRT 网络。
      * @param network TensorRT 网络定义。
      * @param weights_map 权重映射表。

@@ -29,6 +29,15 @@ public:
     {
         return "MobileNet";
     }
+
+    /**
+     * @brief MobileNet 主干支持仅 batch 维动态的 TensorRT profile。
+     * @return 始终返回 true。
+     */
+    bool supportsDynamicBatch() const noexcept override
+    {
+        return true;
+    }
 };
 
 /**

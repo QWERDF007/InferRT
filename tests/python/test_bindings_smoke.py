@@ -61,6 +61,8 @@ def test_model_config_defaults(irt_module: object) -> None:
     assert config.feature_tensor_names == []
     assert config.backend == irt_module.ModelBackend.TENSORRT
     assert config.device == irt_module.ModelDevice.GPU
+    assert config.dynamic_batch is False
+    assert config.dynamic_batch_range == [1, 1, 1]
 
 
 def test_model_config_setters_round_trip(irt_module: object) -> None:
@@ -78,6 +80,7 @@ def test_model_config_setters_round_trip(irt_module: object) -> None:
     config.output_tensor_names = ["logits", "aux"]
     config.feature_tensor_names = ["layer1", "layer4"]
     config.feature_only = True
+    config.dynamic_batch_range = [1, 2, 4]
     config.backend = irt_module.ModelBackend.ONNXRUNTIME
     config.device = irt_module.ModelDevice.CPU
 
@@ -88,6 +91,8 @@ def test_model_config_setters_round_trip(irt_module: object) -> None:
     assert config.output_tensor_names == ["logits", "aux"]
     assert config.feature_tensor_names == ["layer1", "layer4"]
     assert config.feature_only is True
+    assert config.dynamic_batch is True
+    assert config.dynamic_batch_range == [1, 2, 4]
     assert config.backend == irt_module.ModelBackend.ONNXRUNTIME
     assert config.device == irt_module.ModelDevice.CPU
 

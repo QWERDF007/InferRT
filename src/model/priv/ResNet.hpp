@@ -29,6 +29,15 @@ public:
     {
         return "ResNet";
     }
+
+    /**
+     * @brief ResNet 主干仅在 batch 维动态，空间尺寸仍由配置固定。
+     * @return 始终返回 true。
+     */
+    bool supportsDynamicBatch() const noexcept override
+    {
+        return true;
+    }
 };
 
 /**

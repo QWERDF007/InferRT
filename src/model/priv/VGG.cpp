@@ -1,5 +1,7 @@
 #include "VGG.hpp"
 
+#include "Layers.hpp"
+
 #include <cuda_runtime_api.h>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/IModel.h>
@@ -79,9 +81,8 @@ void buildVGG(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *networ
         return;
     }
 
-    IShuffleLayer *shuffle = network->addShuffle(*adaptive_pool->getOutput(0));
-    shuffle->setReshapeDimensions(Dims2{1, -1});
-    named_tensors["flatten"] = shuffle->getOutput(0);
+    ITensor *flatten         = flattenPreserveBatch(network, *adaptive_pool->getOutput(0));
+    named_tensors["flatten"] = flatten;
     if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
@@ -121,11 +122,11 @@ void buildVGG(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *networ
                                                      + ".bias"))
                         ->getOutput(0);
 
-    IMatrixMultiplyLayer *fc1_0 = network->addMatrixMultiply(*shuffle->getOutput(0), MatrixOperation::kNONE, *fc1w,
-                                                             MatrixOperation::kTRANSPOSE);
-    IElementWiseLayer    *fc1_1 = network->addElementWise(*fc1_0->getOutput(0), *fc1b, ElementWiseOperation::kSUM);
-    IActivationLayer     *fc1_2 = network->addActivation(*fc1_1->getOutput(0), ActivationType::kRELU);
-    named_tensors["fc1"]        = fc1_2->getOutput(0);
+    IMatrixMultiplyLayer *fc1_0
+        = network->addMatrixMultiply(*flatten, MatrixOperation::kNONE, *fc1w, MatrixOperation::kTRANSPOSE);
+    IElementWiseLayer *fc1_1 = network->addElementWise(*fc1_0->getOutput(0), *fc1b, ElementWiseOperation::kSUM);
+    IActivationLayer  *fc1_2 = network->addActivation(*fc1_1->getOutput(0), ActivationType::kRELU);
+    named_tensors["fc1"]     = fc1_2->getOutput(0);
     if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;

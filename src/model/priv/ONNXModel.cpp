@@ -142,6 +142,11 @@ void SyncModelMetadataFromEngine(ONNXModel &model)
     config->setInputTensorNames(std::move(input_names));
     config->setOutputTensorNames(std::move(output_names));
     config->setFeatureOnly(current_config.featureOnly());
+    if (current_config.dynamicBatch())
+    {
+        config->setDynamicBatchRange(current_config.minBatchSize(), current_config.optBatchSize(),
+                                     current_config.maxBatchSize());
+    }
     config->setBackend(current_config.backend());
     config->setDevice(current_config.device());
     model.replaceModelConfigWithoutReset(std::move(config));

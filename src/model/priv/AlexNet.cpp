@@ -1,5 +1,7 @@
 #include "AlexNet.hpp"
 
+#include "Layers.hpp"
+
 #include <NvInfer.h>
 #include <cuda_runtime_api.h>
 #include <inferrt/core/Exception.hpp>
@@ -137,9 +139,8 @@ void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsM
         return;
     }
 
-    IShuffleLayer *shuffle = network->addShuffle(*adaptive_pool->getOutput(0));
-    shuffle->setReshapeDimensions(Dims2{1, -1});
-    named_tensors["flatten"] = shuffle->getOutput(0);
+    ITensor *flatten         = flattenPreserveBatch(network, *adaptive_pool->getOutput(0));
+    named_tensors["flatten"] = flatten;
     if (feature_only && tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
@@ -156,12 +157,12 @@ void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsM
         = network->addConstant(DimsHW{num_classes, 4096}, weights_map.at("classifier.6.weight"))->getOutput(0);
     ITensor *fc3b = network->addConstant(DimsHW{1, num_classes}, weights_map.at("classifier.6.bias"))->getOutput(0);
 
-    IMatrixMultiplyLayer *fc1_0 = network->addMatrixMultiply(*shuffle->getOutput(0), MatrixOperation::kNONE, *fc1w,
-                                                             MatrixOperation::kTRANSPOSE);
-    IElementWiseLayer    *fc1_1 = network->addElementWise(*fc1_0->getOutput(0), *fc1b, ElementWiseOperation::kSUM);
-    IActivationLayer     *relu6 = network->addActivation(*fc1_1->getOutput(0), ActivationType::kRELU);
-    named_tensors["fc1"]        = fc1_1->getOutput(0);
-    named_tensors["relu6"]      = relu6->getOutput(0);
+    IMatrixMultiplyLayer *fc1_0
+        = network->addMatrixMultiply(*flatten, MatrixOperation::kNONE, *fc1w, MatrixOperation::kTRANSPOSE);
+    IElementWiseLayer *fc1_1 = network->addElementWise(*fc1_0->getOutput(0), *fc1b, ElementWiseOperation::kSUM);
+    IActivationLayer  *relu6 = network->addActivation(*fc1_1->getOutput(0), ActivationType::kRELU);
+    named_tensors["fc1"]     = fc1_1->getOutput(0);
+    named_tensors["relu6"]   = relu6->getOutput(0);
     if (feature_only && tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;

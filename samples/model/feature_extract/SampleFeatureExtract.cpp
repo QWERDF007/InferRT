@@ -1,8 +1,8 @@
 #include <cuda_runtime_api.h>
 #include <cxxopts.hpp>
 #include <inferrt/core/Exception.hpp>
-#include <inferrt/model/IModel.h>
 #include <inferrt/model/Buffers.hpp>
+#include <inferrt/model/IModel.h>
 #include <inferrt/model/Utils.hpp>
 #include <inferrt/util/Path.hpp>
 #include <opencv2/opencv.hpp>
@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <string>
 #include <vector>
@@ -24,7 +25,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-using Clock = std::chrono::steady_clock;
+using Clock        = std::chrono::steady_clock;
 using DeviceBuffer = irt::model::DeviceBuffer;
 using irt::model::checkCuda;
 using irt::model::dataTypeToString;
@@ -45,7 +46,7 @@ struct Arguments
     std::string              model_name;
     fs::path                 weights_file;
     std::vector<std::string> feature_names;
-    fs::path                 image_path;
+    std::vector<fs::path>    image_paths;
     fs::path                 output_dir;
     irt::model::ModelBackend backend{irt::model::ModelBackend::TensorRT};
     irt::model::ModelDevice  device{irt::model::ModelDevice::GPU};
@@ -136,13 +137,72 @@ std::vector<std::string> splitFeatureNames(const std::string &csv)
     return feature_names;
 }
 
+std::vector<fs::path> splitPathList(const std::string &value)
+{
+    std::vector<fs::path> paths;
+    size_t                start = 0;
+    while (start <= value.size())
+    {
+        const size_t end   = value.find_first_of(",;", start);
+        auto         token = trim(value.substr(start, end == std::string::npos ? std::string::npos : end - start));
+        if (!token.empty())
+        {
+            paths.emplace_back(std::move(token));
+        }
+        if (end == std::string::npos)
+        {
+            break;
+        }
+        start = end + 1;
+    }
+    return paths;
+}
+
+std::vector<fs::path> resolveImagePaths(const fs::path &project_root, const std::vector<fs::path> &configured_paths)
+{
+    if (configured_paths.empty())
+    {
+        return {project_root / irt::model::ImageNetUtil::kDefaultImagePath};
+    }
+
+    std::vector<fs::path> resolved;
+    resolved.reserve(configured_paths.size());
+    for (const auto &path : configured_paths)
+    {
+        resolved.push_back(path.is_absolute() ? path : project_root / path);
+    }
+    return resolved;
+}
+
+std::vector<float> preprocessBatch(const std::vector<cv::Mat> &images, const nvinfer1::Dims &input_dims)
+{
+    if (input_dims.nbDims != 4 || input_dims.d[1] != 3 || input_dims.d[2] <= 0 || input_dims.d[3] <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Feature sample expects input shape Nx3xHxW, got %s",
+                             dimsToCsv(input_dims).c_str());
+    }
+
+    const size_t image_elements = static_cast<size_t>(input_dims.d[1]) * static_cast<size_t>(input_dims.d[2])
+                                * static_cast<size_t>(input_dims.d[3]);
+    std::vector<float> batch_data(images.size() * image_elements);
+    for (size_t i = 0; i < images.size(); ++i)
+    {
+        const auto preprocessed = irt::model::ImageNetUtil::preprocess(
+            images[i], cv::Size(static_cast<int>(input_dims.d[3]), static_cast<int>(input_dims.d[2])));
+        const auto single = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
+        if (single.size() != image_elements)
+        {
+            throw irt::Exception(irt::Status::ERROR_INTERNAL, "Unexpected preprocessed image tensor size");
+        }
+        std::memcpy(batch_data.data() + i * image_elements, single.data(), image_elements * sizeof(float));
+    }
+    return batch_data;
+}
+
 std::string toLower(std::string value)
 {
     std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char ch)
-                   {
-                       return static_cast<char>(std::tolower(ch));
-                   });
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return value;
 }
 
@@ -182,9 +242,12 @@ const char *backendName(irt::model::ModelBackend backend)
 {
     switch (backend)
     {
-    case irt::model::ModelBackend::TensorRT: return "tensorrt";
-    case irt::model::ModelBackend::OpenVINO: return "openvino";
-    case irt::model::ModelBackend::ONNXRuntime: return "onnxruntime";
+    case irt::model::ModelBackend::TensorRT:
+        return "tensorrt";
+    case irt::model::ModelBackend::OpenVINO:
+        return "openvino";
+    case irt::model::ModelBackend::ONNXRuntime:
+        return "onnxruntime";
     }
     return "unknown";
 }
@@ -193,8 +256,10 @@ const char *deviceName(irt::model::ModelDevice device)
 {
     switch (device)
     {
-    case irt::model::ModelDevice::CPU: return "cpu";
-    case irt::model::ModelDevice::GPU: return "gpu";
+    case irt::model::ModelDevice::CPU:
+        return "cpu";
+    case irt::model::ModelDevice::GPU:
+        return "gpu";
     }
     return "unknown";
 }
@@ -213,9 +278,8 @@ TimingStats summarizeTimings(const std::vector<double> &values)
 
 void printTimingStats(const char *name, const TimingStats &stats)
 {
-    std::cout << ", " << name << "_total=" << stats.total_ms << " ms, " << name << "_avg=" << stats.avg_ms
-              << " ms, " << name << "_min=" << stats.min_ms << " ms, " << name << "_max=" << stats.max_ms
-              << " ms";
+    std::cout << ", " << name << "_total=" << stats.total_ms << " ms, " << name << "_avg=" << stats.avg_ms << " ms, "
+              << name << "_min=" << stats.min_ms << " ms, " << name << "_max=" << stats.max_ms << " ms";
 }
 
 /**
@@ -229,14 +293,14 @@ cxxopts::Options makeOptions(const char *program_name)
     options.add_options()("model,m", "Built-in model name (required)", cxxopts::value<std::string>())(
         "weights-file,w", "Weights/model file (.wts, .onnx or OpenVINO IR) (required)", cxxopts::value<std::string>())(
         "features,f", "Comma-separated feature tensor names (required)", cxxopts::value<std::string>())(
-        "image-path,i", "Input image path", cxxopts::value<std::string>()->default_value(""))(
-        "output-dir,o", "Output directory", cxxopts::value<std::string>()->default_value(""))(
+        "image-path,i", "Input image path, or comma/semicolon-separated image paths",
+        cxxopts::value<std::string>()->default_value(""))("output-dir,o", "Output directory",
+                                                          cxxopts::value<std::string>()->default_value(""))(
         "backend", "Inference backend: tensorrt, openvino, onnxruntime",
-        cxxopts::value<std::string>()->default_value("tensorrt"))(
-        "device", "Inference device: cpu or gpu", cxxopts::value<std::string>()->default_value("gpu"))(
+        cxxopts::value<std::string>()->default_value("tensorrt"))("device", "Inference device: cpu or gpu",
+                                                                  cxxopts::value<std::string>()->default_value("gpu"))(
         "warmup", "Warmup iterations before timing", cxxopts::value<int>()->default_value("0"))(
-        "repeat", "Timed feature forward iterations", cxxopts::value<int>()->default_value("1"))("h,help",
-                                                                                                 "Show help");
+        "repeat", "Timed feature forward iterations", cxxopts::value<int>()->default_value("1"))("h,help", "Show help");
     return options;
 }
 
@@ -293,8 +357,8 @@ Arguments parseArguments(int argc, char *argv[])
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--repeat must be > 0");
     }
-    args.image_path = result["image-path"].as<std::string>();
-    args.output_dir = result["output-dir"].as<std::string>();
+    args.image_paths = splitPathList(result["image-path"].as<std::string>());
+    args.output_dir  = result["output-dir"].as<std::string>();
     return args;
 }
 
@@ -378,7 +442,7 @@ void printStats(const TensorDump &tensor)
 } // namespace
 
 /**
- * @brief 运行特征导出 sample，并将输入与中间张量保存到输出目录。
+ * @brief 运行单张或批量图片特征导出 sample，并将输入与中间张量保存到输出目录。
  * @param argc 命令行参数个数。
  * @param argv 命令行参数数组。
  * @return 成功返回 0，失败返回非 0。
@@ -396,14 +460,27 @@ int main(int argc, char *argv[])
 
         const fs::path project_root
             = irt::util::findProjectRoot(argv[0], {irt::model::ImageNetUtil::kDefaultImagePath}, __FILE__);
-        const fs::path image_path
-            = cli.image_path.empty() ? (project_root / irt::model::ImageNetUtil::kDefaultImagePath) : cli.image_path;
+        const std::vector<fs::path> image_paths = resolveImagePaths(project_root, cli.image_paths);
+        if (image_paths.empty())
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "At least one image path is required");
+        }
+        if (image_paths.size() > static_cast<size_t>(std::numeric_limits<int>::max()))
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Batch size is too large: %zu",
+                                 image_paths.size());
+        }
         const fs::path output_dir = cli.output_dir.empty() ? (fs::current_path() / kDefaultOutputDir) : cli.output_dir;
 
         auto config = std::make_unique<irt::model::IModelConfig>();
         config->setFeatureTensorNames(cli.feature_names);
         config->setOutputTensorNames(cli.feature_names);
         config->setFeatureOnly(true);
+        if (image_paths.size() > 1)
+        {
+            const int batch_size = static_cast<int>(image_paths.size());
+            config->setDynamicBatchRange(1, batch_size, batch_size);
+        }
         config->setBackend(cli.backend);
         config->setDevice(cli.device);
 
@@ -422,11 +499,17 @@ int main(int argc, char *argv[])
         model->buildOrLoad(cli.weights_file.string());
         const auto build_end = Clock::now();
 
-        cv::Mat img = cv::imread(image_path.string(), cv::IMREAD_COLOR);
-        if (img.empty())
+        std::vector<cv::Mat> images;
+        images.reserve(image_paths.size());
+        for (const auto &image_path : image_paths)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to load image: %s",
-                                 image_path.string().c_str());
+            cv::Mat img = cv::imread(image_path.string(), cv::IMREAD_COLOR);
+            if (img.empty())
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to load image: %s",
+                                     image_path.string().c_str());
+            }
+            images.push_back(std::move(img));
         }
 
         const auto input_tensor_names = model->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
@@ -440,20 +523,21 @@ int main(int argc, char *argv[])
                                  "Feature sample expects exactly one input tensor, got %zu", input_tensor_names.size());
         }
 
-        const auto input_dims = model->tensorShape(input_tensor_names.front());
-        if (input_dims.nbDims != 4 || input_dims.d[0] != 1 || input_dims.d[1] != 3 || input_dims.d[2] <= 0
-            || input_dims.d[3] <= 0)
+        auto input_dims = model->tensorShape(input_tensor_names.front());
+        if (input_dims.nbDims != 4 || input_dims.d[1] != 3 || input_dims.d[2] <= 0 || input_dims.d[3] <= 0)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "Feature sample expects input shape 1x3xHxW, got %s",
-                                 dimsToCsv(input_dims).c_str());
+                                 "Feature sample expects input shape Nx3xHxW, got %s", dimsToCsv(input_dims).c_str());
+        }
+        if (input_dims.d[0] != static_cast<int64_t>(images.size()))
+        {
+            input_dims.d[0] = static_cast<int64_t>(images.size());
+            model->setTensorShape(input_tensor_names.front(), input_dims);
         }
 
         const auto preprocess_start = Clock::now();
-        const auto preprocessed = irt::model::ImageNetUtil::preprocess(
-            img, cv::Size(static_cast<int>(input_dims.d[3]), static_cast<int>(input_dims.d[2])));
-        const auto input_data     = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
-        const auto preprocess_end = Clock::now();
+        const auto input_data       = preprocessBatch(images, input_dims);
+        const auto preprocess_end   = Clock::now();
 
         const bool uses_tensorrt = cli.backend == irt::model::ModelBackend::TensorRT;
         const auto stream        = uses_tensorrt ? model->resolveExecutionStream() : nullptr;
@@ -464,8 +548,8 @@ int main(int argc, char *argv[])
             d_input = DeviceBuffer(input_data.size(), nvinfer1::DataType::kFLOAT);
         }
 
-        const auto output_names = model->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
-        std::vector<TensorDump>         dumps;
+        const auto              output_names = model->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+        std::vector<TensorDump> dumps;
         dumps.reserve(output_names.size());
 
         std::vector<DeviceBuffer> device_outputs;
@@ -550,8 +634,7 @@ int main(int argc, char *argv[])
             return timing;
         };
 
-        std::cout << "Running feature forward warmup=" << cli.warmup << ", repeat=" << cli.repeat << "..."
-                  << std::endl;
+        std::cout << "Running feature forward warmup=" << cli.warmup << ", repeat=" << cli.repeat << "..." << std::endl;
         for (int i = 0; i < cli.warmup; ++i)
         {
             (void)run_feature_once();
@@ -594,7 +677,12 @@ int main(int argc, char *argv[])
         manifest << "repeat=" << cli.repeat << "\n";
         manifest << "model_name=" << cli.model_name << "\n";
         manifest << "weights_file=" << fs::absolute(cli.weights_file).generic_string() << "\n";
-        manifest << "image_path=" << fs::absolute(image_path).generic_string() << "\n";
+        manifest << "image_count=" << image_paths.size() << "\n";
+        manifest << "image_path=" << fs::absolute(image_paths.front()).generic_string() << "\n";
+        for (size_t i = 0; i < image_paths.size(); ++i)
+        {
+            manifest << "image_path_" << i << "=" << fs::absolute(image_paths[i]).generic_string() << "\n";
+        }
         manifest << "feature_only=true\n";
         manifest << "feature_tensor_names=";
         for (size_t i = 0; i < cli.feature_names.size(); ++i)

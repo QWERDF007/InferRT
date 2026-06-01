@@ -1,6 +1,7 @@
 #include "ResNet.hpp"
 
 #include "BatchNorm.hpp"
+#include "Layers.hpp"
 
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/IModel.h>
@@ -223,9 +224,8 @@ void buildResNet(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *net
         return;
     }
 
-    IShuffleLayer *shuffle = network->addShuffle(*avgpool->getOutput(0));
-    shuffle->setReshapeDimensions(Dims2{1, -1});
-    named_tensors["flatten"] = shuffle->getOutput(0);
+    ITensor *flatten         = flattenPreserveBatch(network, *avgpool->getOutput(0));
+    named_tensors["flatten"] = flatten;
     if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
@@ -236,7 +236,7 @@ void buildResNet(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *net
     ITensor *fcb = network->addConstant(DimsHW{1, num_classes}, weights_map.at("fc.bias"))->getOutput(0);
 
     IMatrixMultiplyLayer *fc0
-        = network->addMatrixMultiply(*shuffle->getOutput(0), MatrixOperation::kNONE, *fcw, MatrixOperation::kTRANSPOSE);
+        = network->addMatrixMultiply(*flatten, MatrixOperation::kNONE, *fcw, MatrixOperation::kTRANSPOSE);
     IElementWiseLayer *fc1  = network->addElementWise(*fc0->getOutput(0), *fcb, ElementWiseOperation::kSUM);
     named_tensors["logits"] = fc1->getOutput(0);
     if (feature_only)
