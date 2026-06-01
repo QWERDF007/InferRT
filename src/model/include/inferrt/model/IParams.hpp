@@ -45,18 +45,22 @@ typedef struct TensorRTParams
 {
     /// 已构建或已加载的 TensorRT engine。
     std::shared_ptr<nvinfer1::ICudaEngine> engine{nullptr};
+
     /// 与 engine 绑定的执行上下文。
     std::unique_ptr<nvinfer1::IExecutionContext> context{nullptr};
 
     /// 推理阶段使用的 CUDA stream。
     std::unique_ptr<cudaStream_t, decltype(StreamDeleter)> stream{nullptr};
+
     /// 调用方显式指定的外部 CUDA stream；为空时回退到内部 stream。
     cudaStream_t external_stream{nullptr};
 
     /// TensorRT 日志对象。
     std::shared_ptr<Logger> logger{nullptr};
+
     /// 当前日志级别。
     nvinfer1::ILogger::Severity log_level{nvinfer1::ILogger::Severity::kWARNING};
+
     /// 当前 engine 是否为仅特征提取的裁剪网络。
     bool feature_only{false};
 } TRTParams;

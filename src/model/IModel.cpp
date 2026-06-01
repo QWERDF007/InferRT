@@ -1,6 +1,7 @@
+#include "priv/IModelImpl.hpp"
+
 #include <inferrt/model/IModel.h>
 
-#include "priv/IModelImpl.hpp"
 
 namespace irt::model {
 

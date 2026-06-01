@@ -1,13 +1,14 @@
 #include "GoogLeNet.hpp"
-#include "Weights.hpp"
 
 #include "BatchNorm.hpp"
+#include "Weights.hpp"
 
 #include <inferrt/model/IModel.h>
 
 #include <array>
 #include <initializer_list>
 #include <string>
+
 
 namespace irt::model {
 
@@ -20,12 +21,12 @@ struct InceptionSpec
 {
     const char *prefix;       ///< 权重文件中的模块前缀，例如 `inception3a.`。
     const char *feature_name; ///< featureOnly 使用的稳定特征名，例如 `inception3a`。
-    int ch1x1;                ///< branch1 的 1x1 卷积输出通道数。
-    int ch3x3_reduce;         ///< branch2 的 1x1 降维通道数。
-    int ch3x3;                ///< branch2 的 3x3 卷积输出通道数。
-    int ch5x5_reduce;         ///< branch3 的 1x1 降维通道数。
-    int ch5x5;                ///< branch3 的 3x3 卷积输出通道数，等价于 torchvision 的 5x5 分支。
-    int pool_proj;            ///< branch4 池化后的 1x1 投影通道数。
+    int         ch1x1;        ///< branch1 的 1x1 卷积输出通道数。
+    int         ch3x3_reduce; ///< branch2 的 1x1 降维通道数。
+    int         ch3x3;        ///< branch2 的 3x3 卷积输出通道数。
+    int         ch5x5_reduce; ///< branch3 的 1x1 降维通道数。
+    int         ch5x5;        ///< branch3 的 3x3 卷积输出通道数，等价于 torchvision 的 5x5 分支。
+    int         pool_proj;    ///< branch4 池化后的 1x1 投影通道数。
 };
 
 /**
@@ -115,12 +116,10 @@ nvinfer1::ITensor *addInception(nvinfer1::INetworkDefinition *network, const Wei
 
     auto *branch1 = addBasicConv2d(network, weights_map, input, prefix + "branch1", spec.ch1x1, 1);
 
-    auto *branch2_reduce
-        = addBasicConv2d(network, weights_map, input, prefix + "branch2.0", spec.ch3x3_reduce, 1);
+    auto *branch2_reduce = addBasicConv2d(network, weights_map, input, prefix + "branch2.0", spec.ch3x3_reduce, 1);
     auto *branch2 = addBasicConv2d(network, weights_map, *branch2_reduce, prefix + "branch2.1", spec.ch3x3, 3, 1, 1);
 
-    auto *branch3_reduce
-        = addBasicConv2d(network, weights_map, input, prefix + "branch3.0", spec.ch5x5_reduce, 1);
+    auto *branch3_reduce = addBasicConv2d(network, weights_map, input, prefix + "branch3.0", spec.ch5x5_reduce, 1);
     auto *branch3 = addBasicConv2d(network, weights_map, *branch3_reduce, prefix + "branch3.1", spec.ch5x5, 3, 1, 1);
 
     auto *branch4_pool = addCeilMaxPool(network, input, 3, 1, 1);
@@ -198,9 +197,11 @@ void GoogLeNet::buildNetwork(nvinfer1::INetworkDefinition *network, const Weight
 {
     using namespace nvinfer1;
 
-    const bool feature_only = isBuildingFeatureEngine();
-    ITensor   *x           = addInputTensor(network);
-    priv::IModelImpl::NamedTensorMap named_tensors{{"input", x}};
+    const bool                       feature_only = isBuildingFeatureEngine();
+    ITensor                         *x            = addInputTensor(network);
+    priv::IModelImpl::NamedTensorMap named_tensors{
+        {"input", x}
+    };
 
     x = addBasicConv2d(network, weights_map, *x, "conv1", 64, 7, 2, 3);
     if (recordFeature(*this, network, named_tensors, {"conv1", "stem.conv1"}, x, feature_only))
@@ -232,8 +233,10 @@ void GoogLeNet::buildNetwork(nvinfer1::INetworkDefinition *network, const Weight
         return;
     }
 
-    constexpr std::array<InceptionSpec, 2> inception3{{{"inception3a.", "inception3a", 64, 96, 128, 16, 32, 32},
-                                                       {"inception3b.", "inception3b", 128, 128, 192, 32, 96, 64}}};
+    constexpr std::array<InceptionSpec, 2> inception3{
+        {{"inception3a.", "inception3a", 64, 96, 128, 16, 32, 32},
+         {"inception3b.", "inception3b", 128, 128, 192, 32, 96, 64}}
+    };
     for (const auto &spec : inception3)
     {
         x = addInception(network, weights_map, *x, spec);
@@ -249,11 +252,13 @@ void GoogLeNet::buildNetwork(nvinfer1::INetworkDefinition *network, const Weight
         return;
     }
 
-    constexpr std::array<InceptionSpec, 5> inception4{{{"inception4a.", "inception4a", 192, 96, 208, 16, 48, 64},
-                                                       {"inception4b.", "inception4b", 160, 112, 224, 24, 64, 64},
-                                                       {"inception4c.", "inception4c", 128, 128, 256, 24, 64, 64},
-                                                       {"inception4d.", "inception4d", 112, 144, 288, 32, 64, 64},
-                                                       {"inception4e.", "inception4e", 256, 160, 320, 32, 128, 128}}};
+    constexpr std::array<InceptionSpec, 5> inception4{
+        {{"inception4a.", "inception4a", 192, 96, 208, 16, 48, 64},
+         {"inception4b.", "inception4b", 160, 112, 224, 24, 64, 64},
+         {"inception4c.", "inception4c", 128, 128, 256, 24, 64, 64},
+         {"inception4d.", "inception4d", 112, 144, 288, 32, 64, 64},
+         {"inception4e.", "inception4e", 256, 160, 320, 32, 128, 128}}
+    };
     for (const auto &spec : inception4)
     {
         x = addInception(network, weights_map, *x, spec);
@@ -269,8 +274,10 @@ void GoogLeNet::buildNetwork(nvinfer1::INetworkDefinition *network, const Weight
         return;
     }
 
-    constexpr std::array<InceptionSpec, 2> inception5{{{"inception5a.", "inception5a", 256, 160, 320, 32, 128, 128},
-                                                       {"inception5b.", "inception5b", 384, 192, 384, 48, 128, 128}}};
+    constexpr std::array<InceptionSpec, 2> inception5{
+        {{"inception5a.", "inception5a", 256, 160, 320, 32, 128, 128},
+         {"inception5b.", "inception5b", 384, 192, 384, 48, 128, 128}}
+    };
     for (const auto &spec : inception5)
     {
         x = addInception(network, weights_map, *x, spec);
@@ -292,7 +299,7 @@ void GoogLeNet::buildNetwork(nvinfer1::INetworkDefinition *network, const Weight
         return;
     }
 
-    x = addClassifier(*this, network, weights_map, *x);
+    x                       = addClassifier(*this, network, weights_map, *x);
     named_tensors["logits"] = x;
     if (feature_only)
     {

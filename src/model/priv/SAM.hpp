@@ -24,21 +24,21 @@ enum class SAMFamily
  */
 struct SAMSpec
 {
-    const char   *display_name;         ///< 模型显示名称。
-    int           image_size;           ///< 输入图像边长。
-    int           mask_size;            ///< 低分辨率 mask 边长。
-    int           max_points;           ///< 固定点提示容量。
-    int           multimask_outputs;    ///< 输出候选 mask 数量。
-    int           encoder_embed_dim;    ///< SAM v1 ViT token 维度。
-    int           encoder_depth;        ///< SAM v1 ViT block 数量。
-    int           encoder_num_heads;    ///< SAM v1 ViT 注意力头数量。
-    std::set<int> global_attn_indexes;  ///< 使用全局注意力的 block 下标。
-    std::vector<int> hiera_stages;      ///< SAM2 Hiera 各 stage 的 block 数量。
-    std::vector<int> hiera_window_spec; ///< SAM2 Hiera 各 stage 的窗口大小。
-    std::vector<int> backbone_channels; ///< SAM2 FPN neck 由低分辨率到高分辨率的输入通道。
-    int           pos_embed_size;       ///< SAM2 Hiera 背景位置编码的基准边长。
-    int           q_pool;               ///< SAM2 Hiera 执行 q pooling 的 stage 数。
-    SAMFamily     family;               ///< SAM 系列版本。
+    const char      *display_name;        ///< 模型显示名称。
+    int              image_size;          ///< 输入图像边长。
+    int              mask_size;           ///< 低分辨率 mask 边长。
+    int              max_points;          ///< 固定点提示容量。
+    int              multimask_outputs;   ///< 输出候选 mask 数量。
+    int              encoder_embed_dim;   ///< SAM v1 ViT token 维度。
+    int              encoder_depth;       ///< SAM v1 ViT block 数量。
+    int              encoder_num_heads;   ///< SAM v1 ViT 注意力头数量。
+    std::set<int>    global_attn_indexes; ///< 使用全局注意力的 block 下标。
+    std::vector<int> hiera_stages;        ///< SAM2 Hiera 各 stage 的 block 数量。
+    std::vector<int> hiera_window_spec;   ///< SAM2 Hiera 各 stage 的窗口大小。
+    std::vector<int> backbone_channels;   ///< SAM2 FPN neck 由低分辨率到高分辨率的输入通道。
+    int              pos_embed_size;      ///< SAM2 Hiera 背景位置编码的基准边长。
+    int              q_pool;              ///< SAM2 Hiera 执行 q pooling 的 stage 数。
+    SAMFamily        family;              ///< SAM 系列版本。
 };
 
 /**
@@ -89,7 +89,11 @@ class SAM : public SAMSegmentationModel
 {
 public:
     SAM();
-    static const char *key() noexcept { return "sam"; }
+
+    static const char *key() noexcept
+    {
+        return "sam";
+    }
 };
 
 /**
@@ -99,7 +103,11 @@ class SAMViTB : public SAMSegmentationModel
 {
 public:
     SAMViTB();
-    static const char *key() noexcept { return "sam_vit_b"; }
+
+    static const char *key() noexcept
+    {
+        return "sam_vit_b";
+    }
 };
 
 /**
@@ -109,7 +117,11 @@ class SAMViTL : public SAMSegmentationModel
 {
 public:
     SAMViTL();
-    static const char *key() noexcept { return "sam_vit_l"; }
+
+    static const char *key() noexcept
+    {
+        return "sam_vit_l";
+    }
 };
 
 /**
@@ -119,7 +131,11 @@ class SAMViTH : public SAMSegmentationModel
 {
 public:
     SAMViTH();
-    static const char *key() noexcept { return "sam_vit_h"; }
+
+    static const char *key() noexcept
+    {
+        return "sam_vit_h";
+    }
 };
 
 /**
@@ -129,7 +145,11 @@ class EdgeSAM : public SAMSegmentationModel
 {
 public:
     EdgeSAM();
-    static const char *key() noexcept { return "edge_sam"; }
+
+    static const char *key() noexcept
+    {
+        return "edge_sam";
+    }
 };
 
 /**
@@ -139,7 +159,11 @@ class SAM2 : public SAMSegmentationModel
 {
 public:
     SAM2();
-    static const char *key() noexcept { return "sam2"; }
+
+    static const char *key() noexcept
+    {
+        return "sam2";
+    }
 };
 
 /**
@@ -149,7 +173,11 @@ class SAM2HieraTiny : public SAMSegmentationModel
 {
 public:
     SAM2HieraTiny();
-    static const char *key() noexcept { return "sam2_hiera_tiny"; }
+
+    static const char *key() noexcept
+    {
+        return "sam2_hiera_tiny";
+    }
 };
 
 /**
@@ -159,7 +187,11 @@ class SAM2HieraSmall : public SAMSegmentationModel
 {
 public:
     SAM2HieraSmall();
-    static const char *key() noexcept { return "sam2_hiera_small"; }
+
+    static const char *key() noexcept
+    {
+        return "sam2_hiera_small";
+    }
 };
 
 /**
@@ -169,7 +201,11 @@ class SAM2HieraBasePlus : public SAMSegmentationModel
 {
 public:
     SAM2HieraBasePlus();
-    static const char *key() noexcept { return "sam2_hiera_base_plus"; }
+
+    static const char *key() noexcept
+    {
+        return "sam2_hiera_base_plus";
+    }
 };
 
 /**
@@ -179,7 +215,11 @@ class SAM2HieraLarge : public SAMSegmentationModel
 {
 public:
     SAM2HieraLarge();
-    static const char *key() noexcept { return "sam2_hiera_large"; }
+
+    static const char *key() noexcept
+    {
+        return "sam2_hiera_large";
+    }
 };
 
 /**
@@ -189,7 +229,11 @@ class SAM21HieraTiny : public SAMSegmentationModel
 {
 public:
     SAM21HieraTiny();
-    static const char *key() noexcept { return "sam2_1_hiera_tiny"; }
+
+    static const char *key() noexcept
+    {
+        return "sam2_1_hiera_tiny";
+    }
 };
 
 /**
@@ -199,7 +243,11 @@ class SAM21HieraSmall : public SAMSegmentationModel
 {
 public:
     SAM21HieraSmall();
-    static const char *key() noexcept { return "sam2_1_hiera_small"; }
+
+    static const char *key() noexcept
+    {
+        return "sam2_1_hiera_small";
+    }
 };
 
 /**
@@ -209,7 +257,11 @@ class SAM21HieraBasePlus : public SAMSegmentationModel
 {
 public:
     SAM21HieraBasePlus();
-    static const char *key() noexcept { return "sam2_1_hiera_base_plus"; }
+
+    static const char *key() noexcept
+    {
+        return "sam2_1_hiera_base_plus";
+    }
 };
 
 /**
@@ -219,7 +271,11 @@ class SAM21HieraLarge : public SAMSegmentationModel
 {
 public:
     SAM21HieraLarge();
-    static const char *key() noexcept { return "sam2_1_hiera_large"; }
+
+    static const char *key() noexcept
+    {
+        return "sam2_1_hiera_large";
+    }
 };
 
 /**
@@ -229,7 +285,11 @@ class SAM3 : public SAMSegmentationModel
 {
 public:
     SAM3();
-    static const char *key() noexcept { return "sam3"; }
+
+    static const char *key() noexcept
+    {
+        return "sam3";
+    }
 };
 
 /**
@@ -239,7 +299,11 @@ class SAM3Image : public SAMSegmentationModel
 {
 public:
     SAM3Image();
-    static const char *key() noexcept { return "sam3_image"; }
+
+    static const char *key() noexcept
+    {
+        return "sam3_image";
+    }
 };
 
 } // namespace irt::model

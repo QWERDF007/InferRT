@@ -18,7 +18,7 @@ enum class DINOVersion
  */
 enum class DINOMlpKind
 {
-    Mlp,         ///< 标准 Linear + GeLU + Linear。
+    Mlp,          ///< 标准 Linear + GeLU + Linear。
     PackedSwiGLU, ///< DINOv2 Giant 使用的 w12/w3 打包 SwiGLU。
     SplitSwiGLU,  ///< DINOv3 Plus/7B 使用的 w1/w2/w3 拆分 SwiGLU。
 };

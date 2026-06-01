@@ -45,7 +45,6 @@ public:
      * @param weights_map 权重映射表。
      */
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
-
 };
 
 } // namespace irt::model

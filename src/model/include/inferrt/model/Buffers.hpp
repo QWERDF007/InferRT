@@ -77,7 +77,7 @@ public:
  * @tparam AllocFunc 分配器类型，需实现 `bool operator()(void **, size_t)`。
  * @tparam FreeFunc 释放器类型，需实现 `void operator()(void *)`。
  */
-template <typename AllocFunc, typename FreeFunc>
+template<typename AllocFunc, typename FreeFunc>
 class GenericBuffer
 {
 public:
@@ -335,12 +335,23 @@ private:
         capacity_ = new_capacity;
     }
 
-    size_t             size_{0};                                ///< 当前逻辑元素数量。
-    size_t             capacity_{0};                            ///< 当前容量，以元素数量表示。
-    nvinfer1::DataType data_type_{nvinfer1::DataType::kFLOAT};  ///< 缓冲区元素类型。
-    void              *data_{nullptr};                          ///< 底层内存指针。
-    AllocFunc          alloc_fn_{};                             ///< 内存分配器。
-    FreeFunc           free_fn_{};                              ///< 内存释放器。
+    ///< 当前逻辑元素数量。
+    size_t size_{0};
+
+    ///< 当前容量，以元素数量表示。
+    size_t capacity_{0};
+
+    ///< 缓冲区元素类型。
+    nvinfer1::DataType data_type_{nvinfer1::DataType::kFLOAT};
+
+    ///< 底层内存指针。
+    void *data_{nullptr};
+
+    ///< 内存分配器。
+    AllocFunc alloc_fn_{};
+
+    ///< 内存释放器。
+    FreeFunc free_fn_{};
 };
 
 /**

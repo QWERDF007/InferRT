@@ -146,24 +146,26 @@ nvinfer1::IActivationLayer *Bottleneck(nvinfer1::INetworkDefinition *network, co
  * @param block      具体的 block 构建函数。
  */
 void buildResNet(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
-                 const std::array<int, 4> &layers, int expansion, int base_width, int num_classes,
-                 BlockBuilder block, bool feature_only = false)
+                 const std::array<int, 4> &layers, int expansion, int base_width, int num_classes, BlockBuilder block,
+                 bool feature_only = false)
 {
     using namespace nvinfer1;
 
     Weights empty_weights{DataType::kFLOAT, nullptr, 0};
     int     inplanes = 64;
 
-    ITensor *input = impl.addInputTensor(network);
-    priv::IModelImpl::NamedTensorMap named_tensors{{"input", input}};
+    ITensor                         *input = impl.addInputTensor(network);
+    priv::IModelImpl::NamedTensorMap named_tensors{
+        {"input", input}
+    };
 
     IConvolutionLayer *conv1
         = network->addConvolutionNd(*input, 64, DimsHW{7, 7}, weights_map.at("conv1.weight"), empty_weights);
     conv1->setStrideNd(DimsHW{2, 2});
     conv1->setPaddingNd(DimsHW{3, 3});
 
-    IScaleLayer      *bn1   = addBatchNorm2d(network, weights_map, *conv1->getOutput(0), "bn1", 1e-5f);
-    IActivationLayer *relu1 = network->addActivation(*bn1->getOutput(0), ActivationType::kRELU);
+    IScaleLayer      *bn1       = addBatchNorm2d(network, weights_map, *conv1->getOutput(0), "bn1", 1e-5f);
+    IActivationLayer *relu1     = network->addActivation(*bn1->getOutput(0), ActivationType::kRELU);
     named_tensors["stem.conv1"] = conv1->getOutput(0);
     named_tensors["stem.relu"]  = relu1->getOutput(0);
     if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
@@ -182,7 +184,7 @@ void buildResNet(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *net
 
     IActivationLayer *layer1 = makeLayer(network, weights_map, *pool1->getOutput(0), inplanes, 64, layers[0], 1,
                                          expansion, base_width, "layer1.", block);
-    named_tensors["layer1"] = layer1->getOutput(0);
+    named_tensors["layer1"]  = layer1->getOutput(0);
     if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
@@ -190,7 +192,7 @@ void buildResNet(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *net
 
     IActivationLayer *layer2 = makeLayer(network, weights_map, *layer1->getOutput(0), inplanes, 128, layers[1], 2,
                                          expansion, base_width, "layer2.", block);
-    named_tensors["layer2"] = layer2->getOutput(0);
+    named_tensors["layer2"]  = layer2->getOutput(0);
     if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
@@ -198,7 +200,7 @@ void buildResNet(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *net
 
     IActivationLayer *layer3 = makeLayer(network, weights_map, *layer2->getOutput(0), inplanes, 256, layers[2], 2,
                                          expansion, base_width, "layer3.", block);
-    named_tensors["layer3"] = layer3->getOutput(0);
+    named_tensors["layer3"]  = layer3->getOutput(0);
     if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
@@ -206,7 +208,7 @@ void buildResNet(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *net
 
     IActivationLayer *layer4 = makeLayer(network, weights_map, *layer3->getOutput(0), inplanes, 512, layers[3], 2,
                                          expansion, base_width, "layer4.", block);
-    named_tensors["layer4"] = layer4->getOutput(0);
+    named_tensors["layer4"]  = layer4->getOutput(0);
     if (feature_only && impl.tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
@@ -235,7 +237,7 @@ void buildResNet(const priv::IModelImpl &impl, nvinfer1::INetworkDefinition *net
 
     IMatrixMultiplyLayer *fc0
         = network->addMatrixMultiply(*shuffle->getOutput(0), MatrixOperation::kNONE, *fcw, MatrixOperation::kTRANSPOSE);
-    IElementWiseLayer *fc1 = network->addElementWise(*fc0->getOutput(0), *fcb, ElementWiseOperation::kSUM);
+    IElementWiseLayer *fc1  = network->addElementWise(*fc0->getOutput(0), *fcb, ElementWiseOperation::kSUM);
     named_tensors["logits"] = fc1->getOutput(0);
     if (feature_only)
     {

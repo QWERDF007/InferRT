@@ -1,8 +1,8 @@
+#include <cuda_runtime_api.h>
 #include <inferrt/model/Buffers.hpp>
 
-#include <cuda_runtime_api.h>
-
 #include <cstdlib>
+
 
 namespace irt::model {
 

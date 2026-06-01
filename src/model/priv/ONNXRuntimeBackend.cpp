@@ -3,13 +3,12 @@
 
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/Utils.hpp>
+#include <onnxruntime_cxx_api.h>
 
 #include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <vector>
-
-#include <onnxruntime_cxx_api.h>
 
 namespace irt::model::priv {
 

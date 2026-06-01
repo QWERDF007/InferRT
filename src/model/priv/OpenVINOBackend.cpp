@@ -2,12 +2,11 @@
 #include "BackendUtils.hpp"
 
 #include <inferrt/core/Exception.hpp>
+#include <openvino/openvino.hpp>
 
 #include <filesystem>
 #include <limits>
 #include <unordered_map>
-
-#include <openvino/openvino.hpp>
 
 namespace irt::model::priv {
 
@@ -15,7 +14,7 @@ namespace {
 
 struct TensorInfo
 {
-    nvinfer1::Dims shape{};
+    nvinfer1::Dims    shape{};
     ov::element::Type element_type{};
 };
 
@@ -214,7 +213,7 @@ public:
                     throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Input buffer is null: %s",
                                          input_name.c_str());
                 }
-                const auto &info = input_info_.at(input_name);
+                const auto     &info  = input_info_.at(input_name);
                 const ov::Shape shape = DimsToSizeTShape(info.shape, input_name);
                 tensors.emplace_back(info.element_type, shape, buffer);
                 infer_request_.set_tensor(input_name, tensors.back());
@@ -228,7 +227,7 @@ public:
                     throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Output buffer is null: %s",
                                          output_name.c_str());
                 }
-                const auto &info = output_info_.at(output_name);
+                const auto     &info  = output_info_.at(output_name);
                 const ov::Shape shape = DimsToSizeTShape(info.shape, output_name);
                 tensors.emplace_back(info.element_type, shape, buffer);
                 infer_request_.set_tensor(output_name, tensors.back());
@@ -307,13 +306,13 @@ private:
         }
     }
 
-    ov::Core          core_;
+    ov::Core                   core_;
     std::shared_ptr<ov::Model> model_;
-    ov::CompiledModel compiled_model_;
-    ov::InferRequest  infer_request_;
+    ov::CompiledModel          compiled_model_;
+    ov::InferRequest           infer_request_;
 
-    std::vector<std::string> input_names_;
-    std::vector<std::string> output_names_;
+    std::vector<std::string>                    input_names_;
+    std::vector<std::string>                    output_names_;
     std::unordered_map<std::string, TensorInfo> input_info_;
     std::unordered_map<std::string, TensorInfo> output_info_;
 };

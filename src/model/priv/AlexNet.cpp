@@ -15,9 +15,11 @@ namespace irt::model {
 void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
     using namespace nvinfer1;
-    const bool feature_only = isBuildingFeatureEngine();
-    ITensor *input = addInputTensor(network);
-    priv::IModelImpl::NamedTensorMap named_tensors{{"input", input}};
+    const bool                       feature_only = isBuildingFeatureEngine();
+    ITensor                         *input        = addInputTensor(network);
+    priv::IModelImpl::NamedTensorMap named_tensors{
+        {"input", input}
+    };
 
     // features
     // CRP (Conv-Relu-Pool)
@@ -27,8 +29,8 @@ void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsM
     conv1->setPaddingNd(DimsHW{2, 2});
 
     IActivationLayer *relu1 = network->addActivation(*conv1->getOutput(0), ActivationType::kRELU);
-    named_tensors["conv1"] = conv1->getOutput(0);
-    named_tensors["relu1"] = relu1->getOutput(0);
+    named_tensors["conv1"]  = conv1->getOutput(0);
+    named_tensors["relu1"]  = relu1->getOutput(0);
     if (feature_only && tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
@@ -49,8 +51,8 @@ void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsM
     conv2->setPaddingNd(DimsHW{2, 2});
 
     IActivationLayer *relu2 = network->addActivation(*conv2->getOutput(0), ActivationType::kRELU);
-    named_tensors["conv2"] = conv2->getOutput(0);
-    named_tensors["relu2"] = relu2->getOutput(0);
+    named_tensors["conv2"]  = conv2->getOutput(0);
+    named_tensors["relu2"]  = relu2->getOutput(0);
     if (feature_only && tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
@@ -71,8 +73,8 @@ void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsM
     conv3->setPaddingNd(DimsHW{1, 1});
 
     IActivationLayer *relu3 = network->addActivation(*conv3->getOutput(0), ActivationType::kRELU);
-    named_tensors["conv3"] = conv3->getOutput(0);
-    named_tensors["relu3"] = relu3->getOutput(0);
+    named_tensors["conv3"]  = conv3->getOutput(0);
+    named_tensors["relu3"]  = relu3->getOutput(0);
     if (feature_only && tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
@@ -85,8 +87,8 @@ void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsM
     conv4->setPaddingNd(DimsHW{1, 1});
 
     IActivationLayer *relu4 = network->addActivation(*conv4->getOutput(0), ActivationType::kRELU);
-    named_tensors["conv4"] = conv4->getOutput(0);
-    named_tensors["relu4"] = relu4->getOutput(0);
+    named_tensors["conv4"]  = conv4->getOutput(0);
+    named_tensors["relu4"]  = relu4->getOutput(0);
     if (feature_only && tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
@@ -99,8 +101,8 @@ void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsM
     conv5->setPaddingNd(DimsHW{1, 1});
 
     IActivationLayer *relu5 = network->addActivation(*conv5->getOutput(0), ActivationType::kRELU);
-    named_tensors["conv5"] = conv5->getOutput(0);
-    named_tensors["relu5"] = relu5->getOutput(0);
+    named_tensors["conv5"]  = conv5->getOutput(0);
+    named_tensors["relu5"]  = relu5->getOutput(0);
     if (feature_only && tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
@@ -146,9 +148,9 @@ void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsM
     // classifier
     ITensor *fc1w
         = network->addConstant(DimsHW{4096, fc1_in_features}, weights_map.at("classifier.1.weight"))->getOutput(0);
-    ITensor *fc1b = network->addConstant(DimsHW{1, 4096}, weights_map.at("classifier.1.bias"))->getOutput(0);
-    ITensor *fc2w = network->addConstant(DimsHW{4096, 4096}, weights_map.at("classifier.4.weight"))->getOutput(0);
-    ITensor *fc2b = network->addConstant(DimsHW{1, 4096}, weights_map.at("classifier.4.bias"))->getOutput(0);
+    ITensor  *fc1b = network->addConstant(DimsHW{1, 4096}, weights_map.at("classifier.1.bias"))->getOutput(0);
+    ITensor  *fc2w = network->addConstant(DimsHW{4096, 4096}, weights_map.at("classifier.4.weight"))->getOutput(0);
+    ITensor  *fc2b = network->addConstant(DimsHW{1, 4096}, weights_map.at("classifier.4.bias"))->getOutput(0);
     const int num_classes = modelConfig().numClasses();
     ITensor  *fc3w
         = network->addConstant(DimsHW{num_classes, 4096}, weights_map.at("classifier.6.weight"))->getOutput(0);
@@ -156,10 +158,10 @@ void AlexNet::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsM
 
     IMatrixMultiplyLayer *fc1_0 = network->addMatrixMultiply(*shuffle->getOutput(0), MatrixOperation::kNONE, *fc1w,
                                                              MatrixOperation::kTRANSPOSE);
-    IElementWiseLayer *fc1_1 = network->addElementWise(*fc1_0->getOutput(0), *fc1b, ElementWiseOperation::kSUM);
-    IActivationLayer  *relu6 = network->addActivation(*fc1_1->getOutput(0), ActivationType::kRELU);
-    named_tensors["fc1"]     = fc1_1->getOutput(0);
-    named_tensors["relu6"]   = relu6->getOutput(0);
+    IElementWiseLayer    *fc1_1 = network->addElementWise(*fc1_0->getOutput(0), *fc1b, ElementWiseOperation::kSUM);
+    IActivationLayer     *relu6 = network->addActivation(*fc1_1->getOutput(0), ActivationType::kRELU);
+    named_tensors["fc1"]        = fc1_1->getOutput(0);
+    named_tensors["relu6"]      = relu6->getOutput(0);
     if (feature_only && tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;

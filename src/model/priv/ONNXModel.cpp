@@ -59,8 +59,8 @@ void ValidateConfig(const ONNXModel &model)
         if (shape.d[0] <= 0 || shape.d[1] <= 0 || shape.d[2] <= 0 || shape.d[3] <= 0)
         {
             throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
-                                 "input shape at index %zu must be positive, got N=%d C=%d H=%d W=%d", i,
-                                 shape.d[0], shape.d[1], shape.d[2], shape.d[3]);
+                                 "input shape at index %zu must be positive, got N=%d C=%d H=%d W=%d", i, shape.d[0],
+                                 shape.d[1], shape.d[2], shape.d[3]);
         }
     }
 
@@ -84,8 +84,7 @@ void ValidateConfig(const ONNXModel &model)
 
     if (config.featureOnly())
     {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION,
-                             "ONNXModel does not support featureOnly configuration");
+        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "ONNXModel does not support featureOnly configuration");
     }
 }
 

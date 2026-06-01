@@ -250,7 +250,7 @@ nvinfer1::ILogger::Severity TensorRTBackend::logLevel() const noexcept
 
 void TensorRTBackend::setLogLevel(nvinfer1::ILogger::Severity severity)
 {
-    log_level_         = severity;
+    log_level_        = severity;
     params_.log_level = severity;
     if (params_.logger)
     {
@@ -375,8 +375,8 @@ void TensorRTBackend::bindTensorAddresses(const std::vector<void *> &buffers)
         throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Execution context is not initialized");
     }
 
-    const auto input_names        = ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
-    const auto output_names       = ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+    const auto  input_names        = ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
+    const auto  output_names       = ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
     const auto *output_description = params_.feature_only ? "feature outputs" : "outputs";
     const auto  expected           = input_names.size() + output_names.size();
     if (buffers.size() != expected)

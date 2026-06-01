@@ -19,10 +19,10 @@ struct YOLOv5Spec
  */
 struct YOLOv8Spec
 {
-    const char *display_name;  ///< 模型显示名称。
-    float       depth;         ///< 深度缩放系数。
-    float       width;         ///< 宽度缩放系数。
-    int         max_channels;  ///< 宽度缩放后的最大通道数。
+    const char *display_name; ///< 模型显示名称。
+    float       depth;        ///< 深度缩放系数。
+    float       width;        ///< 宽度缩放系数。
+    int         max_channels; ///< 宽度缩放后的最大通道数。
 };
 
 /**
@@ -120,7 +120,11 @@ public:
         : YOLOv5Detector({"YOLOv5s", 0.33F, 0.50F})
     {
     }
-    static const char *key() noexcept { return "yolov5"; }
+
+    static const char *key() noexcept
+    {
+        return "yolov5";
+    }
 };
 
 class YOLOv5n : public YOLOv5Detector
@@ -130,7 +134,11 @@ public:
         : YOLOv5Detector({"YOLOv5n", 0.33F, 0.25F})
     {
     }
-    static const char *key() noexcept { return "yolov5n"; }
+
+    static const char *key() noexcept
+    {
+        return "yolov5n";
+    }
 };
 
 class YOLOv5s : public YOLOv5Detector
@@ -140,7 +148,11 @@ public:
         : YOLOv5Detector({"YOLOv5s", 0.33F, 0.50F})
     {
     }
-    static const char *key() noexcept { return "yolov5s"; }
+
+    static const char *key() noexcept
+    {
+        return "yolov5s";
+    }
 };
 
 class YOLOv5m : public YOLOv5Detector
@@ -150,7 +162,11 @@ public:
         : YOLOv5Detector({"YOLOv5m", 0.67F, 0.75F})
     {
     }
-    static const char *key() noexcept { return "yolov5m"; }
+
+    static const char *key() noexcept
+    {
+        return "yolov5m";
+    }
 };
 
 class YOLOv5l : public YOLOv5Detector
@@ -160,7 +176,11 @@ public:
         : YOLOv5Detector({"YOLOv5l", 1.00F, 1.00F})
     {
     }
-    static const char *key() noexcept { return "yolov5l"; }
+
+    static const char *key() noexcept
+    {
+        return "yolov5l";
+    }
 };
 
 class YOLOv5x : public YOLOv5Detector
@@ -170,7 +190,11 @@ public:
         : YOLOv5Detector({"YOLOv5x", 1.33F, 1.25F})
     {
     }
-    static const char *key() noexcept { return "yolov5x"; }
+
+    static const char *key() noexcept
+    {
+        return "yolov5x";
+    }
 };
 
 class YOLOv8 : public YOLOv8Detector
@@ -180,7 +204,11 @@ public:
         : YOLOv8Detector({"YOLOv8n", 0.33F, 0.25F, 1024})
     {
     }
-    static const char *key() noexcept { return "yolov8"; }
+
+    static const char *key() noexcept
+    {
+        return "yolov8";
+    }
 };
 
 class YOLOv8n : public YOLOv8Detector
@@ -190,7 +218,11 @@ public:
         : YOLOv8Detector({"YOLOv8n", 0.33F, 0.25F, 1024})
     {
     }
-    static const char *key() noexcept { return "yolov8n"; }
+
+    static const char *key() noexcept
+    {
+        return "yolov8n";
+    }
 };
 
 class YOLOv8s : public YOLOv8Detector
@@ -200,7 +232,11 @@ public:
         : YOLOv8Detector({"YOLOv8s", 0.33F, 0.50F, 1024})
     {
     }
-    static const char *key() noexcept { return "yolov8s"; }
+
+    static const char *key() noexcept
+    {
+        return "yolov8s";
+    }
 };
 
 class YOLOv8m : public YOLOv8Detector
@@ -210,7 +246,11 @@ public:
         : YOLOv8Detector({"YOLOv8m", 0.67F, 0.75F, 576})
     {
     }
-    static const char *key() noexcept { return "yolov8m"; }
+
+    static const char *key() noexcept
+    {
+        return "yolov8m";
+    }
 };
 
 class YOLOv8l : public YOLOv8Detector
@@ -220,7 +260,11 @@ public:
         : YOLOv8Detector({"YOLOv8l", 1.00F, 1.00F, 512})
     {
     }
-    static const char *key() noexcept { return "yolov8l"; }
+
+    static const char *key() noexcept
+    {
+        return "yolov8l";
+    }
 };
 
 class YOLOv8x : public YOLOv8Detector
@@ -230,7 +274,11 @@ public:
         : YOLOv8Detector({"YOLOv8x", 1.00F, 1.25F, 640})
     {
     }
-    static const char *key() noexcept { return "yolov8x"; }
+
+    static const char *key() noexcept
+    {
+        return "yolov8x";
+    }
 };
 
 } // namespace irt::model

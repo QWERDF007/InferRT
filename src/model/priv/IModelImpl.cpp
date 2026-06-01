@@ -12,9 +12,6 @@ namespace irt::model::priv {
 namespace {
 
 /**
- * @brief 在首次推理或 resolveExecutionStream 时惰性创建内部非阻塞 CUDA stream。
- */
-/**
  * @brief 校验模型的类别数量和输入尺寸配置是否合法。
  * @param config 待校验的模型配置。
  */
@@ -265,7 +262,7 @@ std::string IModelImpl::generateSuffix(const IModelConfig &config) const noexcep
 void IModelImpl::setModelConfig(std::unique_ptr<IModelConfig> config)
 {
     const auto severity = logLevel();
-    config_ = config ? std::move(config) : std::make_unique<IModelConfig>();
+    config_             = config ? std::move(config) : std::make_unique<IModelConfig>();
     normalizeModelConfig(*config_);
     backend_runtime_ = CreateBackendRuntime(config_->backend());
     backend_runtime_->setLogLevel(severity);
@@ -641,8 +638,7 @@ void IModelImpl::save(const std::string &engine_file)
 {
     if (!usesTensorRTBackend())
     {
-        throw irt::Exception(Status::ERROR_NOT_IMPLEMENTED,
-                             "save() is only supported for TensorRT serialized engines");
+        throw irt::Exception(Status::ERROR_NOT_IMPLEMENTED, "save() is only supported for TensorRT serialized engines");
     }
 
     auto &trt_params = trtParams();

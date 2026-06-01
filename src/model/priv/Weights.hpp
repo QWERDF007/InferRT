@@ -25,8 +25,8 @@ inline bool hasWeight(const WeightsMap &weights_map, const std::string &key)
  * @brief 读取权重并按需校验元素数量。
  * @param tag 模型名称标签，用于错误消息。
  */
-inline const nvinfer1::Weights &requireWeight(const WeightsMap &weights_map, const std::string &key,
-                                               const char *tag, int64_t expected_count = -1)
+inline const nvinfer1::Weights &requireWeight(const WeightsMap &weights_map, const std::string &key, const char *tag,
+                                              int64_t expected_count = -1)
 {
     const auto it = weights_map.find(key);
     if (it == weights_map.end())

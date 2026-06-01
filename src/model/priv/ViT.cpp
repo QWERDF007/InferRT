@@ -1,4 +1,5 @@
 #include "ViT.hpp"
+
 #include "Layers.hpp"
 
 #include <NvInfer.h>
@@ -9,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+
 
 namespace irt::model {
 namespace {
@@ -131,9 +133,9 @@ void addTimmQkv(nvinfer1::INetworkDefinition *network, const WeightsMap &weights
 /**
  * @brief 添加 HuggingFace/tensorrtx 分离 q/k/v 权重格式的注意力输入投影。
  */
-void addHuggingFaceQkv(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
-                       nvinfer1::ITensor &input, int embed_dim, nvinfer1::ITensor *&q, nvinfer1::ITensor *&k,
-                       nvinfer1::ITensor *&v, const std::string &prefix)
+void addHuggingFaceQkv(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map, nvinfer1::ITensor &input,
+                       int embed_dim, nvinfer1::ITensor *&q, nvinfer1::ITensor *&k, nvinfer1::ITensor *&v,
+                       const std::string &prefix)
 {
     const auto attention_prefix = prefix + ".attention.attention";
     q = addLinear3D(network, weights_map, input, attention_prefix + ".query", embed_dim, embed_dim, true);
@@ -156,10 +158,10 @@ nvinfer1::ITensor *addAttention(nvinfer1::INetworkDefinition *network, const Wei
                                 nvinfer1::ITensor &input, WeightLayout layout, const std::string &prefix,
                                 const InputGeometry &geometry, const VisionTransformerSpec &spec)
 {
-    const int head_dim = spec.embed_dim / spec.num_heads;
-    nvinfer1::ITensor *q = nullptr;
-    nvinfer1::ITensor *k = nullptr;
-    nvinfer1::ITensor *v = nullptr;
+    const int          head_dim = spec.embed_dim / spec.num_heads;
+    nvinfer1::ITensor *q        = nullptr;
+    nvinfer1::ITensor *k        = nullptr;
+    nvinfer1::ITensor *v        = nullptr;
 
     if (layout == WeightLayout::Timm)
     {
@@ -174,15 +176,16 @@ nvinfer1::ITensor *addAttention(nvinfer1::INetworkDefinition *network, const Wei
     auto *k_heads = reshapeToHeads(network, *k, geometry.batch, geometry.num_tokens, spec.num_heads, head_dim);
     auto *v_heads = reshapeToHeads(network, *v, geometry.batch, geometry.num_tokens, spec.num_heads, head_dim);
 
-    auto *qk = network->addMatrixMultiply(*q_heads, M::kNONE, *k_heads, M::kTRANSPOSE);
-    auto *scale = network->addConstant(nvinfer1::Dims4{1, 1, 1, 1}, ownedScalarWeight(1.0F / std::sqrt(static_cast<float>(head_dim))));
+    auto *qk        = network->addMatrixMultiply(*q_heads, M::kNONE, *k_heads, M::kTRANSPOSE);
+    auto *scale     = network->addConstant(nvinfer1::Dims4{1, 1, 1, 1},
+                                           ownedScalarWeight(1.0F / std::sqrt(static_cast<float>(head_dim))));
     auto *scaled_qk = network->addElementWise(*qk->getOutput(0), *scale->getOutput(0), E::kPROD);
-    auto *softmax = network->addSoftMax(*scaled_qk->getOutput(0));
+    auto *softmax   = network->addSoftMax(*scaled_qk->getOutput(0));
     softmax->setAxes(1U << static_cast<uint32_t>(scaled_qk->getOutput(0)->getDimensions().nbDims - 1));
 
     auto *attended = network->addMatrixMultiply(*softmax->getOutput(0), M::kNONE, *v_heads, M::kNONE);
-    auto *attended_output = mergeHeads(network, *attended->getOutput(0), geometry.batch, geometry.num_tokens,
-                                        spec.embed_dim);
+    auto *attended_output
+        = mergeHeads(network, *attended->getOutput(0), geometry.batch, geometry.num_tokens, spec.embed_dim);
 
     const auto proj_prefix = layout == WeightLayout::Timm ? prefix + ".attn.proj" : prefix + ".attention.output.dense";
     return addLinear3D(network, weights_map, *attended_output, proj_prefix, spec.embed_dim, spec.embed_dim, true);
@@ -196,22 +199,22 @@ nvinfer1::ITensor *addTransformerBlock(nvinfer1::INetworkDefinition *network, co
                                        const InputGeometry &geometry, const VisionTransformerSpec &spec,
                                        float norm_epsilon)
 {
-    const auto prefix = blockPrefix(layout, index);
+    const auto prefix       = blockPrefix(layout, index);
     const auto norm1_prefix = layout == WeightLayout::Timm ? prefix + ".norm1" : prefix + ".layernorm_before";
     const auto norm2_prefix = layout == WeightLayout::Timm ? prefix + ".norm2" : prefix + ".layernorm_after";
 
-    auto *norm1 = addLayerNorm(network, weights_map, input, norm1_prefix, spec.embed_dim, norm_epsilon);
-    auto *attn = addAttention(network, weights_map, *norm1, layout, prefix, geometry, spec);
+    auto *norm1         = addLayerNorm(network, weights_map, input, norm1_prefix, spec.embed_dim, norm_epsilon);
+    auto *attn          = addAttention(network, weights_map, *norm1, layout, prefix, geometry, spec);
     auto *attn_residual = network->addElementWise(input, *attn, E::kSUM)->getOutput(0);
 
     auto *norm2 = addLayerNorm(network, weights_map, *attn_residual, norm2_prefix, spec.embed_dim, norm_epsilon);
 
-    const int mlp_hidden = static_cast<int>(std::lround(static_cast<float>(spec.embed_dim) * spec.mlp_ratio));
+    const int  mlp_hidden = static_cast<int>(std::lround(static_cast<float>(spec.embed_dim) * spec.mlp_ratio));
     const auto fc1_prefix = layout == WeightLayout::Timm ? prefix + ".mlp.fc1" : prefix + ".intermediate.dense";
     const auto fc2_prefix = layout == WeightLayout::Timm ? prefix + ".mlp.fc2" : prefix + ".output.dense";
-    auto *fc1 = addLinear3D(network, weights_map, *norm2, fc1_prefix, spec.embed_dim, mlp_hidden, true);
-    auto *gelu = addGeluApprox(network, *fc1);
-    auto *fc2 = addLinear3D(network, weights_map, *gelu, fc2_prefix, mlp_hidden, spec.embed_dim, true);
+    auto      *fc1        = addLinear3D(network, weights_map, *norm2, fc1_prefix, spec.embed_dim, mlp_hidden, true);
+    auto      *gelu       = addGeluApprox(network, *fc1);
+    auto      *fc2        = addLinear3D(network, weights_map, *gelu, fc2_prefix, mlp_hidden, spec.embed_dim, true);
 
     return network->addElementWise(*attn_residual, *fc2, E::kSUM)->getOutput(0);
 }
@@ -221,7 +224,7 @@ nvinfer1::ITensor *addTransformerBlock(nvinfer1::INetworkDefinition *network, co
  */
 InputGeometry resolveInputGeometry(const VisionTransformerSpec &spec, const IModelConfig &config)
 {
-    const auto &shape = config.inputShape();
+    const auto   &shape = config.inputShape();
     InputGeometry geometry{};
     geometry.batch    = static_cast<int>(shape.d[0]);
     geometry.channels = static_cast<int>(shape.d[1]);
@@ -262,18 +265,17 @@ InputGeometry resolveInputGeometry(const VisionTransformerSpec &spec, const IMod
  */
 nvinfer1::ITensor *addPatchAndPositionEmbedding(const VisionTransformer &impl, nvinfer1::INetworkDefinition *network,
                                                 const WeightsMap &weights_map, WeightLayout layout,
-                                                const InputGeometry &geometry,
-                                                const VisionTransformerSpec &spec,
+                                                const InputGeometry &geometry, const VisionTransformerSpec &spec,
                                                 priv::IModelImpl::NamedTensorMap &named_tensors)
 {
-    auto *input = impl.addInputTensor(network);
+    auto *input            = impl.addInputTensor(network);
     named_tensors["input"] = input;
 
     const auto patch_prefix = patchPrefix(layout);
-    auto *patch = network->addConvolutionNd(
+    auto      *patch        = network->addConvolutionNd(
         *input, spec.embed_dim, nvinfer1::DimsHW{spec.patch_size, spec.patch_size},
         requireWeight(weights_map, patch_prefix + ".weight",
-                      static_cast<int64_t>(spec.embed_dim) * geometry.channels * spec.patch_size * spec.patch_size),
+                                  static_cast<int64_t>(spec.embed_dim) * geometry.channels * spec.patch_size * spec.patch_size),
         requireWeight(weights_map, patch_prefix + ".bias", spec.embed_dim));
     patch->setStrideNd(nvinfer1::DimsHW{spec.patch_size, spec.patch_size});
 
@@ -295,7 +297,7 @@ nvinfer1::ITensor *addPatchAndPositionEmbedding(const VisionTransformer &impl, n
                                         requireWeight(weights_map, positionEmbeddingKey(layout),
                                                       static_cast<int64_t>(geometry.num_tokens) * spec.embed_dim))
                           ->getOutput(0);
-    auto *position_added = network->addElementWise(*concat->getOutput(0), *pos_embed, E::kSUM)->getOutput(0);
+    auto *position_added    = network->addElementWise(*concat->getOutput(0), *pos_embed, E::kSUM)->getOutput(0);
     named_tensors["tokens"] = position_added;
     return position_added;
 }
@@ -330,10 +332,10 @@ void VisionTransformer::buildNetwork(nvinfer1::INetworkDefinition *network, cons
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "network must not be null");
     }
 
-    const auto layout = detectWeightLayout(weights_map);
-    const auto geometry = resolveInputGeometry(spec_, modelConfig());
+    const auto  layout       = detectWeightLayout(weights_map);
+    const auto  geometry     = resolveInputGeometry(spec_, modelConfig());
     const float norm_epsilon = layout == WeightLayout::HuggingFace ? 1e-12F : 1e-6F;
-    const bool feature_only = isBuildingFeatureEngine();
+    const bool  feature_only = isBuildingFeatureEngine();
 
     priv::IModelImpl::NamedTensorMap named_tensors;
     auto *x = addPatchAndPositionEmbedding(*this, network, weights_map, layout, geometry, spec_, named_tensors);
@@ -345,7 +347,7 @@ void VisionTransformer::buildNetwork(nvinfer1::INetworkDefinition *network, cons
     for (int i = 0; i < spec_.depth; ++i)
     {
         x = addTransformerBlock(network, weights_map, *x, layout, i, geometry, spec_, norm_epsilon);
-        named_tensors["block" + std::to_string(i)] = x;
+        named_tensors["block" + std::to_string(i)]   = x;
         named_tensors["blocks." + std::to_string(i)] = x;
         if (feature_only && tryMarkFeatureOutputTensors(network, named_tensors))
         {
@@ -366,15 +368,15 @@ void VisionTransformer::buildNetwork(nvinfer1::INetworkDefinition *network, cons
                     ->getOutput(0);
     auto *pre_logits = network->addShuffle(*cls);
     pre_logits->setReshapeDimensions(nvinfer1::Dims2{geometry.batch, spec_.embed_dim});
-    named_tensors["cls"] = pre_logits->getOutput(0);
+    named_tensors["cls"]        = pre_logits->getOutput(0);
     named_tensors["pre_logits"] = pre_logits->getOutput(0);
     if (feature_only && tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
     }
 
-    auto *head = addLinear3D(network, weights_map, *cls, headPrefix(layout), spec_.embed_dim, modelConfig().numClasses(),
-                             true);
+    auto *head   = addLinear3D(network, weights_map, *cls, headPrefix(layout), spec_.embed_dim,
+                               modelConfig().numClasses(), true);
     auto *logits = network->addShuffle(*head);
     logits->setReshapeDimensions(nvinfer1::Dims2{geometry.batch, modelConfig().numClasses()});
     named_tensors["logits"] = logits->getOutput(0);

@@ -1,10 +1,11 @@
+#include <cuda_runtime_api.h>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/Utils.hpp>
-#include <cuda_runtime_api.h>
 #include <opencv2/imgproc.hpp>
 
 #include <cstring>
 #include <fstream>
+
 
 namespace irt::model {
 
@@ -228,8 +229,8 @@ std::vector<float> ImageNetUtil::imageToTensorCHW(const cv::Mat &image)
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Expected CV_32FC3 image, got type=%d", image.type());
     }
 
-    const size_t plane_size = static_cast<size_t>(image.rows) * static_cast<size_t>(image.cols);
-    std::vector<float> tensor(static_cast<size_t>(image.channels()) * plane_size);
+    const size_t         plane_size = static_cast<size_t>(image.rows) * static_cast<size_t>(image.cols);
+    std::vector<float>   tensor(static_cast<size_t>(image.channels()) * plane_size);
     std::vector<cv::Mat> channels(3);
     cv::split(image, channels);
     for (int c = 0; c < 3; ++c)

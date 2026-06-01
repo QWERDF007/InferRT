@@ -1,4 +1,5 @@
 #include "DINO.hpp"
+
 #include "Layers.hpp"
 
 #include <NvInfer.h>
@@ -61,8 +62,8 @@ inline const nvinfer1::Weights &requireWeight(const WeightsMap &weights_map, con
 /**
  * @brief 返回第一个存在的权重 key。
  */
-const nvinfer1::Weights &requireAnyWeight(const WeightsMap &weights_map,
-                                          const std::vector<std::string> &candidate_keys, int64_t expected_count)
+const nvinfer1::Weights &requireAnyWeight(const WeightsMap &weights_map, const std::vector<std::string> &candidate_keys,
+                                          int64_t expected_count)
 {
     for (const auto &key : candidate_keys)
     {
@@ -117,8 +118,8 @@ nvinfer1::ITensor *addLayerScale(nvinfer1::INetworkDefinition *network, const We
     {
         if (hasWeight(weights_map, key))
         {
-            auto *gamma = network->addConstant(nvinfer1::Dims3{1, 1, embed_dim},
-                                               requireWeight(weights_map, key, embed_dim));
+            auto *gamma
+                = network->addConstant(nvinfer1::Dims3{1, 1, embed_dim}, requireWeight(weights_map, key, embed_dim));
             return network->addElementWise(input, *gamma->getOutput(0), E::kPROD)->getOutput(0);
         }
     }
@@ -136,7 +137,7 @@ nvinfer1::Weights makeSplitQkvBias(const WeightsMap &weights_map, const std::str
     std::vector<float> values(static_cast<size_t>(3 * embed_dim), 0.0F);
     for (int i = 0; i < embed_dim; ++i)
     {
-        values[static_cast<size_t>(i)] = weightValue(q_bias, i);
+        values[static_cast<size_t>(i)]                 = weightValue(q_bias, i);
         values[static_cast<size_t>(2 * embed_dim + i)] = weightValue(v_bias, i);
     }
     return ownedFloatVector(std::move(values));
@@ -166,10 +167,10 @@ nvinfer1::ITensor *addQkvProjection(nvinfer1::INetworkDefinition *network, const
                                     nvinfer1::ITensor &input, const std::string &prefix,
                                     const DINOTransformerSpec &spec)
 {
-    auto *qkv = addLinear3DNoBias(network, weights_map, input, prefix + ".attn.qkv", spec.embed_dim,
-                                  3 * spec.embed_dim);
+    auto *qkv
+        = addLinear3DNoBias(network, weights_map, input, prefix + ".attn.qkv", spec.embed_dim, 3 * spec.embed_dim);
 
-    const auto qkv_bias_key = prefix + ".attn.qkv.bias";
+    const auto                       qkv_bias_key = prefix + ".attn.qkv.bias";
     std::optional<nvinfer1::Weights> bias_weights;
     if (hasWeight(weights_map, qkv_bias_key))
     {
@@ -199,7 +200,7 @@ std::vector<float> resolveRopePeriods(const WeightsMap &weights_map, const DINOI
     const int period_count = geometry.head_dim / 4;
     if (hasWeight(weights_map, "rope_embed.periods"))
     {
-        const auto &periods = requireWeight(weights_map, "rope_embed.periods", period_count);
+        const auto        &periods = requireWeight(weights_map, "rope_embed.periods", period_count);
         std::vector<float> values(static_cast<size_t>(period_count));
         for (int i = 0; i < period_count; ++i)
         {
@@ -211,8 +212,8 @@ std::vector<float> resolveRopePeriods(const WeightsMap &weights_map, const DINOI
     std::vector<float> values(static_cast<size_t>(period_count));
     for (int i = 0; i < period_count; ++i)
     {
-        values[static_cast<size_t>(i)] = std::pow(100.0F, 2.0F * static_cast<float>(i)
-                                                            / static_cast<float>(geometry.head_dim / 2));
+        values[static_cast<size_t>(i)]
+            = std::pow(100.0F, 2.0F * static_cast<float>(i) / static_cast<float>(geometry.head_dim / 2));
     }
     return values;
 }
@@ -263,7 +264,7 @@ DINORopeConstants addRopeConstants(nvinfer1::INetworkDefinition *network, const 
                                    const DINOInputGeometry &geometry)
 {
     const auto periods = resolveRopePeriods(weights_map, geometry);
-    auto *sin = network
+    auto      *sin     = network
                     ->addConstant(nvinfer1::Dims4{1, 1, geometry.num_patches, geometry.head_dim},
                                   ownedFloatVector(makeRopeTable(geometry, periods, true)))
                     ->getOutput(0);
@@ -281,38 +282,38 @@ nvinfer1::ITensor *applyRope(nvinfer1::INetworkDefinition *network, nvinfer1::IT
                              const DINORopeConstants &rope, const DINOInputGeometry &geometry,
                              const DINOTransformerSpec &spec)
 {
-    auto *prefix = network
-                       ->addSlice(input, nvinfer1::Dims4{0, 0, 0, 0},
-                                  nvinfer1::Dims4{geometry.batch, spec.num_heads, geometry.prefix_tokens,
-                                                  geometry.head_dim},
-                                  nvinfer1::Dims4{1, 1, 1, 1})
-                       ->getOutput(0);
-    auto *patch = network
-                      ->addSlice(input, nvinfer1::Dims4{0, 0, geometry.prefix_tokens, 0},
-                                 nvinfer1::Dims4{geometry.batch, spec.num_heads, geometry.num_patches,
-                                                 geometry.head_dim},
-                                 nvinfer1::Dims4{1, 1, 1, 1})
-                      ->getOutput(0);
+    auto *prefix
+        = network
+              ->addSlice(input, nvinfer1::Dims4{0, 0, 0, 0},
+                         nvinfer1::Dims4{geometry.batch, spec.num_heads, geometry.prefix_tokens, geometry.head_dim},
+                         nvinfer1::Dims4{1, 1, 1, 1})
+              ->getOutput(0);
+    auto *patch
+        = network
+              ->addSlice(input, nvinfer1::Dims4{0, 0, geometry.prefix_tokens, 0},
+                         nvinfer1::Dims4{geometry.batch, spec.num_heads, geometry.num_patches, geometry.head_dim},
+                         nvinfer1::Dims4{1, 1, 1, 1})
+              ->getOutput(0);
 
-    auto *x1 = network
-                   ->addSlice(*patch, nvinfer1::Dims4{0, 0, 0, 0},
-                              nvinfer1::Dims4{geometry.batch, spec.num_heads, geometry.num_patches,
-                                              geometry.head_dim / 2},
-                              nvinfer1::Dims4{1, 1, 1, 1})
-                   ->getOutput(0);
-    auto *x2 = network
-                   ->addSlice(*patch, nvinfer1::Dims4{0, 0, 0, geometry.head_dim / 2},
-                              nvinfer1::Dims4{geometry.batch, spec.num_heads, geometry.num_patches,
-                                              geometry.head_dim / 2},
-                              nvinfer1::Dims4{1, 1, 1, 1})
-                   ->getOutput(0);
+    auto *x1
+        = network
+              ->addSlice(*patch, nvinfer1::Dims4{0, 0, 0, 0},
+                         nvinfer1::Dims4{geometry.batch, spec.num_heads, geometry.num_patches, geometry.head_dim / 2},
+                         nvinfer1::Dims4{1, 1, 1, 1})
+              ->getOutput(0);
+    auto *x2
+        = network
+              ->addSlice(*patch, nvinfer1::Dims4{0, 0, 0, geometry.head_dim / 2},
+                         nvinfer1::Dims4{geometry.batch, spec.num_heads, geometry.num_patches, geometry.head_dim / 2},
+                         nvinfer1::Dims4{1, 1, 1, 1})
+              ->getOutput(0);
     auto *neg_x2 = network->addUnary(*x2, nvinfer1::UnaryOperation::kNEG)->getOutput(0);
 
     const std::vector<nvinfer1::ITensor *> rotated_parts{neg_x2, x1};
     auto *rotated_half = network->addConcatenation(rotated_parts.data(), static_cast<int32_t>(rotated_parts.size()));
     rotated_half->setAxis(3);
 
-    auto *x_cos = network->addElementWise(*patch, *rope.cos, E::kPROD);
+    auto *x_cos   = network->addElementWise(*patch, *rope.cos, E::kPROD);
     auto *rot_sin = network->addElementWise(*rotated_half->getOutput(0), *rope.sin, E::kPROD);
     auto *rotated = network->addElementWise(*x_cos->getOutput(0), *rot_sin->getOutput(0), E::kSUM)->getOutput(0);
 
@@ -326,42 +327,39 @@ nvinfer1::ITensor *applyRope(nvinfer1::INetworkDefinition *network, nvinfer1::IT
  * @brief 添加多头自注意力。
  */
 nvinfer1::ITensor *addAttention(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
-                                nvinfer1::ITensor &input, const std::string &prefix,
-                                const DINOInputGeometry &geometry, const DINOTransformerSpec &spec)
+                                nvinfer1::ITensor &input, const std::string &prefix, const DINOInputGeometry &geometry,
+                                const DINOTransformerSpec &spec)
 {
-    auto *qkv = addQkvProjection(network, weights_map, input, prefix, spec);
-    nvinfer1::ITensor *q = nullptr;
-    nvinfer1::ITensor *k = nullptr;
-    nvinfer1::ITensor *v = nullptr;
+    auto              *qkv = addQkvProjection(network, weights_map, input, prefix, spec);
+    nvinfer1::ITensor *q   = nullptr;
+    nvinfer1::ITensor *k   = nullptr;
+    nvinfer1::ITensor *v   = nullptr;
     splitQkv(network, *qkv, geometry.batch, geometry.num_tokens, spec.embed_dim, q, k, v);
 
-    auto *q_heads = reshapeToHeads(network, *q, geometry.batch, geometry.num_tokens, spec.num_heads,
-                                    geometry.head_dim);
-    auto *k_heads = reshapeToHeads(network, *k, geometry.batch, geometry.num_tokens, spec.num_heads,
-                                    geometry.head_dim);
-    auto *v_heads = reshapeToHeads(network, *v, geometry.batch, geometry.num_tokens, spec.num_heads,
-                                    geometry.head_dim);
+    auto *q_heads = reshapeToHeads(network, *q, geometry.batch, geometry.num_tokens, spec.num_heads, geometry.head_dim);
+    auto *k_heads = reshapeToHeads(network, *k, geometry.batch, geometry.num_tokens, spec.num_heads, geometry.head_dim);
+    auto *v_heads = reshapeToHeads(network, *v, geometry.batch, geometry.num_tokens, spec.num_heads, geometry.head_dim);
 
     if (spec.version == DINOVersion::V3)
     {
         const auto rope = addRopeConstants(network, weights_map, geometry);
-        q_heads = applyRope(network, *q_heads, rope, geometry, spec);
-        k_heads = applyRope(network, *k_heads, rope, geometry, spec);
+        q_heads         = applyRope(network, *q_heads, rope, geometry, spec);
+        k_heads         = applyRope(network, *k_heads, rope, geometry, spec);
     }
 
-    auto *qk = network->addMatrixMultiply(*q_heads, M::kNONE, *k_heads, M::kTRANSPOSE);
-    auto *scale = network->addConstant(nvinfer1::Dims4{1, 1, 1, 1},
-                                       ownedScalarWeight(1.0F / std::sqrt(static_cast<float>(geometry.head_dim))));
+    auto *qk        = network->addMatrixMultiply(*q_heads, M::kNONE, *k_heads, M::kTRANSPOSE);
+    auto *scale     = network->addConstant(nvinfer1::Dims4{1, 1, 1, 1},
+                                           ownedScalarWeight(1.0F / std::sqrt(static_cast<float>(geometry.head_dim))));
     auto *scaled_qk = network->addElementWise(*qk->getOutput(0), *scale->getOutput(0), E::kPROD);
-    auto *softmax = network->addSoftMax(*scaled_qk->getOutput(0));
+    auto *softmax   = network->addSoftMax(*scaled_qk->getOutput(0));
     softmax->setAxes(1U << static_cast<uint32_t>(scaled_qk->getOutput(0)->getDimensions().nbDims - 1));
 
     auto *attended = network->addMatrixMultiply(*softmax->getOutput(0), M::kNONE, *v_heads, M::kNONE);
-    auto *attended_output = mergeHeads(network, *attended->getOutput(0), geometry.batch, geometry.num_tokens,
-                                        spec.embed_dim);
+    auto *attended_output
+        = mergeHeads(network, *attended->getOutput(0), geometry.batch, geometry.num_tokens, spec.embed_dim);
 
-    return addLinear3D(network, weights_map, *attended_output, prefix + ".attn.proj", spec.embed_dim,
-                       spec.embed_dim, true);
+    return addLinear3D(network, weights_map, *attended_output, prefix + ".attn.proj", spec.embed_dim, spec.embed_dim,
+                       true);
 }
 
 /**
@@ -370,8 +368,8 @@ nvinfer1::ITensor *addAttention(nvinfer1::INetworkDefinition *network, const Wei
 int swigluHiddenDim(const DINOTransformerSpec &spec)
 {
     const int raw_hidden = static_cast<int>(std::lround(static_cast<float>(spec.embed_dim) * spec.mlp_ratio));
-    const int reduced = static_cast<int>(static_cast<float>(raw_hidden) * 2.0F / 3.0F);
-    const int align = std::max(1, spec.swiglu_align);
+    const int reduced    = static_cast<int>(static_cast<float>(raw_hidden) * 2.0F / 3.0F);
+    const int align      = std::max(1, spec.swiglu_align);
     return reduced + ((align - (reduced % align)) % align);
 }
 
@@ -379,12 +377,11 @@ int swigluHiddenDim(const DINOTransformerSpec &spec)
  * @brief 添加标准 MLP 子层。
  */
 nvinfer1::ITensor *addStandardMlp(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
-                                  nvinfer1::ITensor &input, const std::string &prefix,
-                                  const DINOTransformerSpec &spec)
+                                  nvinfer1::ITensor &input, const std::string &prefix, const DINOTransformerSpec &spec)
 {
     const int hidden = static_cast<int>(std::lround(static_cast<float>(spec.embed_dim) * spec.mlp_ratio));
-    auto *fc1 = addLinear3D(network, weights_map, input, prefix + ".mlp.fc1", spec.embed_dim, hidden, true);
-    auto *gelu = addGeluApprox(network, *fc1);
+    auto     *fc1    = addLinear3D(network, weights_map, input, prefix + ".mlp.fc1", spec.embed_dim, hidden, true);
+    auto     *gelu   = addGeluApprox(network, *fc1);
     return addLinear3D(network, weights_map, *gelu, prefix + ".mlp.fc2", hidden, spec.embed_dim, true);
 }
 
@@ -392,17 +389,16 @@ nvinfer1::ITensor *addStandardMlp(nvinfer1::INetworkDefinition *network, const W
  * @brief 添加 DINOv2 Giant 的打包 SwiGLU 子层。
  */
 nvinfer1::ITensor *addPackedSwiGLU(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
-                                   nvinfer1::ITensor &input, const std::string &prefix,
-                                   const DINOTransformerSpec &spec)
+                                   nvinfer1::ITensor &input, const std::string &prefix, const DINOTransformerSpec &spec)
 {
-    const int hidden = swigluHiddenDim(spec);
-    const auto fc1_prefix = hasWeight(weights_map, prefix + ".mlp.w12.weight") ? prefix + ".mlp.w12"
-                                                                               : prefix + ".mlp.fc1";
-    const auto fc2_prefix = hasWeight(weights_map, prefix + ".mlp.w3.weight") ? prefix + ".mlp.w3"
-                                                                              : prefix + ".mlp.fc2";
+    const int  hidden = swigluHiddenDim(spec);
+    const auto fc1_prefix
+        = hasWeight(weights_map, prefix + ".mlp.w12.weight") ? prefix + ".mlp.w12" : prefix + ".mlp.fc1";
+    const auto fc2_prefix
+        = hasWeight(weights_map, prefix + ".mlp.w3.weight") ? prefix + ".mlp.w3" : prefix + ".mlp.fc2";
 
     auto *packed = addLinear3D(network, weights_map, input, fc1_prefix, spec.embed_dim, 2 * hidden, true);
-    auto *gate = network
+    auto *gate   = network
                      ->addSlice(*packed, nvinfer1::Dims3{0, 0, 0},
                                 nvinfer1::Dims3{input.getDimensions().d[0], input.getDimensions().d[1], hidden},
                                 nvinfer1::Dims3{1, 1, 1})
@@ -412,7 +408,7 @@ nvinfer1::ITensor *addPackedSwiGLU(nvinfer1::INetworkDefinition *network, const 
                                  nvinfer1::Dims3{input.getDimensions().d[0], input.getDimensions().d[1], hidden},
                                  nvinfer1::Dims3{1, 1, 1})
                       ->getOutput(0);
-    auto *activated = addSilu(network, *gate);
+    auto *activated     = addSilu(network, *gate);
     auto *hidden_tensor = network->addElementWise(*activated, *value, E::kPROD)->getOutput(0);
     return addLinear3D(network, weights_map, *hidden_tensor, fc2_prefix, hidden, spec.embed_dim, true);
 }
@@ -421,21 +417,20 @@ nvinfer1::ITensor *addPackedSwiGLU(nvinfer1::INetworkDefinition *network, const 
  * @brief 添加 DINOv3 Plus/7B 的拆分 SwiGLU 子层。
  */
 nvinfer1::ITensor *addSplitSwiGLU(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
-                                  nvinfer1::ITensor &input, const std::string &prefix,
-                                  const DINOTransformerSpec &spec)
+                                  nvinfer1::ITensor &input, const std::string &prefix, const DINOTransformerSpec &spec)
 {
     const int hidden = swigluHiddenDim(spec);
 
-    const auto gate_prefix = hasWeight(weights_map, prefix + ".mlp.w1.weight") ? prefix + ".mlp.w1"
-                                                                               : prefix + ".mlp.fc1_g";
-    const auto value_prefix = hasWeight(weights_map, prefix + ".mlp.w2.weight") ? prefix + ".mlp.w2"
-                                                                                : prefix + ".mlp.fc1_x";
-    const auto fc2_prefix = hasWeight(weights_map, prefix + ".mlp.w3.weight") ? prefix + ".mlp.w3"
-                                                                              : prefix + ".mlp.fc2";
+    const auto gate_prefix
+        = hasWeight(weights_map, prefix + ".mlp.w1.weight") ? prefix + ".mlp.w1" : prefix + ".mlp.fc1_g";
+    const auto value_prefix
+        = hasWeight(weights_map, prefix + ".mlp.w2.weight") ? prefix + ".mlp.w2" : prefix + ".mlp.fc1_x";
+    const auto fc2_prefix
+        = hasWeight(weights_map, prefix + ".mlp.w3.weight") ? prefix + ".mlp.w3" : prefix + ".mlp.fc2";
 
-    auto *gate = addLinear3D(network, weights_map, input, gate_prefix, spec.embed_dim, hidden, true);
-    auto *value = addLinear3D(network, weights_map, input, value_prefix, spec.embed_dim, hidden, true);
-    auto *activated = addSilu(network, *gate);
+    auto *gate          = addLinear3D(network, weights_map, input, gate_prefix, spec.embed_dim, hidden, true);
+    auto *value         = addLinear3D(network, weights_map, input, value_prefix, spec.embed_dim, hidden, true);
+    auto *activated     = addSilu(network, *gate);
     auto *hidden_tensor = network->addElementWise(*activated, *value, E::kPROD)->getOutput(0);
     return addLinear3D(network, weights_map, *hidden_tensor, fc2_prefix, hidden, spec.embed_dim, true);
 }
@@ -467,17 +462,17 @@ nvinfer1::ITensor *addDINOBlock(nvinfer1::INetworkDefinition *network, const Wei
                                 const DINOTransformerSpec &spec)
 {
     const auto prefix = "blocks." + std::to_string(index);
-    auto *norm1 = addLayerNorm(network, weights_map, input, prefix + ".norm1", spec.embed_dim, spec.norm_epsilon);
-    auto *attn = addAttention(network, weights_map, *norm1, prefix, geometry, spec);
-    auto *scaled_attn = addLayerScale(network, weights_map, *attn,
-                                      {prefix + ".ls1.gamma", prefix + ".gamma_1"}, spec.embed_dim);
+    auto      *norm1  = addLayerNorm(network, weights_map, input, prefix + ".norm1", spec.embed_dim, spec.norm_epsilon);
+    auto      *attn   = addAttention(network, weights_map, *norm1, prefix, geometry, spec);
+    auto      *scaled_attn
+        = addLayerScale(network, weights_map, *attn, {prefix + ".ls1.gamma", prefix + ".gamma_1"}, spec.embed_dim);
     auto *attn_residual = network->addElementWise(input, *scaled_attn, E::kSUM)->getOutput(0);
 
-    auto *norm2 = addLayerNorm(network, weights_map, *attn_residual, prefix + ".norm2", spec.embed_dim,
-                               spec.norm_epsilon);
+    auto *norm2
+        = addLayerNorm(network, weights_map, *attn_residual, prefix + ".norm2", spec.embed_dim, spec.norm_epsilon);
     auto *mlp = addMlp(network, weights_map, *norm2, prefix, spec);
-    auto *scaled_mlp = addLayerScale(network, weights_map, *mlp,
-                                     {prefix + ".ls2.gamma", prefix + ".gamma_2"}, spec.embed_dim);
+    auto *scaled_mlp
+        = addLayerScale(network, weights_map, *mlp, {prefix + ".ls2.gamma", prefix + ".gamma_2"}, spec.embed_dim);
     return network->addElementWise(*attn_residual, *scaled_mlp, E::kSUM)->getOutput(0);
 }
 
@@ -486,18 +481,17 @@ nvinfer1::ITensor *addDINOBlock(nvinfer1::INetworkDefinition *network, const Wei
  */
 DINOInputGeometry resolveInputGeometry(const DINOTransformerSpec &spec, const IModelConfig &config)
 {
-    const auto &shape = config.inputShape();
+    const auto       &shape = config.inputShape();
     DINOInputGeometry geometry{};
-    geometry.batch = static_cast<int>(shape.d[0]);
+    geometry.batch    = static_cast<int>(shape.d[0]);
     geometry.channels = static_cast<int>(shape.d[1]);
-    geometry.height = static_cast<int>(shape.d[2]);
-    geometry.width = static_cast<int>(shape.d[3]);
+    geometry.height   = static_cast<int>(shape.d[2]);
+    geometry.width    = static_cast<int>(shape.d[3]);
 
     if (geometry.batch != 1)
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
-                             "DINO handwritten TensorRT network currently requires batch=1, got %d",
-                             geometry.batch);
+                             "DINO handwritten TensorRT network currently requires batch=1, got %d", geometry.batch);
     }
     if (geometry.channels != 3)
     {
@@ -516,17 +510,17 @@ DINOInputGeometry resolveInputGeometry(const DINOTransformerSpec &spec, const IM
                              spec.embed_dim, spec.num_heads);
     }
 
-    geometry.grid_h = geometry.height / spec.patch_size;
-    geometry.grid_w = geometry.width / spec.patch_size;
-    geometry.num_patches = geometry.grid_h * geometry.grid_w;
+    geometry.grid_h        = geometry.height / spec.patch_size;
+    geometry.grid_w        = geometry.width / spec.patch_size;
+    geometry.num_patches   = geometry.grid_h * geometry.grid_w;
     geometry.prefix_tokens = 1 + spec.extra_tokens;
-    geometry.num_tokens = geometry.prefix_tokens + geometry.num_patches;
-    geometry.head_dim = spec.embed_dim / spec.num_heads;
+    geometry.num_tokens    = geometry.prefix_tokens + geometry.num_patches;
+    geometry.head_dim      = spec.embed_dim / spec.num_heads;
 
     if (spec.version == DINOVersion::V3 && geometry.head_dim % 4 != 0)
     {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
-                             "DINOv3 RoPE requires head_dim divisible by 4, got %d", geometry.head_dim);
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "DINOv3 RoPE requires head_dim divisible by 4, got %d",
+                             geometry.head_dim);
     }
     return geometry;
 }
@@ -536,10 +530,9 @@ DINOInputGeometry resolveInputGeometry(const DINOTransformerSpec &spec, const IM
  */
 nvinfer1::ITensor *addPatchEmbedding(const DINOTransformer &impl, nvinfer1::INetworkDefinition *network,
                                      const WeightsMap &weights_map, const DINOInputGeometry &geometry,
-                                     const DINOTransformerSpec &spec,
-                                     priv::IModelImpl::NamedTensorMap &named_tensors)
+                                     const DINOTransformerSpec &spec, priv::IModelImpl::NamedTensorMap &named_tensors)
 {
-    auto *input = impl.addInputTensor(network);
+    auto *input            = impl.addInputTensor(network);
     named_tensors["input"] = input;
 
     auto *patch = network->addConvolutionNd(
@@ -583,8 +576,8 @@ nvinfer1::ITensor *addDINOv2Tokens(nvinfer1::INetworkDefinition *network, const 
                           ->addConstant(nvinfer1::Dims3{1, 1, spec.embed_dim},
                                         requireWeight(weights_map, "cls_token", spec.embed_dim))
                           ->getOutput(0);
-    auto *extra_tokens = addExtraTokens(network, weights_map, spec);
-    const auto &pos_weight = requireWeight(weights_map, "pos_embed");
+    auto       *extra_tokens = addExtraTokens(network, weights_map, spec);
+    const auto &pos_weight   = requireWeight(weights_map, "pos_embed");
     if (pos_weight.count % spec.embed_dim != 0)
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "DINOv2 pos_embed count is not divisible by embed_dim");
@@ -597,8 +590,7 @@ nvinfer1::ITensor *addDINOv2Tokens(nvinfer1::INetworkDefinition *network, const 
         auto *concat = network->addConcatenation(cls_and_patch.data(), static_cast<int32_t>(cls_and_patch.size()));
         concat->setAxis(1);
 
-        auto *pos = network
-                        ->addConstant(nvinfer1::Dims3{1, geometry.num_patches + 1, spec.embed_dim}, pos_weight)
+        auto *pos = network->addConstant(nvinfer1::Dims3{1, geometry.num_patches + 1, spec.embed_dim}, pos_weight)
                         ->getOutput(0);
         auto *position_added = network->addElementWise(*concat->getOutput(0), *pos, E::kSUM)->getOutput(0);
         if (extra_tokens == nullptr)
@@ -606,11 +598,11 @@ nvinfer1::ITensor *addDINOv2Tokens(nvinfer1::INetworkDefinition *network, const 
             return position_added;
         }
 
-        auto *cls_with_pos = network
-                                 ->addSlice(*position_added, nvinfer1::Dims3{0, 0, 0},
-                                            nvinfer1::Dims3{geometry.batch, 1, spec.embed_dim},
-                                            nvinfer1::Dims3{1, 1, 1})
-                                 ->getOutput(0);
+        auto *cls_with_pos
+            = network
+                  ->addSlice(*position_added, nvinfer1::Dims3{0, 0, 0},
+                             nvinfer1::Dims3{geometry.batch, 1, spec.embed_dim}, nvinfer1::Dims3{1, 1, 1})
+                  ->getOutput(0);
         auto *patch_with_pos = network
                                    ->addSlice(*position_added, nvinfer1::Dims3{0, 1, 0},
                                               nvinfer1::Dims3{geometry.batch, geometry.num_patches, spec.embed_dim},
@@ -624,9 +616,8 @@ nvinfer1::ITensor *addDINOv2Tokens(nvinfer1::INetworkDefinition *network, const 
 
     if (pos_tokens == geometry.num_patches)
     {
-        auto *pos = network
-                        ->addConstant(nvinfer1::Dims3{1, geometry.num_patches, spec.embed_dim}, pos_weight)
-                        ->getOutput(0);
+        auto *pos
+            = network->addConstant(nvinfer1::Dims3{1, geometry.num_patches, spec.embed_dim}, pos_weight)->getOutput(0);
         auto *patch_with_pos = network->addElementWise(patch_tokens, *pos, E::kSUM)->getOutput(0);
 
         std::vector<nvinfer1::ITensor *> tokens{cls_token};
@@ -651,8 +642,8 @@ nvinfer1::ITensor *addDINOv2Tokens(nvinfer1::INetworkDefinition *network, const 
         auto *concat = network->addConcatenation(tokens.data(), static_cast<int32_t>(tokens.size()));
         concat->setAxis(1);
 
-        auto *pos = network->addConstant(nvinfer1::Dims3{1, geometry.num_tokens, spec.embed_dim}, pos_weight)
-                        ->getOutput(0);
+        auto *pos
+            = network->addConstant(nvinfer1::Dims3{1, geometry.num_tokens, spec.embed_dim}, pos_weight)->getOutput(0);
         return network->addElementWise(*concat->getOutput(0), *pos, E::kSUM)->getOutput(0);
     }
 
@@ -690,13 +681,12 @@ nvinfer1::ITensor *addDINOv3Tokens(nvinfer1::INetworkDefinition *network, const 
  */
 nvinfer1::ITensor *addInputTokens(const DINOTransformer &impl, nvinfer1::INetworkDefinition *network,
                                   const WeightsMap &weights_map, const DINOInputGeometry &geometry,
-                                  const DINOTransformerSpec &spec,
-                                  priv::IModelImpl::NamedTensorMap &named_tensors)
+                                  const DINOTransformerSpec &spec, priv::IModelImpl::NamedTensorMap &named_tensors)
 {
-    auto *patch_tokens = addPatchEmbedding(impl, network, weights_map, geometry, spec, named_tensors);
-    auto *tokens = spec.version == DINOVersion::V2 ? addDINOv2Tokens(network, weights_map, *patch_tokens, geometry,
-                                                                      spec)
-                                                   : addDINOv3Tokens(network, weights_map, *patch_tokens, spec);
+    auto *patch_tokens      = addPatchEmbedding(impl, network, weights_map, geometry, spec, named_tensors);
+    auto *tokens            = spec.version == DINOVersion::V2
+                                ? addDINOv2Tokens(network, weights_map, *patch_tokens, geometry, spec)
+                                : addDINOv3Tokens(network, weights_map, *patch_tokens, spec);
     named_tensors["tokens"] = tokens;
     return tokens;
 }
@@ -706,21 +696,21 @@ nvinfer1::ITensor *addInputTokens(const DINOTransformer &impl, nvinfer1::INetwor
  */
 nvinfer1::ITensor *addFinalFeatureOutputs(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
                                           nvinfer1::ITensor &prenorm, const DINOInputGeometry &geometry,
-                                          const DINOTransformerSpec &spec,
+                                          const DINOTransformerSpec        &spec,
                                           priv::IModelImpl::NamedTensorMap &named_tensors)
 {
     named_tensors["x_prenorm"] = &prenorm;
-    auto *norm = addLayerNorm(network, weights_map, prenorm, "norm", spec.embed_dim, spec.norm_epsilon);
-    named_tensors["norm"] = norm;
+    auto *norm                 = addLayerNorm(network, weights_map, prenorm, "norm", spec.embed_dim, spec.norm_epsilon);
+    named_tensors["norm"]      = norm;
 
     auto *cls = network
-                    ->addSlice(*norm, nvinfer1::Dims3{0, 0, 0},
-                               nvinfer1::Dims3{geometry.batch, 1, spec.embed_dim}, nvinfer1::Dims3{1, 1, 1})
+                    ->addSlice(*norm, nvinfer1::Dims3{0, 0, 0}, nvinfer1::Dims3{geometry.batch, 1, spec.embed_dim},
+                               nvinfer1::Dims3{1, 1, 1})
                     ->getOutput(0);
     auto *cls_flatten = network->addShuffle(*cls);
     cls_flatten->setReshapeDimensions(nvinfer1::Dims2{geometry.batch, spec.embed_dim});
-    named_tensors["cls"] = cls_flatten->getOutput(0);
-    named_tensors["pre_logits"] = cls_flatten->getOutput(0);
+    named_tensors["cls"]             = cls_flatten->getOutput(0);
+    named_tensors["pre_logits"]      = cls_flatten->getOutput(0);
     named_tensors["x_norm_clstoken"] = cls_flatten->getOutput(0);
 
     if (spec.extra_tokens > 0)
@@ -731,7 +721,7 @@ nvinfer1::ITensor *addFinalFeatureOutputs(nvinfer1::INetworkDefinition *network,
                                      nvinfer1::Dims3{1, 1, 1})
                           ->getOutput(0);
         named_tensors[spec.version == DINOVersion::V2 ? "x_norm_regtokens" : "x_storage_tokens"] = extra;
-        named_tensors["extra_tokens"] = extra;
+        named_tensors["extra_tokens"]                                                            = extra;
     }
 
     auto *patch = network
@@ -749,8 +739,8 @@ nvinfer1::ITensor *addFinalFeatureOutputs(nvinfer1::INetworkDefinition *network,
 DINOTransformerSpec makeDINOv2Spec(const char *display_name, int image_size, int embed_dim, int depth, int num_heads,
                                    DINOMlpKind mlp_kind, int extra_tokens)
 {
-    return {display_name, image_size, 14, embed_dim, depth, num_heads, extra_tokens, 4.0F,
-            DINOVersion::V2, mlp_kind, 8, 1e-6F};
+    return {display_name, image_size,      14,       embed_dim, depth, num_heads, extra_tokens,
+            4.0F,         DINOVersion::V2, mlp_kind, 8,         1e-6F};
 }
 
 /**
@@ -759,8 +749,8 @@ DINOTransformerSpec makeDINOv2Spec(const char *display_name, int image_size, int
 DINOTransformerSpec makeDINOv3Spec(const char *display_name, int image_size, int embed_dim, int depth, int num_heads,
                                    float mlp_ratio, DINOMlpKind mlp_kind, int swiglu_align)
 {
-    return {display_name, image_size, 16, embed_dim, depth, num_heads, 4, mlp_ratio,
-            DINOVersion::V3, mlp_kind, swiglu_align, 1e-5F};
+    return {display_name, image_size,      16,       embed_dim,    depth, num_heads, 4,
+            mlp_ratio,    DINOVersion::V3, mlp_kind, swiglu_align, 1e-5F};
 }
 
 class DINOv2ViTS14 : public DINOTransformer
@@ -770,7 +760,11 @@ public:
         : DINOTransformer(makeDINOv2Spec("DINOv2ViTS14", 518, 384, 12, 6, DINOMlpKind::Mlp, 0))
     {
     }
-    static const char *key() noexcept { return "dinov2_vits14"; }
+
+    static const char *key() noexcept
+    {
+        return "dinov2_vits14";
+    }
 };
 
 class DINOv2ViTB14 : public DINOTransformer
@@ -780,7 +774,11 @@ public:
         : DINOTransformer(makeDINOv2Spec("DINOv2ViTB14", 518, 768, 12, 12, DINOMlpKind::Mlp, 0))
     {
     }
-    static const char *key() noexcept { return "dinov2_vitb14"; }
+
+    static const char *key() noexcept
+    {
+        return "dinov2_vitb14";
+    }
 };
 
 class DINOv2ViTL14 : public DINOTransformer
@@ -790,7 +788,11 @@ public:
         : DINOTransformer(makeDINOv2Spec("DINOv2ViTL14", 518, 1024, 24, 16, DINOMlpKind::Mlp, 0))
     {
     }
-    static const char *key() noexcept { return "dinov2_vitl14"; }
+
+    static const char *key() noexcept
+    {
+        return "dinov2_vitl14";
+    }
 };
 
 class DINOv2ViTG14 : public DINOTransformer
@@ -800,7 +802,11 @@ public:
         : DINOTransformer(makeDINOv2Spec("DINOv2ViTG14", 518, 1536, 40, 24, DINOMlpKind::PackedSwiGLU, 0))
     {
     }
-    static const char *key() noexcept { return "dinov2_vitg14"; }
+
+    static const char *key() noexcept
+    {
+        return "dinov2_vitg14";
+    }
 };
 
 class DINOv2ViTS14Reg : public DINOTransformer
@@ -810,7 +816,11 @@ public:
         : DINOTransformer(makeDINOv2Spec("DINOv2ViTS14Reg4", 518, 384, 12, 6, DINOMlpKind::Mlp, 4))
     {
     }
-    static const char *key() noexcept { return "dinov2_vits14_reg"; }
+
+    static const char *key() noexcept
+    {
+        return "dinov2_vits14_reg";
+    }
 };
 
 class DINOv2ViTB14Reg : public DINOTransformer
@@ -820,7 +830,11 @@ public:
         : DINOTransformer(makeDINOv2Spec("DINOv2ViTB14Reg4", 518, 768, 12, 12, DINOMlpKind::Mlp, 4))
     {
     }
-    static const char *key() noexcept { return "dinov2_vitb14_reg"; }
+
+    static const char *key() noexcept
+    {
+        return "dinov2_vitb14_reg";
+    }
 };
 
 class DINOv2ViTL14Reg : public DINOTransformer
@@ -830,7 +844,11 @@ public:
         : DINOTransformer(makeDINOv2Spec("DINOv2ViTL14Reg4", 518, 1024, 24, 16, DINOMlpKind::Mlp, 4))
     {
     }
-    static const char *key() noexcept { return "dinov2_vitl14_reg"; }
+
+    static const char *key() noexcept
+    {
+        return "dinov2_vitl14_reg";
+    }
 };
 
 class DINOv2ViTG14Reg : public DINOTransformer
@@ -840,7 +858,11 @@ public:
         : DINOTransformer(makeDINOv2Spec("DINOv2ViTG14Reg4", 518, 1536, 40, 24, DINOMlpKind::PackedSwiGLU, 4))
     {
     }
-    static const char *key() noexcept { return "dinov2_vitg14_reg"; }
+
+    static const char *key() noexcept
+    {
+        return "dinov2_vitg14_reg";
+    }
 };
 
 class DINOv3ViTS16 : public DINOTransformer
@@ -850,7 +872,11 @@ public:
         : DINOTransformer(makeDINOv3Spec("DINOv3ViTS16", 224, 384, 12, 6, 4.0F, DINOMlpKind::Mlp, 1))
     {
     }
-    static const char *key() noexcept { return "dinov3_vits16"; }
+
+    static const char *key() noexcept
+    {
+        return "dinov3_vits16";
+    }
 };
 
 class DINOv3ViTS16Plus : public DINOTransformer
@@ -860,7 +886,11 @@ public:
         : DINOTransformer(makeDINOv3Spec("DINOv3ViTS16Plus", 224, 384, 12, 6, 6.0F, DINOMlpKind::SplitSwiGLU, 8))
     {
     }
-    static const char *key() noexcept { return "dinov3_vits16plus"; }
+
+    static const char *key() noexcept
+    {
+        return "dinov3_vits16plus";
+    }
 };
 
 class DINOv3ViTB16 : public DINOTransformer
@@ -870,7 +900,11 @@ public:
         : DINOTransformer(makeDINOv3Spec("DINOv3ViTB16", 224, 768, 12, 12, 4.0F, DINOMlpKind::Mlp, 1))
     {
     }
-    static const char *key() noexcept { return "dinov3_vitb16"; }
+
+    static const char *key() noexcept
+    {
+        return "dinov3_vitb16";
+    }
 };
 
 class DINOv3ViTL16 : public DINOTransformer
@@ -880,7 +914,11 @@ public:
         : DINOTransformer(makeDINOv3Spec("DINOv3ViTL16", 224, 1024, 24, 16, 4.0F, DINOMlpKind::Mlp, 1))
     {
     }
-    static const char *key() noexcept { return "dinov3_vitl16"; }
+
+    static const char *key() noexcept
+    {
+        return "dinov3_vitl16";
+    }
 };
 
 class DINOv3ViTL16Plus : public DINOTransformer
@@ -890,7 +928,11 @@ public:
         : DINOTransformer(makeDINOv3Spec("DINOv3ViTL16Plus", 224, 1024, 24, 16, 6.0F, DINOMlpKind::SplitSwiGLU, 8))
     {
     }
-    static const char *key() noexcept { return "dinov3_vitl16plus"; }
+
+    static const char *key() noexcept
+    {
+        return "dinov3_vitl16plus";
+    }
 };
 
 class DINOv3ViTH16Plus : public DINOTransformer
@@ -900,7 +942,11 @@ public:
         : DINOTransformer(makeDINOv3Spec("DINOv3ViTH16Plus", 224, 1280, 32, 20, 6.0F, DINOMlpKind::SplitSwiGLU, 8))
     {
     }
-    static const char *key() noexcept { return "dinov3_vith16plus"; }
+
+    static const char *key() noexcept
+    {
+        return "dinov3_vith16plus";
+    }
 };
 
 class DINOv3ViT7B16 : public DINOTransformer
@@ -910,17 +956,24 @@ public:
         : DINOTransformer(makeDINOv3Spec("DINOv3ViT7B16", 224, 4096, 40, 32, 3.0F, DINOMlpKind::SplitSwiGLU, 64))
     {
     }
-    static const char *key() noexcept { return "dinov3_vit7b16"; }
+
+    static const char *key() noexcept
+    {
+        return "dinov3_vit7b16";
+    }
 };
 
 /**
  * @brief 轻量别名类：只复用结构参数并绑定额外注册 key。
  */
-#define INFERRT_DINO_ALIAS_CLASS(CLASS_NAME, BASE_CLASS, KEY_LITERAL)                                             \
-    class CLASS_NAME : public BASE_CLASS                                                                          \
-    {                                                                                                             \
-    public:                                                                                                       \
-        static const char *key() noexcept { return KEY_LITERAL; }                                                 \
+#define INFERRT_DINO_ALIAS_CLASS(CLASS_NAME, BASE_CLASS, KEY_LITERAL) \
+    class CLASS_NAME : public BASE_CLASS                              \
+    {                                                                 \
+    public:                                                           \
+        static const char *key() noexcept                             \
+        {                                                             \
+            return KEY_LITERAL;                                       \
+        }                                                             \
     }
 
 INFERRT_DINO_ALIAS_CLASS(DINOv2ViTS14Reg4Alias, DINOv2ViTS14Reg, "dinov2_vits14_reg4");
@@ -944,7 +997,11 @@ public:
         : DINOTransformer(makeDINOv3Spec("DINOv3ViTS16", 256, 384, 12, 6, 4.0F, DINOMlpKind::Mlp, 1))
     {
     }
-    static const char *key() noexcept { return "vit_small_patch16_dinov3"; }
+
+    static const char *key() noexcept
+    {
+        return "vit_small_patch16_dinov3";
+    }
 };
 
 INFERRT_DINO_ALIAS_CLASS(TimmDINOv3ViTS16Qkvb, TimmDINOv3ViTS16, "vit_small_patch16_dinov3_qkvb");
@@ -956,11 +1013,14 @@ public:
         : DINOTransformer(makeDINOv3Spec("DINOv3ViTS16Plus", 256, 384, 12, 6, 6.0F, DINOMlpKind::SplitSwiGLU, 8))
     {
     }
-    static const char *key() noexcept { return "vit_small_plus_patch16_dinov3"; }
+
+    static const char *key() noexcept
+    {
+        return "vit_small_plus_patch16_dinov3";
+    }
 };
 
-INFERRT_DINO_ALIAS_CLASS(TimmDINOv3ViTS16PlusQkvb, TimmDINOv3ViTS16Plus,
-                         "vit_small_plus_patch16_dinov3_qkvb");
+INFERRT_DINO_ALIAS_CLASS(TimmDINOv3ViTS16PlusQkvb, TimmDINOv3ViTS16Plus, "vit_small_plus_patch16_dinov3_qkvb");
 
 class TimmDINOv3ViTB16 : public DINOTransformer
 {
@@ -969,7 +1029,11 @@ public:
         : DINOTransformer(makeDINOv3Spec("DINOv3ViTB16", 256, 768, 12, 12, 4.0F, DINOMlpKind::Mlp, 1))
     {
     }
-    static const char *key() noexcept { return "vit_base_patch16_dinov3"; }
+
+    static const char *key() noexcept
+    {
+        return "vit_base_patch16_dinov3";
+    }
 };
 
 INFERRT_DINO_ALIAS_CLASS(TimmDINOv3ViTB16Qkvb, TimmDINOv3ViTB16, "vit_base_patch16_dinov3_qkvb");
@@ -981,7 +1045,11 @@ public:
         : DINOTransformer(makeDINOv3Spec("DINOv3ViTL16", 256, 1024, 24, 16, 4.0F, DINOMlpKind::Mlp, 1))
     {
     }
-    static const char *key() noexcept { return "vit_large_patch16_dinov3"; }
+
+    static const char *key() noexcept
+    {
+        return "vit_large_patch16_dinov3";
+    }
 };
 
 INFERRT_DINO_ALIAS_CLASS(TimmDINOv3ViTL16Qkvb, TimmDINOv3ViTL16, "vit_large_patch16_dinov3_qkvb");
@@ -993,11 +1061,14 @@ public:
         : DINOTransformer(makeDINOv3Spec("DINOv3ViTH16Plus", 256, 1280, 32, 20, 6.0F, DINOMlpKind::SplitSwiGLU, 8))
     {
     }
-    static const char *key() noexcept { return "vit_huge_plus_patch16_dinov3"; }
+
+    static const char *key() noexcept
+    {
+        return "vit_huge_plus_patch16_dinov3";
+    }
 };
 
-INFERRT_DINO_ALIAS_CLASS(TimmDINOv3ViTH16PlusQkvb, TimmDINOv3ViTH16Plus,
-                         "vit_huge_plus_patch16_dinov3_qkvb");
+INFERRT_DINO_ALIAS_CLASS(TimmDINOv3ViTH16PlusQkvb, TimmDINOv3ViTH16Plus, "vit_huge_plus_patch16_dinov3_qkvb");
 
 class TimmDINOv3ViT7B16 : public DINOTransformer
 {
@@ -1006,7 +1077,11 @@ public:
         : DINOTransformer(makeDINOv3Spec("DINOv3ViT7B16", 256, 4096, 40, 32, 3.0F, DINOMlpKind::SplitSwiGLU, 64))
     {
     }
-    static const char *key() noexcept { return "vit_7b_patch16_dinov3"; }
+
+    static const char *key() noexcept
+    {
+        return "vit_7b_patch16_dinov3";
+    }
 };
 
 } // namespace
@@ -1020,8 +1095,8 @@ void DINOTransformer::normalizeModelConfig(IModelConfig &config) const
     }
 
     const auto &shape = config.inputShape();
-    const bool is_default_image_config = shape.d[0] == 1 && shape.d[1] == 3 && shape.d[2] == kDefaultImageSize
-                                      && shape.d[3] == kDefaultImageSize;
+    const bool  is_default_image_config
+        = shape.d[0] == 1 && shape.d[1] == 3 && shape.d[2] == kDefaultImageSize && shape.d[3] == kDefaultImageSize;
     if (is_default_image_config)
     {
         config.setInputShape(nvinfer1::Dims4{1, 3, spec_.image_size, spec_.image_size});
@@ -1035,11 +1110,11 @@ void DINOTransformer::buildNetwork(nvinfer1::INetworkDefinition *network, const 
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "network must not be null");
     }
 
-    const auto geometry = resolveInputGeometry(spec_, modelConfig());
+    const auto geometry     = resolveInputGeometry(spec_, modelConfig());
     const bool feature_only = isBuildingFeatureEngine();
 
     priv::IModelImpl::NamedTensorMap named_tensors;
-    auto *x = addInputTokens(*this, network, weights_map, geometry, spec_, named_tensors);
+    auto                            *x = addInputTokens(*this, network, weights_map, geometry, spec_, named_tensors);
     if (feature_only && tryMarkFeatureOutputTensors(network, named_tensors))
     {
         return;
@@ -1047,8 +1122,8 @@ void DINOTransformer::buildNetwork(nvinfer1::INetworkDefinition *network, const 
 
     for (int i = 0; i < spec_.depth; ++i)
     {
-        x = addDINOBlock(network, weights_map, *x, i, geometry, spec_);
-        named_tensors["block" + std::to_string(i)] = x;
+        x                                            = addDINOBlock(network, weights_map, *x, i, geometry, spec_);
+        named_tensors["block" + std::to_string(i)]   = x;
         named_tensors["blocks." + std::to_string(i)] = x;
         if (feature_only && tryMarkFeatureOutputTensors(network, named_tensors))
         {
