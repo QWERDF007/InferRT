@@ -14,8 +14,8 @@ cmake --build build --config Debug --target inferrt_sample_image_search
 ## Run
 
 ```bash
-build/bin/inferrt_sample_image_search.exe --weights-file <weights_or_model_file> --gallery-dir <gallery_dir> --query-image <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--backend tensorrt|openvino|onnxruntime] [--device cpu|gpu] [--norm l2|l1|none] [--preprocess-backend cpu|gpu] [--faiss-backend cpu|gpu] [--index-storage ram|disk] [--disk-build-batch-size N] [--rebuild-index]
-build/bin/inferrt_sample_image_search.exe -w <weights_or_model_file> -g <gallery_dir> -q <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--backend tensorrt|openvino|onnxruntime] [--device cpu|gpu] [--norm l2|l1|none] [--preprocess-backend cpu|gpu] [--faiss-backend cpu|gpu] [--index-storage ram|disk] [--disk-build-batch-size N] [--rebuild-index]
+build/bin/inferrt_sample_image_search.exe --weights-file <weights_or_model_file> --gallery-dir <gallery_dir> --query-image <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--backend tensorrt|openvino|onnxruntime] [--device cpu|gpu] [--norm l2|l1|none] [--preprocess-backend cpu|gpu] [--faiss-backend cpu|gpu] [--index-storage ram|disk] [--disk-build-batch-size N] [--model-batch-size N] [--rebuild-index]
+build/bin/inferrt_sample_image_search.exe -w <weights_or_model_file> -g <gallery_dir> -q <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--backend tensorrt|openvino|onnxruntime] [--device cpu|gpu] [--norm l2|l1|none] [--preprocess-backend cpu|gpu] [--faiss-backend cpu|gpu] [--index-storage ram|disk] [--disk-build-batch-size N] [--model-batch-size N] [--rebuild-index]
 build/bin/inferrt_sample_image_search.exe --help
 ```
 
@@ -28,6 +28,7 @@ build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classific
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --index build/gallery/resnet18_layer4.faiss
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet50.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model resnet50 --feature layer3
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --norm l2 --preprocess-backend cpu --faiss-backend cpu --index-storage disk --disk-build-batch-size 128 --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/dinov2_vits14.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --model-batch-size 4 --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --norm l2 --preprocess-backend cpu --faiss-backend gpu --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --backend onnxruntime --device cpu --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --backend openvino --device cpu --rebuild-index
@@ -56,6 +57,7 @@ Use `--rebuild-index` when the gallery directory has changed and you want to inc
 - `--faiss-backend`: selects Faiss backend, one of `cpu`, `gpu`; default is `cpu`
 - `--index-storage`: selects CPU Faiss search storage, one of `ram`, `disk`; default is `ram`; `disk` uses IVF with an on-disk inverted-list sidecar for large galleries; GPU Faiss currently keeps the default RAM behavior
 - `--disk-build-batch-size`: controls the batch size used while building CPU disk indexes; default is `256`; lower it to reduce peak RAM during build
+- `--model-batch-size`: controls the TensorRT feature extraction model batch size; default is `1`; increase it for gallery indexing when the selected model supports dynamic batch
 - if `--index` is omitted, the sample writes `<gallery_dir>/<model>_<feature>.faiss`
 - DINO models use the engine input size during preprocessing, so `dinov2_vits14` runs at its registered `518x518` default and `dinov3_*` official keys run at `224x224` unless the model config is overridden.
 - ONNX Runtime and OpenVINO backends use graph outputs directly. Export the feature you want to search, such as `x_norm_clstoken`, as an ONNX/OpenVINO output first.

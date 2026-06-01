@@ -26,6 +26,9 @@ inline constexpr const char *kDefaultImageSearchFeatureName = "layer4";
 /// CPU 磁盘索引构建时的默认特征批大小。
 inline constexpr size_t kDefaultImageSearchDiskBuildBatchSize = 256;
 
+/// 图像检索特征提取模型的默认推理 batch 数。
+inline constexpr size_t kDefaultImageSearchModelBatchSize = 1;
+
 /**
  * @brief 图像检索结果。
  */
@@ -154,6 +157,9 @@ struct ImageSearchConfig
 
     ///< CPU disk index build batch size.
     size_t disk_build_batch_size{kDefaultImageSearchDiskBuildBatchSize};
+
+    ///< 特征提取模型推理 batch；当前用于 TensorRT 动态 batch。
+    size_t model_batch_size{kDefaultImageSearchModelBatchSize};
 };
 
 /**

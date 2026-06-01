@@ -51,7 +51,9 @@
 
 namespace irt::features::priv {
 
-using BuildProgressCallback = ImageSearchBuildProgressCallback;
+using BuildProgressCallback    = ImageSearchBuildProgressCallback;
+using LoadFeatureCallback      = std::function<std::vector<float>(size_t)>;
+using LoadFeatureBatchCallback = std::function<std::vector<float>(size_t, size_t)>;
 
 inline void reportBuildProgress(const BuildProgressCallback &progress_callback, ImageSearchBuildStage stage,
                                 size_t batch_index = 0, size_t batch_begin = 0, size_t batch_count = 0,
@@ -393,7 +395,7 @@ inline void writeAt(std::fstream &output, uint64_t offset, const void *data, siz
  * @return 长度为 ``count * feature_dim`` 的拼接特征。
  */
 inline std::vector<float> loadFeatureBatch(size_t begin, size_t count, int feature_dim,
-                                           const std::function<std::vector<float>(size_t)> &load_feature)
+                                           const LoadFeatureCallback &load_feature)
 {
     std::vector<float> features;
     features.reserve(count * static_cast<size_t>(feature_dim));
@@ -409,6 +411,20 @@ inline std::vector<float> loadFeatureBatch(size_t begin, size_t count, int featu
     return features;
 }
 
+/**
+ * @brief 通过批量回调加载连续图像特征，并校验返回的扁平化尺寸。
+ */
+inline std::vector<float> loadFeatureBatch(size_t begin, size_t count, int feature_dim,
+                                           const LoadFeatureBatchCallback &load_features)
+{
+    auto features = load_features(begin, count);
+    if (features.size() != count * static_cast<size_t>(feature_dim))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected ImageSearch feature batch size");
+    }
+    return features;
+}
+
 struct TrainingFeatureSample
 {
     std::vector<float>  features;
@@ -417,9 +433,8 @@ struct TrainingFeatureSample
 };
 
 inline TrainingFeatureSample loadTrainingFeatures(size_t vector_count, int feature_dim, size_t training_count,
-                                                  size_t                                           stride,
-                                                  const std::function<std::vector<float>(size_t)> &load_feature,
-                                                  const BuildProgressCallback                     &progress_callback)
+                                                  size_t stride, const LoadFeatureCallback &load_feature,
+                                                  const BuildProgressCallback &progress_callback)
 {
     reportBuildProgress(progress_callback, ImageSearchBuildStage::TrainingFeatures, 0, 0, 0, 0, training_count);
 
@@ -563,8 +578,9 @@ inline size_t chooseCpuOnDiskIvfBuildBatchSize(size_t requested_batch_size, size
 inline void writeCpuOnDiskIvfDataFileBatched(const faiss::IndexIVF &index, size_t vector_count, int feature_dim,
                                              const std::filesystem::path &data_path,
                                              const std::vector<float> &centroids, size_t batch_size,
-                                             const std::function<std::vector<float>(size_t)> &load_feature,
-                                             const BuildProgressCallback                     &progress_callback = {})
+                                             const LoadFeatureCallback      &load_feature,
+                                             const LoadFeatureBatchCallback &load_feature_batch = {},
+                                             const BuildProgressCallback    &progress_callback  = {})
 {
     if (batch_size == 0)
     {
@@ -589,7 +605,8 @@ inline void writeCpuOnDiskIvfDataFileBatched(const faiss::IndexIVF &index, size_
     for (size_t begin = 0; begin < vector_count; begin += batch_size)
     {
         const size_t count       = std::min(batch_size, vector_count - begin);
-        const auto   features    = loadFeatureBatch(begin, count, feature_dim, load_feature);
+        const auto   features    = load_feature_batch ? loadFeatureBatch(begin, count, feature_dim, load_feature_batch)
+                                                      : loadFeatureBatch(begin, count, feature_dim, load_feature);
         const auto   assignments = assignFeatureBatchToCentroids(features, count, feature_dim, centroids, index.nlist);
         for (const auto list_no : assignments)
         {
@@ -621,7 +638,8 @@ inline void writeCpuOnDiskIvfDataFileBatched(const faiss::IndexIVF &index, size_
     for (size_t begin = 0; begin < vector_count; begin += batch_size)
     {
         const size_t count       = std::min(batch_size, vector_count - begin);
-        const auto   features    = loadFeatureBatch(begin, count, feature_dim, load_feature);
+        const auto   features    = load_feature_batch ? loadFeatureBatch(begin, count, feature_dim, load_feature_batch)
+                                                      : loadFeatureBatch(begin, count, feature_dim, load_feature);
         const auto   assignments = assignFeatureBatchToCentroids(features, count, feature_dim, centroids, index.nlist);
 
         std::vector<std::pair<faiss::idx_t, size_t>> ordered;
@@ -903,9 +921,29 @@ inline std::unique_ptr<faiss::Index> loadCpuOnDiskIvfFlatIndex(const std::filesy
  * @return 已挂接磁盘倒排列表、可直接用于检索的 Faiss 索引。
  * @throws irt::Exception 参数非法、训练/添加失败或落盘失败时抛出。
  */
-inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
-    size_t vector_count, int feature_dim, const std::filesystem::path &index_path, size_t batch_size,
-    const std::function<std::vector<float>(size_t)> &load_feature, const BuildProgressCallback &progress_callback = {})
+inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(size_t vector_count, int feature_dim,
+                                                                const std::filesystem::path    &index_path,
+                                                                size_t                          batch_size,
+                                                                const LoadFeatureCallback      &load_feature,
+                                                                const LoadFeatureBatchCallback &load_feature_batch,
+                                                                const BuildProgressCallback    &progress_callback = {});
+
+inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(size_t vector_count, int feature_dim,
+                                                                const std::filesystem::path &index_path,
+                                                                size_t                       batch_size,
+                                                                const LoadFeatureCallback   &load_feature,
+                                                                const BuildProgressCallback &progress_callback = {})
+{
+    return buildCpuOnDiskIvfFlatIndex(vector_count, feature_dim, index_path, batch_size, load_feature, {},
+                                      progress_callback);
+}
+
+inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(size_t vector_count, int feature_dim,
+                                                                const std::filesystem::path    &index_path,
+                                                                size_t                          batch_size,
+                                                                const LoadFeatureCallback      &load_feature,
+                                                                const LoadFeatureBatchCallback &load_feature_batch,
+                                                                const BuildProgressCallback    &progress_callback)
 {
     if (vector_count == 0 || feature_dim <= 0)
     {
@@ -944,14 +982,30 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
     reportBuildProgress(progress_callback, ImageSearchBuildStage::WritingIndex, 0, 0, 0, 1, 1);
 
     writeCpuOnDiskIvfDataFileBatched(*ivf_index, vector_count, feature_dim, cpuOnDiskIvfDataPath(index_path), centroids,
-                                     batch_size, load_feature, progress_callback);
+                                     batch_size, load_feature, load_feature_batch, progress_callback);
     return loadCpuOnDiskIvfFlatIndex(index_path);
 }
 
 inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int feature_dim, size_t batch_size,
-                                                        const std::function<std::vector<float>(size_t)> &load_feature,
+                                                        const LoadFeatureCallback      &load_feature,
+                                                        const LoadFeatureBatchCallback &load_feature_batch,
+                                                        const BuildProgressCallback    &progress_callback      = {},
+                                                        bool                            require_gpu_compatible = false);
+
+inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int feature_dim, size_t batch_size,
+                                                        const LoadFeatureCallback   &load_feature,
                                                         const BuildProgressCallback &progress_callback      = {},
                                                         bool                         require_gpu_compatible = false)
+{
+    return buildRamIvfPqIndex(vector_count, feature_dim, batch_size, load_feature, {}, progress_callback,
+                              require_gpu_compatible);
+}
+
+inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int feature_dim, size_t batch_size,
+                                                        const LoadFeatureCallback      &load_feature,
+                                                        const LoadFeatureBatchCallback &load_feature_batch,
+                                                        const BuildProgressCallback    &progress_callback,
+                                                        bool                            require_gpu_compatible)
 {
     if (vector_count == 0 || feature_dim <= 0)
     {
@@ -1033,7 +1087,8 @@ inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int
     for (size_t begin = 0; begin < vector_count; begin += batch_size)
     {
         const size_t count    = std::min(batch_size, vector_count - begin);
-        const auto   features = loadFeatureBatch(begin, count, feature_dim, load_cached_feature);
+        const auto   features = load_feature_batch ? loadFeatureBatch(begin, count, feature_dim, load_feature_batch)
+                                                   : loadFeatureBatch(begin, count, feature_dim, load_cached_feature);
         ivfpq_index->add(static_cast<faiss::idx_t>(count), features.data());
         reportBuildProgress(progress_callback, ImageSearchBuildStage::AddingVectors, add_batch_index++, begin, count,
                             std::min(vector_count, begin + count), vector_count);

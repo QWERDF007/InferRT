@@ -3,16 +3,14 @@
  * @brief ``ImageSearch`` 与 CPU 磁盘 Faiss 索引的单元测试。
  */
 
-#include <gtest/gtest.h>
-
-#include <inferrt/core/Exception.hpp>
-#include <inferrt/core/Status.h>
-#include <inferrt/features/ImageSearch.hpp>
-
 #include "ImageSearchFaissIndex.hpp"
 
 #include <faiss/IndexIVF.h>
 #include <faiss/IndexIVFPQ.h>
+#include <gtest/gtest.h>
+#include <inferrt/core/Exception.hpp>
+#include <inferrt/core/Status.h>
+#include <inferrt/features/ImageSearch.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -39,9 +37,9 @@ public:
     TempDir()
     {
         static std::atomic<int> counter{0};
-        path_ = fs::temp_directory_path()
-              / fs::path("inferrt_image_search_test_"
-                         + std::to_string(counter.fetch_add(1, std::memory_order_relaxed)));
+        path_
+            = fs::temp_directory_path()
+            / fs::path("inferrt_image_search_test_" + std::to_string(counter.fetch_add(1, std::memory_order_relaxed)));
         fs::create_directories(path_);
     }
 
@@ -64,7 +62,7 @@ public:
     }
 
     /** @brief 禁止拷贝构造。 */
-    TempDir(const TempDir &)            = delete;
+    TempDir(const TempDir &) = delete;
     /** @brief 禁止拷贝赋值。 */
     TempDir &operator=(const TempDir &) = delete;
 
@@ -88,7 +86,7 @@ void writeFile(const fs::path &path)
  * @param fn 待执行调用。
  * @param expected_code 期望错误码。
  */
-template <typename Fn>
+template<typename Fn>
 void expectIrtExceptionCode(Fn &&fn, irt::Status expected_code)
 {
     try
@@ -124,6 +122,7 @@ TEST(ImageSearchTest, DefaultConstructsNotReadySearcher)
     EXPECT_EQ(search.config().faiss_backend, irt::features::ImageSearchFaissBackend::CPU);
     EXPECT_EQ(search.config().index_storage, irt::features::ImageSearchIndexStorage::RAM);
     EXPECT_EQ(search.config().disk_build_batch_size, irt::features::kDefaultImageSearchDiskBuildBatchSize);
+    EXPECT_EQ(search.config().model_batch_size, irt::features::kDefaultImageSearchModelBatchSize);
 }
 
 /**
@@ -132,12 +131,12 @@ TEST(ImageSearchTest, DefaultConstructsNotReadySearcher)
 TEST(ImageSearchTest, ConstructorStoresConfig)
 {
     irt::features::ImageSearchConfig config;
-    config.model_name = "resnet18";
-    config.feature_name = "layer4";
-    config.model_backend = irt::model::ModelBackend::OpenVINO;
-    config.model_device = irt::model::ModelDevice::CPU;
-    config.norm = irt::features::ImageSearchFeatureNorm::L1;
-    config.index_storage = irt::features::ImageSearchIndexStorage::Disk;
+    config.model_name            = "resnet18";
+    config.feature_name          = "layer4";
+    config.model_backend         = irt::model::ModelBackend::OpenVINO;
+    config.model_device          = irt::model::ModelDevice::CPU;
+    config.norm                  = irt::features::ImageSearchFeatureNorm::L1;
+    config.index_storage         = irt::features::ImageSearchIndexStorage::Disk;
     config.disk_build_batch_size = 3;
 
     const irt::features::ImageSearch search(config);
@@ -151,6 +150,7 @@ TEST(ImageSearchTest, ConstructorStoresConfig)
     EXPECT_EQ(search.config().faiss_backend, irt::features::ImageSearchFaissBackend::CPU);
     EXPECT_EQ(search.config().index_storage, irt::features::ImageSearchIndexStorage::Disk);
     EXPECT_EQ(search.config().disk_build_batch_size, 3U);
+    EXPECT_EQ(search.config().model_batch_size, irt::features::kDefaultImageSearchModelBatchSize);
 
     config.norm = irt::features::ImageSearchFeatureNorm::None;
     const irt::features::ImageSearch default_search(config);
@@ -162,6 +162,22 @@ TEST(ImageSearchTest, ConstructorStoresConfig)
     EXPECT_EQ(default_search.config().norm, irt::features::ImageSearchFeatureNorm::None);
     EXPECT_EQ(default_search.config().index_storage, irt::features::ImageSearchIndexStorage::Disk);
     EXPECT_EQ(default_search.config().disk_build_batch_size, 3U);
+    EXPECT_EQ(default_search.config().model_batch_size, irt::features::kDefaultImageSearchModelBatchSize);
+}
+
+/**
+ * @brief TensorRT 图像检索配置应允许设置特征提取模型 batch。
+ */
+TEST(ImageSearchTest, ConstructorStoresTensorRtModelBatchSize)
+{
+    irt::features::ImageSearchConfig config;
+    config.model_name       = "resnet18";
+    config.feature_name     = "layer4";
+    config.model_batch_size = 4;
+
+    const irt::features::ImageSearch search(config);
+
+    EXPECT_EQ(search.config().model_batch_size, 4U);
 }
 
 /**
@@ -170,10 +186,10 @@ TEST(ImageSearchTest, ConstructorStoresConfig)
 TEST(ImageSearchTest, ConstructorAcceptsOnnxRuntimeBackend)
 {
     irt::features::ImageSearchConfig config;
-    config.model_name = "resnet18";
-    config.feature_name = "layer4";
+    config.model_name    = "resnet18";
+    config.feature_name  = "layer4";
     config.model_backend = irt::model::ModelBackend::ONNXRuntime;
-    config.model_device = irt::model::ModelDevice::CPU;
+    config.model_device  = irt::model::ModelDevice::CPU;
 
     const irt::features::ImageSearch search(config);
 
@@ -188,13 +204,12 @@ TEST(ImageSearchTest, ConstructorAcceptsOnnxRuntimeBackend)
 TEST(ImageSearchTest, ConstructorRejectsTensorRtCpuDevice)
 {
     irt::features::ImageSearchConfig config;
-    config.model_name = "resnet18";
-    config.feature_name = "layer4";
+    config.model_name    = "resnet18";
+    config.feature_name  = "layer4";
     config.model_backend = irt::model::ModelBackend::TensorRT;
-    config.model_device = irt::model::ModelDevice::CPU;
+    config.model_device  = irt::model::ModelDevice::CPU;
 
-    expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); },
-                           irt::Status::ERROR_NOT_IMPLEMENTED);
+    expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); }, irt::Status::ERROR_NOT_IMPLEMENTED);
 }
 
 /**
@@ -203,12 +218,11 @@ TEST(ImageSearchTest, ConstructorRejectsTensorRtCpuDevice)
 TEST(ImageSearchTest, ConstructorRejectsGpuPreprocessPlaceholder)
 {
     irt::features::ImageSearchConfig config;
-    config.model_name = "resnet18";
-    config.feature_name = "layer4";
+    config.model_name         = "resnet18";
+    config.feature_name       = "layer4";
     config.preprocess_backend = irt::features::ImageSearchPreprocessBackend::GPU;
 
-    expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); },
-                           irt::Status::ERROR_NOT_IMPLEMENTED);
+    expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); }, irt::Status::ERROR_NOT_IMPLEMENTED);
 }
 
 /**
@@ -217,8 +231,8 @@ TEST(ImageSearchTest, ConstructorRejectsGpuPreprocessPlaceholder)
 TEST(ImageSearchTest, ConstructorAcceptsGpuFaissBackend)
 {
     irt::features::ImageSearchConfig config;
-    config.model_name = "resnet18";
-    config.feature_name = "layer4";
+    config.model_name    = "resnet18";
+    config.feature_name  = "layer4";
     config.faiss_backend = irt::features::ImageSearchFaissBackend::GPU;
     config.index_storage = irt::features::ImageSearchIndexStorage::Disk;
 
@@ -235,12 +249,39 @@ TEST(ImageSearchTest, ConstructorAcceptsGpuFaissBackend)
 TEST(ImageSearchTest, ConstructorRejectsZeroDiskBuildBatchSize)
 {
     irt::features::ImageSearchConfig config;
-    config.model_name = "resnet18";
-    config.feature_name = "layer4";
+    config.model_name            = "resnet18";
+    config.feature_name          = "layer4";
     config.disk_build_batch_size = 0;
 
-    expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); },
-                           irt::Status::ERROR_INVALID_ARGUMENT);
+    expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); }, irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+/**
+ * @brief 模型推理 batch 必须为正数。
+ */
+TEST(ImageSearchTest, ConstructorRejectsZeroModelBatchSize)
+{
+    irt::features::ImageSearchConfig config;
+    config.model_name       = "resnet18";
+    config.feature_name     = "layer4";
+    config.model_batch_size = 0;
+
+    expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); }, irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+/**
+ * @brief 图像检索当前只对 TensorRT 后端暴露大于 1 的模型 batch。
+ */
+TEST(ImageSearchTest, ConstructorRejectsGraphBackendModelBatchSize)
+{
+    irt::features::ImageSearchConfig config;
+    config.model_name       = "resnet18";
+    config.feature_name     = "layer4";
+    config.model_backend    = irt::model::ModelBackend::ONNXRuntime;
+    config.model_device     = irt::model::ModelDevice::CPU;
+    config.model_batch_size = 2;
+
+    expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); }, irt::Status::ERROR_NOT_IMPLEMENTED);
 }
 
 /**
@@ -249,12 +290,12 @@ TEST(ImageSearchTest, ConstructorRejectsZeroDiskBuildBatchSize)
 TEST(ImageSearchTest, ConstructorAcceptsDinoBackbonesForClsTokenSearch)
 {
     irt::features::ImageSearchConfig dinov2_config;
-    dinov2_config.model_name = "dinov2_vits14";
+    dinov2_config.model_name   = "dinov2_vits14";
     dinov2_config.feature_name = "x_norm_clstoken";
     const irt::features::ImageSearch dinov2(dinov2_config);
 
     irt::features::ImageSearchConfig dinov3_config;
-    dinov3_config.model_name = "dinov3_vitb16";
+    dinov3_config.model_name   = "dinov3_vitb16";
     dinov3_config.feature_name = "x_norm_clstoken";
     const irt::features::ImageSearch dinov3(dinov3_config);
 
@@ -297,8 +338,7 @@ TEST(ImageSearchTest, DefaultIndexPathSanitizesModelAndFeatureNames)
  */
 TEST(ImageSearchTest, DefaultIndexPathHandlesDinoFeatureNames)
 {
-    const auto cls_path
-        = irt::features::ImageSearch::defaultIndexPath("gallery", "dinov3_vitb16", "x_norm_clstoken");
+    const auto cls_path   = irt::features::ImageSearch::defaultIndexPath("gallery", "dinov3_vitb16", "x_norm_clstoken");
     const auto block_path = irt::features::ImageSearch::defaultIndexPath("gallery", "dinov2_vits14", "blocks.11");
 
     EXPECT_EQ(cls_path.generic_string(), "gallery/dinov3_vitb16_x_norm_clstoken.faiss");
@@ -320,7 +360,8 @@ TEST(ImageSearchTest, RamIndexUsesInMemoryIvfPqCompression)
         features[row * feature_dim + ((row * 3 + 1) % feature_dim)] += 0.25f;
     }
 
-    auto load_feature = [&](size_t row) {
+    auto load_feature = [&](size_t row)
+    {
         const auto begin = features.begin() + static_cast<std::ptrdiff_t>(row * feature_dim);
         return std::vector<float>(begin, begin + feature_dim);
     };
@@ -335,8 +376,8 @@ TEST(ImageSearchTest, RamIndexUsesInMemoryIvfPqCompression)
     EXPECT_LT(ivfpq->code_size, static_cast<size_t>(feature_dim) * sizeof(float));
     EXPECT_GE(ivfpq->nprobe, 1U);
 
-    auto query = load_feature(0);
-    std::vector<float> distances(3);
+    auto                      query = load_feature(0);
+    std::vector<float>        distances(3);
     std::vector<faiss::idx_t> labels(3);
     index->search(1, query.data(), static_cast<faiss::idx_t>(labels.size()), distances.data(), labels.data());
     EXPECT_GE(labels[0], 0);
@@ -357,13 +398,14 @@ TEST(ImageSearchTest, RamIndexBuildReportsStagesAndAddBatches)
         features[row * feature_dim + ((row * 5 + 3) % feature_dim)] += 0.125f;
     }
 
-    auto load_feature = [&](size_t row) {
+    auto load_feature = [&](size_t row)
+    {
         const auto begin = features.begin() + static_cast<std::ptrdiff_t>(row * feature_dim);
         return std::vector<float>(begin, begin + feature_dim);
     };
 
     std::vector<irt::features::ImageSearchBuildStage> stages;
-    std::vector<std::pair<size_t, size_t>>             add_batches;
+    std::vector<std::pair<size_t, size_t>>            add_batches;
     size_t                                            training_progress = 0;
     size_t                                            add_progress      = 0;
     auto progress_callback = [&](const irt::features::ImageSearchBuildProgress &progress)
@@ -383,8 +425,7 @@ TEST(ImageSearchTest, RamIndexBuildReportsStagesAndAddBatches)
         }
     };
 
-    auto index = irt::features::priv::buildRamIvfPqIndex(vector_count, feature_dim, 5, load_feature,
-                                                         progress_callback);
+    auto index = irt::features::priv::buildRamIvfPqIndex(vector_count, feature_dim, 5, load_feature, progress_callback);
 
     ASSERT_TRUE(index);
     EXPECT_NE(std::find(stages.begin(), stages.end(), irt::features::ImageSearchBuildStage::TrainingFeatures),
@@ -393,7 +434,12 @@ TEST(ImageSearchTest, RamIndexBuildReportsStagesAndAddBatches)
               stages.end());
     EXPECT_NE(std::find(stages.begin(), stages.end(), irt::features::ImageSearchBuildStage::AddingVectors),
               stages.end());
-    const std::vector<std::pair<size_t, size_t>> expected_add_batches{{0, 5}, {5, 5}, {10, 5}, {15, 2}};
+    const std::vector<std::pair<size_t, size_t>> expected_add_batches{
+        { 0, 5},
+        { 5, 5},
+        {10, 5},
+        {15, 2}
+    };
     EXPECT_EQ(add_batches, expected_add_batches);
     EXPECT_EQ(training_progress, vector_count);
     EXPECT_EQ(add_progress, vector_count);
@@ -414,7 +460,8 @@ TEST(ImageSearchTest, RamIvfPqGpuCompatibleIndexUsesEightBitCodes)
         features[row * feature_dim + ((row * 3 + 1) % feature_dim)] += 0.25f;
     }
 
-    auto load_feature = [&](size_t row) {
+    auto load_feature = [&](size_t row)
+    {
         const auto begin = features.begin() + static_cast<std::ptrdiff_t>(row * feature_dim);
         return std::vector<float>(begin, begin + feature_dim);
     };
@@ -433,30 +480,30 @@ TEST(ImageSearchTest, RamIvfPqGpuCompatibleIndexUsesEightBitCodes)
  */
 TEST(ImageSearchTest, CpuDiskIndexUsesOnDiskIvfInvertedLists)
 {
-    constexpr int feature_dim = 4;
+    constexpr int    feature_dim  = 4;
     constexpr size_t vector_count = 16;
 
     std::vector<float> features(vector_count * feature_dim, 0.0f);
     for (size_t row = 0; row < vector_count; ++row)
     {
-        features[row * feature_dim + (row % feature_dim)] = 1.0f;
+        features[row * feature_dim + (row % feature_dim)]       = 1.0f;
         features[row * feature_dim + ((row + 1) % feature_dim)] = 0.01f * static_cast<float>(row + 1);
     }
 
-    auto load_feature = [&](size_t row) {
+    auto load_feature = [&](size_t row)
+    {
         const auto begin = features.begin() + static_cast<std::ptrdiff_t>(row * feature_dim);
         return std::vector<float>(begin, begin + feature_dim);
     };
 
-    TempDir temp;
-    const auto index_path = temp.path() / "synthetic_disk.faiss";
+    TempDir                                temp;
+    const auto                             index_path = temp.path() / "synthetic_disk.faiss";
     std::vector<std::pair<size_t, size_t>> batches;
-    auto index = irt::features::priv::buildCpuOnDiskIvfFlatIndex(
+    auto                                   index = irt::features::priv::buildCpuOnDiskIvfFlatIndex(
         vector_count, feature_dim, index_path, 3, load_feature,
         [&](const irt::features::ImageSearchBuildProgress &progress)
         {
-            if (progress.stage == irt::features::ImageSearchBuildStage::AddingVectors
-                && progress.batch_count > 0)
+            if (progress.stage == irt::features::ImageSearchBuildStage::AddingVectors && progress.batch_count > 0)
             {
                 batches.emplace_back(progress.batch_begin, progress.batch_count);
             }
@@ -475,15 +522,20 @@ TEST(ImageSearchTest, CpuDiskIndexUsesOnDiskIvfInvertedLists)
     EXPECT_EQ(index->metric_type, faiss::METRIC_INNER_PRODUCT);
     EXPECT_GE(ivf_index->nprobe, 1U);
     const std::vector<std::pair<size_t, size_t>> expected_batches{
-        {0, 3}, {3, 3}, {6, 3}, {9, 3}, {12, 3}, {15, 1}
+        { 0, 3},
+        { 3, 3},
+        { 6, 3},
+        { 9, 3},
+        {12, 3},
+        {15, 1}
     };
     EXPECT_EQ(batches, expected_batches);
 
     const std::string invlists_type = typeid(*ivf_index->invlists).name();
     EXPECT_NE(invlists_type.find("OnDisk"), std::string::npos) << invlists_type;
 
-    auto query = load_feature(0);
-    std::vector<float> distances(3);
+    auto                      query = load_feature(0);
+    std::vector<float>        distances(3);
     std::vector<faiss::idx_t> labels(3);
     index->search(1, query.data(), static_cast<faiss::idx_t>(labels.size()), distances.data(), labels.data());
     EXPECT_GE(labels[0], 0);
@@ -508,10 +560,9 @@ TEST(ImageSearchTest, CpuDiskIndexBoundsWideFeatureBuffers)
     constexpr size_t vector_count = 12500;
     constexpr int    feature_dim  = 1369 * 384;
 
-    const auto nlist = irt::features::priv::chooseCpuOnDiskIvfListCount(vector_count, feature_dim);
-    const auto training_count =
-        irt::features::priv::chooseCpuOnDiskIvfTrainingCount(vector_count, feature_dim, nlist);
-    const auto batch_size = irt::features::priv::chooseCpuOnDiskIvfBuildBatchSize(256, vector_count, feature_dim);
+    const auto nlist          = irt::features::priv::chooseCpuOnDiskIvfListCount(vector_count, feature_dim);
+    const auto training_count = irt::features::priv::chooseCpuOnDiskIvfTrainingCount(vector_count, feature_dim, nlist);
+    const auto batch_size     = irt::features::priv::chooseCpuOnDiskIvfBuildBatchSize(256, vector_count, feature_dim);
 
     const auto bytes_per_feature = static_cast<size_t>(feature_dim) * sizeof(float);
 
@@ -534,21 +585,22 @@ TEST(ImageSearchTest, CpuDiskIndexBuildsDinoClsSizedGallery)
     std::vector<float> features(vector_count * feature_dim, 0.0f);
     for (size_t row = 0; row < vector_count; ++row)
     {
-        const size_t first  = row % feature_dim;
-        const size_t second = (row * 37 + 11) % feature_dim;
+        const size_t first                  = row % feature_dim;
+        const size_t second                 = (row * 37 + 11) % feature_dim;
         features[row * feature_dim + first] = 1.0f;
         features[row * feature_dim + second] += 0.25f;
     }
 
-    auto load_feature = [&](size_t row) {
+    auto load_feature = [&](size_t row)
+    {
         const auto begin = features.begin() + static_cast<std::ptrdiff_t>(row * feature_dim);
         return std::vector<float>(begin, begin + feature_dim);
     };
 
-    TempDir temp;
+    TempDir    temp;
     const auto index_path = temp.path() / "dino_cls_sized_disk.faiss";
-    auto index = irt::features::priv::buildCpuOnDiskIvfFlatIndex(vector_count, feature_dim, index_path, 256,
-                                                                 load_feature);
+    auto       index
+        = irt::features::priv::buildCpuOnDiskIvfFlatIndex(vector_count, feature_dim, index_path, 256, load_feature);
 
     ASSERT_TRUE(index);
     EXPECT_EQ(index->ntotal, static_cast<faiss::idx_t>(vector_count));
@@ -609,11 +661,10 @@ TEST(ImageSearchTest, BuildFromExplicitImagePathsRequiresIndexFile)
     TempDir temp;
     writeFile(temp.path() / "a.jpg");
 
-    irt::features::ImageSearch search;
+    irt::features::ImageSearch  search;
     const std::vector<fs::path> images{temp.path() / "a.jpg"};
 
-    expectIrtExceptionCode([&] { search.build("weights.wts", images, {}); },
-                           irt::Status::ERROR_INVALID_ARGUMENT);
+    expectIrtExceptionCode([&] { search.build("weights.wts", images, {}); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -623,7 +674,7 @@ TEST(ImageSearchTest, BuildFromExplicitImagePathsRejectsEmptyList)
 {
     TempDir temp;
 
-    irt::features::ImageSearch search;
+    irt::features::ImageSearch  search;
     const std::vector<fs::path> images;
 
     expectIrtExceptionCode([&] { search.build("weights.wts", images, temp.path() / "index.faiss"); },
@@ -636,7 +687,7 @@ TEST(ImageSearchTest, BuildFromExplicitImagePathsRejectsEmptyList)
 TEST(ImageSearchTest, ConstructorRejectsUnsupportedModel)
 {
     irt::features::ImageSearchConfig config;
-    config.model_name = "not_a_model";
+    config.model_name   = "not_a_model";
     config.feature_name = "layer4";
 
     expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); }, irt::Status::ERROR_INVALID_ARGUMENT);
@@ -648,7 +699,7 @@ TEST(ImageSearchTest, ConstructorRejectsUnsupportedModel)
 TEST(ImageSearchTest, ConstructorRejectsEmptyFeatureName)
 {
     irt::features::ImageSearchConfig config;
-    config.model_name = "resnet18";
+    config.model_name   = "resnet18";
     config.feature_name = "";
 
     expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); }, irt::Status::ERROR_INVALID_ARGUMENT);
@@ -660,7 +711,7 @@ TEST(ImageSearchTest, ConstructorRejectsEmptyFeatureName)
 TEST(ImageSearchTest, SearchBeforeBuildOrLoadThrowsInvalidOperation)
 {
     irt::features::ImageSearchConfig config;
-    config.model_name = "resnet18";
+    config.model_name   = "resnet18";
     config.feature_name = "layer4";
     irt::features::ImageSearch search(config);
 
@@ -678,7 +729,7 @@ TEST(ImageSearchTest, SearchBeforeBuildOrLoadThrowsInvalidOperation)
 TEST(ImageSearchTest, MoveConstructedSearcherKeepsConfiguration)
 {
     irt::features::ImageSearchConfig config;
-    config.model_name = "resnet18";
+    config.model_name   = "resnet18";
     config.feature_name = "layer4";
     irt::features::ImageSearch source(config);
     irt::features::ImageSearch moved(std::move(source));

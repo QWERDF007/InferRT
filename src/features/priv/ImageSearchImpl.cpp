@@ -25,8 +25,8 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
-#include <numeric>
 #include <string>
 #include <system_error>
 #include <unordered_map>
@@ -60,18 +60,22 @@ struct FaissIndexBundle
  * @brief 对特征向量做 L2 归一化（原地修改）。
  * @param values 特征分量数组。
  */
-void l2Normalize(std::vector<float> &values)
+void l2Normalize(float *values, size_t count)
 {
-    const float sum_sq = std::inner_product(values.begin(), values.end(), values.begin(), 0.0f);
+    float sum_sq = 0.0f;
+    for (size_t i = 0; i < count; ++i)
+    {
+        sum_sq += values[i] * values[i];
+    }
     if (sum_sq <= 0.0f)
     {
         return;
     }
 
     const float inv_norm = 1.0f / std::sqrt(sum_sq);
-    for (float &value : values)
+    for (size_t i = 0; i < count; ++i)
     {
-        value *= inv_norm;
+        values[i] *= inv_norm;
     }
 }
 
@@ -79,12 +83,12 @@ void l2Normalize(std::vector<float> &values)
  * @brief 对特征向量做 L1 归一化（原地修改）。
  * @param values 特征分量数组。
  */
-void l1Normalize(std::vector<float> &values)
+void l1Normalize(float *values, size_t count)
 {
     float sum_abs = 0.0f;
-    for (const float value : values)
+    for (size_t i = 0; i < count; ++i)
     {
-        sum_abs += std::abs(value);
+        sum_abs += std::abs(values[i]);
     }
     if (sum_abs <= 0.0f)
     {
@@ -92,9 +96,9 @@ void l1Normalize(std::vector<float> &values)
     }
 
     const float inv_norm = 1.0f / sum_abs;
-    for (float &value : values)
+    for (size_t i = 0; i < count; ++i)
     {
-        value *= inv_norm;
+        values[i] *= inv_norm;
     }
 }
 
@@ -103,21 +107,26 @@ void l1Normalize(std::vector<float> &values)
  * @param values 特征分量数组（原地修改）。
  * @param norm 归一化方式。
  */
-void normalizeFeature(std::vector<float> &values, ImageSearchFeatureNorm norm)
+void normalizeFeature(float *values, size_t count, ImageSearchFeatureNorm norm)
 {
     switch (norm)
     {
     case ImageSearchFeatureNorm::None:
         return;
     case ImageSearchFeatureNorm::L1:
-        l1Normalize(values);
+        l1Normalize(values, count);
         return;
     case ImageSearchFeatureNorm::L2:
-        l2Normalize(values);
+        l2Normalize(values, count);
         return;
     }
 
     throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported ImageSearch feature norm");
+}
+
+void normalizeFeature(std::vector<float> &values, ImageSearchFeatureNorm norm)
+{
+    normalizeFeature(values.data(), values.size(), norm);
 }
 
 /** 
@@ -277,6 +286,19 @@ void validateConfig(const ImageSearchConfig &config)
     if (config.disk_build_batch_size == 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch disk build batch size must be positive");
+    }
+    if (config.model_batch_size == 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch model batch size must be positive");
+    }
+    if (config.model_batch_size > static_cast<size_t>(std::numeric_limits<int>::max()))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch model batch size is too large");
+    }
+    if (config.model_batch_size > 1 && !usesTensorRtModelBackend(config))
+    {
+        throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED,
+                             "ImageSearch model batch size greater than 1 currently requires TensorRT backend");
     }
 }
 
@@ -503,6 +525,7 @@ void saveMetadata(const fs::path &metadata_path, const std::string &gallery_valu
     output << "faiss_backend=" << faissBackendName(config.faiss_backend) << "\n";
     output << "index_storage=" << indexStorageName(config.index_storage) << "\n";
     output << "disk_build_batch_size=" << config.disk_build_batch_size << "\n";
+    output << "model_batch_size=" << config.model_batch_size << "\n";
     output << "index_kind=" << indexKindName(config) << "\n";
 }
 
@@ -628,6 +651,11 @@ public:
         model_config->setFeatureOnly(true);
         model_config->setBackend(config_.model_backend);
         model_config->setDevice(config_.model_device);
+        if (usesTensorRtModelBackend(config_) && config_.model_batch_size > 1)
+        {
+            const int batch = static_cast<int>(config_.model_batch_size);
+            model_config->setDynamicBatchRange(1, batch, batch);
+        }
 
         const std::string runtime_model_name = usesTensorRtModelBackend(config_) ? model_name_ : "onnx";
         model_                               = irt::model::CreateModel(runtime_model_name, std::move(model_config));
@@ -663,26 +691,46 @@ public:
                                  "ImageSearch model must expose at least one input tensor");
         }
 
-        const auto input_shape = model_->tensorShape(input_tensor_names.front());
+        input_name_            = input_tensor_names.front();
+        const auto input_shape = model_->tensorShape(input_name_);
         const auto input_type  = model_->tensorDataType(input_tensor_names.front());
         if (input_type != nvinfer1::DataType::kFLOAT)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch expects float32 input tensor");
         }
-        if (input_shape.nbDims != 4 || input_shape.d[0] != 1 || input_shape.d[1] != 3 || input_shape.d[2] <= 0
+        if (input_shape.nbDims != 4 || input_shape.d[0] <= 0 || input_shape.d[1] != 3 || input_shape.d[2] <= 0
             || input_shape.d[3] <= 0)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch expects input shape 1x3xHxW, got %s",
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch expects input shape Nx3xHxW, got %s",
                                  dimsToCsv(input_shape).c_str());
         }
+        const auto runtime_batch = static_cast<size_t>(input_shape.d[0]);
+        if (usesTensorRtModelBackend(config_) && runtime_batch != config_.model_batch_size)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "ImageSearch TensorRT model batch does not match configured model batch size");
+        }
+        if (runtime_batch > config_.model_batch_size)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "ImageSearch model runtime batch exceeds configured model batch size");
+        }
+        if (output_dims_.nbDims <= 0 || output_dims_.d[0] != input_shape.d[0])
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "ImageSearch feature output must preserve model batch dimension");
+        }
 
-        input_height_ = static_cast<int>(input_shape.d[2]);
-        input_width_  = static_cast<int>(input_shape.d[3]);
-        feature_dim_  = elementCount(output_dims_);
+        input_shape_               = input_shape;
+        input_height_              = static_cast<int>(input_shape.d[2]);
+        input_width_               = static_cast<int>(input_shape.d[3]);
+        max_batch_size_            = runtime_batch;
+        input_elements_per_sample_ = elementCount(input_shape) / max_batch_size_;
+        feature_dim_               = elementCount(output_dims_) / max_batch_size_;
         if (usesTensorRtModelBackend(config_))
         {
-            device_input_.resize(elementCount(input_shape), nvinfer1::DataType::kFLOAT);
-            device_output_.resize(feature_dim_, nvinfer1::DataType::kFLOAT);
+            device_input_.resize(max_batch_size_ * input_elements_per_sample_, nvinfer1::DataType::kFLOAT);
+            device_output_.resize(max_batch_size_ * feature_dim_, nvinfer1::DataType::kFLOAT);
         }
     }
 
@@ -709,29 +757,50 @@ public:
      */
     std::vector<float> extract(const fs::path &image_path)
     {
-        cv::Mat image = cv::imread(image_path.string(), cv::IMREAD_COLOR);
-        if (image.empty())
+        const std::vector<fs::path> image_paths{image_path};
+        return extractBatch(image_paths, 0, 1);
+    }
+
+    /**
+     * @brief 从连续图像区间批量提取归一化特征。
+     * @param image_paths 图像路径数组。
+     * @param begin 起始图像下标。
+     * @param count 图像数量；大于模型 batch 时会自动拆分为多次前向。
+     * @return 扁平化特征数组，布局为 ``count x featureDim()``。
+     */
+    std::vector<float> extractBatch(const std::vector<fs::path> &image_paths, size_t begin, size_t count)
+    {
+        if (count == 0)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to load image: %s",
-                                 image_path.string().c_str());
+            return {};
+        }
+        if (begin > image_paths.size() || count > image_paths.size() - begin)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch feature batch range is invalid");
+        }
+        if (count > max_batch_size_)
+        {
+            std::vector<float> features;
+            features.reserve(count * feature_dim_);
+            for (size_t offset = 0; offset < count; offset += max_batch_size_)
+            {
+                const size_t chunk_count = std::min(max_batch_size_, count - offset);
+                auto         chunk       = extractBatch(image_paths, begin + offset, chunk_count);
+                features.insert(features.end(), chunk.begin(), chunk.end());
+            }
+            return features;
         }
 
-        std::vector<float> input_data;
-        switch (config_.preprocess_backend)
+        auto       input_data      = preprocessBatch(image_paths, begin, count);
+        const auto output_dims     = setRuntimeBatchSize(count);
+        const auto output_elements = elementCount(output_dims);
+        if (output_elements != count * feature_dim_)
         {
-        case ImageSearchPreprocessBackend::CPU:
-        {
-            const auto preprocessed
-                = irt::model::ImageNetUtil::preprocess(image, cv::Size(input_width_, input_height_));
-            input_data = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
-            break;
-        }
-        case ImageSearchPreprocessBackend::GPU:
-            throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED,
-                                 "ImageSearch GPU preprocessing is not implemented");
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "ImageSearch feature output size does not match runtime batch");
         }
 
-        std::vector<float> feature(feature_dim_);
+        std::vector<float> features(output_elements);
         if (usesTensorRtModelBackend(config_))
         {
             std::vector<void *> buffers{device_input_.data(), device_output_.data()};
@@ -741,22 +810,78 @@ public:
                                       cudaMemcpyHostToDevice, stream),
                       "cudaMemcpyAsync(H2D input)");
             model_->forwardFeatures(buffers, stream, true);
-            checkCuda(cudaMemcpyAsync(feature.data(), device_output_.data(), feature.size() * sizeof(float),
+            checkCuda(cudaMemcpyAsync(features.data(), device_output_.data(), features.size() * sizeof(float),
                                       cudaMemcpyDeviceToHost, stream),
                       "cudaMemcpyAsync(D2H feature)");
             checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(feature extraction)");
         }
         else
         {
-            std::vector<void *> buffers{input_data.data(), feature.data()};
+            std::vector<void *> buffers{input_data.data(), features.data()};
             model_->forwardFeatures(buffers, nullptr, false);
         }
 
-        normalizeFeature(feature, config_.norm);
-        return feature;
+        for (size_t i = 0; i < count; ++i)
+        {
+            normalizeFeature(features.data() + i * feature_dim_, feature_dim_, config_.norm);
+        }
+        return features;
     }
 
 private:
+    /**
+     * @brief 读取并预处理一个连续图像区间，拼接为 NCHW batch。
+     */
+    std::vector<float> preprocessBatch(const std::vector<fs::path> &image_paths, size_t begin, size_t count) const
+    {
+        std::vector<float> input_data;
+        input_data.reserve(count * input_elements_per_sample_);
+        for (size_t i = 0; i < count; ++i)
+        {
+            const auto &image_path = image_paths[begin + i];
+            cv::Mat     image      = cv::imread(image_path.string(), cv::IMREAD_COLOR);
+            if (image.empty())
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to load image: %s",
+                                     image_path.string().c_str());
+            }
+
+            switch (config_.preprocess_backend)
+            {
+            case ImageSearchPreprocessBackend::CPU:
+            {
+                const auto preprocessed
+                    = irt::model::ImageNetUtil::preprocess(image, cv::Size(input_width_, input_height_));
+                auto single = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
+                input_data.insert(input_data.end(), single.begin(), single.end());
+                break;
+            }
+            case ImageSearchPreprocessBackend::GPU:
+                throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED,
+                                     "ImageSearch GPU preprocessing is not implemented");
+            }
+        }
+        return input_data;
+    }
+
+    /**
+     * @brief 设置运行时 batch，并返回当前输出形状。
+     */
+    nvinfer1::Dims setRuntimeBatchSize(size_t batch_size)
+    {
+        auto dims = input_shape_;
+        dims.d[0] = static_cast<int32_t>(batch_size);
+        model_->setTensorShape(input_name_, dims);
+
+        auto output_dims = model_->tensorShape(output_name_);
+        if (output_dims.nbDims <= 0 || output_dims.d[0] != dims.d[0])
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "ImageSearch feature output must preserve runtime batch dimension");
+        }
+        return output_dims;
+    }
+
     ///< 模型名称。
     std::string model_name_;
 
@@ -769,8 +894,14 @@ private:
     ///< TensorRT 推理模型。
     std::unique_ptr<irt::model::IModel> model_;
 
+    ///< 输入张量名称。
+    std::string input_name_;
+
     ///< 特征输出张量名。
     std::string output_name_;
+
+    ///< 最大 batch 对应的输入形状；推理前只修改第 0 维。
+    nvinfer1::Dims input_shape_{};
 
     ///< 输出张量形状。
     nvinfer1::Dims output_dims_{};
@@ -786,6 +917,12 @@ private:
 
     ///< 特征向量维度。
     size_t feature_dim_{0};
+
+    ///< 特征提取模型一次前向允许的最大 batch。
+    size_t max_batch_size_{1};
+
+    ///< 单张图像输入元素数量。
+    size_t input_elements_per_sample_{0};
 
     ///< 设备侧输入缓冲区。
     DeviceBuffer device_input_;
@@ -809,7 +946,8 @@ FaissIndexBundle buildCpuOnDiskIndex(const std::vector<fs::path>       &gallery_
     FaissIndexBundle bundle;
     bundle.index = priv::buildCpuOnDiskIvfFlatIndex(
         gallery_images.size(), extractor.featureDim(), index_path, config.disk_build_batch_size,
-        [&](size_t index) { return extractor.extract(gallery_images[index]); }, progress_callback);
+        [&](size_t index) { return extractor.extract(gallery_images[index]); }, [&](size_t begin, size_t count)
+        { return extractor.extractBatch(gallery_images, begin, count); }, progress_callback);
     savePathMapping(mappingPathFromIndex(index_path), gallery_images);
     return bundle;
 }
@@ -824,8 +962,9 @@ FaissIndexBundle buildRamIvfPqIndex(const std::vector<fs::path>       &gallery_i
 {
     auto cpu_index = priv::buildRamIvfPqIndex(
         gallery_images.size(), extractor.featureDim(), config.disk_build_batch_size,
-        [&](size_t index) { return extractor.extract(gallery_images[index]); }, progress_callback,
-        config.faiss_backend == ImageSearchFaissBackend::GPU);
+        [&](size_t index) { return extractor.extract(gallery_images[index]); },
+        [&](size_t begin, size_t count) { return extractor.extractBatch(gallery_images, begin, count); },
+        progress_callback, config.faiss_backend == ImageSearchFaissBackend::GPU);
 
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::WritingIndex, 0, 0, 0, 0, 1);
     faiss::write_index(cpu_index.get(), index_path.string().c_str());
