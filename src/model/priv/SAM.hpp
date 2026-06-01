@@ -73,6 +73,15 @@ public:
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 
     /**
+     * @brief 查询 SAM 手写 TensorRT 网络是否支持动态 batch。
+     * @return SAM/SAM2/EdgeSAM 支持；SAM3 原生主干尚未接入，保持不支持。
+     */
+    bool supportsDynamicBatch() const noexcept override
+    {
+        return spec_.family != SAMFamily::SAM3;
+    }
+
+    /**
      * @brief 根据 SAM 变体补齐默认输入/输出配置。
      * @param config 待规整配置。
      */

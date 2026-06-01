@@ -74,6 +74,15 @@ public:
     }
 
     /**
+     * @brief DINO 手写 TensorRT 网络的第 0 维使用动态 shape 构建。
+     * @return 始终支持 TensorRT 动态 batch。
+     */
+    bool supportsDynamicBatch() const noexcept override
+    {
+        return true;
+    }
+
+    /**
      * @brief 构建 DINO Transformer TensorRT 网络。
      * @param network TensorRT 网络定义。
      * @param weights_map 从 `.wts` 读取的权重表。

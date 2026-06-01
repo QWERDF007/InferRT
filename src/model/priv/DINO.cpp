@@ -27,7 +27,7 @@ using M = nvinfer1::MatrixOperation;
  */
 struct DINOInputGeometry
 {
-    int batch;         ///< 当前手写 TensorRT 网络固定支持 batch=1。
+    int batch;         ///< 配置中的默认 batch；建网时第 0 维可由 TensorRT profile 动态决定。
     int channels;      ///< 输入通道数，应为 3。
     int height;        ///< 输入图像高度。
     int width;         ///< 输入图像宽度。
@@ -282,31 +282,15 @@ nvinfer1::ITensor *applyRope(nvinfer1::INetworkDefinition *network, nvinfer1::IT
                              const DINORopeConstants &rope, const DINOInputGeometry &geometry,
                              const DINOTransformerSpec &spec)
 {
-    auto *prefix
-        = network
-              ->addSlice(input, nvinfer1::Dims4{0, 0, 0, 0},
-                         nvinfer1::Dims4{geometry.batch, spec.num_heads, geometry.prefix_tokens, geometry.head_dim},
-                         nvinfer1::Dims4{1, 1, 1, 1})
-              ->getOutput(0);
-    auto *patch
-        = network
-              ->addSlice(input, nvinfer1::Dims4{0, 0, geometry.prefix_tokens, 0},
-                         nvinfer1::Dims4{geometry.batch, spec.num_heads, geometry.num_patches, geometry.head_dim},
-                         nvinfer1::Dims4{1, 1, 1, 1})
-              ->getOutput(0);
+    auto *prefix = slicePreserveFirstDim(network, input, nvinfer1::Dims4{0, 0, 0, 0},
+                                         {spec.num_heads, geometry.prefix_tokens, geometry.head_dim});
+    auto *patch  = slicePreserveFirstDim(network, input, nvinfer1::Dims4{0, 0, geometry.prefix_tokens, 0},
+                                         {spec.num_heads, geometry.num_patches, geometry.head_dim});
 
-    auto *x1
-        = network
-              ->addSlice(*patch, nvinfer1::Dims4{0, 0, 0, 0},
-                         nvinfer1::Dims4{geometry.batch, spec.num_heads, geometry.num_patches, geometry.head_dim / 2},
-                         nvinfer1::Dims4{1, 1, 1, 1})
-              ->getOutput(0);
-    auto *x2
-        = network
-              ->addSlice(*patch, nvinfer1::Dims4{0, 0, 0, geometry.head_dim / 2},
-                         nvinfer1::Dims4{geometry.batch, spec.num_heads, geometry.num_patches, geometry.head_dim / 2},
-                         nvinfer1::Dims4{1, 1, 1, 1})
-              ->getOutput(0);
+    auto *x1     = slicePreserveFirstDim(network, *patch, nvinfer1::Dims4{0, 0, 0, 0},
+                                         {spec.num_heads, geometry.num_patches, geometry.head_dim / 2});
+    auto *x2     = slicePreserveFirstDim(network, *patch, nvinfer1::Dims4{0, 0, 0, geometry.head_dim / 2},
+                                         {spec.num_heads, geometry.num_patches, geometry.head_dim / 2});
     auto *neg_x2 = network->addUnary(*x2, nvinfer1::UnaryOperation::kNEG)->getOutput(0);
 
     const std::vector<nvinfer1::ITensor *> rotated_parts{neg_x2, x1};
@@ -397,19 +381,12 @@ nvinfer1::ITensor *addPackedSwiGLU(nvinfer1::INetworkDefinition *network, const 
     const auto fc2_prefix
         = hasWeight(weights_map, prefix + ".mlp.w3.weight") ? prefix + ".mlp.w3" : prefix + ".mlp.fc2";
 
-    auto *packed = addLinear3D(network, weights_map, input, fc1_prefix, spec.embed_dim, 2 * hidden, true);
-    auto *gate   = network
-                     ->addSlice(*packed, nvinfer1::Dims3{0, 0, 0},
-                                nvinfer1::Dims3{input.getDimensions().d[0], input.getDimensions().d[1], hidden},
-                                nvinfer1::Dims3{1, 1, 1})
-                     ->getOutput(0);
-    auto *value = network
-                      ->addSlice(*packed, nvinfer1::Dims3{0, 0, hidden},
-                                 nvinfer1::Dims3{input.getDimensions().d[0], input.getDimensions().d[1], hidden},
-                                 nvinfer1::Dims3{1, 1, 1})
-                      ->getOutput(0);
-    auto *activated     = addSilu(network, *gate);
-    auto *hidden_tensor = network->addElementWise(*activated, *value, E::kPROD)->getOutput(0);
+    auto      *packed      = addLinear3D(network, weights_map, input, fc1_prefix, spec.embed_dim, 2 * hidden, true);
+    const auto token_count = input.getDimensions().d[1];
+    auto      *gate        = slicePreserveFirstDim(network, *packed, nvinfer1::Dims3{0, 0, 0}, {token_count, hidden});
+    auto      *value = slicePreserveFirstDim(network, *packed, nvinfer1::Dims3{0, 0, hidden}, {token_count, hidden});
+    auto      *activated     = addSilu(network, *gate);
+    auto      *hidden_tensor = network->addElementWise(*activated, *value, E::kPROD)->getOutput(0);
     return addLinear3D(network, weights_map, *hidden_tensor, fc2_prefix, hidden, spec.embed_dim, true);
 }
 
@@ -488,10 +465,10 @@ DINOInputGeometry resolveInputGeometry(const DINOTransformerSpec &spec, const IM
     geometry.height   = static_cast<int>(shape.d[2]);
     geometry.width    = static_cast<int>(shape.d[3]);
 
-    if (geometry.batch != 1)
+    if (geometry.batch <= 0)
     {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
-                             "DINO handwritten TensorRT network currently requires batch=1, got %d", geometry.batch);
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "DINO requires a positive batch size, got %d",
+                             geometry.batch);
     }
     if (geometry.channels != 3)
     {
@@ -543,7 +520,7 @@ nvinfer1::ITensor *addPatchEmbedding(const DINOTransformer &impl, nvinfer1::INet
     patch->setStrideNd(nvinfer1::DimsHW{spec.patch_size, spec.patch_size});
 
     auto *flatten = network->addShuffle(*patch->getOutput(0));
-    flatten->setReshapeDimensions(nvinfer1::Dims3{geometry.batch, spec.embed_dim, geometry.num_patches});
+    flatten->setReshapeDimensions(nvinfer1::Dims3{0, spec.embed_dim, geometry.num_patches});
     flatten->setSecondTranspose(nvinfer1::Permutation{0, 2, 1});
     named_tensors["patch_embed"] = flatten->getOutput(0);
     return flatten->getOutput(0);
@@ -553,7 +530,7 @@ nvinfer1::ITensor *addPatchEmbedding(const DINOTransformer &impl, nvinfer1::INet
  * @brief 添加 register/storage token 常量；无额外 token 时返回空指针。
  */
 nvinfer1::ITensor *addExtraTokens(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
-                                  const DINOTransformerSpec &spec)
+                                  const DINOTransformerSpec &spec, nvinfer1::ITensor &batch_like)
 {
     if (spec.extra_tokens <= 0)
     {
@@ -562,7 +539,8 @@ nvinfer1::ITensor *addExtraTokens(nvinfer1::INetworkDefinition *network, const W
 
     const auto &weights = requireAnyWeight(weights_map, {"register_tokens", "reg_token", "storage_tokens"},
                                            static_cast<int64_t>(spec.extra_tokens) * spec.embed_dim);
-    return network->addConstant(nvinfer1::Dims3{1, spec.extra_tokens, spec.embed_dim}, weights)->getOutput(0);
+    auto *tokens = network->addConstant(nvinfer1::Dims3{1, spec.extra_tokens, spec.embed_dim}, weights)->getOutput(0);
+    return broadcastFirstDimLike(network, *tokens, batch_like);
 }
 
 /**
@@ -576,7 +554,8 @@ nvinfer1::ITensor *addDINOv2Tokens(nvinfer1::INetworkDefinition *network, const 
                           ->addConstant(nvinfer1::Dims3{1, 1, spec.embed_dim},
                                         requireWeight(weights_map, "cls_token", spec.embed_dim))
                           ->getOutput(0);
-    auto       *extra_tokens = addExtraTokens(network, weights_map, spec);
+    cls_token                = broadcastFirstDimLike(network, *cls_token, patch_tokens);
+    auto       *extra_tokens = addExtraTokens(network, weights_map, spec, patch_tokens);
     const auto &pos_weight   = requireWeight(weights_map, "pos_embed");
     if (pos_weight.count % spec.embed_dim != 0)
     {
@@ -599,15 +578,9 @@ nvinfer1::ITensor *addDINOv2Tokens(nvinfer1::INetworkDefinition *network, const 
         }
 
         auto *cls_with_pos
-            = network
-                  ->addSlice(*position_added, nvinfer1::Dims3{0, 0, 0},
-                             nvinfer1::Dims3{geometry.batch, 1, spec.embed_dim}, nvinfer1::Dims3{1, 1, 1})
-                  ->getOutput(0);
-        auto *patch_with_pos = network
-                                   ->addSlice(*position_added, nvinfer1::Dims3{0, 1, 0},
-                                              nvinfer1::Dims3{geometry.batch, geometry.num_patches, spec.embed_dim},
-                                              nvinfer1::Dims3{1, 1, 1})
-                                   ->getOutput(0);
+            = slicePreserveFirstDim(network, *position_added, nvinfer1::Dims3{0, 0, 0}, {1, spec.embed_dim});
+        auto *patch_with_pos = slicePreserveFirstDim(network, *position_added, nvinfer1::Dims3{0, 1, 0},
+                                                     {geometry.num_patches, spec.embed_dim});
         const std::vector<nvinfer1::ITensor *> tokens{cls_with_pos, extra_tokens, patch_with_pos};
         auto *with_registers = network->addConcatenation(tokens.data(), static_cast<int32_t>(tokens.size()));
         with_registers->setAxis(1);
@@ -662,7 +635,8 @@ nvinfer1::ITensor *addDINOv3Tokens(nvinfer1::INetworkDefinition *network, const 
                           ->addConstant(nvinfer1::Dims3{1, 1, spec.embed_dim},
                                         requireWeight(weights_map, "cls_token", spec.embed_dim))
                           ->getOutput(0);
-    auto *extra_tokens = addExtraTokens(network, weights_map, spec);
+    cls_token          = broadcastFirstDimLike(network, *cls_token, patch_tokens);
+    auto *extra_tokens = addExtraTokens(network, weights_map, spec, patch_tokens);
 
     std::vector<nvinfer1::ITensor *> tokens{cls_token};
     if (extra_tokens != nullptr)
@@ -703,32 +677,23 @@ nvinfer1::ITensor *addFinalFeatureOutputs(nvinfer1::INetworkDefinition *network,
     auto *norm                 = addLayerNorm(network, weights_map, prenorm, "norm", spec.embed_dim, spec.norm_epsilon);
     named_tensors["norm"]      = norm;
 
-    auto *cls = network
-                    ->addSlice(*norm, nvinfer1::Dims3{0, 0, 0}, nvinfer1::Dims3{geometry.batch, 1, spec.embed_dim},
-                               nvinfer1::Dims3{1, 1, 1})
-                    ->getOutput(0);
+    auto *cls         = slicePreserveFirstDim(network, *norm, nvinfer1::Dims3{0, 0, 0}, {1, spec.embed_dim});
     auto *cls_flatten = network->addShuffle(*cls);
-    cls_flatten->setReshapeDimensions(nvinfer1::Dims2{geometry.batch, spec.embed_dim});
+    cls_flatten->setReshapeDimensions(nvinfer1::Dims2{0, spec.embed_dim});
     named_tensors["cls"]             = cls_flatten->getOutput(0);
     named_tensors["pre_logits"]      = cls_flatten->getOutput(0);
     named_tensors["x_norm_clstoken"] = cls_flatten->getOutput(0);
 
     if (spec.extra_tokens > 0)
     {
-        auto *extra = network
-                          ->addSlice(*norm, nvinfer1::Dims3{0, 1, 0},
-                                     nvinfer1::Dims3{geometry.batch, spec.extra_tokens, spec.embed_dim},
-                                     nvinfer1::Dims3{1, 1, 1})
-                          ->getOutput(0);
+        auto *extra
+            = slicePreserveFirstDim(network, *norm, nvinfer1::Dims3{0, 1, 0}, {spec.extra_tokens, spec.embed_dim});
         named_tensors[spec.version == DINOVersion::V2 ? "x_norm_regtokens" : "x_storage_tokens"] = extra;
         named_tensors["extra_tokens"]                                                            = extra;
     }
 
-    auto *patch = network
-                      ->addSlice(*norm, nvinfer1::Dims3{0, geometry.prefix_tokens, 0},
-                                 nvinfer1::Dims3{geometry.batch, geometry.num_patches, spec.embed_dim},
-                                 nvinfer1::Dims3{1, 1, 1})
-                      ->getOutput(0);
+    auto *patch = slicePreserveFirstDim(network, *norm, nvinfer1::Dims3{0, geometry.prefix_tokens, 0},
+                                        {geometry.num_patches, spec.embed_dim});
     named_tensors["x_norm_patchtokens"] = patch;
     return cls_flatten->getOutput(0);
 }

@@ -415,6 +415,10 @@ def _run_inferrt_sam(
     config = irt_module.ModelConfig()
     config.backend = irt_module.ModelBackend.TENSORRT
     config.device = irt_module.ModelDevice.GPU
+    batch = int(next(iter(inputs.values())).shape[0])
+    if batch > 1:
+        config.input_shapes = [[int(dim) for dim in inputs[name].shape] for name in SAM_INPUT_NAMES]
+        config.dynamic_batch_range = [1, batch, batch]
     model = irt_module.create_model(model_name, config=config)
     # Rebuild the engine for parity so stale TensorRT caches cannot hide graph changes.
     _build_sam_model_or_skip(model, weights_path, label=f"TENSORRT/GPU/{model_name}")
@@ -657,6 +661,12 @@ def _assert_sam_outputs_close(
     )
 
 
+def _repeat_batch(tensors: dict[str, np.ndarray], batch: int) -> dict[str, np.ndarray]:
+    """沿第 0 维复制 SAM 输入或输出，用于动态 batch 等价性测试。"""
+
+    return {name: np.ascontiguousarray(np.repeat(value, batch, axis=0)) for name, value in tensors.items()}
+
+
 def test_sam_v1_pybind_matches_official_pytorch_forward(
     compare_runtimes: list[str],
     compare_devices: list[str],
@@ -736,6 +746,55 @@ def test_sam_v1_pybind_matches_official_pytorch_forward(
         )
 
 
+def test_sam_v1_dynamic_batch_pybind_matches_official_pytorch_forward(
+    compare_runtimes: list[str],
+    compare_devices: list[str],
+    irt_module: Any,
+    repo_root: Path,
+    model_root: Path,
+    default_image: Path,
+    sam_root: Path,
+) -> None:
+    """SAM v1 TensorRT 动态 batch 输出应逐样本匹配官方 PyTorch 参考。"""
+
+    if "TENSORRT" not in compare_runtimes or "gpu" not in compare_devices:
+        pytest.skip("SAM v1 dynamic batch parity requires --inferrt-compare-runtime=tensorrt and GPU device")
+
+    checkpoint = model_root / "sam" / "sam_vit_b_01ec64.pth"
+    if not checkpoint.exists():
+        pytest.skip(f"SAM ViT-B checkpoint not found: {checkpoint}")
+    inputs, torch_outputs = _run_torch_sam_v1_reference(
+        repo_root=repo_root,
+        checkpoint=checkpoint,
+        sam_root=sam_root,
+        image_path=default_image,
+    )
+
+    weights = ensure_sam_v1_wts(
+        repo_root=repo_root,
+        model_root=model_root,
+        checkpoint=checkpoint,
+        sam_root=sam_root,
+    )
+    batched_inputs = _repeat_batch(inputs, 2)
+    batched_reference = _repeat_batch(torch_outputs, 2)
+    outputs = _run_inferrt_sam(
+        irt_module,
+        model_name=SAM_V1_MODEL_NAME,
+        weights_path=weights,
+        inputs=batched_inputs,
+    )
+    _assert_sam_outputs_close(
+        batched_reference,
+        outputs,
+        mask_rtol=SAM_V1_MASK_RTOL,
+        mask_atol=SAM_V1_MASK_ATOL,
+        iou_rtol=SAM_V1_IOU_RTOL,
+        iou_atol=SAM_V1_IOU_ATOL,
+        label=f"{SAM_V1_MODEL_NAME}.dynamic_batch.tensorrt.gpu",
+    )
+
+
 def test_edge_sam_pybind_matches_official_pytorch_forward(
     compare_runtimes: list[str],
     compare_devices: list[str],
@@ -777,6 +836,52 @@ def test_edge_sam_pybind_matches_official_pytorch_forward(
         iou_rtol=EDGE_SAM_IOU_RTOL,
         iou_atol=EDGE_SAM_IOU_ATOL,
         label=f"{EDGE_SAM_MODEL_NAME}.tensorrt.gpu",
+    )
+
+
+def test_edge_sam_dynamic_batch_pybind_matches_official_pytorch_forward(
+    compare_runtimes: list[str],
+    compare_devices: list[str],
+    irt_module: Any,
+    repo_root: Path,
+    model_root: Path,
+    default_image: Path,
+    edge_sam_root: Path,
+    edge_sam_checkpoint: Path,
+) -> None:
+    """EdgeSAM TensorRT 动态 batch 输出应逐样本匹配官方 PyTorch 参考。"""
+
+    if "TENSORRT" not in compare_runtimes or "gpu" not in compare_devices:
+        pytest.skip("EdgeSAM dynamic batch parity requires --inferrt-compare-runtime=tensorrt and GPU device")
+
+    inputs, torch_outputs = _run_torch_edge_sam_reference(
+        repo_root=repo_root,
+        checkpoint=edge_sam_checkpoint,
+        edge_sam_root=edge_sam_root,
+        image_path=default_image,
+    )
+    weights = ensure_edge_sam_wts(
+        repo_root=repo_root,
+        model_root=model_root,
+        checkpoint=edge_sam_checkpoint,
+        edge_sam_root=edge_sam_root,
+    )
+    batched_inputs = _repeat_batch(inputs, 2)
+    batched_reference = _repeat_batch(torch_outputs, 2)
+    outputs = _run_inferrt_sam(
+        irt_module,
+        model_name=EDGE_SAM_MODEL_NAME,
+        weights_path=weights,
+        inputs=batched_inputs,
+    )
+    _assert_sam_outputs_close(
+        batched_reference,
+        outputs,
+        mask_rtol=EDGE_SAM_MASK_RTOL,
+        mask_atol=EDGE_SAM_MASK_ATOL,
+        iou_rtol=EDGE_SAM_IOU_RTOL,
+        iou_atol=EDGE_SAM_IOU_ATOL,
+        label=f"{EDGE_SAM_MODEL_NAME}.dynamic_batch.tensorrt.gpu",
     )
 
 
@@ -857,3 +962,52 @@ def test_sam2_pybind_matches_official_pytorch_forward(
             iou_atol=SAM_IOU_ATOL,
             label=label,
         )
+
+
+def test_sam2_dynamic_batch_pybind_matches_official_pytorch_forward(
+    compare_runtimes: list[str],
+    compare_devices: list[str],
+    irt_module: Any,
+    repo_root: Path,
+    model_root: Path,
+    default_image: Path,
+    sam2_root: Path,
+) -> None:
+    """SAM2 TensorRT 动态 batch 输出应逐样本匹配官方 PyTorch 参考。"""
+
+    if "TENSORRT" not in compare_runtimes or "gpu" not in compare_devices:
+        pytest.skip("SAM2 dynamic batch parity requires --inferrt-compare-runtime=tensorrt and GPU device")
+
+    checkpoint = model_root / "sam" / "sam2.1_hiera_tiny.pt"
+    if not checkpoint.exists():
+        pytest.skip(f"SAM2.1 Hiera-Tiny checkpoint not found: {checkpoint}")
+    inputs, torch_outputs = _run_torch_sam2_reference(
+        repo_root=repo_root,
+        checkpoint=checkpoint,
+        sam2_root=sam2_root,
+        image_path=default_image,
+    )
+
+    weights = ensure_sam2_wts(
+        repo_root=repo_root,
+        model_root=model_root,
+        checkpoint=checkpoint,
+        sam2_root=sam2_root,
+    )
+    batched_inputs = _repeat_batch(inputs, 2)
+    batched_reference = _repeat_batch(torch_outputs, 2)
+    outputs = _run_inferrt_sam(
+        irt_module,
+        model_name=SAM2_MODEL_NAME,
+        weights_path=weights,
+        inputs=batched_inputs,
+    )
+    _assert_sam_outputs_close(
+        batched_reference,
+        outputs,
+        mask_rtol=SAM_MASK_RTOL,
+        mask_atol=SAM_MASK_ATOL,
+        iou_rtol=SAM_IOU_RTOL,
+        iou_atol=SAM_IOU_ATOL,
+        label=f"{SAM2_MODEL_NAME}.dynamic_batch.tensorrt.gpu",
+    )

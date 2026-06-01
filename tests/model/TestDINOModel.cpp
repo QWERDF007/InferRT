@@ -138,3 +138,20 @@ TEST(DINOModelBuildTest, DINOv3BuildRejectsInvalidChannelCount)
     const TempWeightsFile weights("inferrt_dinov3_test_");
     ExpectIrtExceptionCode([&] { model->build(weights.path().string()); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
+
+/**
+ * @brief DINO TensorRT 手写网络应允许动态 batch 配置，并继续进入权重校验阶段。
+ */
+TEST(DINOModelBuildTest, DynamicBatchConfigIsAccepted)
+{
+    auto model = irt::model::CreateModel("dinov2_vits14");
+    ASSERT_NE(model, nullptr);
+
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setInputShape(nvinfer1::Dims4{2, 3, 518, 518});
+    config->setDynamicBatchRange(1, 2, 4);
+    model->setModelConfig(std::move(config));
+
+    const TempWeightsFile weights("inferrt_dinov2_dynamic_batch_");
+    ExpectIrtExceptionCode([&] { model->build(weights.path().string()); }, irt::Status::ERROR_INVALID_ARGUMENT);
+}

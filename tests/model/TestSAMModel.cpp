@@ -47,14 +47,14 @@ void expectSAMContract(const irt::model::IModel &model, int image_size, bool exp
 /**
  * @brief 生成只改变图像尺寸的完整 SAM 输入形状。
  */
-std::vector<nvinfer1::Dims4> makeSAMInputShapes(int image_size)
+std::vector<nvinfer1::Dims4> makeSAMInputShapes(int image_size, int batch = 1)
 {
     return {
-        nvinfer1::Dims4{1, 3, image_size, image_size},
-        nvinfer1::Dims4{1, 16, 2, 1},
-        nvinfer1::Dims4{1, 16, 1, 1},
-        nvinfer1::Dims4{1, 1, 256, 256},
-        nvinfer1::Dims4{1, 1, 1, 1},
+        nvinfer1::Dims4{batch,  3, image_size, image_size},
+        nvinfer1::Dims4{batch, 16,          2,          1},
+        nvinfer1::Dims4{batch, 16,          1,          1},
+        nvinfer1::Dims4{batch,  1,        256,        256},
+        nvinfer1::Dims4{batch,  1,          1,          1},
     };
 }
 
@@ -116,19 +116,19 @@ TEST(SAMModelFactoryTest, SAM3DefaultKeyUsesImageModelInputSize)
 TEST(SAMModelFactoryTest, RegistersSAMFamilyVariants)
 {
     const std::vector<std::pair<std::string, std::string>> cases{
-        {"sam_vit_b", "SAMViTB"},
-        {"sam_vit_l", "SAMViTL"},
-        {"sam_vit_h", "SAMViTH"},
-        {"edge_sam", "EdgeSAM"},
-        {"sam2_hiera_tiny", "SAM2HieraTiny"},
-        {"sam2_hiera_small", "SAM2HieraSmall"},
-        {"sam2_hiera_base_plus", "SAM2HieraBasePlus"},
-        {"sam2_hiera_large", "SAM2HieraLarge"},
-        {"sam2_1_hiera_tiny", "SAM2.1HieraTiny"},
-        {"sam2_1_hiera_small", "SAM2.1HieraSmall"},
+        {             "sam_vit_b",             "SAMViTB"},
+        {             "sam_vit_l",             "SAMViTL"},
+        {             "sam_vit_h",             "SAMViTH"},
+        {              "edge_sam",             "EdgeSAM"},
+        {       "sam2_hiera_tiny",       "SAM2HieraTiny"},
+        {      "sam2_hiera_small",      "SAM2HieraSmall"},
+        {  "sam2_hiera_base_plus",   "SAM2HieraBasePlus"},
+        {      "sam2_hiera_large",      "SAM2HieraLarge"},
+        {     "sam2_1_hiera_tiny",     "SAM2.1HieraTiny"},
+        {    "sam2_1_hiera_small",    "SAM2.1HieraSmall"},
         {"sam2_1_hiera_base_plus", "SAM2.1HieraBasePlus"},
-        {"sam2_1_hiera_large", "SAM2.1HieraLarge"},
-        {"sam3_image", "SAM3Image"},
+        {    "sam2_1_hiera_large",    "SAM2.1HieraLarge"},
+        {            "sam3_image",           "SAM3Image"},
     };
 
     for (const auto &[key, display_name] : cases)
@@ -203,7 +203,7 @@ TEST(SAMModelBuildTest, BuildRejectsInvalidPointCoordinateShape)
     ASSERT_NE(model, nullptr);
 
     auto shapes = makeSAMInputShapes(1024);
-    shapes[1] = nvinfer1::Dims4{1, 8, 2, 1};
+    shapes[1]   = nvinfer1::Dims4{1, 8, 2, 1};
 
     auto config = std::make_unique<irt::model::IModelConfig>();
     config->setInputTensorNames({"image", "point_coords", "point_labels", "mask_input", "has_mask_input"});
@@ -212,6 +212,47 @@ TEST(SAMModelBuildTest, BuildRejectsInvalidPointCoordinateShape)
     model->setModelConfig(std::move(config));
 
     const TempWeightsFile weights("inferrt_sam_point_shape_");
+    ExpectIrtExceptionCode([&] { model->build(weights.path().string()); }, irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+/**
+ * @brief SAM TensorRT 手写网络应允许所有输入共享同一个动态 batch。
+ */
+TEST(SAMModelBuildTest, DynamicBatchConfigIsAccepted)
+{
+    auto model = irt::model::CreateModel("edge_sam");
+    ASSERT_NE(model, nullptr);
+
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setInputTensorNames({"image", "point_coords", "point_labels", "mask_input", "has_mask_input"});
+    config->setInputShapes(makeSAMInputShapes(1024, 2));
+    config->setOutputTensorNames({"masks", "iou_predictions", "low_res_masks"});
+    config->setDynamicBatchRange(1, 2, 4);
+    model->setModelConfig(std::move(config));
+
+    const TempWeightsFile weights("inferrt_edge_sam_dynamic_batch_");
+    ExpectIrtExceptionCode([&] { model->build(weights.path().string()); }, irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+/**
+ * @brief SAM 动态 batch 要求 prompt、mask 输入与 image 输入保持相同 batch。
+ */
+TEST(SAMModelBuildTest, DynamicBatchRejectsMismatchedPromptBatch)
+{
+    auto model = irt::model::CreateModel("sam_vit_b");
+    ASSERT_NE(model, nullptr);
+
+    auto shapes = makeSAMInputShapes(1024, 2);
+    shapes[1]   = nvinfer1::Dims4{1, 16, 2, 1};
+
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setInputTensorNames({"image", "point_coords", "point_labels", "mask_input", "has_mask_input"});
+    config->setInputShapes(shapes);
+    config->setOutputTensorNames({"masks", "iou_predictions", "low_res_masks"});
+    config->setDynamicBatchRange(1, 2, 4);
+    model->setModelConfig(std::move(config));
+
+    const TempWeightsFile weights("inferrt_sam_mismatched_dynamic_batch_");
     ExpectIrtExceptionCode([&] { model->build(weights.path().string()); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 

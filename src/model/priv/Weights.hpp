@@ -4,6 +4,7 @@
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/Utils.hpp>
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -55,6 +56,12 @@ inline std::vector<std::vector<float>> &weightArena()
     return arena;
 }
 
+inline std::vector<std::vector<int64_t>> &int64WeightArena()
+{
+    static std::vector<std::vector<int64_t>> arena;
+    return arena;
+}
+
 } // namespace detail
 
 /**
@@ -75,6 +82,17 @@ inline nvinfer1::Weights ownedFloatVector(std::vector<float> values)
     auto &arena = detail::weightArena();
     arena.push_back(std::move(values));
     return nvinfer1::Weights{nvinfer1::DataType::kFLOAT, arena.back().data(),
+                             static_cast<int64_t>(arena.back().size())};
+}
+
+/**
+ * @brief 构造在建网期间保持有效的 int64 shape 常量权重。
+ */
+inline nvinfer1::Weights ownedInt64Vector(std::vector<int64_t> values)
+{
+    auto &arena = detail::int64WeightArena();
+    arena.push_back(std::move(values));
+    return nvinfer1::Weights{nvinfer1::DataType::kINT64, arena.back().data(),
                              static_cast<int64_t>(arena.back().size())};
 }
 

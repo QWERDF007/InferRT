@@ -18,7 +18,6 @@
 #include <utility>
 #include <vector>
 
-
 namespace irt::model {
 namespace {
 
@@ -118,7 +117,7 @@ struct SAMMaskDecoderOptions
  */
 struct SAMGeometry
 {
-    int batch;       ///< 当前实现固定为 1。
+    int batch;       ///< 配置中的默认 batch；TensorRT 动态 profile 可在运行时覆盖第 0 维。
     int channels;    ///< 输入图像通道数，必须为 3。
     int image_h;     ///< 输入图像高度。
     int image_w;     ///< 输入图像宽度。
@@ -384,8 +383,9 @@ nvinfer1::ITensor *addEdgeSAMConvNoBias(nvinfer1::INetworkDefinition *network, c
 nvinfer1::ITensor *flattenNHWC(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input, int batch, int height,
                                int width, int channels)
 {
+    (void)batch;
     auto *shuffle = requireLayer(network->addShuffle(input), "Failed to add SAM NHWC flatten");
-    shuffle->setReshapeDimensions(nvinfer1::Dims3{batch, height * width, channels});
+    shuffle->setReshapeDimensions(nvinfer1::Dims3{0, height * width, channels});
     return shuffle->getOutput(0);
 }
 
@@ -395,8 +395,9 @@ nvinfer1::ITensor *flattenNHWC(nvinfer1::INetworkDefinition *network, nvinfer1::
 nvinfer1::ITensor *unflattenNHWC(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input, int batch, int height,
                                  int width, int channels)
 {
+    (void)batch;
     auto *shuffle = requireLayer(network->addShuffle(input), "Failed to add SAM NHWC unflatten");
-    shuffle->setReshapeDimensions(nvinfer1::Dims4{batch, height, width, channels});
+    shuffle->setReshapeDimensions(nvinfer1::Dims4{0, height, width, channels});
     return shuffle->getOutput(0);
 }
 
@@ -501,11 +502,12 @@ nvinfer1::ITensor *addImageRelativePosition(nvinfer1::INetworkDefinition *networ
                                             const std::string &prefix, int batch, int q_h, int q_w, int num_heads,
                                             int head_dim)
 {
+    (void)batch;
     auto *attn_view = requireLayer(network->addShuffle(attn), "Failed to reshape SAM relative position attention");
-    attn_view->setReshapeDimensions(makeDims({batch, num_heads, q_h, q_w, q_h, q_w}));
+    attn_view->setReshapeDimensions(makeDims({0, num_heads, q_h, q_w, q_h, q_w}));
 
     auto *q_view = requireLayer(network->addShuffle(q_heads), "Failed to reshape SAM relative position query");
-    q_view->setReshapeDimensions(makeDims({batch, num_heads, q_h, q_w, head_dim}));
+    q_view->setReshapeDimensions(makeDims({0, num_heads, q_h, q_w, head_dim}));
 
     auto *rel_h = requireLayer(
         network->addConstant(makeDims({1, 1, q_h, head_dim, q_h}),
@@ -516,7 +518,7 @@ nvinfer1::ITensor *addImageRelativePosition(nvinfer1::INetworkDefinition *networ
                        "Failed to add SAM rel_pos_h scores");
     auto *rel_h_view
         = requireLayer(network->addShuffle(*rel_h_scores->getOutput(0)), "Failed to expand SAM rel_pos_h scores");
-    rel_h_view->setReshapeDimensions(makeDims({batch, num_heads, q_h, q_w, q_h, 1}));
+    rel_h_view->setReshapeDimensions(makeDims({0, num_heads, q_h, q_w, q_h, 1}));
 
     auto *q_w_view
         = requireLayer(network->addShuffle(*q_view->getOutput(0)), "Failed to transpose SAM relative position query");
@@ -533,7 +535,7 @@ nvinfer1::ITensor *addImageRelativePosition(nvinfer1::INetworkDefinition *networ
     rel_w_transpose->setSecondTranspose(nvinfer1::Permutation{0, 1, 3, 2, 4});
     auto *rel_w_view
         = requireLayer(network->addShuffle(*rel_w_transpose->getOutput(0)), "Failed to expand SAM rel_pos_w scores");
-    rel_w_view->setReshapeDimensions(makeDims({batch, num_heads, q_h, q_w, 1, q_w}));
+    rel_w_view->setReshapeDimensions(makeDims({0, num_heads, q_h, q_w, 1, q_w}));
 
     auto *with_h  = requireLayer(network->addElementWise(*attn_view->getOutput(0), *rel_h_view->getOutput(0), E::kSUM),
                                  "Failed to add SAM rel_pos_h to attention");
@@ -541,7 +543,7 @@ nvinfer1::ITensor *addImageRelativePosition(nvinfer1::INetworkDefinition *networ
                                  "Failed to add SAM rel_pos_w to attention");
     auto *scores  = requireLayer(network->addShuffle(*with_hw->getOutput(0)),
                                  "Failed to flatten SAM relative position attention");
-    scores->setReshapeDimensions(nvinfer1::Dims4{batch, num_heads, q_h * q_w, q_h * q_w});
+    scores->setReshapeDimensions(nvinfer1::Dims4{0, num_heads, q_h * q_w, q_h * q_w});
     return scores->getOutput(0);
 }
 
@@ -584,14 +586,16 @@ nvinfer1::ITensor *addImageAttention(nvinfer1::INetworkDefinition *network, cons
 nvinfer1::ITensor *padNHWC(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input, int batch, int height,
                            int width, int channels, int padded_h, int padded_w)
 {
+    (void)batch;
     if (height == padded_h && width == padded_w)
     {
         return &input;
     }
-    auto *slice = requireLayer(
-        network->addSlice(input, nvinfer1::Dims4{0, 0, 0, 0}, nvinfer1::Dims4{batch, padded_h, padded_w, channels},
-                          nvinfer1::Dims4{1, 1, 1, 1}),
-        "Failed to add SAM window padding");
+    auto *slice
+        = requireLayer(network->addSlice(input, nvinfer1::Dims4{0, 0, 0, 0},
+                                         nvinfer1::Dims4{1, padded_h, padded_w, channels}, nvinfer1::Dims4{1, 1, 1, 1}),
+                       "Failed to add SAM window padding");
+    slice->setInput(2, *shapeWithFirstDimOf(network, input, {padded_h, padded_w, channels}));
     slice->setMode(nvinfer1::SampleMode::kFILL);
     auto *zero = requireLayer(network->addConstant(nvinfer1::Dims4{1, 1, 1, 1}, ownedScalarWeight(0.0F)),
                               "Failed to add SAM padding zero");
@@ -612,11 +616,11 @@ nvinfer1::ITensor *partitionWindows(nvinfer1::INetworkDefinition *network, nvinf
     const int windows_h = padded_h / window_size;
     const int windows_w = padded_w / window_size;
     auto     *view      = requireLayer(network->addShuffle(*padded), "Failed to add SAM window view");
-    view->setReshapeDimensions(makeDims({batch, windows_h, window_size, windows_w, window_size, channels}));
+    view->setReshapeDimensions(makeDims({0, windows_h, window_size, windows_w, window_size, channels}));
     view->setSecondTranspose(nvinfer1::Permutation{0, 1, 3, 2, 4, 5});
 
     auto *windows = requireLayer(network->addShuffle(*view->getOutput(0)), "Failed to add SAM window flatten");
-    windows->setReshapeDimensions(nvinfer1::Dims4{batch * windows_h * windows_w, window_size, window_size, channels});
+    windows->setReshapeDimensions(nvinfer1::Dims4{-1, window_size, window_size, channels});
     return windows->getOutput(0);
 }
 
@@ -626,22 +630,25 @@ nvinfer1::ITensor *partitionWindows(nvinfer1::INetworkDefinition *network, nvinf
 nvinfer1::ITensor *unpartitionWindows(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &windows, int batch,
                                       int height, int width, int channels, int window_size, int padded_h, int padded_w)
 {
+    (void)batch;
     const int windows_h = padded_h / window_size;
     const int windows_w = padded_w / window_size;
     auto     *view      = requireLayer(network->addShuffle(windows), "Failed to add SAM window restore view");
-    view->setReshapeDimensions(makeDims({batch, windows_h, windows_w, window_size, window_size, channels}));
+    view->setReshapeDimensions(makeDims({-1, windows_h, windows_w, window_size, window_size, channels}));
     view->setSecondTranspose(nvinfer1::Permutation{0, 1, 3, 2, 4, 5});
 
     auto *merged = requireLayer(network->addShuffle(*view->getOutput(0)), "Failed to add SAM window restore merge");
-    merged->setReshapeDimensions(nvinfer1::Dims4{batch, padded_h, padded_w, channels});
+    merged->setReshapeDimensions(nvinfer1::Dims4{0, padded_h, padded_w, channels});
     if (height == padded_h && width == padded_w)
     {
         return merged->getOutput(0);
     }
-    return requireLayer(network->addSlice(*merged->getOutput(0), nvinfer1::Dims4{0, 0, 0, 0},
-                                          nvinfer1::Dims4{batch, height, width, channels}, nvinfer1::Dims4{1, 1, 1, 1}),
-                        "Failed to add SAM window crop")
-        ->getOutput(0);
+    auto *crop
+        = requireLayer(network->addSlice(*merged->getOutput(0), nvinfer1::Dims4{0, 0, 0, 0},
+                                         nvinfer1::Dims4{1, height, width, channels}, nvinfer1::Dims4{1, 1, 1, 1}),
+                       "Failed to add SAM window crop");
+    crop->setInput(2, *shapeWithFirstDimOf(network, *merged->getOutput(0), {height, width, channels}));
+    return crop->getOutput(0);
 }
 
 /**
@@ -724,22 +731,44 @@ nvinfer1::ITensor *addMaxPoolNHWC(nvinfer1::INetworkDefinition *network, nvinfer
 }
 
 /**
+ * @brief 设置 NCHW resize 输出形状，并保留输入的动态 batch 维。
+ * @param network TensorRT 网络定义。
+ * @param resize 待配置的 resize 层。
+ * @param input resize 输入张量。
+ * @param reference 提供目标 H/W 的参考张量。
+ *
+ * TensorRT 在动态 resize 中不能通过 `setOutputDimensions()` 写入 `-1` batch，
+ * 需要把 `[N, C, H, W]` 作为 shape tensor 传给 resize 的第 1 个附加输入。
+ */
+void setResizeOutputLike(nvinfer1::INetworkDefinition *network, nvinfer1::IResizeLayer &resize,
+                         nvinfer1::ITensor &input, const nvinfer1::ITensor &reference)
+{
+    auto       dims     = input.getDimensions();
+    const auto ref_dims = reference.getDimensions();
+    if (dims.nbDims != 4 || ref_dims.nbDims != 4)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "SAM resize expects NCHW tensors");
+    }
+
+    dims.d[2] = ref_dims.d[2];
+    dims.d[3] = ref_dims.d[3];
+    if (dims.d[0] < 0)
+    {
+        resize.setInput(1, *shapeWithFirstDimOf(network, input, {dims.d[1], dims.d[2], dims.d[3]}));
+        return;
+    }
+    resize.setOutputDimensions(dims);
+}
+
+/**
  * @brief 将 NCHW 特征图按最近邻方式上采样到参考特征图大小。
  */
 nvinfer1::ITensor *addNearestResizeLike(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input,
                                         const nvinfer1::ITensor &reference)
 {
-    auto      *resize   = requireLayer(network->addResize(input), "Failed to add SAM2 nearest resize");
-    auto       dims     = input.getDimensions();
-    const auto ref_dims = reference.getDimensions();
-    if (dims.nbDims != 4 || ref_dims.nbDims != 4)
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "SAM2 nearest resize expects NCHW tensors");
-    }
-    dims.d[2] = ref_dims.d[2];
-    dims.d[3] = ref_dims.d[3];
+    auto *resize = requireLayer(network->addResize(input), "Failed to add SAM2 nearest resize");
     resize->setResizeMode(nvinfer1::InterpolationMode::kNEAREST);
-    resize->setOutputDimensions(dims);
+    setResizeOutputLike(network, *resize, input, reference);
     return resize->getOutput(0);
 }
 
@@ -749,19 +778,11 @@ nvinfer1::ITensor *addNearestResizeLike(nvinfer1::INetworkDefinition *network, n
 nvinfer1::ITensor *addCubicResizeLike(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input,
                                       const nvinfer1::ITensor &reference)
 {
-    auto      *resize   = requireLayer(network->addResize(input), "Failed to add EdgeSAM bicubic resize");
-    auto       dims     = input.getDimensions();
-    const auto ref_dims = reference.getDimensions();
-    if (dims.nbDims != 4 || ref_dims.nbDims != 4)
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "EdgeSAM bicubic resize expects NCHW tensors");
-    }
-    dims.d[2] = ref_dims.d[2];
-    dims.d[3] = ref_dims.d[3];
+    auto *resize = requireLayer(network->addResize(input), "Failed to add EdgeSAM bicubic resize");
     resize->setResizeMode(nvinfer1::InterpolationMode::kCUBIC);
     resize->setCoordinateTransformation(nvinfer1::ResizeCoordinateTransformation::kHALF_PIXEL);
     resize->setCubicCoeff(-0.75F);
-    resize->setOutputDimensions(dims);
+    setResizeOutputLike(network, *resize, input, reference);
     return resize->getOutput(0);
 }
 
@@ -1305,10 +1326,11 @@ SAMGeometry resolveSAMGeometry(const SAMSpec &spec, const IModelConfig &config)
     geometry.channels = static_cast<int>(image_shape.d[1]);
     geometry.image_h  = static_cast<int>(image_shape.d[2]);
     geometry.image_w  = static_cast<int>(image_shape.d[3]);
-    if (geometry.batch != 1 || geometry.channels != 3)
+    if (geometry.batch <= 0 || geometry.channels != 3)
     {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "SAM image input must be 1x3xHxW, got %dx%dx%dx%d",
-                             image_shape.d[0], image_shape.d[1], image_shape.d[2], image_shape.d[3]);
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "SAM image input must be Nx3xHxW, got %lldx%lldx%lldx%lld",
+                             static_cast<long long>(image_shape.d[0]), static_cast<long long>(image_shape.d[1]),
+                             static_cast<long long>(image_shape.d[2]), static_cast<long long>(image_shape.d[3]));
     }
     if (geometry.image_h != spec.image_size || geometry.image_w != spec.image_size)
     {
@@ -1325,31 +1347,35 @@ SAMGeometry resolveSAMGeometry(const SAMSpec &spec, const IModelConfig &config)
     geometry.grid_tokens = geometry.grid_h * geometry.grid_w;
 
     const auto &coords_shape = input_shapes[1];
-    if (coords_shape.d[0] != 1 || coords_shape.d[1] != spec.max_points || coords_shape.d[2] != 2
+    if (coords_shape.d[0] != geometry.batch || coords_shape.d[1] != spec.max_points || coords_shape.d[2] != 2
         || coords_shape.d[3] != 1)
     {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "SAM point_coords must be 1x%dx2x1", spec.max_points);
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "SAM point_coords must be Nx%dx2x1 and share image batch",
+                             spec.max_points);
     }
 
     const auto &labels_shape = input_shapes[2];
-    if (labels_shape.d[0] != 1 || labels_shape.d[1] != spec.max_points || labels_shape.d[2] != 1
+    if (labels_shape.d[0] != geometry.batch || labels_shape.d[1] != spec.max_points || labels_shape.d[2] != 1
         || labels_shape.d[3] != 1)
     {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "SAM point_labels must be 1x%dx1x1", spec.max_points);
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "SAM point_labels must be Nx%dx1x1 and share image batch",
+                             spec.max_points);
     }
 
     const auto &mask_shape = input_shapes[3];
-    if (mask_shape.d[0] != 1 || mask_shape.d[1] != 1 || mask_shape.d[2] != spec.mask_size
+    if (mask_shape.d[0] != geometry.batch || mask_shape.d[1] != 1 || mask_shape.d[2] != spec.mask_size
         || mask_shape.d[3] != spec.mask_size)
     {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "SAM mask_input must be 1x1x%dx%d", spec.mask_size,
-                             spec.mask_size);
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "SAM mask_input must be Nx1x%dx%d and share image batch",
+                             spec.mask_size, spec.mask_size);
     }
 
     const auto &has_mask_shape = input_shapes[4];
-    if (has_mask_shape.d[0] != 1 || has_mask_shape.d[1] != 1 || has_mask_shape.d[2] != 1 || has_mask_shape.d[3] != 1)
+    if (has_mask_shape.d[0] != geometry.batch || has_mask_shape.d[1] != 1 || has_mask_shape.d[2] != 1
+        || has_mask_shape.d[3] != 1)
     {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "SAM has_mask_input must be 1x1x1x1");
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                             "SAM has_mask_input must be Nx1x1x1 and share image batch");
     }
 
     return geometry;
@@ -1490,7 +1516,7 @@ nvinfer1::ITensor *addPointPromptEmbedding(const SAMSegmentationModel &impl, nvi
     named_tensors["point_labels"] = point_labels;
 
     auto *coords = requireLayer(network->addShuffle(*point_coords), "Failed to reshape SAM point coords");
-    coords->setReshapeDimensions(nvinfer1::Dims3{1, kSamMaxPoints, 2});
+    coords->setReshapeDimensions(nvinfer1::Dims3{0, kSamMaxPoints, 2});
     auto              *half    = addScalar(network, *coords->getOutput(0), 0.5F);
     auto              *shifted = requireLayer(network->addElementWise(*coords->getOutput(0), *half, E::kSUM),
                                               "Failed to shift SAM point coords");
@@ -1501,9 +1527,10 @@ nvinfer1::ITensor *addPointPromptEmbedding(const SAMSegmentationModel &impl, nvi
     auto *normalized
         = requireLayer(network->addElementWise(*shifted->getOutput(0), *norm_const->getOutput(0), E::kPROD),
                        "Failed to normalize SAM point coords");
-    auto *pad_coord = requireLayer(network->addConstant(nvinfer1::Dims3{1, 1, 2}, ownedFloatVector({0.0F, 0.0F})),
-                                   "Failed to add SAM padding point");
-    std::array<nvinfer1::ITensor *, 2> coord_tensors{normalized->getOutput(0), pad_coord->getOutput(0)};
+    auto *pad_coord       = requireLayer(network->addConstant(nvinfer1::Dims3{1, 1, 2}, ownedFloatVector({0.0F, 0.0F})),
+                                         "Failed to add SAM padding point");
+    auto *pad_coord_batch = broadcastFirstDimLike(network, *pad_coord->getOutput(0), *normalized->getOutput(0));
+    std::array<nvinfer1::ITensor *, 2> coord_tensors{normalized->getOutput(0), pad_coord_batch};
     auto *coords_cat = requireLayer(network->addConcatenation(coord_tensors.data(), 2), "Failed to concat SAM coords");
     coords_cat->setAxis(1);
 
@@ -1532,10 +1559,11 @@ nvinfer1::ITensor *addPointPromptEmbedding(const SAMSegmentationModel &impl, nvi
     pe->setAxis(2);
 
     auto *labels = requireLayer(network->addShuffle(*point_labels), "Failed to reshape SAM point labels");
-    labels->setReshapeDimensions(nvinfer1::Dims3{1, kSamMaxPoints, 1});
-    auto *pad_label = requireLayer(network->addConstant(nvinfer1::Dims3{1, 1, 1}, ownedScalarWeight(-1.0F)),
-                                   "Failed to add SAM padding label");
-    std::array<nvinfer1::ITensor *, 2> label_tensors{labels->getOutput(0), pad_label->getOutput(0)};
+    labels->setReshapeDimensions(nvinfer1::Dims3{0, kSamMaxPoints, 1});
+    auto *pad_label       = requireLayer(network->addConstant(nvinfer1::Dims3{1, 1, 1}, ownedScalarWeight(-1.0F)),
+                                         "Failed to add SAM padding label");
+    auto *pad_label_batch = broadcastFirstDimLike(network, *pad_label->getOutput(0), *labels->getOutput(0));
+    std::array<nvinfer1::ITensor *, 2> label_tensors{labels->getOutput(0), pad_label_batch};
     auto *labels_cat = requireLayer(network->addConcatenation(label_tensors.data(), 2), "Failed to concat SAM labels");
     labels_cat->setAxis(1);
 
@@ -1638,7 +1666,7 @@ nvinfer1::ITensor *addDecoderAttention(nvinfer1::INetworkDefinition *network, co
     auto     *q    = addLinear3D(network, weights_map, q_input, prefix + ".q_proj", kSamPromptDim, internal_dim);
     auto     *k    = addLinear3D(network, weights_map, k_input, prefix + ".k_proj", kSamPromptDim, internal_dim);
     auto     *v    = addLinear3D(network, weights_map, v_input, prefix + ".v_proj", kSamPromptDim, internal_dim);
-    auto     *attn = addTokenAttention(network, *q, *k, *v, 1, q_tokens, k_tokens, kSamTwoWayHeads, internal_dim);
+    auto     *attn = addTokenAttention(network, *q, *k, *v, 0, q_tokens, k_tokens, kSamTwoWayHeads, internal_dim);
     return addLinear3D(network, weights_map, *attn, prefix + ".out_proj", internal_dim, kSamPromptDim);
 }
 
@@ -1750,7 +1778,8 @@ void addSAMMaskDecoder(nvinfer1::INetworkDefinition *network, const WeightsMap &
         network->addConcatenation(output_token_parts.data(), static_cast<int32_t>(output_token_parts.size())),
         "Failed to concat SAM output tokens");
     out_cat->setAxis(1);
-    std::array<nvinfer1::ITensor *, 2> all_tokens{out_cat->getOutput(0), &sparse_prompt};
+    auto *output_tokens = broadcastFirstDimLike(network, *out_cat->getOutput(0), sparse_prompt);
+    std::array<nvinfer1::ITensor *, 2> all_tokens{output_tokens, &sparse_prompt};
     auto                              *token_cat
         = requireLayer(network->addConcatenation(all_tokens.data(), 2), "Failed to concat SAM decoder tokens");
     token_cat->setAxis(1);
@@ -1760,11 +1789,11 @@ void addSAMMaskDecoder(nvinfer1::INetworkDefinition *network, const WeightsMap &
                              "Failed to add SAM dense prompt to image embedding")
                     ->getOutput(0);
     auto *keys = requireLayer(network->addShuffle(*src), "Failed to flatten SAM decoder image tokens");
-    keys->setReshapeDimensions(nvinfer1::Dims3{1, kSamPromptDim, options.image_grid * options.image_grid});
+    keys->setReshapeDimensions(nvinfer1::Dims3{0, kSamPromptDim, options.image_grid * options.image_grid});
     keys->setSecondTranspose(nvinfer1::Permutation{0, 2, 1});
 
     auto *pe_tokens = requireLayer(network->addShuffle(image_pe), "Failed to flatten SAM decoder image PE");
-    pe_tokens->setReshapeDimensions(nvinfer1::Dims3{1, kSamPromptDim, options.image_grid * options.image_grid});
+    pe_tokens->setReshapeDimensions(nvinfer1::Dims3{0, kSamPromptDim, options.image_grid * options.image_grid});
     pe_tokens->setSecondTranspose(nvinfer1::Permutation{0, 2, 1});
     nvinfer1::ITensor *key_tokens          = keys->getOutput(0);
     nvinfer1::ITensor *query_tokens_tensor = queries;
@@ -1796,20 +1825,14 @@ void addSAMMaskDecoder(nvinfer1::INetworkDefinition *network, const WeightsMap &
                                                                mask_prefix + ".transformer.norm_final_attn", kSamPromptDim);
     named_tensors["mask_decoder_tokens"] = query_tokens_tensor;
 
-    auto *iou_token_out
-        = requireLayer(network->addSlice(*query_tokens_tensor, nvinfer1::Dims3{0, iou_token_index, 0},
-                                         nvinfer1::Dims3{1, 1, kSamPromptDim}, nvinfer1::Dims3{1, 1, 1}),
-                       "Failed to slice SAM iou token out")
-              ->getOutput(0);
-    auto *mask_tokens_out
-        = requireLayer(network->addSlice(*query_tokens_tensor, nvinfer1::Dims3{0, mask_token_index, 0},
-                                         nvinfer1::Dims3{1, kSamMaskTokens, kSamPromptDim}, nvinfer1::Dims3{1, 1, 1}),
-                       "Failed to slice SAM mask tokens out")
-              ->getOutput(0);
+    auto *iou_token_out   = slicePreserveFirstDim(network, *query_tokens_tensor, nvinfer1::Dims3{0, iou_token_index, 0},
+                                                  {1, kSamPromptDim});
+    auto *mask_tokens_out = slicePreserveFirstDim(
+        network, *query_tokens_tensor, nvinfer1::Dims3{0, mask_token_index, 0}, {kSamMaskTokens, kSamPromptDim});
 
     auto *src_view = requireLayer(network->addShuffle(*key_tokens), "Failed to restore SAM decoder image tokens");
     src_view->setFirstTranspose(nvinfer1::Permutation{0, 2, 1});
-    src_view->setReshapeDimensions(nvinfer1::Dims4{1, kSamPromptDim, options.image_grid, options.image_grid});
+    src_view->setReshapeDimensions(nvinfer1::Dims4{0, kSamPromptDim, options.image_grid, options.image_grid});
 
     auto *up0
         = requireLayer(network->addDeconvolutionNd(
@@ -1852,16 +1875,13 @@ void addSAMMaskDecoder(nvinfer1::INetworkDefinition *network, const WeightsMap &
     for (int i = 0; i < kSamMaskTokens; ++i)
     {
         const auto prefix = mask_prefix + ".output_hypernetworks_mlps." + std::to_string(i) + ".layers.";
-        auto      *token  = requireLayer(network->addSlice(*mask_tokens_out, nvinfer1::Dims3{0, i, 0},
-                                                           nvinfer1::Dims3{1, 1, kSamPromptDim}, nvinfer1::Dims3{1, 1, 1}),
-                                         "Failed to slice SAM hyper token")
-                          ->getOutput(0);
-        auto *h0 = addLinear3D(network, weights_map, *token, prefix + "0", kSamPromptDim, kSamPromptDim);
-        auto *r0 = requireLayer(network->addActivation(*h0, nvinfer1::ActivationType::kRELU),
-                                "Failed to add SAM hyper ReLU0");
-        auto *h1 = addLinear3D(network, weights_map, *r0->getOutput(0), prefix + "1", kSamPromptDim, kSamPromptDim);
-        auto *r1 = requireLayer(network->addActivation(*h1, nvinfer1::ActivationType::kRELU),
-                                "Failed to add SAM hyper ReLU1");
+        auto *token = slicePreserveFirstDim(network, *mask_tokens_out, nvinfer1::Dims3{0, i, 0}, {1, kSamPromptDim});
+        auto *h0    = addLinear3D(network, weights_map, *token, prefix + "0", kSamPromptDim, kSamPromptDim);
+        auto *r0    = requireLayer(network->addActivation(*h0, nvinfer1::ActivationType::kRELU),
+                                   "Failed to add SAM hyper ReLU0");
+        auto *h1    = addLinear3D(network, weights_map, *r0->getOutput(0), prefix + "1", kSamPromptDim, kSamPromptDim);
+        auto *r1    = requireLayer(network->addActivation(*h1, nvinfer1::ActivationType::kRELU),
+                                   "Failed to add SAM hyper ReLU1");
         hyper_outputs.push_back(
             addLinear3D(network, weights_map, *r1->getOutput(0), prefix + "2", kSamPromptDim, kSamPromptDim / 8));
     }
@@ -1871,18 +1891,14 @@ void addSAMMaskDecoder(nvinfer1::INetworkDefinition *network, const WeightsMap &
     hyper->setAxis(1);
 
     auto *up_flat = requireLayer(network->addShuffle(*upscaled), "Failed to flatten SAM upscaled embedding");
-    up_flat->setReshapeDimensions(nvinfer1::Dims3{1, kSamPromptDim / 8, kSamMaskSize * kSamMaskSize});
+    up_flat->setReshapeDimensions(nvinfer1::Dims3{0, kSamPromptDim / 8, kSamMaskSize * kSamMaskSize});
     auto *mask_logits
         = requireLayer(network->addMatrixMultiply(*hyper->getOutput(0), M::kNONE, *up_flat->getOutput(0), M::kNONE),
                        "Failed to add SAM hyper mask matmul");
     auto *mask_view = requireLayer(network->addShuffle(*mask_logits->getOutput(0)), "Failed to reshape SAM masks");
-    mask_view->setReshapeDimensions(nvinfer1::Dims4{1, kSamMaskTokens, kSamMaskSize, kSamMaskSize});
-    auto *selected_masks
-        = requireLayer(network->addSlice(*mask_view->getOutput(0), nvinfer1::Dims4{0, 1, 0, 0},
-                                         nvinfer1::Dims4{1, kSamOutputMasks, kSamMaskSize, kSamMaskSize},
-                                         nvinfer1::Dims4{1, 1, 1, 1}),
-                       "Failed to slice SAM multimask outputs")
-              ->getOutput(0);
+    mask_view->setReshapeDimensions(nvinfer1::Dims4{0, kSamMaskTokens, kSamMaskSize, kSamMaskSize});
+    auto *selected_masks = slicePreserveFirstDim(network, *mask_view->getOutput(0), nvinfer1::Dims4{0, 1, 0, 0},
+                                                 {kSamOutputMasks, kSamMaskSize, kSamMaskSize});
 
     auto *iou0 = addLinear3D(network, weights_map, *iou_token_out, mask_prefix + ".iou_prediction_head.layers.0",
                              kSamPromptDim, kSamPromptDim);
@@ -1904,9 +1920,10 @@ void addSAMMaskDecoder(nvinfer1::INetworkDefinition *network, const WeightsMap &
     auto *iou_slice = requireLayer(network->addSlice(*iou_logits, nvinfer1::Dims3{0, 0, 1},
                                                      nvinfer1::Dims3{1, 1, kSamOutputMasks}, nvinfer1::Dims3{1, 1, 1}),
                                    "Failed to slice SAM iou predictions");
+    iou_slice->setInput(2, *shapeWithFirstDimOf(network, *iou_logits, {1, kSamOutputMasks}));
     auto *iou_view
         = requireLayer(network->addShuffle(*iou_slice->getOutput(0)), "Failed to reshape SAM iou predictions");
-    iou_view->setReshapeDimensions(nvinfer1::Dims4{1, kSamOutputMasks, 1, 1});
+    iou_view->setReshapeDimensions(nvinfer1::Dims4{0, kSamOutputMasks, 1, 1});
 
     masks                            = selected_masks;
     iou_predictions                  = iou_view->getOutput(0);
@@ -2148,7 +2165,7 @@ void SAMSegmentationModel::buildNetwork(nvinfer1::INetworkDefinition *network, c
     }
 
     auto *low_res_clone = requireLayer(network->addShuffle(*masks), "Failed to clone SAM low_res_masks output");
-    low_res_clone->setReshapeDimensions(nvinfer1::Dims4{1, kSamOutputMasks, kSamMaskSize, kSamMaskSize});
+    low_res_clone->setReshapeDimensions(nvinfer1::Dims4{0, kSamOutputMasks, kSamMaskSize, kSamMaskSize});
     markOutputTensors(network, {masks, iou_predictions, low_res_clone->getOutput(0)});
 }
 
