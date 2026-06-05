@@ -1,3 +1,5 @@
+#include "TestCVCudaCommon.hpp"
+
 #include <gtest/gtest.h>
 #include <inferrt/core/Status.h>
 #include <inferrt/cvcuda/OpResize.h>
@@ -6,6 +8,9 @@
 #include <vtest/common/ValueTests.hpp>
 
 #include <type_traits>
+
+using irt::cvcuda::test::AssertInferRTSuccess;
+using irt::cvcuda::test::CvDepth;
 
 /**
  * @brief 多参数组合测试套件
@@ -24,44 +29,6 @@ _TEST_SUITE_P(MultiParamTest,
                   * vtest::ValueList<double>{0.1, 0.3, 0.5, 1.3, 2.0, 10.0}
                   * vtest::ValueList<int>{cv::INTER_NEAREST, cv::INTER_LINEAR, cv::INTER_CUBIC, cv::INTER_AREA,
                                           cv::INTER_LANCZOS4, cv::INTER_NEAREST_EXACT, cv::INTER_LINEAR_EXACT});
-
-// ============================================================================
-// 类型映射和调用器抽象
-// ============================================================================
-
-/**
- * @brief 将 C++ 类型映射到对应的 OpenCV 深度
- * 
- * @tparam T 数据类型（uint8_t 或 float）
- */
-template<typename T>
-struct CvDepth;
-
-/**
- * @brief uint8_t 类型的 OpenCV 深度映射
- * 
- * - value: CV_8U（8位无符号整数）
- * - range: 255.0（随机值生成的上限）
- */
-template<>
-struct CvDepth<uint8_t>
-{
-    static constexpr int    value = CV_8U;
-    static constexpr double range = 255.0;
-};
-
-/**
- * @brief float 类型的 OpenCV 深度映射
- * 
- * - value: CV_32F（32位浮点数）
- * - range: 1.0（随机值生成的上限）
- */
-template<>
-struct CvDepth<float>
-{
-    static constexpr int    value = CV_32F;
-    static constexpr double range = 1.0;
-};
 
 /**
  * @brief Resize 操作调用器 - 函数版本
@@ -93,19 +60,6 @@ struct ResizeClassCaller
         return resize_op(d_src, d_dst, ssize, dsize, ch, interp, stream);
     }
 };
-
-static ::testing::AssertionResult AssertInferRTSuccess(int ret)
-{
-    if (ret == IRT_SUCCESS)
-    {
-        return ::testing::AssertionSuccess();
-    }
-
-    char msg[IRT_MAX_STATUS_MESSAGE_LENGTH] = {};
-    irt::PeekAtLastErrorMessage(msg, sizeof(msg));
-    return ::testing::AssertionFailure() << "ret=" << ret << " (" << irt::StatusGetName(static_cast<IRTStatus>(ret))
-                                         << "), last_error=" << msg;
-}
 
 template<typename T>
 bool ShouldSkipExactInterpolation(int interp)

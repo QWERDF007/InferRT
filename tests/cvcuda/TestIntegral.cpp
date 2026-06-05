@@ -9,6 +9,8 @@
  * - 非法通道数等边界错误
  */
 
+#include "TestCVCudaCommon.hpp"
+
 #include <gtest/gtest.h>
 #include <inferrt/core/Status.h>
 #include <inferrt/cvcuda/OpIntegral.h>
@@ -22,64 +24,8 @@
 
 namespace {
 
-// ============================================================================
-// 类型映射与辅助函数
-// ============================================================================
-
-/**
- * @brief 将 InferRT 返回码断言为成功
- *
- * 失败时附带状态名与 PeekAtLastErrorMessage 中的最近错误信息。
- *
- * @param ret InferRT 状态码（IRT_SUCCESS 表示成功）
- * @return Google Test 断言结果
- */
-static ::testing::AssertionResult AssertInferRTSuccess(int ret)
-{
-    if (ret == IRT_SUCCESS)
-    {
-        return ::testing::AssertionSuccess();
-    }
-
-    char msg[IRT_MAX_STATUS_MESSAGE_LENGTH] = {};
-    irt::PeekAtLastErrorMessage(msg, sizeof(msg));
-    return ::testing::AssertionFailure() << "ret=" << ret << " (" << irt::StatusGetName(static_cast<IRTStatus>(ret))
-                                         << "), last_error=" << msg;
-}
-
-/**
- * @brief 将 C++ 源类型映射到 OpenCV Mat 深度
- *
- * @tparam T 源数据类型（uint8_t 或 float）
- */
-template<typename T>
-struct CvDepth;
-
-/**
- * @brief uint8_t 类型的 OpenCV 深度映射
- *
- * - value: CV_8U
- * - range: 255.0（随机值上限）
- */
-template<>
-struct CvDepth<uint8_t>
-{
-    static constexpr int value = CV_8U;
-    static constexpr double range = 255.0;
-};
-
-/**
- * @brief float 类型的 OpenCV 深度映射
- *
- * - value: CV_32F
- * - range: 1.0（随机值上限）
- */
-template<>
-struct CvDepth<float>
-{
-    static constexpr int value = CV_32F;
-    static constexpr double range = 1.0;
-};
+using irt::cvcuda::test::AssertInferRTSuccess;
+using irt::cvcuda::test::CvDepth;
 
 /**
  * @brief 在 CPU 上生成积分图参考结果
@@ -97,7 +43,7 @@ std::vector<CT> makeIntegralReference(const cv::Mat &src)
 {
     const int src_w = src.cols;
     const int src_h = src.rows;
-    const int ch = src.channels();
+    const int ch    = src.channels();
     const int dst_w = src_w + 1;
     const int dst_h = src_h + 1;
 
@@ -105,8 +51,8 @@ std::vector<CT> makeIntegralReference(const cv::Mat &src)
 
     for (int y = 0; y < src_h; ++y)
     {
-        const T *in_row = src.ptr<T>(y);
-        CT *out_row = ref.data() + static_cast<size_t>(y + 1) * dst_w * ch;
+        const T *in_row  = src.ptr<T>(y);
+        CT      *out_row = ref.data() + static_cast<size_t>(y + 1) * dst_w * ch;
 
         for (int c = 0; c < ch; ++c)
         {
@@ -169,7 +115,7 @@ void runIntegralTest(int src_w, int src_h, int ch, double max_diff, Caller calle
     const size_t src_bytes = static_cast<size_t>(src_w) * src_h * ch * sizeof(T);
     const size_t dst_bytes = static_cast<size_t>(src_w + 1) * (src_h + 1) * ch * sizeof(CT);
 
-    T *d_src = nullptr;
+    T  *d_src = nullptr;
     CT *d_dst = nullptr;
     ASSERT_EQ(cudaMalloc(&d_src, src_bytes), cudaSuccess);
     ASSERT_EQ(cudaMalloc(&d_dst, dst_bytes), cudaSuccess);
@@ -190,7 +136,8 @@ void runIntegralTest(int src_w, int src_h, int ch, double max_diff, Caller calle
     double actual_max_diff = 0.0;
     for (size_t i = 0; i < dst.size(); ++i)
     {
-        actual_max_diff = std::max(actual_max_diff, std::abs(static_cast<double>(dst[i]) - static_cast<double>(ref[i])));
+        actual_max_diff
+            = std::max(actual_max_diff, std::abs(static_cast<double>(dst[i]) - static_cast<double>(ref[i])));
     }
     EXPECT_LE(actual_max_diff, max_diff);
 }
@@ -208,10 +155,9 @@ void runIntegralTest(int src_w, int src_h, int ch, double max_diff, Caller calle
  */
 TEST(IntegralFunctionTest, U8GrayToU32)
 {
-    runIntegralTest<uint8_t, uint32_t>(31, 17, 1, 0.0,
-                                       [](const uint8_t *src, uint32_t *dst, cv::Size ssize, int ch,
-                                          cudaStream_t stream)
-                                       { return irt::cvcuda::integral<uint8_t, uint32_t>(src, dst, ssize, ch, stream); });
+    runIntegralTest<uint8_t, uint32_t>(
+        31, 17, 1, 0.0, [](const uint8_t *src, uint32_t *dst, cv::Size ssize, int ch, cudaStream_t stream)
+        { return irt::cvcuda::integral<uint8_t, uint32_t>(src, dst, ssize, ch, stream); });
 }
 
 /**
@@ -221,10 +167,9 @@ TEST(IntegralFunctionTest, U8GrayToU32)
  */
 TEST(IntegralFunctionTest, U8BgrToU32)
 {
-    runIntegralTest<uint8_t, uint32_t>(29, 23, 3, 0.0,
-                                       [](const uint8_t *src, uint32_t *dst, cv::Size ssize, int ch,
-                                          cudaStream_t stream)
-                                       { return irt::cvcuda::integral<uint8_t, uint32_t>(src, dst, ssize, ch, stream); });
+    runIntegralTest<uint8_t, uint32_t>(
+        29, 23, 3, 0.0, [](const uint8_t *src, uint32_t *dst, cv::Size ssize, int ch, cudaStream_t stream)
+        { return irt::cvcuda::integral<uint8_t, uint32_t>(src, dst, ssize, ch, stream); });
 }
 
 /**
@@ -263,7 +208,7 @@ TEST(IntegralClassTest, F32GrayToF32)
  */
 TEST(IntegralFunctionEdgeCaseTest, RejectsInvalidChannels)
 {
-    uint8_t *d_src = nullptr;
+    uint8_t  *d_src = nullptr;
     uint32_t *d_dst = nullptr;
     ASSERT_EQ(cudaMalloc(&d_src, 10 * 10 * 4), cudaSuccess);
     ASSERT_EQ(cudaMalloc(&d_dst, 11 * 11 * 4 * sizeof(uint32_t)), cudaSuccess);

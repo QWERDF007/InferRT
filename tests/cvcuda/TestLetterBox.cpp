@@ -9,6 +9,8 @@
  * - 非法通道数等边界错误
  */
 
+#include "TestCVCudaCommon.hpp"
+
 #include <gtest/gtest.h>
 #include <inferrt/core/Status.h>
 #include <inferrt/cvcuda/OpLetterBox.h>
@@ -22,30 +24,7 @@
 
 namespace {
 
-// ============================================================================
-// 辅助函数
-// ============================================================================
-
-/**
- * @brief 将 InferRT 返回码断言为成功
- *
- * 失败时附带状态名与 PeekAtLastErrorMessage 中的最近错误信息。
- *
- * @param ret InferRT 状态码（IRT_SUCCESS 表示成功）
- * @return Google Test 断言结果
- */
-static ::testing::AssertionResult AssertInferRTSuccess(int ret)
-{
-    if (ret == IRT_SUCCESS)
-    {
-        return ::testing::AssertionSuccess();
-    }
-
-    char msg[IRT_MAX_STATUS_MESSAGE_LENGTH] = {};
-    irt::PeekAtLastErrorMessage(msg, sizeof(msg));
-    return ::testing::AssertionFailure() << "ret=" << ret << " (" << irt::StatusGetName(static_cast<IRTStatus>(ret))
-                                         << "), last_error=" << msg;
-}
+using irt::cvcuda::test::AssertInferRTSuccess;
 
 /**
  * @brief 使用 OpenCV 在 CPU 上生成 LetterBox 参考输出
@@ -61,19 +40,19 @@ std::vector<float> makeLetterBoxReference(const cv::Mat &src, cv::Size dsize)
 {
     const int src_w = src.cols;
     const int src_h = src.rows;
-    const int ch = src.channels();
+    const int ch    = src.channels();
 
-    const double r_w = static_cast<double>(dsize.width) / src_w;
-    const double r_h = static_cast<double>(dsize.height) / src_h;
+    const double r_w   = static_cast<double>(dsize.width) / src_w;
+    const double r_h   = static_cast<double>(dsize.height) / src_h;
     const double ratio = std::min(r_w, r_h);
 
     int resized_w = std::max(1, static_cast<int>(std::round(src_w * ratio)));
     int resized_h = std::max(1, static_cast<int>(std::round(src_h * ratio)));
-    resized_w = std::min(resized_w, dsize.width);
-    resized_h = std::min(resized_h, dsize.height);
+    resized_w     = std::min(resized_w, dsize.width);
+    resized_h     = std::min(resized_h, dsize.height);
 
-    const int left = static_cast<int>(std::round((dsize.width - resized_w) / 2 - 0.1));
-    const int top = static_cast<int>(std::round((dsize.height - resized_h) / 2 - 0.1));
+    const int left       = static_cast<int>(std::round((dsize.width - resized_w) / 2 - 0.1));
+    const int top        = static_cast<int>(std::round((dsize.height - resized_h) / 2 - 0.1));
     const int plane_size = dsize.width * dsize.height;
 
     std::vector<float> ref(static_cast<size_t>(ch) * plane_size, 114.0f / 255.0f);
@@ -92,7 +71,7 @@ std::vector<float> makeLetterBoxReference(const cv::Mat &src, cv::Size dsize)
             }
             else
             {
-                const cv::Vec3b pixel = resized.at<cv::Vec3b>(y, x);
+                const cv::Vec3b pixel         = resized.at<cv::Vec3b>(y, x);
                 ref[0 * plane_size + dst_idx] = pixel[2] / 255.0f;
                 ref[1 * plane_size + dst_idx] = pixel[1] / 255.0f;
                 ref[2 * plane_size + dst_idx] = pixel[0] / 255.0f;
@@ -132,7 +111,7 @@ void runLetterBoxTest(int src_w, int src_h, int ch, cv::Size dsize, Caller calle
     const size_t dst_bytes = static_cast<size_t>(dsize.width) * dsize.height * ch * sizeof(float);
 
     uint8_t *d_src = nullptr;
-    float *d_dst = nullptr;
+    float   *d_dst = nullptr;
     ASSERT_EQ(cudaMalloc(&d_src, src_bytes), cudaSuccess);
     ASSERT_EQ(cudaMalloc(&d_dst, dst_bytes), cudaSuccess);
 
@@ -171,8 +150,7 @@ void runLetterBoxTest(int src_w, int src_h, int ch, cv::Size dsize, Caller calle
 TEST(LetterBoxFunctionTest, BgrHwcToRgbChwWithPadding)
 {
     runLetterBoxTest(37, 19, 3, cv::Size(64, 64),
-                     [](const uint8_t *src, float *dst, cv::Size ssize, cv::Size dsize, int ch,
-                        cudaStream_t stream)
+                     [](const uint8_t *src, float *dst, cv::Size ssize, cv::Size dsize, int ch, cudaStream_t stream)
                      { return irt::cvcuda::letterBox(src, dst, ssize, dsize, ch, stream); });
 }
 
@@ -184,8 +162,7 @@ TEST(LetterBoxFunctionTest, BgrHwcToRgbChwWithPadding)
 TEST(LetterBoxFunctionTest, GrayHwcToChwWithPadding)
 {
     runLetterBoxTest(17, 41, 1, cv::Size(64, 64),
-                     [](const uint8_t *src, float *dst, cv::Size ssize, cv::Size dsize, int ch,
-                        cudaStream_t stream)
+                     [](const uint8_t *src, float *dst, cv::Size ssize, cv::Size dsize, int ch, cudaStream_t stream)
                      { return irt::cvcuda::letter_box(src, dst, ssize, dsize, ch, stream); });
 }
 
@@ -198,8 +175,8 @@ TEST(LetterBoxClassTest, BgrHwcToRgbChwWithPadding)
 {
     irt::cvcuda::LetterBox op;
     runLetterBoxTest(80, 23, 3, cv::Size(96, 48),
-                     [&op](const uint8_t *src, float *dst, cv::Size ssize, cv::Size dsize, int ch,
-                           cudaStream_t stream) { return op(src, dst, ssize, dsize, ch, stream); });
+                     [&op](const uint8_t *src, float *dst, cv::Size ssize, cv::Size dsize, int ch, cudaStream_t stream)
+                     { return op(src, dst, ssize, dsize, ch, stream); });
 }
 
 // ============================================================================
@@ -214,7 +191,7 @@ TEST(LetterBoxClassTest, BgrHwcToRgbChwWithPadding)
 TEST(LetterBoxFunctionEdgeCaseTest, RejectsInvalidChannels)
 {
     uint8_t *d_src = nullptr;
-    float *d_dst = nullptr;
+    float   *d_dst = nullptr;
     ASSERT_EQ(cudaMalloc(&d_src, 10 * 10 * 4), cudaSuccess);
     ASSERT_EQ(cudaMalloc(&d_dst, 32 * 32 * 4 * sizeof(float)), cudaSuccess);
 

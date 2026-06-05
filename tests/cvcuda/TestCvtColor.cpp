@@ -1,3 +1,5 @@
+#include "TestCVCudaCommon.hpp"
+
 #include <gtest/gtest.h>
 #include <inferrt/core/Status.h>
 #include <inferrt/cvcuda/OpCvtColor.h>
@@ -11,68 +13,8 @@
 
 namespace {
 
-/**
- * @brief 断言 InferRT 调用成功
- *
- * 若返回值非 IRT_SUCCESS，则读取并附加最近一次错误信息。
- *
- * @param ret InferRT 状态码
- * @return 成功时返回 AssertionSuccess，否则返回带错误详情的 AssertionFailure
- */
-static ::testing::AssertionResult AssertInferRTSuccess(int ret)
-{
-    if (ret == IRT_SUCCESS)
-    {
-        return ::testing::AssertionSuccess();
-    }
-
-    char msg[IRT_MAX_STATUS_MESSAGE_LENGTH] = {};
-    irt::PeekAtLastErrorMessage(msg, sizeof(msg));
-    return ::testing::AssertionFailure() << "ret=" << ret << " (" << irt::StatusGetName(static_cast<IRTStatus>(ret))
-                                         << "), last_error=" << msg;
-}
-
-// ============================================================================
-// 类型映射
-// ============================================================================
-
-/**
- * @brief 将 C++ 类型映射到对应的 OpenCV 深度
- *
- * @tparam T 数据类型（uint8_t 或 float）
- */
-template<typename T>
-struct CvDepth;
-
-/**
- * @brief uint8_t 类型的 OpenCV 深度映射
- *
- * - value: CV_8U（8 位无符号整数）
- * - range: 255.0（随机值生成的上限）
- */
-template<>
-struct CvDepth<uint8_t>
-{
-    static constexpr int value = CV_8U;
-    static constexpr double range = 255.0;
-};
-
-/**
- * @brief float 类型的 OpenCV 深度映射
- *
- * - value: CV_32F（32 位浮点数）
- * - range: 1.0（随机值生成的上限）
- */
-template<>
-struct CvDepth<float>
-{
-    static constexpr int value = CV_32F;
-    static constexpr double range = 1.0;
-};
-
-// ============================================================================
-// 公共测试逻辑
-// ============================================================================
+using irt::cvcuda::test::AssertInferRTSuccess;
+using irt::cvcuda::test::CvDepth;
 
 /**
  * @brief 公共 cvtColor 测试逻辑
@@ -123,11 +65,12 @@ void runCvtColorTest(int width, int height, int src_ch, int code, double max_dif
     cudaFree(d_src);
     cudaFree(d_dst);
 
-    const T *ref_data = reinterpret_cast<const T *>(ref.data);
-    double actual_max_diff = 0.0;
+    const T *ref_data        = reinterpret_cast<const T *>(ref.data);
+    double   actual_max_diff = 0.0;
     for (size_t i = 0; i < dst.size(); ++i)
     {
-        actual_max_diff = std::max(actual_max_diff, std::abs(static_cast<double>(dst[i]) - static_cast<double>(ref_data[i])));
+        actual_max_diff
+            = std::max(actual_max_diff, std::abs(static_cast<double>(dst[i]) - static_cast<double>(ref_data[i])));
     }
     EXPECT_LE(actual_max_diff, max_diff);
 }

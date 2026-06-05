@@ -1,3 +1,13 @@
+/**
+ * @file TestAdaptiveThreshold.cpp
+ * @brief AdaptiveThreshold 自适应阈值算子的单元测试。
+ *
+ * 覆盖 mean、gaussian、percentage 三种自适应阈值策略，以及普通二值和反向二值两种
+ * threshold 类型；同时验证关键非法输入会返回预期的 InferRT 错误码。
+ */
+
+#include "TestCVCudaCommon.hpp"
+
 #include <gtest/gtest.h>
 #include <inferrt/core/Status.h>
 #include <inferrt/cvcuda/OpAdaptiveThreshold.h>
@@ -11,24 +21,28 @@
 
 namespace {
 
-static ::testing::AssertionResult AssertInferRTSuccess(int ret)
-{
-    if (ret == IRT_SUCCESS)
-    {
-        return ::testing::AssertionSuccess();
-    }
+using irt::cvcuda::test::AssertInferRTSuccess;
 
-    char msg[IRT_MAX_STATUS_MESSAGE_LENGTH] = {};
-    irt::PeekAtLastErrorMessage(msg, sizeof(msg));
-    return ::testing::AssertionFailure() << "ret=" << ret << " (" << irt::StatusGetName(static_cast<IRTStatus>(ret))
-                                         << "), last_error=" << msg;
-}
-
+/**
+ * @brief 使用 BORDER_REPLICATE 规则裁剪一维坐标。
+ *
+ * @param p 原始坐标。
+ * @param len 有效长度。
+ * @return 裁剪后的合法坐标。
+ */
 int borderReplicate(int p, int len)
 {
     return std::min(std::max(p, 0), len - 1);
 }
 
+/**
+ * @brief 生成二维 Gaussian 自适应阈值权重。
+ *
+ * 使用 OpenCV 的一维高斯核做外积，得到与 CUDA gaussian 分支输入一致的二维权重表。
+ *
+ * @param block_size 自适应窗口尺寸，必须为奇数。
+ * @return 行优先布局的二维高斯权重。
+ */
 std::vector<float> makeGaussianWeights(int block_size)
 {
     cv::Mat            kernel = cv::getGaussianKernel(block_size, 0.0, CV_32F);
@@ -45,6 +59,21 @@ std::vector<float> makeGaussianWeights(int block_size)
     return weights;
 }
 
+/**
+ * @brief 在 CPU 上生成 AdaptiveThreshold 参考结果。
+ *
+ * 参考实现显式复现 CUDA kernel 的边界处理、delta 取整策略和 percentage 判断规则，
+ * 用于逐元素验证 GPU 输出。
+ *
+ * @param src HWC 布局的 uint8 输入图像。
+ * @param maxval 阈值命中时写入的最大值。
+ * @param adaptive_method 自适应阈值方法。
+ * @param threshold_type 二值化类型。
+ * @param block_size 自适应窗口尺寸。
+ * @param param mean/gaussian 分支表示 C，percentage 分支表示比例。
+ * @param weights gaussian 分支使用的二维权重表。
+ * @return 与输入尺寸和通道数一致的 HWC uint8 参考输出。
+ */
 std::vector<uint8_t> makeAdaptiveThresholdReference(const cv::Mat &src, double maxval, int adaptive_method,
                                                     int threshold_type, int block_size, double param,
                                                     const std::vector<float> &weights = {})
@@ -125,6 +154,13 @@ std::vector<uint8_t> makeAdaptiveThresholdReference(const cv::Mat &src, double m
     return ref;
 }
 
+/**
+ * @brief 运行 AdaptiveThreshold 的通用正确性测试。
+ *
+ * 测试流程包括随机输入生成、CPU 参考结果生成、GPU 内存分配、算子调用、结果下载和逐元素比较。
+ *
+ * @tparam Caller 可调用对象类型，签名与 adaptiveThreshold/AdaptiveThreshold::operator() 保持一致。
+ */
 template<typename Caller>
 void runAdaptiveThresholdTest(int width, int height, int channels, double maxval, int adaptive_method,
                               int threshold_type, int block_size, double param, Caller caller,
@@ -174,6 +210,9 @@ void runAdaptiveThresholdTest(int width, int height, int channels, double maxval
 
 } // namespace
 
+/**
+ * @brief 验证 mean 自适应阈值的单通道普通二值输出。
+ */
 TEST(AdaptiveThresholdFunctionTest, MeanGrayBinary)
 {
     runAdaptiveThresholdTest(
@@ -186,6 +225,9 @@ TEST(AdaptiveThresholdFunctionTest, MeanGrayBinary)
         });
 }
 
+/**
+ * @brief 验证 mean 自适应阈值的三通道反向二值输出。
+ */
 TEST(AdaptiveThresholdFunctionTest, MeanBgrBinaryInv)
 {
     runAdaptiveThresholdTest(
@@ -198,6 +240,9 @@ TEST(AdaptiveThresholdFunctionTest, MeanBgrBinaryInv)
         });
 }
 
+/**
+ * @brief 验证 AdaptiveThreshold 类封装的 gaussian 单通道普通二值输出。
+ */
 TEST(AdaptiveThresholdClassTest, GaussianGrayBinary)
 {
     const std::vector<float>                weights = makeGaussianWeights(5);
@@ -214,6 +259,9 @@ TEST(AdaptiveThresholdClassTest, GaussianGrayBinary)
         weights);
 }
 
+/**
+ * @brief 验证 percentage 自适应阈值的三通道反向二值输出。
+ */
 TEST(AdaptiveThresholdFunctionTest, PercentageBgrBinaryInv)
 {
     runAdaptiveThresholdTest(
@@ -226,6 +274,9 @@ TEST(AdaptiveThresholdFunctionTest, PercentageBgrBinaryInv)
         });
 }
 
+/**
+ * @brief gaussian 分支缺少权重指针时应返回 IRT_ERROR_INVALID_ARGUMENT。
+ */
 TEST(AdaptiveThresholdFunctionEdgeCaseTest, RejectsGaussianWithoutWeights)
 {
     uint8_t *d_src = nullptr;
@@ -242,6 +293,9 @@ TEST(AdaptiveThresholdFunctionEdgeCaseTest, RejectsGaussianWithoutWeights)
     cudaFree(d_dst);
 }
 
+/**
+ * @brief 非法通道数应返回 IRT_ERROR_INVALID_ARGUMENT。
+ */
 TEST(AdaptiveThresholdFunctionEdgeCaseTest, RejectsInvalidChannels)
 {
     uint8_t *d_src = nullptr;
