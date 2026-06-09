@@ -199,6 +199,59 @@ def ensure_yolo_wts(
     return require_file(output, f"{model_name} exported .wts")
 
 
+def ensure_rfdetr_wts(
+    *,
+    repo_root: Path,
+    build_dir: Path,
+    model_name: str,
+    checkpoint: Path,
+    rfdetr_root: Path,
+) -> Path:
+    """使用上游 RF-DETR checkpoint 导出 InferRT 原生 `.wts`。
+
+    Args:
+        repo_root: InferRT 仓库根目录。
+        build_dir: CMake 构建目录。
+        model_name: InferRT RF-DETR 模型 key。
+        checkpoint: `F:/models/rfdetr` 下的官方 `.pth` checkpoint。
+        rfdetr_root: 本地 RF-DETR 上游源码仓库。
+
+    Returns:
+        导出的 `.wts` 文件路径。
+    """
+
+    checkpoint = require_file(checkpoint, f"{model_name} checkpoint")
+    output_dir = artifact_dir(build_dir, "rfdetr")
+    output = output_dir / f"{model_name}.wts"
+    exporter_sources = [
+        checkpoint,
+        repo_root / "samples" / "model" / "python" / "rfdetr_gen_wts.py",
+    ]
+    if is_fresh_against_all(output, exporter_sources):
+        return output
+
+    command = [
+        sys.executable,
+        "samples/model/python/rfdetr_gen_wts.py",
+        "--model",
+        model_name,
+        "--checkpoint",
+        str(checkpoint),
+        "--output",
+        str(output),
+        "--device",
+        "cpu",
+        "--quiet",
+    ]
+    if rfdetr_root.exists():
+        command.extend(["--rfdetr-root", str(rfdetr_root)])
+    elif importlib.util.find_spec("rfdetr") is None:
+        pytest.skip(f"RF-DETR package/repo not found: {rfdetr_root}")
+
+    run_export_or_skip(command, cwd=repo_root)
+    return require_file(output, f"{model_name} exported .wts")
+
+
 def ensure_sam_v1_wts(*, repo_root: Path, model_root: Path, checkpoint: Path, sam_root: Path) -> Path:
     """使用官方 Segment Anything v1 checkpoint 导出 ``sam_vit_b`` 的 ``.wts``。
 

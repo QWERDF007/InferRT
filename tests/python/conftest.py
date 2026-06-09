@@ -163,6 +163,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="本地 EdgeSAM 仓库路径；默认 INFERRT_EDGE_SAM_ROOT 或 F:/Github/SAM-based/EdgeSAM",
     )
     parser.addoption(
+        "--inferrt-rfdetr-root",
+        action="store",
+        default="",
+        help="本地 RF-DETR 仓库路径；默认 INFERRT_RFDETR_ROOT 或 F:/Github/CV/rf-detr",
+    )
+    parser.addoption(
         "--inferrt-edge-sam-checkpoint",
         action="store",
         default="",
@@ -392,6 +398,13 @@ def sam2_root(pytestconfig: pytest.Config) -> Path:
     """本地 SAM2 仓库路径，用于导出 SAM2/SAM2.1 权重。"""
 
     return _configured_path(pytestconfig, "--inferrt-sam2-root", "INFERRT_SAM2_ROOT", "D:/Github/SAM/sam2")
+
+
+@pytest.fixture(scope="session")
+def rfdetr_root(pytestconfig: pytest.Config) -> Path:
+    """本地 RF-DETR 仓库路径，用于 PyTorch reference 和 `.wts` 导出。"""
+
+    return _configured_path(pytestconfig, "--inferrt-rfdetr-root", "INFERRT_RFDETR_ROOT", "F:/Github/CV/rf-detr")
 
 
 @pytest.fixture(scope="session")

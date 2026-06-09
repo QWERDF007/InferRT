@@ -21,6 +21,17 @@ class ModelLifecycleRegisteredModelsTest : public RegisteredModelsTest
 };
 
 /**
+ * @brief 判断模型 key 是否使用 ONNX 文件作为权重入口。
+ * @param key 模型注册 key。
+ * @return ONNX 通用模型或 ONNX-backed 模型族返回 true。
+ */
+bool IsOnnxBackedModelKey(const char *key)
+{
+    const std::string key_value = key ? key : "";
+    return key_value == "onnx";
+}
+
+/**
  * @brief 使用新配置替换模型的输入/输出张量名称。
  * @param model 待更新的模型实例。
  * @param input_names 新输入张量名称列表。
@@ -79,7 +90,7 @@ TEST_P(ModelLifecycleRegisteredModelsTest, DefaultExtensionsMatchExpectedValues)
 
     auto model = irt::model::CreateModel(param.key);
     ASSERT_NE(model, nullptr);
-    const std::string expected_wts_extension = std::string(param.key) == "onnx" ? ".onnx" : ".wts";
+    const std::string expected_wts_extension = IsOnnxBackedModelKey(param.key) ? ".onnx" : ".wts";
     EXPECT_EQ(model->wtsExtension(), expected_wts_extension);
     EXPECT_EQ(model->engineExtension(), ".engine");
 }
@@ -202,9 +213,9 @@ TEST(IModelConfigTest, DynamicBatchSupportIsModelScoped)
 
     auto unsupported_config = std::make_unique<irt::model::IModelConfig>();
     unsupported_config->setDynamicBatchRange(1, 2, 2);
-    auto sam = irt::model::CreateModel("sam", std::move(unsupported_config));
-    ASSERT_NE(sam, nullptr);
-    ExpectIrtExceptionCode([&] { sam->build("/non/existent/path/model.wts"); }, irt::Status::ERROR_NOT_IMPLEMENTED);
+    auto alexnet = irt::model::CreateModel("alexnet", std::move(unsupported_config));
+    ASSERT_NE(alexnet, nullptr);
+    ExpectIrtExceptionCode([&] { alexnet->build("/non/existent/path/model.wts"); }, irt::Status::ERROR_NOT_IMPLEMENTED);
 }
 
 /**
