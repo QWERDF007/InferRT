@@ -21,6 +21,45 @@ MODEL_CHECKPOINTS = {
     "rfdetr-nano": "rf-detr-nano.pth",
     "rfdetr_small": "rf-detr-small.pth",
     "rfdetr-small": "rf-detr-small.pth",
+    "rfdetr_seg_preview": "rf-detr-seg-preview.pt",
+    "rfdetr-seg-preview": "rf-detr-seg-preview.pt",
+    "rfdetr_seg_nano": "rf-detr-seg-nano.pt",
+    "rfdetr-seg-nano": "rf-detr-seg-nano.pt",
+    "rfdetr_seg_small": "rf-detr-seg-small.pt",
+    "rfdetr-seg-small": "rf-detr-seg-small.pt",
+    "rfdetr_seg_medium": "rf-detr-seg-medium.pt",
+    "rfdetr-seg-medium": "rf-detr-seg-medium.pt",
+    "rfdetr_seg_large": "rf-detr-seg-large.pt",
+    "rfdetr-seg-large": "rf-detr-seg-large.pt",
+    "rfdetr_seg_xlarge": "rf-detr-seg-xlarge.pt",
+    "rfdetr-seg-xlarge": "rf-detr-seg-xlarge.pt",
+    "rfdetr_seg_2xlarge": "rf-detr-seg-xxlarge.pt",
+    "rfdetr-seg-2xlarge": "rf-detr-seg-xxlarge.pt",
+    "rfdetr_seg_xxlarge": "rf-detr-seg-xxlarge.pt",
+    "rfdetr-seg-xxlarge": "rf-detr-seg-xxlarge.pt",
+}
+
+MODEL_CLASS_NAMES = {
+    "rfdetr_nano": "RFDETRNano",
+    "rfdetr-nano": "RFDETRNano",
+    "rfdetr_small": "RFDETRSmall",
+    "rfdetr-small": "RFDETRSmall",
+    "rfdetr_seg_preview": "RFDETRSegPreview",
+    "rfdetr-seg-preview": "RFDETRSegPreview",
+    "rfdetr_seg_nano": "RFDETRSegNano",
+    "rfdetr-seg-nano": "RFDETRSegNano",
+    "rfdetr_seg_small": "RFDETRSegSmall",
+    "rfdetr-seg-small": "RFDETRSegSmall",
+    "rfdetr_seg_medium": "RFDETRSegMedium",
+    "rfdetr-seg-medium": "RFDETRSegMedium",
+    "rfdetr_seg_large": "RFDETRSegLarge",
+    "rfdetr-seg-large": "RFDETRSegLarge",
+    "rfdetr_seg_xlarge": "RFDETRSegXLarge",
+    "rfdetr-seg-xlarge": "RFDETRSegXLarge",
+    "rfdetr_seg_2xlarge": "RFDETRSeg2XLarge",
+    "rfdetr-seg-2xlarge": "RFDETRSeg2XLarge",
+    "rfdetr_seg_xxlarge": "RFDETRSeg2XLarge",
+    "rfdetr-seg-xxlarge": "RFDETRSeg2XLarge",
 }
 
 
@@ -78,6 +117,7 @@ def infer_checkpoint_num_classes(checkpoint: Path) -> int | None:
 def load_export_model(
     checkpoint: Path,
     *,
+    model_name: str,
     rfdetr_root: Path | None,
     device: str,
     num_classes: int | None = None,
@@ -95,12 +135,24 @@ def load_export_model(
     """
 
     configure_rfdetr_import(rfdetr_root)
-    from rfdetr import from_checkpoint  # type: ignore
+    import rfdetr as rfdetr_module  # type: ignore
 
+    ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
     kwargs: dict[str, object] = {"device": device}
-    if num_classes is not None:
-        kwargs["num_classes"] = num_classes
-    wrapper = from_checkpoint(checkpoint, **kwargs)
+    if "args" in ckpt:
+        if num_classes is not None:
+            kwargs["num_classes"] = num_classes
+        wrapper = rfdetr_module.from_checkpoint(checkpoint, **kwargs)
+    elif isinstance(ckpt.get("model"), Mapping):
+        class_name = MODEL_CLASS_NAMES[model_name]
+        model_cls = getattr(rfdetr_module, class_name)
+        kwargs["pretrain_weights"] = str(checkpoint)
+        if num_classes is not None:
+            kwargs["num_classes"] = num_classes
+        wrapper = model_cls(**kwargs)
+    else:
+        raise ValueError(f"Unsupported RF-DETR checkpoint format: {checkpoint}")
+
     model = wrapper.model.model
     model.eval()
     model.export()
@@ -197,7 +249,13 @@ def main() -> None:
     if num_classes is not None:
         print(f"Using RF-DETR num_classes={num_classes}")
     load_start = time.perf_counter()
-    model = load_export_model(checkpoint, rfdetr_root=args.rfdetr_root, device=args.device, num_classes=num_classes)
+    model = load_export_model(
+        checkpoint,
+        model_name=args.model,
+        rfdetr_root=args.rfdetr_root,
+        device=args.device,
+        num_classes=num_classes,
+    )
     load_end = time.perf_counter()
 
     print(f"Writing weights: {output}")

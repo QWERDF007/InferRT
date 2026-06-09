@@ -1,4 +1,4 @@
-"""使用真实 YOLO checkpoint 验证导出脚本与 detection sample。"""
+"""使用真实检测模型 checkpoint 验证导出脚本与 detection sample。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,13 @@ import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
-from helpers.model_integration import artifact_dir, assert_output_image, ensure_yolo_wts, require_sample
+from helpers.model_integration import (
+    artifact_dir,
+    assert_output_image,
+    ensure_rfdetr_wts,
+    ensure_yolo_wts,
+    require_sample,
+)
 from helpers.runtime import run_process_capture
 
 
@@ -77,5 +83,63 @@ def test_yolo_sample_runs_with_models_root(
 
     assert "Model loaded successfully." in output
     assert "Output output0 shape:" in output
+    assert "Detections:" in output
+    assert_output_image(output_image)
+
+
+def test_detection_sample_runs_with_rfdetr(
+    repo_root: Path,
+    build_dir: Path,
+    model_root: Path,
+    default_image: Path,
+    rfdetr_root: Path,
+) -> None:
+    """使用同一个 detection sample 运行 RF-DETR 原生 TensorRT 检测模型。
+
+    Args:
+        repo_root: 仓库根目录。
+        build_dir: CMake 构建目录。
+        model_root: 真实模型根目录，包含 ``rfdetr`` 子目录。
+        default_image: 默认 dog 测试图。
+        rfdetr_root: 本地 RF-DETR 上游源码仓库。
+    """
+
+    executable = require_sample(build_dir, "detection")
+    weights = ensure_rfdetr_wts(
+        repo_root=repo_root,
+        build_dir=build_dir,
+        model_name="rfdetr_nano",
+        checkpoint=model_root / "rfdetr" / "rf-detr-nano.pth",
+        rfdetr_root=rfdetr_root,
+    )
+    output_image = artifact_dir(build_dir, "rfdetr") / f"rfdetr_nano_dog_{os.getpid()}.jpg"
+
+    completed = run_process_capture(
+        [
+            str(executable),
+            "--model",
+            "rfdetr_nano",
+            "--weights-file",
+            str(weights),
+            "--image-path",
+            str(default_image),
+            "--label-file",
+            str(repo_root / "assets" / "coco80.names"),
+            "--output-image",
+            str(output_image),
+            "--conf-threshold",
+            "0.35",
+            "--nms-threshold",
+            "0.50",
+            "--max-detections",
+            "20",
+        ],
+        cwd=repo_root,
+    )
+    output = completed.stdout + completed.stderr
+
+    assert "Model loaded successfully." in output
+    assert "Output dets shape:" in output
+    assert "Output labels shape:" in output
     assert "Detections:" in output
     assert_output_image(output_image)

@@ -1,4 +1,4 @@
-"""使用真实 SAM checkpoint 验证导出脚本与 segmentation sample。"""
+"""使用真实 SAM checkpoint 验证导出脚本与 sam sample。"""
 
 from __future__ import annotations
 
@@ -70,9 +70,9 @@ def test_sam2_sample_runs_with_models_root(
     default_image: Path,
     sam2_root: Path,
 ) -> None:
-    """使用 ``D:/Models/sam`` 中的 SAM2.1 tiny checkpoint 运行 segmentation sample。"""
+    """使用 ``D:/Models/sam`` 中的 SAM2.1 tiny checkpoint 运行独立 SAM sample。"""
 
-    executable = require_sample(build_dir, "segmentation")
+    executable = require_sample(build_dir, "sam")
     weights = ensure_sam2_wts(
         repo_root=repo_root,
         model_root=model_root,

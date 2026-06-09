@@ -1,5 +1,5 @@
-#include <cxxopts.hpp>
 #include <cuda_runtime_api.h>
+#include <cxxopts.hpp>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/Buffers.hpp>
 #include <inferrt/model/IModel.h>
@@ -9,8 +9,8 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -29,18 +29,20 @@ namespace fs = std::filesystem;
 namespace {
 
 using Clock = std::chrono::steady_clock;
-using irt::model::DeviceBuffer;
-using irt::model::HostBuffer;
 using irt::model::checkCuda;
+using irt::model::DeviceBuffer;
 using irt::model::dimsToCsv;
 using irt::model::elementCount;
+using irt::model::HostBuffer;
 
-constexpr std::array<int, 3> kYoloStrides{8, 16, 32};
-constexpr std::array<std::array<float, 6>, 3> kDefaultYoloV5Anchors{{
-    {10.0F, 13.0F, 16.0F, 30.0F, 33.0F, 23.0F},
-    {30.0F, 61.0F, 62.0F, 45.0F, 59.0F, 119.0F},
-    {116.0F, 90.0F, 156.0F, 198.0F, 373.0F, 326.0F},
-}};
+constexpr std::array<int, 3>                  kYoloStrides{8, 16, 32};
+constexpr std::array<std::array<float, 6>, 3> kDefaultYoloV5Anchors{
+    {
+     {10.0F, 13.0F, 16.0F, 30.0F, 33.0F, 23.0F},
+     {30.0F, 61.0F, 62.0F, 45.0F, 59.0F, 119.0F},
+     {116.0F, 90.0F, 156.0F, 198.0F, 373.0F, 326.0F},
+     }
+};
 const fs::path kDefaultImagePath{"assets/pics/dog.jpg"};
 const fs::path kDefaultLabelPath{"assets/coco80.names"};
 
@@ -56,26 +58,34 @@ struct HelpRequested
 {
 };
 
+enum class DetectionFamily
+{
+    YOLO,
+    RFDETR,
+};
+
 /**
  * @brief detection sample 的命令行参数集合。
  */
 struct Arguments
 {
-    std::string model_name;
-    fs::path    weights_file;
-    fs::path    image_path;
-    fs::path    label_file;
-    fs::path    output_image;
-    std::string legacy_anchors;
-    int         input_size{640};
-    int         num_classes{80};
-    int         max_detections{100};
-    float       conf_threshold{0.25F};
-    float       nms_threshold{0.45F};
+    std::string              model_name;
+    fs::path                 weights_file;
+    fs::path                 image_path;
+    fs::path                 label_file;
+    fs::path                 output_image;
+    std::string              legacy_anchors;
+    int                      input_size{640};
+    bool                     input_size_explicit{false};
+    int                      num_classes{80};
+    int                      max_detections{100};
+    float                    conf_threshold{0.25F};
+    float                    nms_threshold{0.45F};
+    DetectionFamily          family{DetectionFamily::YOLO};
     irt::model::ModelBackend backend{irt::model::ModelBackend::TensorRT};
     irt::model::ModelDevice  device{irt::model::ModelDevice::GPU};
-    int         warmup{0};
-    int         repeat{1};
+    int                      warmup{0};
+    int                      repeat{1};
 };
 
 /**
@@ -84,8 +94,8 @@ struct Arguments
 struct LetterboxInfo
 {
     float scale{1.0F}; ///< 原图缩放到网络输入的比例。
-    int   pad_x{0};   ///< 左侧填充像素。
-    int   pad_y{0};   ///< 顶部填充像素。
+    int   pad_x{0};    ///< 左侧填充像素。
+    int   pad_y{0};    ///< 顶部填充像素。
     int   original_w{0};
     int   original_h{0};
     int   input_w{0};
@@ -139,10 +149,7 @@ std::string trim(std::string value)
 std::string toLower(std::string value)
 {
     std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char ch)
-                   {
-                       return static_cast<char>(std::tolower(ch));
-                   });
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return value;
 }
 
@@ -178,6 +185,29 @@ irt::model::ModelDevice parseDevice(std::string value)
     throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported device: %s", value.c_str());
 }
 
+DetectionFamily modelFamily(const std::string &model_name)
+{
+    const std::string normalized = toLower(model_name);
+    if (normalized.rfind("rfdetr", 0) == 0 && normalized.find("_seg") == std::string::npos
+        && normalized.find("-seg") == std::string::npos)
+    {
+        return DetectionFamily::RFDETR;
+    }
+    return DetectionFamily::YOLO;
+}
+
+bool isRFDETRSegModelName(const std::string &model_name)
+{
+    const std::string normalized = toLower(model_name);
+    return normalized.rfind("rfdetr", 0) == 0
+        && (normalized.find("_seg") != std::string::npos || normalized.find("-seg") != std::string::npos);
+}
+
+const char *modelFamilyName(DetectionFamily family)
+{
+    return family == DetectionFamily::RFDETR ? "RF-DETR" : "YOLO";
+}
+
 TimingStats summarizeTimings(const std::vector<double> &values)
 {
     if (values.empty())
@@ -192,10 +222,8 @@ TimingStats summarizeTimings(const std::vector<double> &values)
 
 void printTimingStats(const char *name, const TimingStats &stats)
 {
-    std::cout << ", " << name << "_total=" << stats.total_ms
-              << " ms, " << name << "_avg=" << stats.avg_ms
-              << " ms, " << name << "_min=" << stats.min_ms
-              << " ms, " << name << "_max=" << stats.max_ms << " ms";
+    std::cout << ", " << name << "_total=" << stats.total_ms << " ms, " << name << "_avg=" << stats.avg_ms << " ms, "
+              << name << "_min=" << stats.min_ms << " ms, " << name << "_max=" << stats.max_ms << " ms";
 }
 
 float sigmoid(float value)
@@ -293,25 +321,23 @@ std::array<std::array<float, 6>, 3> parseLegacyAnchors(const std::string &text)
  */
 cxxopts::Options makeOptions(const char *program_name)
 {
-    cxxopts::Options options(program_name, "Run InferRT YOLO detection models on a single image");
-    options.add_options()("model,m", "YOLO model name, e.g. yolov5n/yolov8n (required)",
+    cxxopts::Options options(program_name, "Run InferRT YOLO/RF-DETR detection models on a single image");
+    options.add_options()("model,m", "Detection model name, e.g. yolov8n or rfdetr_nano (required)",
                           cxxopts::value<std::string>())(
-        "weights-file,w", "Weights/model file (.wts, .onnx or OpenVINO IR) (required)",
-        cxxopts::value<std::string>())(
+        "weights-file,w", "Weights/model file (.wts, .onnx or OpenVINO IR) (required)", cxxopts::value<std::string>())(
         "image-path,i", "Input image path", cxxopts::value<std::string>()->default_value(""))(
         "label-file,l", "Class label file", cxxopts::value<std::string>()->default_value(""))(
         "output-image,o", "Optional path to save image with boxes", cxxopts::value<std::string>()->default_value(""))(
-        "input-size", "Square network input size, must be divisible by 32",
-        cxxopts::value<int>()->default_value("640"))(
-        "classes", "Number of classes used by the YOLO head", cxxopts::value<int>()->default_value("80"))(
+        "input-size", "Square network input size; YOLO defaults to 640, RF-DETR uses its registered default",
+        cxxopts::value<int>())("classes", "Number of classes used by the YOLO head",
+                               cxxopts::value<int>()->default_value("80"))(
         "conf-threshold", "Confidence threshold", cxxopts::value<float>()->default_value("0.25"))(
         "nms-threshold", "Class-wise NMS IoU threshold", cxxopts::value<float>()->default_value("0.45"))(
         "max-detections", "Maximum detections printed after NMS", cxxopts::value<int>()->default_value("100"))(
-        "legacy-anchors",
-        "Legacy YOLOv5 anchors as 18 comma-separated numbers; empty uses COCO defaults",
-        cxxopts::value<std::string>()->default_value(""))(
-        "backend", "Inference backend: tensorrt, openvino, onnxruntime",
-        cxxopts::value<std::string>()->default_value("tensorrt"))(
+        "legacy-anchors", "Legacy YOLOv5 anchors as 18 comma-separated numbers; empty uses COCO defaults",
+        cxxopts::value<std::string>()->default_value(""))("backend",
+                                                          "Inference backend: tensorrt, openvino, onnxruntime",
+                                                          cxxopts::value<std::string>()->default_value("tensorrt"))(
         "device", "Inference device: cpu or gpu", cxxopts::value<std::string>()->default_value("gpu"))(
         "warmup", "Warmup iterations before timing", cxxopts::value<int>()->default_value("0"))(
         "repeat", "Timed inference iterations", cxxopts::value<int>()->default_value("1"))("h,help", "Show help");
@@ -339,25 +365,48 @@ Arguments parseArguments(int argc, char *argv[])
     }
 
     Arguments args;
-    args.model_name      = result["model"].as<std::string>();
-    args.weights_file    = result["weights-file"].as<std::string>();
-    args.image_path      = result["image-path"].as<std::string>();
-    args.label_file      = result["label-file"].as<std::string>();
-    args.output_image    = result["output-image"].as<std::string>();
-    args.input_size      = result["input-size"].as<int>();
-    args.num_classes     = result["classes"].as<int>();
-    args.conf_threshold  = result["conf-threshold"].as<float>();
-    args.nms_threshold   = result["nms-threshold"].as<float>();
-    args.max_detections  = result["max-detections"].as<int>();
-    args.legacy_anchors  = result["legacy-anchors"].as<std::string>();
-    args.backend         = parseBackend(result["backend"].as<std::string>());
-    args.device          = parseDevice(result["device"].as<std::string>());
-    args.warmup          = result["warmup"].as<int>();
-    args.repeat          = result["repeat"].as<int>();
+    args.model_name = result["model"].as<std::string>();
+    if (isRFDETRSegModelName(args.model_name))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "RF-DETR segmentation models must be run with inferrt_sample_segmentation");
+    }
+    args.family              = modelFamily(args.model_name);
+    args.weights_file        = result["weights-file"].as<std::string>();
+    args.image_path          = result["image-path"].as<std::string>();
+    args.label_file          = result["label-file"].as<std::string>();
+    args.output_image        = result["output-image"].as<std::string>();
+    args.input_size_explicit = result.count("input-size") != 0U;
+    args.input_size          = args.input_size_explicit ? result["input-size"].as<int>() : 640;
+    args.num_classes         = result["classes"].as<int>();
+    args.conf_threshold      = result["conf-threshold"].as<float>();
+    args.nms_threshold       = result["nms-threshold"].as<float>();
+    args.max_detections      = result["max-detections"].as<int>();
+    args.legacy_anchors      = result["legacy-anchors"].as<std::string>();
+    args.backend             = parseBackend(result["backend"].as<std::string>());
+    args.device              = parseDevice(result["device"].as<std::string>());
+    args.warmup              = result["warmup"].as<int>();
+    args.repeat              = result["repeat"].as<int>();
 
-    if (args.input_size <= 0 || args.input_size % 32 != 0)
+    if (args.family == DetectionFamily::RFDETR)
+    {
+        if (result.count("conf-threshold") == 0U)
+        {
+            args.conf_threshold = 0.35F;
+        }
+        if (result.count("nms-threshold") == 0U)
+        {
+            args.nms_threshold = 0.50F;
+        }
+    }
+
+    if (args.family == DetectionFamily::YOLO && (args.input_size <= 0 || args.input_size % 32 != 0))
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--input-size must be positive and divisible by 32");
+    }
+    if (args.family == DetectionFamily::RFDETR && args.input_size_explicit && args.input_size <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--input-size must be positive");
     }
     if (args.num_classes <= 0)
     {
@@ -397,8 +446,8 @@ std::vector<float> preprocessLetterbox(const cv::Mat &bgr_image, int input_w, in
 
     const int resized_w = static_cast<int>(std::round(static_cast<float>(bgr_image.cols) * info.scale));
     const int resized_h = static_cast<int>(std::round(static_cast<float>(bgr_image.rows) * info.scale));
-    info.pad_x         = (input_w - resized_w) / 2;
-    info.pad_y         = (input_h - resized_h) / 2;
+    info.pad_x          = (input_w - resized_w) / 2;
+    info.pad_y          = (input_h - resized_h) / 2;
 
     cv::Mat resized;
     cv::resize(bgr_image, resized, cv::Size(resized_w, resized_h), 0.0, 0.0, cv::INTER_LINEAR);
@@ -423,14 +472,30 @@ std::vector<float> preprocessLetterbox(const cv::Mat &bgr_image, int input_w, in
     return chw;
 }
 
+/**
+ * @brief 使用 RF-DETR 官方 ImageNet 归一化预处理，并按 NCHW 展平。
+ */
+std::vector<float> preprocessRFDETR(const cv::Mat &bgr_image, const nvinfer1::Dims &input_dims)
+{
+    if (input_dims.nbDims != 4 || input_dims.d[1] != 3 || input_dims.d[2] <= 0 || input_dims.d[3] <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "RF-DETR expects Nx3xHxW input, got %s",
+                             dimsToCsv(input_dims).c_str());
+    }
+
+    const cv::Mat preprocessed = irt::model::ImageNetUtil::preprocess(
+        bgr_image, cv::Size(static_cast<int>(input_dims.d[3]), static_cast<int>(input_dims.d[2])));
+    return irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
+}
+
 float intersectionOverUnion(const Detection &a, const Detection &b)
 {
-    const float x1 = std::max(a.x1, b.x1);
-    const float y1 = std::max(a.y1, b.y1);
-    const float x2 = std::min(a.x2, b.x2);
-    const float y2 = std::min(a.y2, b.y2);
-    const float inter_w = std::max(0.0F, x2 - x1);
-    const float inter_h = std::max(0.0F, y2 - y1);
+    const float x1         = std::max(a.x1, b.x1);
+    const float y1         = std::max(a.y1, b.y1);
+    const float x2         = std::min(a.x2, b.x2);
+    const float y2         = std::min(a.y2, b.y2);
+    const float inter_w    = std::max(0.0F, x2 - x1);
+    const float inter_h    = std::max(0.0F, y2 - y1);
     const float inter_area = inter_w * inter_h;
 
     const float area_a = std::max(0.0F, a.x2 - a.x1) * std::max(0.0F, a.y2 - a.y1);
@@ -475,8 +540,7 @@ std::vector<Detection> nonMaximumSuppression(std::vector<Detection> detections, 
  */
 bool isLegacyYoloV5Output(const nvinfer1::Dims &dims, int num_classes)
 {
-    return dims.nbDims == 4 && dims.d[0] == 1 && dims.d[1] == 3 * (num_classes + 5) && dims.d[2] > 0
-        && dims.d[3] > 0;
+    return dims.nbDims == 4 && dims.d[0] == 1 && dims.d[1] == 3 * (num_classes + 5) && dims.d[2] > 0 && dims.d[3] > 0;
 }
 
 /**
@@ -492,8 +556,7 @@ bool isDflOutput(const nvinfer1::Dims &dims, int num_classes)
  */
 void decodeLegacyYoloV5Output(const float *data, const nvinfer1::Dims &dims, int branch_index, int num_classes,
                               float conf_threshold, const LetterboxInfo &letterbox,
-                              const std::array<std::array<float, 6>, 3> &anchors,
-                              std::vector<Detection> &detections)
+                              const std::array<std::array<float, 6>, 3> &anchors, std::vector<Detection> &detections)
 {
     const int channels = static_cast<int>(dims.d[1]);
     const int grid_h   = static_cast<int>(dims.d[2]);
@@ -517,7 +580,7 @@ void decodeLegacyYoloV5Output(const float *data, const nvinfer1::Dims &dims, int
             for (int x = 0; x < grid_w; ++x)
             {
                 const int grid_index = y * grid_w + x;
-                auto valueAt = [&](int attr)
+                auto      valueAt    = [&](int attr)
                 {
                     const int channel = anchor_idx * info_len + attr;
                     return data[channel * grid_h * grid_w + grid_index];
@@ -601,8 +664,8 @@ void decodeDflOutput(const float *data, const nvinfer1::Dims &dims, int branch_i
             continue;
         }
 
-        const int   x = idx % grid_w;
-        const int   y = idx / grid_w;
+        const int   x        = idx % grid_w;
+        const int   y        = idx / grid_w;
         const float anchor_x = static_cast<float>(x) + 0.5F;
         const float anchor_y = static_cast<float>(y) + 0.5F;
         const float left     = data[0 * grid + idx];
@@ -625,9 +688,9 @@ void decodeDflOutput(const float *data, const nvinfer1::Dims &dims, int branch_i
 /**
  * @brief 根据模型输出形态选择 YOLO 后处理路径。
  */
-std::vector<Detection> postprocessYoloOutputs(const std::vector<HostBuffer> &outputs,
-                                              const std::vector<nvinfer1::Dims> &output_dims,
-                                              const Arguments &args, const LetterboxInfo &letterbox)
+std::vector<Detection> postprocessYoloOutputs(const std::vector<HostBuffer>     &outputs,
+                                              const std::vector<nvinfer1::Dims> &output_dims, const Arguments &args,
+                                              const LetterboxInfo &letterbox)
 {
     if (outputs.size() != 3 || output_dims.size() != 3)
     {
@@ -648,8 +711,8 @@ std::vector<Detection> postprocessYoloOutputs(const std::vector<HostBuffer> &out
             {
                 throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Mixed YOLO output head types");
             }
-            decodeDflOutput(data, output_dims[i], static_cast<int>(i), args.num_classes, args.conf_threshold,
-                            letterbox, detections);
+            decodeDflOutput(data, output_dims[i], static_cast<int>(i), args.num_classes, args.conf_threshold, letterbox,
+                            detections);
         }
         else if (legacy_head)
         {
@@ -657,8 +720,8 @@ std::vector<Detection> postprocessYoloOutputs(const std::vector<HostBuffer> &out
             {
                 throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Mixed YOLO output head types");
             }
-            decodeLegacyYoloV5Output(data, output_dims[i], static_cast<int>(i), args.num_classes,
-                                     args.conf_threshold, letterbox, anchors, detections);
+            decodeLegacyYoloV5Output(data, output_dims[i], static_cast<int>(i), args.num_classes, args.conf_threshold,
+                                     letterbox, anchors, detections);
         }
         else
         {
@@ -666,6 +729,65 @@ std::vector<Detection> postprocessYoloOutputs(const std::vector<HostBuffer> &out
                                  "Unsupported YOLO output shape: %s. Expected DFL [1,4+classes,grid] or legacy "
                                  "[1,3*(classes+5),H,W]",
                                  dimsToCsv(output_dims.front()).c_str());
+        }
+    }
+
+    return nonMaximumSuppression(std::move(detections), args.nms_threshold, args.max_detections);
+}
+
+/**
+ * @brief 解码 RF-DETR 原生 TensorRT 输出，boxes 为归一化 cxcywh，logits 为类别分数。
+ */
+std::vector<Detection> postprocessRFDETROutputs(const std::vector<HostBuffer>     &outputs,
+                                                const std::vector<nvinfer1::Dims> &output_dims, const Arguments &args,
+                                                const cv::Size &image_size)
+{
+    if (outputs.size() < 2 || output_dims.size() < 2)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "RF-DETR detection sample expects dets/labels outputs");
+    }
+
+    const auto &boxes_dims  = output_dims[0];
+    const auto &logits_dims = output_dims[1];
+    if (boxes_dims.nbDims != 3 || logits_dims.nbDims != 3 || boxes_dims.d[0] != 1 || logits_dims.d[0] != 1
+        || boxes_dims.d[1] != logits_dims.d[1] || boxes_dims.d[2] != 4)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected RF-DETR output shapes: dets=%s labels=%s",
+                             dimsToCsv(boxes_dims).c_str(), dimsToCsv(logits_dims).c_str());
+    }
+
+    const auto *boxes   = static_cast<const float *>(outputs[0].data());
+    const auto *logits  = static_cast<const float *>(outputs[1].data());
+    const int   queries = static_cast<int>(boxes_dims.d[1]);
+    const int   classes = static_cast<int>(logits_dims.d[2]);
+
+    std::vector<Detection> detections;
+    for (int q = 0; q < queries; ++q)
+    {
+        const float cx = boxes[q * 4 + 0] * static_cast<float>(image_size.width);
+        const float cy = boxes[q * 4 + 1] * static_cast<float>(image_size.height);
+        const float w  = boxes[q * 4 + 2] * static_cast<float>(image_size.width);
+        const float h  = boxes[q * 4 + 3] * static_cast<float>(image_size.height);
+
+        Detection base;
+        base.x1 = clampFloat(cx - 0.5F * w, 0.0F, static_cast<float>(image_size.width - 1));
+        base.y1 = clampFloat(cy - 0.5F * h, 0.0F, static_cast<float>(image_size.height - 1));
+        base.x2 = clampFloat(cx + 0.5F * w, 0.0F, static_cast<float>(image_size.width - 1));
+        base.y2 = clampFloat(cy + 0.5F * h, 0.0F, static_cast<float>(image_size.height - 1));
+
+        for (int cls = 0; cls < classes; ++cls)
+        {
+            const float confidence = sigmoid(logits[q * classes + cls]);
+            if (confidence < args.conf_threshold)
+            {
+                continue;
+            }
+
+            auto det       = base;
+            det.confidence = confidence;
+            det.class_id   = cls;
+            detections.push_back(det);
         }
     }
 
@@ -691,8 +813,8 @@ void printDetections(const std::vector<Detection> &detections, const std::vector
     {
         const auto &det = detections[i];
         std::cout << std::fixed << std::setprecision(4) << "#" << i << " confidence=" << det.confidence
-                  << " class=" << det.class_id << " (" << className(det.class_id, labels) << ") box=["
-                  << det.x1 << ", " << det.y1 << ", " << det.x2 << ", " << det.y2 << "]" << std::endl;
+                  << " class=" << det.class_id << " (" << className(det.class_id, labels) << ") box=[" << det.x1 << ", "
+                  << det.y1 << ", " << det.x2 << ", " << det.y2 << "]" << std::endl;
     }
 }
 
@@ -710,20 +832,21 @@ void drawDetections(const cv::Mat &image, const std::vector<Detection> &detectio
     cv::Mat visual = image.clone();
     for (const auto &det : detections)
     {
-        const int color_seed = det.class_id * 37;
+        const int  color_seed = det.class_id * 37;
         cv::Scalar color((color_seed * 3) % 255, (color_seed * 7 + 80) % 255, (color_seed * 11 + 160) % 255);
         cv::rectangle(visual, cv::Point(static_cast<int>(std::round(det.x1)), static_cast<int>(std::round(det.y1))),
                       cv::Point(static_cast<int>(std::round(det.x2)), static_cast<int>(std::round(det.y2))), color, 2);
 
         std::ostringstream label;
         label << className(det.class_id, labels) << ' ' << std::fixed << std::setprecision(2) << det.confidence;
-        int baseline = 0;
+        int            baseline  = 0;
         const cv::Size text_size = cv::getTextSize(label.str(), cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
         const int      text_x    = static_cast<int>(std::round(det.x1));
         const int      text_y    = std::max(text_size.height + 4, static_cast<int>(std::round(det.y1)));
-        cv::rectangle(visual, cv::Rect(text_x, text_y - text_size.height - 4, text_size.width + 4,
-                                       text_size.height + baseline + 4),
-                      color, cv::FILLED);
+        cv::rectangle(
+            visual,
+            cv::Rect(text_x, text_y - text_size.height - 4, text_size.width + 4, text_size.height + baseline + 4),
+            color, cv::FILLED);
         cv::putText(visual, label.str(), cv::Point(text_x + 2, text_y - 3), cv::FONT_HERSHEY_SIMPLEX, 0.5,
                     cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
     }
@@ -740,7 +863,7 @@ void drawDetections(const cv::Mat &image, const std::vector<Detection> &detectio
 } // namespace
 
 /**
- * @brief 运行单张图片 YOLO 检测，并在 sample 层完成解码与 NMS。
+ * @brief 运行单张图片检测模型，并在 sample 层完成解码与 NMS。
  */
 int main(int argc, char *argv[])
 {
@@ -752,6 +875,11 @@ int main(int argc, char *argv[])
             std::cerr << "Unsupported model: " << args.model_name << std::endl;
             return -1;
         }
+        if (args.family == DetectionFamily::RFDETR && args.backend != irt::model::ModelBackend::TensorRT)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "RF-DETR in the detection sample currently requires TensorRT backend");
+        }
 
         fs::path project_root = irt::util::findProjectRoot(argv[0], {kDefaultImagePath, kDefaultLabelPath}, __FILE__);
         fs::path image_path   = args.image_path.empty() ? project_root / kDefaultImagePath : args.image_path;
@@ -762,9 +890,16 @@ int main(int argc, char *argv[])
         config->setDevice(args.device);
         if (args.backend == irt::model::ModelBackend::TensorRT)
         {
-            config->setInputShape(nvinfer1::Dims4{1, 3, args.input_size, args.input_size});
-            config->setNumClasses(args.num_classes);
-            config->setOutputTensorNames({"output0", "output1", "output2"});
+            if (args.family == DetectionFamily::YOLO)
+            {
+                config->setInputShape(nvinfer1::Dims4{1, 3, args.input_size, args.input_size});
+                config->setNumClasses(args.num_classes);
+                config->setOutputTensorNames({"output0", "output1", "output2"});
+            }
+            else if (args.input_size_explicit)
+            {
+                config->setInputShape(nvinfer1::Dims4{1, 3, args.input_size, args.input_size});
+            }
         }
 
         const std::string runtime_model_name
@@ -793,10 +928,13 @@ int main(int argc, char *argv[])
 
         const auto input_names  = model->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
         const auto output_names = model->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
-        if (input_names.size() != 1 || output_names.size() != 3)
+        const bool output_contract_ok
+            = args.family == DetectionFamily::RFDETR ? output_names.size() >= 2U : output_names.size() == 3U;
+        if (input_names.size() != 1 || !output_contract_ok)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "Detection sample expects one input and three outputs");
+                                 "%s detection sample expects one input and %s outputs", modelFamilyName(args.family),
+                                 args.family == DetectionFamily::RFDETR ? "at least two" : "three");
         }
 
         const nvinfer1::Dims input_dims = model->tensorShape(input_names.front());
@@ -806,11 +944,13 @@ int main(int argc, char *argv[])
                                  dimsToCsv(input_dims).c_str());
         }
 
-        const auto preprocess_start = Clock::now();
-        LetterboxInfo letterbox;
-        std::vector<float> input_tensor = preprocessLetterbox(image, static_cast<int>(input_dims.d[3]),
-                                                              static_cast<int>(input_dims.d[2]), letterbox);
-        const auto preprocess_end = Clock::now();
+        const auto         preprocess_start = Clock::now();
+        LetterboxInfo      letterbox;
+        std::vector<float> input_tensor   = args.family == DetectionFamily::RFDETR
+                                              ? preprocessRFDETR(image, input_dims)
+                                              : preprocessLetterbox(image, static_cast<int>(input_dims.d[3]),
+                                                                    static_cast<int>(input_dims.d[2]), letterbox);
+        const auto         preprocess_end = Clock::now();
 
         const bool uses_tensorrt = args.backend == irt::model::ModelBackend::TensorRT;
         const auto stream        = uses_tensorrt ? model->resolveExecutionStream() : nullptr;
@@ -834,7 +974,7 @@ int main(int argc, char *argv[])
             const auto type = model->tensorDataType(output_name);
             if (type != nvinfer1::DataType::kFLOAT)
             {
-                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "YOLO sample expects float32 outputs");
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Detection sample expects float32 outputs");
             }
             output_dims.push_back(dims);
             if (uses_tensorrt)
@@ -919,9 +1059,11 @@ int main(int argc, char *argv[])
         const auto infer_end = Clock::now();
 
         const auto postprocess_start = Clock::now();
-        const auto labels = readLabels(label_path);
-        auto detections = postprocessYoloOutputs(host_outputs, output_dims, args, letterbox);
-        const auto postprocess_end = Clock::now();
+        const auto labels            = readLabels(label_path);
+        auto       detections        = args.family == DetectionFamily::RFDETR
+                                         ? postprocessRFDETROutputs(host_outputs, output_dims, args, image.size())
+                                         : postprocessYoloOutputs(host_outputs, output_dims, args, letterbox);
+        const auto postprocess_end   = Clock::now();
 
         printDetections(detections, labels);
         drawDetections(image, detections, labels, args.output_image);
