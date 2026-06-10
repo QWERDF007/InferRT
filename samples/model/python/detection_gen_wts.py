@@ -16,7 +16,7 @@ def elapsed_ms(start: float, end: float) -> float:
 def parse_args() -> argparse.Namespace:
     """解析 YOLO ``.wts`` 导出命令行参数。"""
 
-    parser = argparse.ArgumentParser(description="Generate YOLOv5/YOLOv8 detection weights for InferRT")
+    parser = argparse.ArgumentParser(description="Generate YOLOv5/YOLOv8 detection or segmentation weights for InferRT")
     parser.add_argument("-m", "--model", default="yolov8n", choices=list_supported_models(), help="InferRT YOLO key")
     parser.add_argument("-w", "--weights", default=None, help="Ultralytics .pt weights path or model name")
     parser.add_argument("-o", "--output", default=None, help="Output .wts path")

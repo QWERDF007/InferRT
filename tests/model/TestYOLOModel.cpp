@@ -28,8 +28,16 @@ void expectInputShape(const irt::model::IModel &model, int n, int c, int h, int 
  */
 void expectDefaultYoloOutputs(const irt::model::IModel &model)
 {
+    EXPECT_EQ(model.modelConfig().outputTensorNames(), (std::vector<std::string>{"output0", "output1", "output2"}));
+}
+
+/**
+ * @brief 断言 YOLOv8-Seg 默认分割输出张量名称。
+ */
+void expectDefaultYoloSegOutputs(const irt::model::IModel &model)
+{
     EXPECT_EQ(model.modelConfig().outputTensorNames(),
-              (std::vector<std::string>{"output0", "output1", "output2"}));
+              (std::vector<std::string>{"output0", "output1", "output2", "proto"}));
 }
 
 } // namespace
@@ -46,6 +54,25 @@ TEST(YOLOModelFactoryTest, YOLOv5AliasCreatesSmallDetector)
     expectInputShape(*model, 1, 3, 640, 640);
     EXPECT_EQ(model->modelConfig().numClasses(), 80);
     expectDefaultYoloOutputs(*model);
+}
+
+/**
+ * @brief YOLOv8-Seg 兼容别名应创建常用的 YOLOv8n 分割模型。
+ */
+TEST(YOLOModelFactoryTest, YOLOv8SegAliasCreatesNanoSegmenter)
+{
+    auto model = irt::model::CreateModel("yolov8_seg");
+    ASSERT_NE(model, nullptr);
+
+    EXPECT_EQ(model->name(), "YOLOv8nSeg");
+    expectInputShape(*model, 1, 3, 640, 640);
+    EXPECT_EQ(model->modelConfig().numClasses(), 80);
+    expectDefaultYoloSegOutputs(*model);
+
+    auto hyphen = irt::model::CreateModel("yolov8n-seg");
+    ASSERT_NE(hyphen, nullptr);
+    EXPECT_EQ(hyphen->name(), "YOLOv8nSeg");
+    expectDefaultYoloSegOutputs(*hyphen);
 }
 
 /**
@@ -68,10 +95,26 @@ TEST(YOLOModelFactoryTest, YOLOv8AliasCreatesNanoDetector)
 TEST(YOLOModelFactoryTest, RegistersScaledDetectorVariants)
 {
     const std::vector<std::pair<std::string, std::string>> cases{
-        {"yolov5n", "YOLOv5n"}, {"yolov5s", "YOLOv5s"}, {"yolov5m", "YOLOv5m"},
-        {"yolov5l", "YOLOv5l"}, {"yolov5x", "YOLOv5x"}, {"yolov8n", "YOLOv8n"},
-        {"yolov8s", "YOLOv8s"}, {"yolov8m", "YOLOv8m"}, {"yolov8l", "YOLOv8l"},
-        {"yolov8x", "YOLOv8x"},
+        {    "yolov5n",    "YOLOv5n"},
+        {    "yolov5s",    "YOLOv5s"},
+        {    "yolov5m",    "YOLOv5m"},
+        {    "yolov5l",    "YOLOv5l"},
+        {    "yolov5x",    "YOLOv5x"},
+        {    "yolov8n",    "YOLOv8n"},
+        {    "yolov8s",    "YOLOv8s"},
+        {    "yolov8m",    "YOLOv8m"},
+        {    "yolov8l",    "YOLOv8l"},
+        {    "yolov8x",    "YOLOv8x"},
+        {"yolov8n_seg", "YOLOv8nSeg"},
+        {"yolov8s_seg", "YOLOv8sSeg"},
+        {"yolov8m_seg", "YOLOv8mSeg"},
+        {"yolov8l_seg", "YOLOv8lSeg"},
+        {"yolov8x_seg", "YOLOv8xSeg"},
+        {"yolov8n-seg", "YOLOv8nSeg"},
+        {"yolov8s-seg", "YOLOv8sSeg"},
+        {"yolov8m-seg", "YOLOv8mSeg"},
+        {"yolov8l-seg", "YOLOv8lSeg"},
+        {"yolov8x-seg", "YOLOv8xSeg"},
     };
 
     for (const auto &[key, display_name] : cases)
@@ -100,6 +143,26 @@ TEST(YOLOModelConfigTest, PreservesExplicitDetectionConfig)
     expectInputShape(*model, 1, 3, 320, 320);
     EXPECT_EQ(model->modelConfig().numClasses(), 3);
     EXPECT_EQ(model->modelConfig().outputTensorNames(), (std::vector<std::string>{"p3", "p4", "p5"}));
+}
+
+/**
+ * @brief YOLOv8-Seg 显式配置不应被默认分割配置覆盖。
+ */
+TEST(YOLOModelConfigTest, PreservesExplicitSegmentationConfig)
+{
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setInputTensorNames({"images"});
+    config->setInputShape(nvinfer1::Dims4{1, 3, 320, 320});
+    config->setNumClasses(3);
+    config->setOutputTensorNames({"p3", "p4", "p5", "proto"});
+
+    auto model = irt::model::CreateModel("yolov8s_seg", std::move(config));
+    ASSERT_NE(model, nullptr);
+
+    EXPECT_EQ(model->modelConfig().inputTensorNames(), (std::vector<std::string>{"images"}));
+    expectInputShape(*model, 1, 3, 320, 320);
+    EXPECT_EQ(model->modelConfig().numClasses(), 3);
+    EXPECT_EQ(model->modelConfig().outputTensorNames(), (std::vector<std::string>{"p3", "p4", "p5", "proto"}));
 }
 
 /**
@@ -143,7 +206,10 @@ TEST(YOLOModelBuildTest, BuildRejectsMultipleInputShapes)
     ASSERT_NE(model, nullptr);
 
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setInputShapes({nvinfer1::Dims4{1, 3, 640, 640}, nvinfer1::Dims4{1, 3, 640, 640}});
+    config->setInputShapes({
+        nvinfer1::Dims4{1, 3, 640, 640},
+        nvinfer1::Dims4{1, 3, 640, 640}
+    });
     config->setOutputTensorNames({"output0", "output1", "output2"});
     model->setModelConfig(std::move(config));
 
@@ -165,5 +231,22 @@ TEST(YOLOModelBuildTest, BuildRejectsWrongOutputTensorCount)
     model->setModelConfig(std::move(config));
 
     const TempWeightsFile weights("inferrt_yolov5_outputs_");
+    ExpectIrtExceptionCode([&] { model->build(weights.path().string()); }, irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+/**
+ * @brief YOLOv8-Seg 固定导出 3 个检测分支和 1 个 proto，输出名数量错误时应拒绝构建。
+ */
+TEST(YOLOModelBuildTest, BuildRejectsWrongSegmentationOutputTensorCount)
+{
+    auto model = irt::model::CreateModel("yolov8n_seg");
+    ASSERT_NE(model, nullptr);
+
+    auto config = std::make_unique<irt::model::IModelConfig>();
+    config->setInputShape(nvinfer1::Dims4{1, 3, 640, 640});
+    config->setOutputTensorNames({"output0", "output1", "output2"});
+    model->setModelConfig(std::move(config));
+
+    const TempWeightsFile weights("inferrt_yolov8_seg_outputs_");
     ExpectIrtExceptionCode([&] { model->build(weights.path().string()); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }

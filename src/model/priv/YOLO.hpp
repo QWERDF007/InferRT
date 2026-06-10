@@ -113,6 +113,28 @@ private:
     YOLOv8Spec spec_;
 };
 
+/**
+ * @brief Ultralytics YOLOv8 实例分割网络实现。
+ */
+class YOLOv8Segmenter : public YOLOv8Detector
+{
+public:
+    /**
+     * @brief 构造 YOLOv8 segmentation 模型。
+     * @param spec 结构缩放参数。
+     */
+    explicit YOLOv8Segmenter(YOLOv8Spec spec)
+        : YOLOv8Detector(spec)
+    {
+    }
+
+    std::string generateSuffix(const IModelConfig &config) const noexcept override;
+    void        buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
+
+protected:
+    void normalizeModelConfig(IModelConfig &config) const override;
+};
+
 class YOLOv5 : public YOLOv5Detector
 {
 public:
@@ -280,5 +302,108 @@ public:
         return "yolov8x";
     }
 };
+
+class YOLOv8Seg : public YOLOv8Segmenter
+{
+public:
+    YOLOv8Seg()
+        : YOLOv8Segmenter({"YOLOv8nSeg", 0.33F, 0.25F, 1024})
+    {
+    }
+
+    static const char *key() noexcept
+    {
+        return "yolov8_seg";
+    }
+};
+
+class YOLOv8nSeg : public YOLOv8Segmenter
+{
+public:
+    YOLOv8nSeg()
+        : YOLOv8Segmenter({"YOLOv8nSeg", 0.33F, 0.25F, 1024})
+    {
+    }
+
+    static const char *key() noexcept
+    {
+        return "yolov8n_seg";
+    }
+};
+
+class YOLOv8sSeg : public YOLOv8Segmenter
+{
+public:
+    YOLOv8sSeg()
+        : YOLOv8Segmenter({"YOLOv8sSeg", 0.33F, 0.50F, 1024})
+    {
+    }
+
+    static const char *key() noexcept
+    {
+        return "yolov8s_seg";
+    }
+};
+
+class YOLOv8mSeg : public YOLOv8Segmenter
+{
+public:
+    YOLOv8mSeg()
+        : YOLOv8Segmenter({"YOLOv8mSeg", 0.67F, 0.75F, 576})
+    {
+    }
+
+    static const char *key() noexcept
+    {
+        return "yolov8m_seg";
+    }
+};
+
+class YOLOv8lSeg : public YOLOv8Segmenter
+{
+public:
+    YOLOv8lSeg()
+        : YOLOv8Segmenter({"YOLOv8lSeg", 1.00F, 1.00F, 512})
+    {
+    }
+
+    static const char *key() noexcept
+    {
+        return "yolov8l_seg";
+    }
+};
+
+class YOLOv8xSeg : public YOLOv8Segmenter
+{
+public:
+    YOLOv8xSeg()
+        : YOLOv8Segmenter({"YOLOv8xSeg", 1.00F, 1.25F, 640})
+    {
+    }
+
+    static const char *key() noexcept
+    {
+        return "yolov8x_seg";
+    }
+};
+
+#define INFERRT_YOLO_ALIAS_CLASS(CLASS_NAME, BASE_CLASS, KEY_LITERAL) \
+    class CLASS_NAME : public BASE_CLASS                              \
+    {                                                                 \
+    public:                                                           \
+        static const char *key() noexcept                             \
+        {                                                             \
+            return KEY_LITERAL;                                       \
+        }                                                             \
+    }
+
+INFERRT_YOLO_ALIAS_CLASS(YOLOv8SegHyphenAlias, YOLOv8Seg, "yolov8-seg");
+INFERRT_YOLO_ALIAS_CLASS(YOLOv8nSegHyphenAlias, YOLOv8nSeg, "yolov8n-seg");
+INFERRT_YOLO_ALIAS_CLASS(YOLOv8sSegHyphenAlias, YOLOv8sSeg, "yolov8s-seg");
+INFERRT_YOLO_ALIAS_CLASS(YOLOv8mSegHyphenAlias, YOLOv8mSeg, "yolov8m-seg");
+INFERRT_YOLO_ALIAS_CLASS(YOLOv8lSegHyphenAlias, YOLOv8lSeg, "yolov8l-seg");
+INFERRT_YOLO_ALIAS_CLASS(YOLOv8xSegHyphenAlias, YOLOv8xSeg, "yolov8x-seg");
+
+#undef INFERRT_YOLO_ALIAS_CLASS
 
 } // namespace irt::model

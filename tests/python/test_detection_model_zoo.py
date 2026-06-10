@@ -30,6 +30,8 @@ def test_list_supported_models_includes_yolov5_and_yolov8() -> None:
     assert "yolov5x" in names
     assert "yolov8n" in names
     assert "yolov8x" in names
+    assert "yolov8n_seg" in names
+    assert "yolov8n-seg" in names
 
 
 def test_resolve_model_weights_uses_alias_defaults() -> None:
@@ -40,6 +42,9 @@ def test_resolve_model_weights_uses_alias_defaults() -> None:
     assert yolo_model_zoo.resolve_model_weights("yolov5x", None) == "yolov5xu.pt"
     assert yolo_model_zoo.resolve_model_weights("yolov8", None) == "yolov8n.pt"
     assert yolo_model_zoo.resolve_model_weights("yolov8s", None) == "yolov8s.pt"
+    assert yolo_model_zoo.resolve_model_weights("yolov8_seg", None) == "yolov8n-seg.pt"
+    assert yolo_model_zoo.resolve_model_weights("yolov8n_seg", None) == "yolov8n-seg.pt"
+    assert yolo_model_zoo.resolve_model_weights("yolov8n-seg", None) == "yolov8n-seg.pt"
 
 
 def test_resolve_model_weights_prefers_explicit_weights() -> None:
