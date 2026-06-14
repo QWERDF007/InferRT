@@ -32,6 +32,8 @@ class ImageSearchFeatureExtractor;
  *
  * 持有 Faiss 内积索引、图库路径映射及可选的特征提取器；负责索引的构建、
  * 加载与 Top-K 检索。具体逻辑见 ``ImageSearchImpl.cpp``。
+ *
+ * 该类型只服务于 ``ImageSearch`` 的 PIMPL 边界，不作为稳定公共 ABI 暴露给调用方。
  */
 class ImageSearch::Impl
 {

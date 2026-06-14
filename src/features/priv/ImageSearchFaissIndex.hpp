@@ -51,11 +51,49 @@
 
 namespace irt::features::priv {
 
-using BuildProgressCallback           = ImageSearchBuildProgressCallback;
-using LoadFeatureCallback             = std::function<std::vector<float>(size_t)>;
-using LoadFeatureBatchCallback        = std::function<std::vector<float>(size_t, size_t)>;
+/**
+ * @brief 索引构建进度回调别名。
+ *
+ * 私有 Faiss 构建函数统一通过该回调报告阶段切换和批次推进，公共 API 暴露同一结构体。
+ */
+using BuildProgressCallback = ImageSearchBuildProgressCallback;
+
+/**
+ * @brief 按图库下标加载单条归一化特征。
+ * @param index 图库图片下标。
+ * @return 单条 ``feature_dim`` 长度的 float 特征。
+ */
+using LoadFeatureCallback = std::function<std::vector<float>(size_t)>;
+
+/**
+ * @brief 按连续图库区间批量加载归一化特征。
+ * @param begin 连续区间起始下标。
+ * @param count 区间内图片数量。
+ * @return 扁平化 ``count x feature_dim`` 特征。
+ */
+using LoadFeatureBatchCallback = std::function<std::vector<float>(size_t, size_t)>;
+
+/**
+ * @brief 按任意图库下标列表批量加载归一化特征。
+ *
+ * IVF 训练采样可能按 stride 抽取非连续图片；该回调允许训练阶段仍按模型 batch 前向，
+ * 避免退化为逐图推理。
+ *
+ * @param indices 图库下标列表，顺序即返回特征的行顺序。
+ * @return 扁平化 ``indices.size() x feature_dim`` 特征。
+ */
 using LoadFeatureIndexedBatchCallback = std::function<std::vector<float>(const std::vector<size_t> &)>;
 
+/**
+ * @brief 向调用方报告索引构建进度。
+ * @param progress_callback 可为空的进度回调。
+ * @param stage 当前阶段。
+ * @param batch_index 当前阶段内从 0 开始的批次编号。
+ * @param batch_begin 当前批次对应的图库起始下标。
+ * @param batch_count 当前批次处理的图库图片数量。
+ * @param processed_count 当前阶段已完成的工作单元数。
+ * @param total_count 当前阶段总工作单元数；不可度量时为 0。
+ */
 inline void reportBuildProgress(const BuildProgressCallback &progress_callback, ImageSearchBuildStage stage,
                                 size_t batch_index = 0, size_t batch_begin = 0, size_t batch_count = 0,
                                 size_t processed_count = 0, size_t total_count = 0)
@@ -364,9 +402,12 @@ private:
 };
 
 /**
- * @brief 向输出流写入指定数量的零字节填充。
- * @param output 目标二进制输出流。
- * @param count 填充字节数。
+ * @brief 向 ``.ivfdata`` 输出流的指定偏移写入一段二进制数据。
+ * @param output 已打开的二进制读写流。
+ * @param offset 文件内字节偏移。
+ * @param data 待写入数据起始地址。
+ * @param size 待写入字节数。
+ * @throws irt::Exception seek 或 write 失败时抛出。
  */
 inline void writeAt(std::fstream &output, uint64_t offset, const void *data, size_t size)
 {
@@ -426,6 +467,11 @@ inline std::vector<float> loadFeatureBatch(size_t begin, size_t count, int featu
     return features;
 }
 
+/**
+ * @brief 判断一组图库下标是否构成连续区间。
+ * @param indices 按采样顺序排列的图库下标。
+ * @return 空列表或连续递增列表返回 true。
+ */
 inline bool isContiguousIndexBatch(const std::vector<size_t> &indices)
 {
     if (indices.empty())
@@ -444,6 +490,20 @@ inline bool isContiguousIndexBatch(const std::vector<size_t> &indices)
     return true;
 }
 
+/**
+ * @brief 根据下标形态选择最高效的批量特征加载方式。
+ *
+ * 连续下标优先走 ``LoadFeatureBatchCallback``；非连续下标优先走 indexed batch 回调；
+ * 两种批量回调均不可用时回退到逐条 ``LoadFeatureCallback``。
+ *
+ * @param first_index ``indices`` 第一项，用于连续区间批量加载。
+ * @param indices 需要加载的图库下标列表。
+ * @param feature_dim 单条特征维度。
+ * @param load_feature 单条特征加载回调。
+ * @param load_feature_batch 连续区间批量加载回调。
+ * @param load_feature_index_batch 任意下标批量加载回调。
+ * @return 扁平化批量特征。
+ */
 inline std::vector<float> loadFeatureIndexedBatch(size_t first_index, const std::vector<size_t> &indices,
                                                   int feature_dim, const LoadFeatureCallback &load_feature,
                                                   const LoadFeatureBatchCallback        &load_feature_batch,
@@ -484,13 +544,33 @@ inline std::vector<float> loadFeatureIndexedBatch(size_t first_index, const std:
     return features;
 }
 
+/**
+ * @brief Faiss 训练阶段采样出的特征集合。
+ */
 struct TrainingFeatureSample
 {
-    std::vector<float>  features;
-    std::vector<size_t> indices;
-    size_t              count{0};
+    std::vector<float>  features; ///< 扁平化 ``count x feature_dim`` 训练特征。
+    std::vector<size_t> indices;  ///< 每条训练特征对应的图库下标，按 ``features`` 行顺序排列。
+    size_t              count{0}; ///< 已采样训练特征数量。
 };
 
+/**
+ * @brief 按 stride 抽样并批量加载 Faiss 训练特征。
+ *
+ * 该函数只负责训练样本收集，不直接训练 Faiss；进度单位仍是训练向量数量，批次大小由
+ * ``training_batch_size`` 控制，通常来自 ``ImageSearchConfig::model_batch_size``。
+ *
+ * @param vector_count 图库向量总数。
+ * @param feature_dim 单条特征维度。
+ * @param training_count 需要采样的训练向量数量。
+ * @param stride 采样步长。
+ * @param training_batch_size 训练特征提取批量。
+ * @param load_feature 单条特征加载回调。
+ * @param load_feature_batch 连续区间批量加载回调。
+ * @param load_feature_index_batch 任意下标批量加载回调。
+ * @param progress_callback 进度回调。
+ * @return 训练特征及其图库下标。
+ */
 inline TrainingFeatureSample loadTrainingFeatures(size_t vector_count, int feature_dim, size_t training_count,
                                                   size_t stride, size_t training_batch_size,
                                                   const LoadFeatureCallback             &load_feature,
@@ -762,15 +842,6 @@ inline void writeCpuOnDiskIvfDataFileBatched(const faiss::IndexIVF &index, size_
 }
 
 /**
- * @brief 将 IVF 索引的倒排列表序列化到 ``.ivfdata`` 侧车文件。
- *
- * 布局为：文件头 → 各列表元数据 → 按对齐规则排列的 ID 与编码块。
- *
- * @param index 已训练且已添加向量的 IVF 索引。
- * @param data_path 输出路径，通常为 ``cpuOnDiskIvfDataPath(index_path)``。
- * @throws irt::Exception 倒排列表为空或写入失败时抛出。
- */
-/**
  * @brief 将磁盘倒排列表挂接到已加载的 IVF 索引。
  *
  * 用 ``InferRtOnDiskInvertedLists`` 替换索引内原有的倒排列表，并同步 ``ntotal``。
@@ -889,6 +960,14 @@ inline std::vector<float> makeCpuOnDiskIvfCentroids(const std::vector<float> &tr
 inline constexpr size_t kRamIvfPqMaxSubQuantizers = 64;
 inline constexpr size_t kRamIvfPqBitsPerCode      = 8;
 
+/**
+ * @brief 为 RAM IVF-PQ 选择 PQ 子量化器数量。
+ *
+ * Faiss PQ 要求特征维度能被子量化器数量整除；这里从上限向下查找可整除值，尽量保留压缩效率。
+ *
+ * @param feature_dim 单条特征维度。
+ * @return 可整除 ``feature_dim`` 的子量化器数量，最小为 1。
+ */
 inline size_t chooseRamIvfPqSubQuantizerCount(int feature_dim)
 {
     if (feature_dim <= 0)
@@ -907,12 +986,28 @@ inline size_t chooseRamIvfPqSubQuantizerCount(int feature_dim)
     return 1;
 }
 
+/**
+ * @brief 选择 RAM IVF-PQ 训练样本数量。
+ * @param vector_count 图库向量总数。
+ * @param feature_dim 单条特征维度。
+ * @param nlist IVF 聚类数量。
+ * @return 不超过图库规模和内存预算的训练向量数量。
+ */
 inline size_t chooseRamIvfPqTrainingCount(size_t vector_count, int feature_dim, size_t nlist)
 {
     const auto by_memory = maxCpuOnDiskIvfBufferedVectorCount(feature_dim, kCpuOnDiskIvfMaxTrainingBytes);
     return std::min(vector_count, std::max<size_t>(nlist, by_memory));
 }
 
+/**
+ * @brief 根据训练样本数选择 PQ code 位宽。
+ *
+ * GPU Faiss 当前固定使用 8-bit PQ code；CPU 路径在训练样本较少时降低位宽，避免训练阶段要求过多样本。
+ *
+ * @param training_count 实际训练向量数量。
+ * @param require_gpu_compatible 是否要求后续可迁移到 GPU Faiss。
+ * @return 每个 PQ 子码本的 bit 数。
+ */
 inline size_t chooseRamIvfPqBitsPerCode(size_t training_count, bool require_gpu_compatible = false)
 {
     if (require_gpu_compatible)
@@ -989,7 +1084,11 @@ inline std::unique_ptr<faiss::Index> loadCpuOnDiskIvfFlatIndex(const std::filesy
  * @param feature_dim 特征维度。
  * @param index_path 输出索引文件路径。
  * @param batch_size 磁盘倒排列表构建时的特征批量。
+ * @param training_batch_size 训练特征采样阶段的模型批量。
  * @param load_feature 按图库下标加载单条归一化特征的回调。
+ * @param load_feature_batch 按连续下标区间批量加载特征的回调。
+ * @param load_feature_index_batch 按任意下标列表批量加载训练特征的回调。
+ * @param progress_callback 构建进度回调。
  * @return 已挂接磁盘倒排列表、可直接用于检索的 Faiss 索引。
  * @throws irt::Exception 参数非法、训练/添加失败或落盘失败时抛出。
  */
@@ -1068,6 +1167,23 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
     return loadCpuOnDiskIvfFlatIndex(index_path);
 }
 
+/**
+ * @brief 构建 RAM 常驻的 IVF-PQ 内积索引。
+ *
+ * 训练样本按 ``training_batch_size`` 批量提取，添加图库向量时按 ``batch_size`` 分块；
+ * 若 ``require_gpu_compatible`` 为 true，则选择 GPU Faiss 可接受的 PQ code 位宽。
+ *
+ * @param vector_count 图库向量总数。
+ * @param feature_dim 单条特征维度。
+ * @param batch_size 添加图库向量阶段的特征批量。
+ * @param training_batch_size 训练特征采样阶段的模型批量。
+ * @param load_feature 按图库下标加载单条归一化特征的回调。
+ * @param load_feature_batch 按连续下标区间批量加载特征的回调。
+ * @param load_feature_index_batch 按任意下标列表批量加载训练特征的回调。
+ * @param progress_callback 构建进度回调。
+ * @param require_gpu_compatible 是否生成可迁移到 GPU Faiss 的 PQ 配置。
+ * @return 已训练并添加图库向量的 CPU Faiss 索引。
+ */
 inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int feature_dim, size_t batch_size,
                                                         size_t                                 training_batch_size,
                                                         const LoadFeatureCallback             &load_feature,

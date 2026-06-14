@@ -145,6 +145,7 @@ std::vector<fs::path> ImageSearch::collectGalleryImages(const fs::path &gallery_
                              gallery_dir.string().c_str());
     }
 
+    // 递归扫描后统一转为绝对路径，保证同一图库在不同工作目录下生成稳定的路径映射。
     std::vector<fs::path> images;
     for (const auto &entry : fs::recursive_directory_iterator(gallery_dir))
     {
@@ -170,6 +171,7 @@ std::vector<fs::path> ImageSearch::collectGalleryImages(const fs::path &gallery_
 fs::path ImageSearch::defaultIndexPath(const fs::path &gallery_dir, const std::string &model_name,
                                        const std::string &feature_name)
 {
+    // 模型名和特征名可能包含 '.'、'/' 等字符，写入文件名之前需要折叠为安全 stem。
     return gallery_dir / (sanitizeFileStem(model_name) + "_" + sanitizeFileStem(feature_name) + ".faiss");
 }
 

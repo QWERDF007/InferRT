@@ -31,6 +31,9 @@ inline constexpr size_t kDefaultImageSearchModelBatchSize = 1;
 
 /**
  * @brief 图像检索结果。
+ *
+ * 每个结果对应 Faiss 返回的一个向量 ID；实现层会通过索引旁边的 ``.paths.txt`` 映射文件
+ * 将 ID 还原为图库图片路径。
  */
 struct ImageSearchResult
 {
@@ -43,20 +46,25 @@ struct ImageSearchResult
 
 enum class ImageSearchBuildStage
 {
-    Unknown,
-    Started,
-    CollectingImages,
-    LoadingModel,
-    TrainingFeatures,
-    TrainingIndex,
-    AssigningVectors,
-    AddingVectors,
-    WritingIndex,
-    LoadingIndex,
-    SavingMetadata,
-    Finished,
+    Unknown,          ///< 未知或未初始化阶段。
+    Started,          ///< 构建/加载流程已经开始。
+    CollectingImages, ///< 正在扫描或规范化图库图片列表。
+    LoadingModel,     ///< 正在创建并加载特征提取模型。
+    TrainingFeatures, ///< 正在抽样提取 Faiss 训练特征。
+    TrainingIndex,    ///< 正在训练 IVF/PQ 等 Faiss 索引结构。
+    AssigningVectors, ///< CPU 磁盘 IVF 模式下正在统计向量所属倒排列表。
+    AddingVectors,    ///< 正在向 Faiss 索引或磁盘倒排列表写入图库向量。
+    WritingIndex,     ///< 正在写入 ``.faiss`` 索引文件。
+    LoadingIndex,     ///< 正在从磁盘加载索引或迁移到 GPU。
+    SavingMetadata,   ///< 正在写入路径映射和元数据。
+    Finished,         ///< 构建或加载流程完成。
 };
 
+/**
+ * @brief 将构建阶段枚举转换为稳定的日志/进度字符串。
+ * @param stage 构建阶段。
+ * @return 小写蛇形命名字符串；未知值返回 ``"unknown"``。
+ */
 inline const char *imageSearchBuildStageName(ImageSearchBuildStage stage) noexcept
 {
     switch (stage)
@@ -155,10 +163,20 @@ struct ImageSearchConfig
     ///< Faiss 索引搜索存储位置；GPU Faiss 当前始终使用 RAM。
     ImageSearchIndexStorage index_storage{ImageSearchIndexStorage::RAM};
 
-    ///< CPU disk index build batch size.
+    /**
+     * @brief CPU 磁盘索引写入阶段的外层特征批量。
+     *
+     * 该值控制 Faiss 添加/落盘向量时一次处理多少图库向量；模型实际前向批量仍受
+     * ``model_batch_size`` 限制。
+     */
     size_t disk_build_batch_size{kDefaultImageSearchDiskBuildBatchSize};
 
-    ///< 特征提取模型推理 batch；TensorRT 使用动态 profile，图后端要求导出动态 batch。
+    /**
+     * @brief 特征提取模型推理批量。
+     *
+     * 构建索引时，训练特征采样和图库向量提取都会尽量按该批量调用模型；TensorRT 使用动态
+     * profile，ONNX Runtime/OpenVINO 需要导出的图支持动态 batch。
+     */
     size_t model_batch_size{kDefaultImageSearchModelBatchSize};
 };
 

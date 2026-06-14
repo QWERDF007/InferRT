@@ -124,6 +124,11 @@ void normalizeFeature(float *values, size_t count, ImageSearchFeatureNorm norm)
     throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported ImageSearch feature norm");
 }
 
+/**
+ * @brief 对整条特征向量做原地归一化。
+ * @param values 待归一化的特征向量。
+ * @param norm 归一化策略。
+ */
 void normalizeFeature(std::vector<float> &values, ImageSearchFeatureNorm norm)
 {
     normalizeFeature(values.data(), values.size(), norm);
@@ -144,6 +149,11 @@ const char *preprocessBackendName(ImageSearchPreprocessBackend backend)
     return "unknown";
 }
 
+/**
+ * @brief 判断当前特征提取模型是否走 TensorRT 后端。
+ * @param config 图像检索配置。
+ * @return 使用 TensorRT 时返回 true。
+ */
 bool usesTensorRtModelBackend(const ImageSearchConfig &config)
 {
     return config.model_backend == irt::model::ModelBackend::TensorRT;
@@ -806,6 +816,16 @@ public:
         return features;
     }
 
+    /**
+     * @brief 按任意下标列表批量提取图库特征。
+     *
+     * IVF 训练采样可能按 stride 选择非连续图片；该重载把这些图片重排为临时连续批次，
+     * 复用常规 ``extractBatch`` 的预处理、前向和归一化逻辑。
+     *
+     * @param image_paths 完整图库图片路径列表。
+     * @param indices 待提取图片在 ``image_paths`` 中的下标列表。
+     * @return 扁平化 ``indices.size() x featureDim()`` 特征。
+     */
     std::vector<float> extractBatch(const std::vector<fs::path> &image_paths, const std::vector<size_t> &indices)
     {
         if (indices.empty())
@@ -988,6 +1008,12 @@ namespace {
 
 /**
  * @brief 构建 CPU 磁盘 IVF 索引并保存路径映射。
+ * @param gallery_images 图库图片路径列表，顺序对应 Faiss 向量 ID。
+ * @param extractor 已加载的特征提取器。
+ * @param index_path ``.faiss`` 输出路径。
+ * @param config 图像检索配置。
+ * @param progress_callback 构建进度回调。
+ * @return 索引及相关资源包。
  */
 FaissIndexBundle buildCpuOnDiskIndex(const std::vector<fs::path>       &gallery_images,
                                      priv::ImageSearchFeatureExtractor &extractor, const fs::path &index_path,
@@ -1007,6 +1033,12 @@ FaissIndexBundle buildCpuOnDiskIndex(const std::vector<fs::path>       &gallery_
 
 /**
  * @brief 构建内存 IVF-PQ 压缩索引，并按配置保留在 CPU 或迁移到 GPU。
+ * @param gallery_images 图库图片路径列表，顺序对应 Faiss 向量 ID。
+ * @param extractor 已加载的特征提取器。
+ * @param index_path ``.faiss`` 输出路径。
+ * @param config 图像检索配置。
+ * @param progress_callback 构建进度回调。
+ * @return 索引及相关资源包；GPU 后端会额外持有 ``StandardGpuResources``。
  */
 FaissIndexBundle buildRamIvfPqIndex(const std::vector<fs::path>       &gallery_images,
                                     priv::ImageSearchFeatureExtractor &extractor, const fs::path &index_path,
@@ -1033,6 +1065,12 @@ FaissIndexBundle buildRamIvfPqIndex(const std::vector<fs::path>       &gallery_i
 
 /**
  * @brief 按配置构建 Faiss 索引（内存 IVF-PQ 或 CPU 磁盘 IVF）。
+ * @param gallery_images 图库图片路径列表。
+ * @param extractor 已加载的特征提取器。
+ * @param index_path ``.faiss`` 输出路径。
+ * @param config 图像检索配置。
+ * @param progress_callback 构建进度回调。
+ * @return 构建完成的索引资源包。
  */
 FaissIndexBundle buildIndex(const std::vector<fs::path> &gallery_images, priv::ImageSearchFeatureExtractor &extractor,
                             const fs::path &index_path, const ImageSearchConfig &config,
@@ -1048,6 +1086,9 @@ FaissIndexBundle buildIndex(const std::vector<fs::path> &gallery_images, priv::I
 
 /**
  * @brief 从磁盘加载 Faiss 索引、路径映射，并迁移到配置指定的后端。
+ * @param index_path ``.faiss`` 索引路径。
+ * @param config 图像检索配置。
+ * @return 加载完成的索引资源包。
  */
 FaissIndexBundle loadIndex(const fs::path &index_path, const ImageSearchConfig &config)
 {
