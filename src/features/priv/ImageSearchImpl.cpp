@@ -819,8 +819,7 @@ public:
         {
             if (index >= image_paths.size())
             {
-                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                     "ImageSearch feature batch index is invalid");
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch feature batch index is invalid");
             }
             selected_images.push_back(image_paths[index]);
         }
@@ -998,9 +997,8 @@ FaissIndexBundle buildCpuOnDiskIndex(const std::vector<fs::path>       &gallery_
     FaissIndexBundle bundle;
     bundle.index = priv::buildCpuOnDiskIvfFlatIndex(
         gallery_images.size(), extractor.featureDim(), index_path, config.disk_build_batch_size,
-        config.model_batch_size,
-        [&](size_t index) { return extractor.extract(gallery_images[index]); }, [&](size_t begin, size_t count)
-        { return extractor.extractBatch(gallery_images, begin, count); },
+        config.model_batch_size, [&](size_t index) { return extractor.extract(gallery_images[index]); },
+        [&](size_t begin, size_t count) { return extractor.extractBatch(gallery_images, begin, count); },
         [&](const std::vector<size_t> &indices) { return extractor.extractBatch(gallery_images, indices); },
         progress_callback);
     savePathMapping(mappingPathFromIndex(index_path), gallery_images);
