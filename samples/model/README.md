@@ -5,12 +5,13 @@ This directory contains the ImageNet-style classification sample assets provided
 ## Layout
 
 - `classification/`: classification inference sample for all supported classification models
-- `detection/`: YOLOv5/YOLOv8 single-image detection sample with decode + NMS
+- `detection/`: YOLOv5/YOLOv8/RF-DETR single-image detection sample with decode + NMS
 - `feature_extract/`: feature dump sample for checking InferRT vs PyTorch feature consistency
 - `image_search/`: Faiss-based image retrieval sample, including CNN and DINO feature tensors
 - `onnx/`: ONNX -> TensorRT inference sample
 - `python/`: centralized Python scripts, including weight exporters, ONNX exporters, comparators, and pybind11 samples
-- `segmentation/`: SAM/SAM2/SAM3 prompt segmentation sample
+- `sam/`: SAM/SAM2/SAM3 prompt segmentation sample
+- `segmentation/`: RF-DETR-Seg and YOLOv8-Seg image-only instance segmentation sample
 
 ## Build
 
@@ -21,6 +22,7 @@ cmake --build build --config Debug --target inferrt_sample_classification
 cmake --build build --config Debug --target inferrt_sample_detection
 cmake --build build --config Debug --target inferrt_sample_feature_extract
 cmake --build build --config Debug --target inferrt_sample_image_search
+cmake --build build --config Debug --target inferrt_sample_sam
 cmake --build build --config Debug --target inferrt_sample_segmentation
 cmake --build build --config Debug --target inferrt_model_py
 ```
@@ -40,7 +42,10 @@ build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file samp
 build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file D:/Models/resnet/<checkpoint-stem-or-dir>/resnet50.onnx --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend openvino --device cpu
 build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file samples/model/classification/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend tensorrt --device gpu --warmup 10 --repeat 100
 build/bin/inferrt_sample_detection.exe -m yolov8n -w samples/model/detection/yolov8n.wts -i assets/pics/dog.jpg -l assets/coco80.names -o build/yolov8n_result.jpg --backend tensorrt --device gpu --warmup 10 --repeat 100
-build/bin/inferrt_sample_segmentation.exe -m sam_vit_b -w samples/model/segmentation/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_mask.jpg --point-x 0.5 --point-y 0.5 --backend tensorrt --device gpu --warmup 5 --repeat 20
+build/bin/inferrt_sample_detection.exe -m rfdetr_nano -w build/python_test_artifacts/rfdetr/rfdetr_nano.wts -i assets/pics/dog.jpg -l assets/coco80.names -o build/rfdetr_nano_result.jpg --backend tensorrt --device gpu --warmup 5 --repeat 20
+build/bin/inferrt_sample_segmentation.exe -m rfdetr_seg_nano -w build/python_test_artifacts/rfdetr/rfdetr_seg_nano.wts -i assets/pics/dog.jpg -o build/rfdetr_seg_nano_result.jpg --backend tensorrt --device gpu --warmup 5 --repeat 20
+build/bin/inferrt_sample_segmentation.exe -m yolov8n_seg -w build/python_test_artifacts/yolo/yolov8n_seg.wts -i assets/pics/dog.jpg -o build/yolov8n_seg_result.jpg --backend tensorrt --device gpu --conf-threshold 0.10 --warmup 5 --repeat 20
+build/bin/inferrt_sample_sam.exe -m sam_vit_b -w samples/model/sam/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_mask.jpg --point-x 0.5 --point-y 0.5 --backend tensorrt --device gpu --warmup 5 --repeat 20
 ```
 
 ## Weight export
@@ -56,6 +61,9 @@ python samples/model/python/classification_gen_wts.py -m dinov3_vitb16 -b transf
 python samples/model/python/gen_sam_wts.py -m vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.wts
 python samples/model/python/gen_sam_wts.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.wts
 python samples/model/python/gen_sam_wts.py -m sam3 -c D:/Models/sam3 -o sam3.wts --skip-forward
+python samples/model/python/rfdetr_gen_wts.py -m rfdetr_nano -c F:/models/rfdetr/rf-detr-nano.pth --rfdetr-root F:/Github/CV/rf-detr -o build/python_test_artifacts/rfdetr/rfdetr_nano.wts --quiet
+python samples/model/python/rfdetr_gen_wts.py -m rfdetr_seg_nano -c F:/models/rfdetr/rf-detr-seg-nano.pt --rfdetr-root F:/Github/CV/rf-detr -o build/python_test_artifacts/rfdetr/rfdetr_seg_nano.wts --quiet
+python samples/model/python/detection_gen_wts.py -m yolov8n_seg -w F:/models/yolov8/yolov8n-seg.pt --ultralytics-repo F:/Github/CV/ultralytics -o build/python_test_artifacts/yolo/yolov8n_seg.wts --quiet
 python samples/model/python/export_sam_onnx.py -m sam_vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.onnx
 python samples/model/python/export_sam_onnx.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.onnx
 python samples/model/python/export_sam_onnx.py -m sam3 -c D:/Models/sam3 -o sam3.onnx
@@ -113,9 +121,20 @@ ONNX / OpenVINO note:
 - ONNX graph backends cannot select hidden tensors after export; export the desired features as graph outputs first.
 - Use `python/export_feature_onnx.py` to turn `forward_features()` keys such as `x_norm_clstoken` into ONNX/OpenVINO output tensors.
 
-## SAM Segmentation Sample
+## Instance Segmentation Sample
 
-The segmentation sample exercises the selected InferRT backend and uses the default prompt contract:
+The `segmentation` sample is image-only and does not accept point or box prompts. RF-DETR-Seg returns
+`dets`/`labels`/`masks`; YOLOv8-Seg returns three DFL outputs plus `proto`.
+
+```bash
+build/bin/inferrt_sample_segmentation.exe -m rfdetr_seg_nano -w build/python_test_artifacts/rfdetr/rfdetr_seg_nano.wts -i assets/pics/dog.jpg -o build/rfdetr_seg_nano_result.jpg --backend tensorrt --device gpu
+build/bin/inferrt_sample_segmentation.exe -m yolov8n_seg -w build/python_test_artifacts/yolo/yolov8n_seg.wts -i assets/pics/dog.jpg -o build/yolov8n_seg_result.jpg --backend tensorrt --device gpu --conf-threshold 0.10
+build/bin/inferrt_sample_segmentation.exe --help
+```
+
+## SAM Prompt Sample
+
+The SAM sample exercises the selected InferRT backend and uses the default prompt contract:
 `image`, `point_coords`, `point_labels`, `mask_input`, `has_mask_input` -> `masks`, `iou_predictions`, `low_res_masks`.
 SAM v1 builds the official ViT image encoder, prompt encoder, and mask decoder from official `segment_anything`
 checkpoints exported by `python/gen_sam_wts.py`. SAM2/SAM2.1 builds the official Hiera image encoder, FPN
@@ -123,12 +142,15 @@ neck, prompt encoder, and high-resolution mask decoder from checkpoints exported
 SAM3 keys are registered, but their native backbone currently fails explicitly with `ERROR_NOT_IMPLEMENTED`.
 
 ```bash
-build/bin/inferrt_sample_segmentation.exe -m sam_vit_b -w samples/model/segmentation/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_vit_b_mask.jpg --box 0.2,0.2,0.8,0.8 --backend tensorrt --device gpu --warmup 5 --repeat 20
-build/bin/inferrt_sample_segmentation.exe -m sam2_1_hiera_tiny -w samples/model/segmentation/sam2_1_hiera_tiny.wts -i assets/pics/dog.jpg -o build/sam2_mask.jpg --backend tensorrt --device gpu
-build/bin/inferrt_sample_segmentation.exe --help
+build/bin/inferrt_sample_sam.exe -m sam_vit_b -w samples/model/sam/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_vit_b_mask.jpg --box 0.2,0.2,0.8,0.8 --backend tensorrt --device gpu --warmup 5 --repeat 20
+build/bin/inferrt_sample_sam.exe -m sam2_1_hiera_tiny -w samples/model/sam/sam2_1_hiera_tiny.wts -i assets/pics/dog.jpg -o build/sam2_mask.jpg --backend tensorrt --device gpu
+build/bin/inferrt_sample_sam.exe --help
 ```
 
-Both detection and segmentation report `build_or_load`, `preprocess`, H2D, inference, D2H, end-to-end, timed-loop wall time, and postprocess. See [`detection/README.md`](detection/README.md) and [`segmentation/README.md`](segmentation/README.md) for backend/device options and graph backend contracts.
+Detection, segmentation, and SAM samples report `build_or_load`, `preprocess`, H2D, inference, D2H, end-to-end,
+timed-loop wall time, and postprocess. See [`detection/README.md`](detection/README.md),
+[`segmentation/README.md`](segmentation/README.md), and [`sam/README.md`](sam/README.md) for options and runtime
+contracts.
 
 ## Feature Comparison Sample
 

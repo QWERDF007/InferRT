@@ -12,7 +12,7 @@ from typing import Any
 import torch
 
 
-YOLO_MODEL_NAMES = [
+YOLO_DETECTION_MODEL_NAMES = [
     "yolov5",
     "yolov5n",
     "yolov5s",
@@ -27,13 +27,40 @@ YOLO_MODEL_NAMES = [
     "yolov8x",
 ]
 
+YOLOV8_SEGMENTATION_MODEL_NAMES = [
+    "yolov8_seg",
+    "yolov8n_seg",
+    "yolov8s_seg",
+    "yolov8m_seg",
+    "yolov8l_seg",
+    "yolov8x_seg",
+    "yolov8-seg",
+    "yolov8n-seg",
+    "yolov8s-seg",
+    "yolov8m-seg",
+    "yolov8l-seg",
+    "yolov8x-seg",
+]
+
+YOLO_MODEL_NAMES = [
+    *YOLO_DETECTION_MODEL_NAMES,
+    *YOLOV8_SEGMENTATION_MODEL_NAMES,
+]
+
 YOLO_MODEL_WEIGHTS = {
     "yolov5": "yolov5su.pt",
     "yolov8": "yolov8n.pt",
+    "yolov8_seg": "yolov8n-seg.pt",
+    "yolov8-seg": "yolov8n-seg.pt",
     **{
         name: f"{name}u.pt" if name.startswith("yolov5") else f"{name}.pt"
-        for name in YOLO_MODEL_NAMES
+        for name in YOLO_DETECTION_MODEL_NAMES
         if name not in {"yolov5", "yolov8"}
+    },
+    **{
+        name: f"{name.replace('_seg', '-seg')}.pt" if name.endswith("_seg") else f"{name}.pt"
+        for name in YOLOV8_SEGMENTATION_MODEL_NAMES
+        if name not in {"yolov8_seg", "yolov8-seg"}
     },
 }
 

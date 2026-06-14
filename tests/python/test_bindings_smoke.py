@@ -24,6 +24,8 @@ def test_registered_models(irt_module: object) -> None:
     assert "vit_base_patch16_dinov3" in names
     assert "yolov5n" in names
     assert "yolov8n" in names
+    assert "yolov8n_seg" in names
+    assert "yolov8n-seg" in names
     assert "sam" in names
     assert "sam2" in names
     assert "sam3" in names
@@ -38,6 +40,8 @@ def test_registered_models(irt_module: object) -> None:
     assert irt_module.is_supported_model("ViT_Base_Patch16_DINOv3")
     assert irt_module.is_supported_model("YOLOv5N")
     assert irt_module.is_supported_model("YOLOv8N")
+    assert irt_module.is_supported_model("YOLOv8N_Seg")
+    assert irt_module.is_supported_model("YOLOv8N-Seg")
     assert irt_module.is_supported_model("SAM")
     assert irt_module.is_supported_model("SAM2_Hiera_Tiny")
     assert irt_module.is_supported_model("SAM3_Image")
@@ -225,6 +229,11 @@ def test_create_yolo_without_build(irt_module: object) -> None:
     assert yolov8.name() == "YOLOv8n"
     assert yolov8.input_tensor_names() == ["input"]
     assert yolov8.output_tensor_names() == ["output0", "output1", "output2"]
+
+    yolov8_seg = irt_module.create_model("YOLOv8N_Seg")
+    assert yolov8_seg.name() == "YOLOv8nSeg"
+    assert yolov8_seg.input_tensor_names() == ["input"]
+    assert yolov8_seg.output_tensor_names() == ["output0", "output1", "output2", "proto"]
 
 
 def test_create_sam_without_build(irt_module: object) -> None:

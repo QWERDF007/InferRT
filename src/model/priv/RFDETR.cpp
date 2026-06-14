@@ -73,6 +73,10 @@ Layer *requireLayer(Layer *layer, const char *message)
  */
 nvinfer1::Dims lastDimWeightDims(int rank, int channels)
 {
+    if (rank <= 0)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "RF-DETR last-dim weight expects a valid tensor rank");
+    }
     std::vector<int64_t> values(static_cast<size_t>(rank), 1);
     values.back() = channels;
     return makeDimsFromValues(values);
@@ -83,6 +87,10 @@ nvinfer1::Dims lastDimWeightDims(int rank, int channels)
  */
 nvinfer1::Dims scalarDims(int rank)
 {
+    if (rank <= 0)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "RF-DETR scalar expects a valid tensor rank");
+    }
     return makeDimsFromValues(std::vector<int64_t>(static_cast<size_t>(rank), 1));
 }
 
@@ -102,10 +110,15 @@ nvinfer1::ITensor *addScalar(nvinfer1::INetworkDefinition *network, const nvinfe
 nvinfer1::ITensor *addLayerNormLastDim(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
                                        nvinfer1::ITensor &input, const std::string &prefix, int channels)
 {
-    const auto dims        = input.getDimensions();
-    auto      *scale_const = requireLayer(
+    const auto dims = input.getDimensions();
+    if (dims.nbDims <= 0)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "RF-DETR LayerNorm input rank is invalid for %s",
+                             prefix.c_str());
+    }
+    auto *scale_const = requireLayer(
         network->addConstant(lastDimWeightDims(dims.nbDims, channels),
-                                  requireWeight(weights_map, prefix + ".weight", "RF-DETR LayerNorm", channels)),
+                             requireWeight(weights_map, prefix + ".weight", "RF-DETR LayerNorm", channels)),
         "Failed to add RF-DETR LayerNorm scale");
     auto *bias_const = requireLayer(
         network->addConstant(lastDimWeightDims(dims.nbDims, channels),
@@ -164,6 +177,51 @@ nvinfer1::ITensor *addLinear3DFromKeys(nvinfer1::INetworkDefinition *network, co
                            "Failed to add RF-DETR linear bias")
                   ->getOutput(0);
         output = requireLayer(network->addElementWise(*output, *bias, E::kSUM), "Failed to add RF-DETR linear bias add")
+                     ->getOutput(0);
+    }
+    else if (bias_required)
+    {
+        requireWeight(weights_map, bias_key, "RF-DETR Linear", out_features);
+    }
+    return output;
+}
+
+/**
+ * @brief 对任意 rank 张量的最后一维执行 Linear，用于 NHWC segmentation block。
+ */
+nvinfer1::ITensor *addLinearLastDim(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
+                                    nvinfer1::ITensor &input, const std::string &prefix, int in_features,
+                                    int out_features, bool bias_required = true)
+{
+    const auto dims = input.getDimensions();
+    if (dims.nbDims < 2)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "RF-DETR Linear expects rank >= 2 for %s", prefix.c_str());
+    }
+
+    std::vector<int64_t> weight_dims(static_cast<size_t>(dims.nbDims), 1);
+    weight_dims[static_cast<size_t>(dims.nbDims - 2)] = out_features;
+    weight_dims[static_cast<size_t>(dims.nbDims - 1)] = in_features;
+    auto *weight = requireLayer(network->addConstant(makeDimsFromValues(weight_dims),
+                                                     requireWeight(weights_map, prefix + ".weight", "RF-DETR Linear",
+                                                                   static_cast<int64_t>(out_features) * in_features)),
+                                "Failed to add RF-DETR linear-last-dim weight")
+                       ->getOutput(0);
+    auto *matmul = requireLayer(network->addMatrixMultiply(input, M::kNONE, *weight, M::kTRANSPOSE),
+                                "Failed to add RF-DETR linear-last-dim matmul");
+    auto *output = matmul->getOutput(0);
+
+    const auto bias_key = prefix + ".bias";
+    if (hasWeight(weights_map, bias_key))
+    {
+        auto bias_dims               = scalarDims(dims.nbDims);
+        bias_dims.d[dims.nbDims - 1] = out_features;
+        auto *bias                   = requireLayer(network->addConstant(
+                                      bias_dims, requireWeight(weights_map, bias_key, "RF-DETR Linear", out_features)),
+                                                    "Failed to add RF-DETR linear-last-dim bias")
+                         ->getOutput(0);
+        output = requireLayer(network->addElementWise(*output, *bias, E::kSUM),
+                              "Failed to add RF-DETR linear-last-dim bias add")
                      ->getOutput(0);
     }
     else if (bias_required)
@@ -1281,7 +1339,7 @@ nvinfer1::ITensor *addSegDepthwiseBlock(nvinfer1::INetworkDefinition *network, c
     auto *nhwc = requireLayer(network->addShuffle(*dw), "Failed RF-DETR seg NCHW->NHWC");
     nhwc->setFirstTranspose(nvinfer1::Permutation{0, 2, 3, 1});
     auto *norm = addLayerNormLastDim(network, weights_map, *nhwc->getOutput(0), prefix + ".norm", channels);
-    auto *proj = addLinear3D(network, weights_map, *norm, prefix + ".pwconv1", channels, channels);
+    auto *proj = addLinearLastDim(network, weights_map, *norm, prefix + ".pwconv1", channels, channels);
     auto *gelu = addGeluExact(network, *proj);
     auto *nchw = requireLayer(network->addShuffle(*gelu), "Failed RF-DETR seg NHWC->NCHW");
     nchw->setFirstTranspose(nvinfer1::Permutation{0, 3, 1, 2});
@@ -1296,11 +1354,13 @@ nvinfer1::ITensor *addSegmentationHead(nvinfer1::INetworkDefinition *network, co
                                        nvinfer1::ITensor &spatial, nvinfer1::ITensor &query, const RFDETRSpec &spec,
                                        const RFDETRGeometry &geometry)
 {
+    const int mask_h = geometry.height / kRFDETRMaskDownsample;
+    const int mask_w = geometry.width / kRFDETRMaskDownsample;
+
     auto *resize = requireLayer(network->addResize(spatial), "Failed RF-DETR seg resize");
     resize->setResizeMode(nvinfer1::InterpolationMode::kLINEAR);
     resize->setCoordinateTransformation(nvinfer1::ResizeCoordinateTransformation::kHALF_PIXEL);
-    resize->setOutputDimensions(nvinfer1::Dims4{0, spec.hidden_dim, geometry.height / kRFDETRMaskDownsample,
-                                                geometry.width / kRFDETRMaskDownsample});
+    resize->setInput(1, *shapeWithFirstDimOf(network, spatial, {spec.hidden_dim, mask_h, mask_w}));
 
     nvinfer1::ITensor *spatial_features = resize->getOutput(0);
     for (int i = 0; i < spec.decoder_layers; ++i)
@@ -1322,9 +1382,7 @@ nvinfer1::ITensor *addSegmentationHead(nvinfer1::INetworkDefinition *network, co
     q = addLinear3D(network, weights_map, *q, "segmentation_head.query_features_proj", spec.hidden_dim,
                     spec.hidden_dim);
 
-    auto     *flat   = requireLayer(network->addShuffle(*spatial_features), "Failed RF-DETR seg flatten spatial");
-    const int mask_h = geometry.height / kRFDETRMaskDownsample;
-    const int mask_w = geometry.width / kRFDETRMaskDownsample;
+    auto *flat = requireLayer(network->addShuffle(*spatial_features), "Failed RF-DETR seg flatten spatial");
     flat->setReshapeDimensions(nvinfer1::Dims3{0, spec.hidden_dim, mask_h * mask_w});
     auto *masks = requireLayer(network->addMatrixMultiply(*q, M::kNONE, *flat->getOutput(0), M::kNONE),
                                "Failed RF-DETR seg einsum");

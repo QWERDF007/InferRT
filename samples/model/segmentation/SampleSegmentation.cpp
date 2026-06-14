@@ -12,9 +12,12 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
-#include <cstddef>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <memory>
 #include <numeric>
 #include <sstream>
 #include <string>
@@ -31,8 +34,10 @@ using irt::model::dimsToCsv;
 using irt::model::elementCount;
 using irt::model::HostBuffer;
 
-constexpr int  kSamMaxPoints = 16;
-const fs::path kDefaultImagePath{"assets/pics/dog.jpg"};
+constexpr std::array<int, 3> kYoloStrides{8, 16, 32};
+constexpr int                kYoloMaskChannels = 32;
+const fs::path               kDefaultImagePath{"assets/pics/dog.jpg"};
+const fs::path               kDefaultLabelPath{"assets/coco80.names"};
 
 /**
  * @brief 用于在显示帮助后中断主流程。
@@ -41,20 +46,30 @@ struct HelpRequested
 {
 };
 
+enum class SegmentationFamily
+{
+    RFDETR,
+    YOLOV8,
+};
+
 /**
- * @brief SAM 分割 sample 的命令行参数。
+ * @brief RF-DETR-Seg 单图实例分割示例的命令行参数。
  */
 struct Arguments
 {
     std::string              model_name;
     fs::path                 weights_file;
     fs::path                 image_path;
+    fs::path                 label_file;
     fs::path                 output_image;
-    float                    point_x{0.5F};
-    float                    point_y{0.5F};
-    float                    threshold{0.0F};
-    bool                     has_box{false};
-    std::array<float, 4>     box{0.0F, 0.0F, 1.0F, 1.0F};
+    int                      input_size{0};
+    bool                     input_size_explicit{false};
+    int                      num_classes{80};
+    float                    conf_threshold{0.35F};
+    float                    mask_threshold{0.0F};
+    float                    nms_threshold{0.50F};
+    int                      max_instances{20};
+    SegmentationFamily       family{SegmentationFamily::RFDETR};
     irt::model::ModelBackend backend{irt::model::ModelBackend::TensorRT};
     irt::model::ModelDevice  device{irt::model::ModelDevice::GPU};
     int                      warmup{0};
@@ -62,19 +77,33 @@ struct Arguments
 };
 
 /**
- * @brief SAM 官方最长边缩放后的图像信息。
+ * @brief YOLO letterbox 预处理的缩放与填充信息。
  */
-struct PreprocessedSAMImage
+struct LetterboxInfo
 {
-    std::vector<float> tensor;    ///< `1x3x1024x1024` 输入张量。
-    int                resized_h; ///< padding 前的缩放高度。
-    int                resized_w; ///< padding 前的缩放宽度。
+    float scale{1.0F};
+    int   pad_x{0};
+    int   pad_y{0};
+    int   original_w{0};
+    int   original_h{0};
+    int   input_w{0};
+    int   input_h{0};
 };
 
-double elapsedMs(Clock::time_point start, Clock::time_point end)
+/**
+ * @brief 单个实例分割结果，坐标使用原图像素坐标。
+ */
+struct Instance
 {
-    return std::chrono::duration<double, std::milli>(end - start).count();
-}
+    float              x1{0.0F};
+    float              y1{0.0F};
+    float              x2{0.0F};
+    float              y2{0.0F};
+    float              score{0.0F};
+    int                class_id{0};
+    int                query_index{0};
+    std::vector<float> mask_coefficients;
+};
 
 struct IterationTiming
 {
@@ -95,6 +124,11 @@ struct TimingStats
     double min_ms{0.0};
     double max_ms{0.0};
 };
+
+double elapsedMs(Clock::time_point start, Clock::time_point end)
+{
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
 
 std::string trim(std::string value)
 {
@@ -146,13 +180,74 @@ irt::model::ModelDevice parseDevice(std::string value)
     throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported device: %s", value.c_str());
 }
 
+bool isRFDETRSegModelName(const std::string &model_name)
+{
+    const std::string normalized = toLower(model_name);
+    return normalized.rfind("rfdetr", 0) == 0
+        && (normalized.find("_seg") != std::string::npos || normalized.find("-seg") != std::string::npos);
+}
+
+bool isYOLOv8SegModelName(const std::string &model_name)
+{
+    const std::string normalized = toLower(model_name);
+    return normalized.rfind("yolov8", 0) == 0
+        && (normalized.find("_seg") != std::string::npos || normalized.find("-seg") != std::string::npos);
+}
+
+SegmentationFamily modelFamily(const std::string &model_name)
+{
+    if (isRFDETRSegModelName(model_name))
+    {
+        return SegmentationFamily::RFDETR;
+    }
+    if (isYOLOv8SegModelName(model_name))
+    {
+        return SegmentationFamily::YOLOV8;
+    }
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                         "Segmentation sample expects RF-DETR-Seg or YOLOv8-Seg model");
+}
+
+const char *modelFamilyName(SegmentationFamily family)
+{
+    return family == SegmentationFamily::RFDETR ? "RF-DETR-Seg" : "YOLOv8-Seg";
+}
+
+/**
+ * @brief 按名称定位 RF-DETR-Seg 输出，避免后处理依赖后端返回顺序。
+ */
+size_t requireOutputIndex(const std::vector<std::string> &output_names, const char *required_name)
+{
+    const auto iter = std::find(output_names.begin(), output_names.end(), required_name);
+    if (iter == output_names.end())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Segmentation output is missing: %s", required_name);
+    }
+    return static_cast<size_t>(std::distance(output_names.begin(), iter));
+}
+
+float sigmoid(float value)
+{
+    if (value >= 0.0F)
+    {
+        const float z = std::exp(-value);
+        return 1.0F / (1.0F + z);
+    }
+    const float z = std::exp(value);
+    return z / (1.0F + z);
+}
+
+float clampFloat(float value, float lower, float upper)
+{
+    return std::max(lower, std::min(value, upper));
+}
+
 TimingStats summarizeTimings(const std::vector<double> &values)
 {
     if (values.empty())
     {
         return {};
     }
-
     const auto [min_it, max_it] = std::minmax_element(values.begin(), values.end());
     const double total          = std::accumulate(values.begin(), values.end(), 0.0);
     return TimingStats{total, total / static_cast<double>(values.size()), *min_it, *max_it};
@@ -164,70 +259,538 @@ void printTimingStats(const char *name, const TimingStats &stats)
               << name << "_min=" << stats.min_ms << " ms, " << name << "_max=" << stats.max_ms << " ms";
 }
 
-/**
- * @brief 判断当前模型是否属于 SAM2/SAM2.1。
- */
-bool isSAM2Model(std::string model_name)
+std::vector<std::string> readLabels(const fs::path &label_file)
 {
-    std::transform(model_name.begin(), model_name.end(), model_name.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    return model_name.rfind("sam2", 0) == 0;
-}
-
-/**
- * @brief 判断模型 key 是否属于当前 sample 支持的 SAM 分割族。
- */
-bool isSAMFamilyModel(std::string model_name)
-{
-    std::transform(model_name.begin(), model_name.end(), model_name.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    return model_name.rfind("sam", 0) == 0 || model_name == "edge_sam";
-}
-
-/**
- * @brief 解析 `x0,y0,x1,y1` 格式的 box prompt。
- */
-std::array<float, 4> parseBoxPrompt(std::string value)
-{
-    std::replace(value.begin(), value.end(), ',', ' ');
-    std::istringstream   input(value);
-    std::array<float, 4> box{};
-    if (!(input >> box[0] >> box[1] >> box[2] >> box[3]))
+    std::vector<std::string> labels;
+    if (label_file.empty() || !fs::exists(label_file))
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--box must be x0,y0,x1,y1");
+        std::cout << "Label file not found, class ids will be printed: " << label_file.generic_string() << std::endl;
+        return labels;
     }
-    return box;
+
+    std::ifstream input(label_file);
+    std::string   line;
+    while (std::getline(input, line))
+    {
+        line = trim(line);
+        if (!line.empty())
+        {
+            labels.push_back(line);
+        }
+    }
+    return labels;
+}
+
+std::string className(int class_id, const std::vector<std::string> &labels)
+{
+    if (class_id >= 0 && static_cast<size_t>(class_id) < labels.size())
+    {
+        return labels[static_cast<size_t>(class_id)];
+    }
+    return "class_" + std::to_string(class_id);
 }
 
 /**
- * @brief 构造命令行选项。
+ * @brief 使用 YOLO letterbox 规则预处理输入图像。
  */
+std::vector<float> preprocessLetterbox(const cv::Mat &bgr_image, int input_w, int input_h, LetterboxInfo &info)
+{
+    info.original_w = bgr_image.cols;
+    info.original_h = bgr_image.rows;
+    info.input_w    = input_w;
+    info.input_h    = input_h;
+    info.scale      = std::min(static_cast<float>(input_w) / static_cast<float>(bgr_image.cols),
+                               static_cast<float>(input_h) / static_cast<float>(bgr_image.rows));
+
+    const int resized_w = static_cast<int>(std::round(static_cast<float>(bgr_image.cols) * info.scale));
+    const int resized_h = static_cast<int>(std::round(static_cast<float>(bgr_image.rows) * info.scale));
+    info.pad_x          = (input_w - resized_w) / 2;
+    info.pad_y          = (input_h - resized_h) / 2;
+
+    cv::Mat resized;
+    cv::resize(bgr_image, resized, cv::Size(resized_w, resized_h), 0.0, 0.0, cv::INTER_LINEAR);
+
+    cv::Mat canvas(input_h, input_w, CV_8UC3, cv::Scalar(114, 114, 114));
+    resized.copyTo(canvas(cv::Rect(info.pad_x, info.pad_y, resized_w, resized_h)));
+
+    cv::Mat rgb;
+    cv::cvtColor(canvas, rgb, cv::COLOR_BGR2RGB);
+    rgb.convertTo(rgb, CV_32FC3, 1.0 / 255.0);
+
+    std::vector<cv::Mat> channels;
+    cv::split(rgb, channels);
+
+    std::vector<float> chw(static_cast<size_t>(3 * input_h * input_w));
+    const size_t       plane_size = static_cast<size_t>(input_h * input_w);
+    for (int c = 0; c < 3; ++c)
+    {
+        std::memcpy(chw.data() + static_cast<size_t>(c) * plane_size, channels[c].ptr<float>(),
+                    plane_size * sizeof(float));
+    }
+    return chw;
+}
+
+/**
+ * @brief 使用 RF-DETR 官方 ImageNet 归一化预处理，并按 NCHW 展平。
+ */
+std::vector<float> preprocessRFDETR(const cv::Mat &bgr_image, const nvinfer1::Dims &input_dims)
+{
+    if (input_dims.nbDims != 4 || input_dims.d[1] != 3 || input_dims.d[2] <= 0 || input_dims.d[3] <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "RF-DETR-Seg expects Nx3xHxW input, got %s",
+                             dimsToCsv(input_dims).c_str());
+    }
+
+    const cv::Mat preprocessed = irt::model::ImageNetUtil::preprocess(
+        bgr_image, cv::Size(static_cast<int>(input_dims.d[3]), static_cast<int>(input_dims.d[2])));
+    return irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
+}
+
+float intersectionOverUnion(const Instance &a, const Instance &b)
+{
+    const float x1         = std::max(a.x1, b.x1);
+    const float y1         = std::max(a.y1, b.y1);
+    const float x2         = std::min(a.x2, b.x2);
+    const float y2         = std::min(a.y2, b.y2);
+    const float inter_w    = std::max(0.0F, x2 - x1);
+    const float inter_h    = std::max(0.0F, y2 - y1);
+    const float inter_area = inter_w * inter_h;
+    const float area_a     = std::max(0.0F, a.x2 - a.x1) * std::max(0.0F, a.y2 - a.y1);
+    const float area_b     = std::max(0.0F, b.x2 - b.x1) * std::max(0.0F, b.y2 - b.y1);
+    const float denom      = area_a + area_b - inter_area;
+    return denom <= 0.0F ? 0.0F : inter_area / denom;
+}
+
+std::vector<Instance> nonMaximumSuppression(std::vector<Instance> instances, float threshold, int max_instances)
+{
+    std::sort(instances.begin(), instances.end(),
+              [](const Instance &a, const Instance &b) { return a.score > b.score; });
+
+    std::vector<Instance> kept;
+    std::vector<bool>     removed(instances.size(), false);
+    kept.reserve(std::min<int>(max_instances, static_cast<int>(instances.size())));
+    for (size_t i = 0; i < instances.size() && static_cast<int>(kept.size()) < max_instances; ++i)
+    {
+        if (removed[i])
+        {
+            continue;
+        }
+        kept.push_back(instances[i]);
+        for (size_t j = i + 1; j < instances.size(); ++j)
+        {
+            if (!removed[j] && instances[i].class_id == instances[j].class_id
+                && intersectionOverUnion(instances[i], instances[j]) > threshold)
+            {
+                removed[j] = true;
+            }
+        }
+    }
+    return kept;
+}
+
+/**
+ * @brief 解码 RF-DETR-Seg 的 boxes/logits/masks 输出。
+ */
+std::vector<Instance> decodeRFDETRSegOutputs(const HostBuffer &boxes_output, const nvinfer1::Dims &boxes_dims,
+                                             const HostBuffer &logits_output, const nvinfer1::Dims &logits_dims,
+                                             const nvinfer1::Dims &masks_dims, const Arguments &args,
+                                             const cv::Size &image_size)
+{
+    if (boxes_dims.nbDims != 3 || logits_dims.nbDims != 3 || masks_dims.nbDims != 4 || boxes_dims.d[0] != 1
+        || logits_dims.d[0] != 1 || masks_dims.d[0] != 1 || boxes_dims.d[1] != logits_dims.d[1]
+        || boxes_dims.d[1] != masks_dims.d[1] || boxes_dims.d[2] != 4)
+    {
+        throw irt::Exception(
+            irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected RF-DETR-Seg output shapes: dets=%s labels=%s masks=%s",
+            dimsToCsv(boxes_dims).c_str(), dimsToCsv(logits_dims).c_str(), dimsToCsv(masks_dims).c_str());
+    }
+
+    const auto *boxes   = static_cast<const float *>(boxes_output.data());
+    const auto *logits  = static_cast<const float *>(logits_output.data());
+    const int   queries = static_cast<int>(boxes_dims.d[1]);
+    const int   classes = static_cast<int>(logits_dims.d[2]);
+
+    std::vector<Instance> instances;
+    instances.reserve(static_cast<size_t>(queries));
+    for (int q = 0; q < queries; ++q)
+    {
+        int   best_class = 0;
+        float best_logit = logits[q * classes];
+        for (int cls = 1; cls < classes; ++cls)
+        {
+            const float value = logits[q * classes + cls];
+            if (value > best_logit)
+            {
+                best_logit = value;
+                best_class = cls;
+            }
+        }
+
+        const float score = sigmoid(best_logit);
+        if (score < args.conf_threshold)
+        {
+            continue;
+        }
+
+        const float cx = boxes[q * 4 + 0] * static_cast<float>(image_size.width);
+        const float cy = boxes[q * 4 + 1] * static_cast<float>(image_size.height);
+        const float w  = boxes[q * 4 + 2] * static_cast<float>(image_size.width);
+        const float h  = boxes[q * 4 + 3] * static_cast<float>(image_size.height);
+
+        Instance instance;
+        instance.x1          = clampFloat(cx - 0.5F * w, 0.0F, static_cast<float>(image_size.width - 1));
+        instance.y1          = clampFloat(cy - 0.5F * h, 0.0F, static_cast<float>(image_size.height - 1));
+        instance.x2          = clampFloat(cx + 0.5F * w, 0.0F, static_cast<float>(image_size.width - 1));
+        instance.y2          = clampFloat(cy + 0.5F * h, 0.0F, static_cast<float>(image_size.height - 1));
+        instance.score       = score;
+        instance.class_id    = best_class;
+        instance.query_index = q;
+        instances.push_back(instance);
+    }
+
+    return nonMaximumSuppression(std::move(instances), args.nms_threshold, args.max_instances);
+}
+
+void remapToOriginalImage(Instance &instance, const LetterboxInfo &letterbox)
+{
+    instance.x1 = clampFloat((instance.x1 - static_cast<float>(letterbox.pad_x)) / letterbox.scale, 0.0F,
+                             static_cast<float>(letterbox.original_w - 1));
+    instance.y1 = clampFloat((instance.y1 - static_cast<float>(letterbox.pad_y)) / letterbox.scale, 0.0F,
+                             static_cast<float>(letterbox.original_h - 1));
+    instance.x2 = clampFloat((instance.x2 - static_cast<float>(letterbox.pad_x)) / letterbox.scale, 0.0F,
+                             static_cast<float>(letterbox.original_w - 1));
+    instance.y2 = clampFloat((instance.y2 - static_cast<float>(letterbox.pad_y)) / letterbox.scale, 0.0F,
+                             static_cast<float>(letterbox.original_h - 1));
+}
+
+/**
+ * @brief 解码 YOLOv8-Seg 的 DFL distance、class logits 和 mask coefficients。
+ */
+std::vector<Instance> decodeYoloV8SegOutputs(const std::vector<HostBuffer>     &outputs,
+                                             const std::vector<nvinfer1::Dims> &output_dims,
+                                             const std::array<size_t, 3> &branch_indices, const Arguments &args,
+                                             const LetterboxInfo &letterbox)
+{
+    std::vector<Instance> instances;
+    int                   query_index = 0;
+    for (size_t branch = 0; branch < branch_indices.size(); ++branch)
+    {
+        const auto &dims              = output_dims[branch_indices[branch]];
+        const int   stride            = kYoloStrides[branch];
+        const int   grid_h            = letterbox.input_h / stride;
+        const int   grid_w            = letterbox.input_w / stride;
+        const int   grid              = grid_h * grid_w;
+        const int   expected_channels = 4 + args.num_classes + kYoloMaskChannels;
+        if (dims.nbDims != 3 || dims.d[0] != 1 || dims.d[1] != expected_channels || dims.d[2] != grid)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "Unexpected YOLOv8-Seg output shape for branch %zu: %s", branch,
+                                 dimsToCsv(dims).c_str());
+        }
+
+        const auto *data = static_cast<const float *>(outputs[branch_indices[branch]].data());
+        for (int idx = 0; idx < grid; ++idx)
+        {
+            int   best_class = 0;
+            float best_score = 0.0F;
+            for (int cls = 0; cls < args.num_classes; ++cls)
+            {
+                const float score = sigmoid(data[(4 + cls) * grid + idx]);
+                if (score > best_score)
+                {
+                    best_score = score;
+                    best_class = cls;
+                }
+            }
+            if (best_score < args.conf_threshold)
+            {
+                continue;
+            }
+
+            const int   x        = idx % grid_w;
+            const int   y        = idx / grid_w;
+            const float anchor_x = static_cast<float>(x) + 0.5F;
+            const float anchor_y = static_cast<float>(y) + 0.5F;
+            const float left     = data[0 * grid + idx];
+            const float top      = data[1 * grid + idx];
+            const float right    = data[2 * grid + idx];
+            const float bottom   = data[3 * grid + idx];
+
+            Instance instance;
+            instance.x1          = (anchor_x - left) * static_cast<float>(stride);
+            instance.y1          = (anchor_y - top) * static_cast<float>(stride);
+            instance.x2          = (anchor_x + right) * static_cast<float>(stride);
+            instance.y2          = (anchor_y + bottom) * static_cast<float>(stride);
+            instance.score       = best_score;
+            instance.class_id    = best_class;
+            instance.query_index = query_index++;
+            instance.mask_coefficients.resize(kYoloMaskChannels);
+            for (int c = 0; c < kYoloMaskChannels; ++c)
+            {
+                instance.mask_coefficients[static_cast<size_t>(c)] = data[(4 + args.num_classes + c) * grid + idx];
+            }
+            remapToOriginalImage(instance, letterbox);
+            instances.push_back(std::move(instance));
+        }
+    }
+
+    return nonMaximumSuppression(std::move(instances), args.nms_threshold, args.max_instances);
+}
+
+/**
+ * @brief 根据 YOLOv8-Seg proto 和实例 mask coefficients 生成原图尺寸 mask logits。
+ */
+std::vector<cv::Mat> buildYoloV8SegMasks(const std::vector<Instance> &instances, const HostBuffer &proto_output,
+                                         const nvinfer1::Dims &proto_dims, const LetterboxInfo &letterbox)
+{
+    if (proto_dims.nbDims != 4 || proto_dims.d[0] != 1 || proto_dims.d[1] != kYoloMaskChannels || proto_dims.d[2] <= 0
+        || proto_dims.d[3] <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected YOLOv8-Seg proto shape: %s",
+                             dimsToCsv(proto_dims).c_str());
+    }
+
+    const auto    *proto     = static_cast<const float *>(proto_output.data());
+    const int      proto_h   = static_cast<int>(proto_dims.d[2]);
+    const int      proto_w   = static_cast<int>(proto_dims.d[3]);
+    const int      area      = proto_h * proto_w;
+    const int      resized_w = static_cast<int>(std::round(static_cast<float>(letterbox.original_w) * letterbox.scale));
+    const int      resized_h = static_cast<int>(std::round(static_cast<float>(letterbox.original_h) * letterbox.scale));
+    const cv::Rect content_rect(letterbox.pad_x, letterbox.pad_y, resized_w, resized_h);
+
+    std::vector<cv::Mat> masks;
+    masks.reserve(instances.size());
+    for (const auto &instance : instances)
+    {
+        cv::Mat low_res = cv::Mat::zeros(proto_h, proto_w, CV_32FC1);
+        for (int c = 0; c < kYoloMaskChannels; ++c)
+        {
+            const cv::Mat channel(proto_h, proto_w, CV_32FC1,
+                                  const_cast<float *>(proto + static_cast<size_t>(c) * area));
+            low_res += instance.mask_coefficients[static_cast<size_t>(c)] * channel;
+        }
+
+        const float net_x1 = instance.x1 * letterbox.scale + static_cast<float>(letterbox.pad_x);
+        const float net_y1 = instance.y1 * letterbox.scale + static_cast<float>(letterbox.pad_y);
+        const float net_x2 = instance.x2 * letterbox.scale + static_cast<float>(letterbox.pad_x);
+        const float net_y2 = instance.y2 * letterbox.scale + static_cast<float>(letterbox.pad_y);
+        const int   crop_x1
+            = std::max(0, std::min(proto_w - 1, static_cast<int>(std::floor(net_x1 / letterbox.input_w * proto_w))));
+        const int crop_y1
+            = std::max(0, std::min(proto_h - 1, static_cast<int>(std::floor(net_y1 / letterbox.input_h * proto_h))));
+        const int crop_x2
+            = std::max(0, std::min(proto_w, static_cast<int>(std::ceil(net_x2 / letterbox.input_w * proto_w))));
+        const int crop_y2
+            = std::max(0, std::min(proto_h, static_cast<int>(std::ceil(net_y2 / letterbox.input_h * proto_h))));
+
+        cv::Mat cropped = cv::Mat::zeros(proto_h, proto_w, CV_32FC1);
+        if (crop_x2 > crop_x1 && crop_y2 > crop_y1)
+        {
+            const cv::Rect crop_rect(crop_x1, crop_y1, crop_x2 - crop_x1, crop_y2 - crop_y1);
+            low_res(crop_rect).copyTo(cropped(crop_rect));
+        }
+
+        cv::Mat input_mask;
+        cv::resize(cropped, input_mask, cv::Size(letterbox.input_w, letterbox.input_h), 0.0, 0.0, cv::INTER_LINEAR);
+        cv::Mat original_mask;
+        cv::resize(input_mask(content_rect), original_mask, cv::Size(letterbox.original_w, letterbox.original_h), 0.0,
+                   0.0, cv::INTER_LINEAR);
+        masks.push_back(std::move(original_mask));
+    }
+    return masks;
+}
+
+void printInstances(const std::vector<Instance> &instances, const std::vector<std::string> &labels)
+{
+    std::cout << "\nInstances: " << instances.size() << std::endl;
+    for (size_t i = 0; i < instances.size(); ++i)
+    {
+        const auto &instance = instances[i];
+        std::cout << std::fixed << std::setprecision(4) << "#" << i << " score=" << instance.score
+                  << " class=" << instance.class_id << " (" << className(instance.class_id, labels) << ") box=["
+                  << instance.x1 << ", " << instance.y1 << ", " << instance.x2 << ", " << instance.y2
+                  << "] query=" << instance.query_index << std::endl;
+    }
+}
+
+/**
+ * @brief 将实例 mask 叠加到原图，并绘制检测框和类别标签。
+ */
+void drawInstances(const cv::Mat &image, const std::vector<Instance> &instances, const HostBuffer &mask_buffer,
+                   const nvinfer1::Dims &mask_dims, const std::vector<std::string> &labels, float mask_threshold,
+                   const fs::path &output_path)
+{
+    if (output_path.empty())
+    {
+        return;
+    }
+    if (mask_dims.nbDims != 4)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "RF-DETR-Seg masks output must be 4D");
+    }
+
+    const auto *masks  = static_cast<const float *>(mask_buffer.data());
+    const int   mask_h = static_cast<int>(mask_dims.d[2]);
+    const int   mask_w = static_cast<int>(mask_dims.d[3]);
+
+    cv::Mat visual;
+    image.convertTo(visual, CV_32FC3);
+
+    for (const auto &instance : instances)
+    {
+        const int       color_seed = instance.class_id * 37 + instance.query_index * 13;
+        const cv::Vec3f color(static_cast<float>((color_seed * 3 + 80) % 255),
+                              static_cast<float>((color_seed * 7 + 120) % 255),
+                              static_cast<float>((color_seed * 11 + 160) % 255));
+        const float    *mask_ptr = masks + static_cast<size_t>(instance.query_index) * mask_h * mask_w;
+        const cv::Mat   low_res(mask_h, mask_w, CV_32FC1, const_cast<float *>(mask_ptr));
+        cv::Mat         resized;
+        cv::resize(low_res, resized, image.size(), 0.0, 0.0, cv::INTER_LINEAR);
+
+        for (int y = 0; y < visual.rows; ++y)
+        {
+            auto       *pixel_row = visual.ptr<cv::Vec3f>(y);
+            const auto *mask_row  = resized.ptr<float>(y);
+            for (int x = 0; x < visual.cols; ++x)
+            {
+                if (mask_row[x] > mask_threshold)
+                {
+                    pixel_row[x] = pixel_row[x] * 0.55F + color * 0.45F;
+                }
+            }
+        }
+    }
+
+    visual.convertTo(visual, CV_8UC3);
+    for (const auto &instance : instances)
+    {
+        const int        color_seed = instance.class_id * 37 + instance.query_index * 13;
+        const cv::Scalar color((color_seed * 3 + 80) % 255, (color_seed * 7 + 120) % 255,
+                               (color_seed * 11 + 160) % 255);
+        cv::rectangle(
+            visual, cv::Point(static_cast<int>(std::round(instance.x1)), static_cast<int>(std::round(instance.y1))),
+            cv::Point(static_cast<int>(std::round(instance.x2)), static_cast<int>(std::round(instance.y2))), color, 2);
+
+        std::ostringstream label;
+        label << className(instance.class_id, labels) << ' ' << std::fixed << std::setprecision(2) << instance.score;
+        int            baseline  = 0;
+        const cv::Size text_size = cv::getTextSize(label.str(), cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
+        const int      text_x    = static_cast<int>(std::round(instance.x1));
+        const int      text_y    = std::max(text_size.height + 4, static_cast<int>(std::round(instance.y1)));
+        cv::rectangle(
+            visual,
+            cv::Rect(text_x, text_y - text_size.height - 4, text_size.width + 4, text_size.height + baseline + 4),
+            color, cv::FILLED);
+        cv::putText(visual, label.str(), cv::Point(text_x + 2, text_y - 3), cv::FONT_HERSHEY_SIMPLEX, 0.5,
+                    cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+    }
+
+    fs::create_directories(output_path.parent_path().empty() ? fs::path{"."} : output_path.parent_path());
+    if (!cv::imwrite(output_path.string(), visual))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to write output image: %s",
+                             output_path.string().c_str());
+    }
+    std::cout << "Saved segmentation image to: " << fs::absolute(output_path).string() << std::endl;
+}
+
+/**
+ * @brief 将 YOLOv8-Seg 已还原到原图尺寸的 mask logits 叠加到图像。
+ */
+void drawYoloInstances(const cv::Mat &image, const std::vector<Instance> &instances, const std::vector<cv::Mat> &masks,
+                       const std::vector<std::string> &labels, float mask_threshold, const fs::path &output_path)
+{
+    if (output_path.empty())
+    {
+        return;
+    }
+    if (masks.size() != instances.size())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "YOLOv8-Seg mask count mismatch: got %zu masks for %zu instances", masks.size(),
+                             instances.size());
+    }
+
+    cv::Mat visual;
+    image.convertTo(visual, CV_32FC3);
+
+    for (size_t i = 0; i < instances.size(); ++i)
+    {
+        const auto     &instance   = instances[i];
+        const int       color_seed = instance.class_id * 37 + instance.query_index * 13;
+        const cv::Vec3f color(static_cast<float>((color_seed * 3 + 80) % 255),
+                              static_cast<float>((color_seed * 7 + 120) % 255),
+                              static_cast<float>((color_seed * 11 + 160) % 255));
+        for (int y = 0; y < visual.rows; ++y)
+        {
+            auto       *pixel_row = visual.ptr<cv::Vec3f>(y);
+            const auto *mask_row  = masks[i].ptr<float>(y);
+            for (int x = 0; x < visual.cols; ++x)
+            {
+                if (mask_row[x] > mask_threshold)
+                {
+                    pixel_row[x] = pixel_row[x] * 0.55F + color * 0.45F;
+                }
+            }
+        }
+    }
+
+    visual.convertTo(visual, CV_8UC3);
+    for (const auto &instance : instances)
+    {
+        const int        color_seed = instance.class_id * 37 + instance.query_index * 13;
+        const cv::Scalar color((color_seed * 3 + 80) % 255, (color_seed * 7 + 120) % 255,
+                               (color_seed * 11 + 160) % 255);
+        cv::rectangle(
+            visual, cv::Point(static_cast<int>(std::round(instance.x1)), static_cast<int>(std::round(instance.y1))),
+            cv::Point(static_cast<int>(std::round(instance.x2)), static_cast<int>(std::round(instance.y2))), color, 2);
+
+        std::ostringstream label;
+        label << className(instance.class_id, labels) << ' ' << std::fixed << std::setprecision(2) << instance.score;
+        int            baseline  = 0;
+        const cv::Size text_size = cv::getTextSize(label.str(), cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
+        const int      text_x    = static_cast<int>(std::round(instance.x1));
+        const int      text_y    = std::max(text_size.height + 4, static_cast<int>(std::round(instance.y1)));
+        cv::rectangle(
+            visual,
+            cv::Rect(text_x, text_y - text_size.height - 4, text_size.width + 4, text_size.height + baseline + 4),
+            color, cv::FILLED);
+        cv::putText(visual, label.str(), cv::Point(text_x + 2, text_y - 3), cv::FONT_HERSHEY_SIMPLEX, 0.5,
+                    cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+    }
+
+    fs::create_directories(output_path.parent_path().empty() ? fs::path{"."} : output_path.parent_path());
+    if (!cv::imwrite(output_path.string(), visual))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to write output image: %s",
+                             output_path.string().c_str());
+    }
+    std::cout << "Saved segmentation image to: " << fs::absolute(output_path).string() << std::endl;
+}
+
 cxxopts::Options makeOptions(const char *program_name)
 {
-    cxxopts::Options options(program_name, "Run InferRT SAM/SAM2 segmentation models");
-    options.add_options()("model,m", "SAM/SAM2 model name, e.g. sam_vit_b/sam2_1_hiera_tiny (required)",
-                          cxxopts::value<std::string>())(
-        "weights-file,w", "Weights/model file (.wts, .onnx or OpenVINO IR) (required)", cxxopts::value<std::string>())(
+    cxxopts::Options options(program_name, "Run image-only instance segmentation models");
+    options.add_options()("model,m", "Model key, e.g. rfdetr_seg_nano or yolov8n_seg (required)",
+                          cxxopts::value<std::string>())("weights-file,w", "Native .wts file (required)",
+                                                         cxxopts::value<std::string>())(
         "image-path,i", "Input image path", cxxopts::value<std::string>()->default_value(""))(
+        "label-file,l", "Optional class label file", cxxopts::value<std::string>()->default_value(""))(
         "output-image,o", "Path to save mask overlay", cxxopts::value<std::string>()->default_value(""))(
-        "point-x,x", "Positive point prompt x; <=1 means normalized coordinate",
-        cxxopts::value<float>()->default_value("0.5"))("point-y,y",
-                                                       "Positive point prompt y; <=1 means normalized coordinate",
-                                                       cxxopts::value<float>()->default_value("0.5"))(
-        "box", "Optional box prompt x0,y0,x1,y1; <=1 means normalized coordinate",
-        cxxopts::value<std::string>()->default_value(""))("threshold", "Mask logit threshold",
-                                                          cxxopts::value<float>()->default_value("0.0"))(
-        "backend", "Inference backend: tensorrt, openvino, onnxruntime",
-        cxxopts::value<std::string>()->default_value("tensorrt"))("device", "Inference device: cpu or gpu",
-                                                                  cxxopts::value<std::string>()->default_value("gpu"))(
+        "input-size", "Optional square network input size; default uses the registered model size",
+        cxxopts::value<int>())("conf-threshold", "Instance confidence threshold",
+                               cxxopts::value<float>()->default_value("0.35"))(
+        "num-classes", "Number of YOLO classes; ignored by RF-DETR-Seg", cxxopts::value<int>()->default_value("80"))(
+        "mask-threshold", "Mask logit threshold", cxxopts::value<float>()->default_value("0.0"))(
+        "nms-threshold", "Class-wise NMS IoU threshold", cxxopts::value<float>()->default_value("0.50"))(
+        "max-instances", "Maximum instances to draw", cxxopts::value<int>()->default_value("20"))(
+        "backend", "Inference backend: tensorrt", cxxopts::value<std::string>()->default_value("tensorrt"))(
+        "device", "Inference device: gpu", cxxopts::value<std::string>()->default_value("gpu"))(
         "warmup", "Warmup iterations before timing", cxxopts::value<int>()->default_value("0"))(
         "repeat", "Timed inference iterations", cxxopts::value<int>()->default_value("1"))("h,help", "Show help");
     return options;
 }
 
-/**
- * @brief 解析命令行参数。
- */
 Arguments parseArguments(int argc, char *argv[])
 {
     auto       options = makeOptions(argv[0]);
@@ -236,41 +799,59 @@ Arguments parseArguments(int argc, char *argv[])
     {
         std::cout << options.help() << std::endl;
         std::cout << "Default image: " << kDefaultImagePath.generic_string() << std::endl;
-        std::cout << "Supported SAM models:";
-        for (const auto &model_name : irt::model::getRegisteredModelNames())
-        {
-            if (isSAMFamilyModel(model_name))
-            {
-                std::cout << ' ' << model_name;
-            }
-        }
-        std::cout << std::endl;
+        std::cout << "Default labels: " << kDefaultLabelPath.generic_string() << std::endl;
         throw HelpRequested{};
     }
-
     if (!result.count("model") || !result.count("weights-file"))
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--model and --weights-file are required");
     }
 
     Arguments args;
-    args.model_name   = result["model"].as<std::string>();
-    args.weights_file = result["weights-file"].as<std::string>();
-    args.image_path   = result["image-path"].as<std::string>();
-    args.output_image = result["output-image"].as<std::string>();
-    args.point_x      = result["point-x"].as<float>();
-    args.point_y      = result["point-y"].as<float>();
-    args.backend      = parseBackend(result["backend"].as<std::string>());
-    args.device       = parseDevice(result["device"].as<std::string>());
-    args.warmup       = result["warmup"].as<int>();
-    args.repeat       = result["repeat"].as<int>();
-    const auto box    = result["box"].as<std::string>();
-    if (!box.empty())
+    args.model_name          = result["model"].as<std::string>();
+    args.weights_file        = result["weights-file"].as<std::string>();
+    args.image_path          = result["image-path"].as<std::string>();
+    args.label_file          = result["label-file"].as<std::string>();
+    args.output_image        = result["output-image"].as<std::string>();
+    args.input_size_explicit = result.count("input-size") != 0U;
+    args.input_size          = args.input_size_explicit ? result["input-size"].as<int>() : 0;
+    args.num_classes         = result["num-classes"].as<int>();
+    args.conf_threshold      = result["conf-threshold"].as<float>();
+    args.mask_threshold      = result["mask-threshold"].as<float>();
+    args.nms_threshold       = result["nms-threshold"].as<float>();
+    args.max_instances       = result["max-instances"].as<int>();
+    args.backend             = parseBackend(result["backend"].as<std::string>());
+    args.device              = parseDevice(result["device"].as<std::string>());
+    args.warmup              = result["warmup"].as<int>();
+    args.repeat              = result["repeat"].as<int>();
+    args.family              = modelFamily(args.model_name);
+
+    if (args.backend != irt::model::ModelBackend::TensorRT || args.device != irt::model::ModelDevice::GPU)
     {
-        args.has_box = true;
-        args.box     = parseBoxPrompt(box);
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "Segmentation sample currently requires TensorRT/GPU");
     }
-    args.threshold = result["threshold"].as<float>();
+    if (args.input_size_explicit && args.input_size <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--input-size must be positive");
+    }
+    if (args.family == SegmentationFamily::YOLOV8 && args.input_size_explicit && args.input_size % 32 != 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "YOLO input size must be divisible by 32");
+    }
+    if (args.num_classes <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--num-classes must be positive");
+    }
+    if (args.conf_threshold < 0.0F || args.conf_threshold > 1.0F || args.nms_threshold < 0.0F
+        || args.nms_threshold > 1.0F)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "thresholds must be in [0, 1]");
+    }
+    if (args.max_instances <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--max-instances must be positive");
+    }
     if (args.warmup < 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--warmup must be >= 0");
@@ -282,125 +863,8 @@ Arguments parseArguments(int argc, char *argv[])
     return args;
 }
 
-/**
- * @brief 按官方最长边缩放规则计算 padding 前尺寸。
- */
-std::pair<int, int> computeResizeShape(int original_h, int original_w, int target_size)
-{
-    const float scale = static_cast<float>(target_size) / static_cast<float>(std::max(original_h, original_w));
-    return {static_cast<int>(std::floor(static_cast<float>(original_h) * scale + 0.5F)),
-            static_cast<int>(std::floor(static_cast<float>(original_w) * scale + 0.5F))};
-}
-
-/**
- * @brief 将输入点转换到官方 SAM padding 前坐标系。
- */
-float scalePointCoordinate(float value, int original_size, int resized_size)
-{
-    const float original_coord = value <= 1.0F ? value * static_cast<float>(original_size) : value;
-    return original_coord * static_cast<float>(resized_size) / static_cast<float>(std::max(1, original_size));
-}
-
-/**
- * @brief 使用 SAM 官方均值方差与最长边缩放/padding 预处理图像。
- */
-PreprocessedSAMImage preprocessSAMImage(const cv::Mat &image, int input_h, int input_w, bool use_sam2_preprocess)
-{
-    if (input_h != input_w)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM input must be square, got %dx%d", input_h,
-                             input_w);
-    }
-
-    cv::Mat rgb;
-    cv::cvtColor(image, rgb, cv::COLOR_BGR2RGB);
-    if (use_sam2_preprocess)
-    {
-        static constexpr float kMean[3]{0.485F, 0.456F, 0.406F};
-        static constexpr float kStd[3]{0.229F, 0.224F, 0.225F};
-        cv::Mat                resized;
-        cv::resize(rgb, resized, cv::Size(input_w, input_h), 0, 0, cv::INTER_LINEAR);
-
-        std::vector<float> tensor(static_cast<size_t>(3) * input_h * input_w);
-        for (int y = 0; y < input_h; ++y)
-        {
-            const auto *row = resized.ptr<cv::Vec3b>(y);
-            for (int x = 0; x < input_w; ++x)
-            {
-                for (int c = 0; c < 3; ++c)
-                {
-                    const size_t offset
-                        = static_cast<size_t>(c) * input_h * input_w + static_cast<size_t>(y) * input_w + x;
-                    tensor[offset] = (static_cast<float>(row[x][c]) / 255.0F - kMean[c]) / kStd[c];
-                }
-            }
-        }
-        return {std::move(tensor), input_h, input_w};
-    }
-
-    static constexpr float kMean[3]{123.675F, 116.28F, 103.53F};
-    static constexpr float kStd[3]{58.395F, 57.12F, 57.375F};
-    const auto [resized_h, resized_w] = computeResizeShape(image.rows, image.cols, input_h);
-    cv::Mat resized;
-    cv::resize(rgb, resized, cv::Size(resized_w, resized_h), 0, 0, cv::INTER_LINEAR);
-
-    std::vector<float> tensor(static_cast<size_t>(3) * input_h * input_w, 0.0F);
-    for (int y = 0; y < resized_h; ++y)
-    {
-        const auto *row = resized.ptr<cv::Vec3b>(y);
-        for (int x = 0; x < resized_w; ++x)
-        {
-            for (int c = 0; c < 3; ++c)
-            {
-                const size_t offset = static_cast<size_t>(c) * input_h * input_w + static_cast<size_t>(y) * input_w + x;
-                tensor[offset]      = (static_cast<float>(row[x][c]) - kMean[c]) / kStd[c];
-            }
-        }
-    }
-    return {std::move(tensor), resized_h, resized_w};
-}
-
-/**
- * @brief 保存第一张 mask 的彩色叠加结果，并按官方后处理裁掉 padding。
- */
-void saveMaskOverlay(const cv::Mat &image, const float *mask, int mask_h, int mask_w, int input_h, int input_w,
-                     int resized_h, int resized_w, float threshold, const fs::path &output_image)
-{
-    cv::Mat low_res(mask_h, mask_w, CV_32FC1, const_cast<float *>(mask));
-    cv::Mat padded;
-    cv::resize(low_res, padded, cv::Size(input_w, input_h), 0, 0, cv::INTER_LINEAR);
-    cv::Mat cropped = padded(cv::Rect(0, 0, resized_w, resized_h));
-    cv::Mat resized;
-    cv::resize(cropped, resized, image.size(), 0, 0, cv::INTER_LINEAR);
-
-    cv::Mat overlay = image.clone();
-    for (int y = 0; y < overlay.rows; ++y)
-    {
-        auto       *pixel_row = overlay.ptr<cv::Vec3b>(y);
-        const auto *mask_row  = resized.ptr<float>(y);
-        for (int x = 0; x < overlay.cols; ++x)
-        {
-            if (mask_row[x] > threshold)
-            {
-                pixel_row[x][2] = static_cast<unsigned char>(0.65F * 255.0F + 0.35F * pixel_row[x][2]);
-                pixel_row[x][1] = static_cast<unsigned char>(0.35F * pixel_row[x][1]);
-                pixel_row[x][0] = static_cast<unsigned char>(0.35F * pixel_row[x][0]);
-            }
-        }
-    }
-
-    if (!cv::imwrite(output_image.string(), overlay))
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to write output image: %s",
-                             output_image.string().c_str());
-    }
-}
-
 } // namespace
 
-/**
- * @brief 运行 SAM/SAM2/SAM3 单图分割示例。
- */
 int main(int argc, char *argv[])
 {
     try
@@ -411,29 +875,39 @@ int main(int argc, char *argv[])
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported model: %s", args.model_name.c_str());
         }
 
-        const fs::path project_root = irt::util::findProjectRoot(argv[0], {kDefaultImagePath}, __FILE__);
-        const fs::path image_path   = args.image_path.empty() ? (project_root / kDefaultImagePath) : args.image_path;
-        const fs::path output_path  = args.output_image.empty()
-                                        ? (fs::current_path() / (args.model_name + "_sam_mask.jpg"))
-                                        : args.output_image;
+        const fs::path project_root
+            = irt::util::findProjectRoot(argv[0], {kDefaultImagePath, kDefaultLabelPath}, __FILE__);
+        const fs::path image_path  = args.image_path.empty() ? (project_root / kDefaultImagePath) : args.image_path;
+        const fs::path label_path  = args.label_file.empty() ? (project_root / kDefaultLabelPath) : args.label_file;
+        const fs::path output_path = args.output_image.empty()
+                                       ? (fs::current_path() / (args.model_name + "_segmentation.jpg"))
+                                       : args.output_image;
 
         auto config = std::make_unique<irt::model::IModelConfig>();
         config->setBackend(args.backend);
         config->setDevice(args.device);
-        const std::string runtime_model_name
-            = args.backend == irt::model::ModelBackend::TensorRT ? args.model_name : "onnx";
-        auto model = irt::model::CreateModel(runtime_model_name, std::move(config));
+        if (args.input_size_explicit)
+        {
+            config->setInputShape(nvinfer1::Dims4{1, 3, args.input_size, args.input_size});
+        }
+        if (args.family == SegmentationFamily::YOLOV8)
+        {
+            config->setNumClasses(args.num_classes);
+        }
+
+        auto model = irt::model::CreateModel(args.model_name, std::move(config));
         if (!model)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to create model: %s",
-                                 runtime_model_name.c_str());
+                                 args.model_name.c_str());
         }
         model->setLogLevel(nvinfer1::ILogger::Severity::kINFO);
 
-        std::cout << "Building or loading SAM model..." << std::endl;
+        std::cout << "Building or loading " << modelFamilyName(args.family) << " model..." << std::endl;
         const auto build_start = Clock::now();
         model->buildOrLoad(args.weights_file.string());
         const auto build_end = Clock::now();
+        std::cout << "Model loaded successfully." << std::endl;
 
         cv::Mat image = cv::imread(image_path.string(), cv::IMREAD_COLOR);
         if (image.empty())
@@ -442,89 +916,78 @@ int main(int argc, char *argv[])
                                  image_path.string().c_str());
         }
 
-        const auto input_names  = model->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
-        const auto output_names = model->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
-        if (input_names.size() != 5 || output_names.size() != 3)
+        const auto   input_names      = model->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
+        const auto   output_names     = model->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+        const size_t expected_outputs = args.family == SegmentationFamily::RFDETR ? 3U : 4U;
+        if (input_names.size() != 1 || output_names.size() != expected_outputs)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "Segmentation sample expects SAM default 5-input/3-output contract");
+                                 "%s sample expects one image input and %zu outputs", modelFamilyName(args.family),
+                                 expected_outputs);
         }
-
-        const auto image_dims       = model->tensorShape(input_names[0]);
-        const int  input_h          = static_cast<int>(image_dims.d[2]);
-        const int  input_w          = static_cast<int>(image_dims.d[3]);
-        const auto prompt_mask_dims = model->tensorShape(input_names[3]);
-        const int  prompt_mask_h    = static_cast<int>(prompt_mask_dims.d[2]);
-        const int  prompt_mask_w    = static_cast<int>(prompt_mask_dims.d[3]);
-        const auto output_mask_dims = model->tensorShape(output_names[0]);
-        if (output_mask_dims.nbDims != 4)
+        size_t                dets_index   = 0;
+        size_t                labels_index = 0;
+        size_t                masks_index  = 0;
+        size_t                proto_index  = 0;
+        std::array<size_t, 3> yolo_branch_indices{0, 1, 2};
+        if (args.family == SegmentationFamily::RFDETR)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM masks output must be 4D, got %dD",
-                                 output_mask_dims.nbDims);
+            dets_index   = requireOutputIndex(output_names, "dets");
+            labels_index = requireOutputIndex(output_names, "labels");
+            masks_index  = requireOutputIndex(output_names, "masks");
         }
-        const int output_mask_h = static_cast<int>(output_mask_dims.d[2]);
-        const int output_mask_w = static_cast<int>(output_mask_dims.d[3]);
-
-        const auto         preprocess_start = Clock::now();
-        auto               preprocessed     = preprocessSAMImage(image, input_h, input_w, isSAM2Model(args.model_name));
-        auto               image_tensor     = std::move(preprocessed.tensor);
-        std::vector<float> point_coords(static_cast<size_t>(kSamMaxPoints) * 2, 0.0F);
-        std::vector<float> point_labels(kSamMaxPoints, -1.0F);
-        point_coords[0] = scalePointCoordinate(args.point_x, image.cols, preprocessed.resized_w);
-        point_coords[1] = scalePointCoordinate(args.point_y, image.rows, preprocessed.resized_h);
-        point_labels[0] = 1.0F;
-        if (args.has_box)
+        else
         {
-            point_coords[2] = scalePointCoordinate(args.box[0], image.cols, preprocessed.resized_w);
-            point_coords[3] = scalePointCoordinate(args.box[1], image.rows, preprocessed.resized_h);
-            point_labels[1] = 2.0F;
-            point_coords[4] = scalePointCoordinate(args.box[2], image.cols, preprocessed.resized_w);
-            point_coords[5] = scalePointCoordinate(args.box[3], image.rows, preprocessed.resized_h);
-            point_labels[2] = 3.0F;
+            yolo_branch_indices
+                = {requireOutputIndex(output_names, "output0"), requireOutputIndex(output_names, "output1"),
+                   requireOutputIndex(output_names, "output2")};
+            proto_index = requireOutputIndex(output_names, "proto");
         }
-        std::vector<float> mask_input(static_cast<size_t>(prompt_mask_h) * prompt_mask_w, 0.0F);
-        std::vector<float> has_mask_input{0.0F};
-        const auto         preprocess_end = Clock::now();
 
-        const std::vector<std::vector<float> *> input_vectors{
-            &image_tensor, &point_coords, &point_labels, &mask_input, &has_mask_input,
-        };
+        const auto input_dims       = model->tensorShape(input_names.front());
+        const auto preprocess_start = Clock::now();
+        if (input_dims.nbDims != 4 || input_dims.d[1] != 3 || input_dims.d[2] <= 0 || input_dims.d[3] <= 0)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "%s expects Nx3xHxW input, got %s",
+                                 modelFamilyName(args.family), dimsToCsv(input_dims).c_str());
+        }
+        LetterboxInfo letterbox;
+        auto          input_tensor   = args.family == SegmentationFamily::RFDETR
+                                         ? preprocessRFDETR(image, input_dims)
+                                         : preprocessLetterbox(image, static_cast<int>(input_dims.d[3]),
+                                                               static_cast<int>(input_dims.d[2]), letterbox);
+        const auto    preprocess_end = Clock::now();
 
-        const auto                stream        = model->resolveExecutionStream();
-        const bool                uses_tensorrt = args.backend == irt::model::ModelBackend::TensorRT;
-        std::vector<DeviceBuffer> device_inputs;
-        std::vector<DeviceBuffer> device_outputs;
-        std::vector<HostBuffer>   host_outputs;
-        std::vector<void *>       buffers;
-        device_inputs.reserve(input_vectors.size());
+        const auto   stream = model->resolveExecutionStream();
+        DeviceBuffer device_input(elementCount(input_dims), nvinfer1::DataType::kFLOAT);
+
+        std::vector<nvinfer1::Dims> output_dims;
+        std::vector<DeviceBuffer>   device_outputs;
+        std::vector<HostBuffer>     host_outputs;
+        output_dims.reserve(output_names.size());
         device_outputs.reserve(output_names.size());
         host_outputs.reserve(output_names.size());
-        buffers.reserve(input_vectors.size() + output_names.size());
-
-        for (const auto *values : input_vectors)
-        {
-            if (uses_tensorrt)
-            {
-                device_inputs.emplace_back(values->size(), nvinfer1::DataType::kFLOAT);
-                buffers.push_back(device_inputs.back().data());
-            }
-            else
-            {
-                buffers.push_back(const_cast<float *>(values->data()));
-            }
-        }
-
         for (const auto &output_name : output_names)
         {
             const auto dims = model->tensorShape(output_name);
-            std::cout << "Output " << output_name << " dims=[" << dimsToCsv(dims) << "]" << std::endl;
-            const size_t count = elementCount(dims);
-            if (uses_tensorrt)
+            const auto type = model->tensorDataType(output_name);
+            if (type != nvinfer1::DataType::kFLOAT)
             {
-                device_outputs.emplace_back(count, nvinfer1::DataType::kFLOAT);
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                     "Segmentation sample expects float32 outputs");
             }
-            host_outputs.emplace_back(count, nvinfer1::DataType::kFLOAT);
-            buffers.push_back(uses_tensorrt ? device_outputs.back().data() : host_outputs.back().data());
+            output_dims.push_back(dims);
+            device_outputs.emplace_back(elementCount(dims), type);
+            host_outputs.emplace_back(elementCount(dims), type);
+            std::cout << "Output " << output_name << " dims=[" << dimsToCsv(dims) << "]" << std::endl;
+        }
+
+        std::vector<void *> buffers;
+        buffers.reserve(1 + output_names.size());
+        buffers.push_back(device_input.data());
+        for (auto &buffer : device_outputs)
+        {
+            buffers.push_back(buffer.data());
         }
 
         auto run_inference_once = [&]() -> IterationTiming
@@ -532,40 +995,27 @@ int main(int argc, char *argv[])
             IterationTiming timing;
 
             const auto h2d_start = Clock::now();
-            if (uses_tensorrt)
-            {
-                for (size_t i = 0; i < input_vectors.size(); ++i)
-                {
-                    const auto *values = input_vectors[i];
-                    checkCuda(cudaMemcpyAsync(device_inputs[i].data(), values->data(), values->size() * sizeof(float),
-                                              cudaMemcpyHostToDevice, stream),
-                              "cudaMemcpyAsync(SAM input)");
-                }
-                checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(SAM input)");
-            }
+            checkCuda(cudaMemcpyAsync(device_input.data(), input_tensor.data(), device_input.sizeBytes(),
+                                      cudaMemcpyHostToDevice, stream),
+                      "cudaMemcpyAsync(RF-DETR-Seg input)");
+            checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(RF-DETR-Seg input)");
             const auto h2d_end = Clock::now();
             timing.h2d_ms      = elapsedMs(h2d_start, h2d_end);
 
             const auto inference_start = Clock::now();
             model->infer(buffers, stream, true);
-            if (uses_tensorrt)
-            {
-                checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(SAM inference)");
-            }
+            checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(RF-DETR-Seg inference)");
             const auto inference_end = Clock::now();
             timing.inference_ms      = elapsedMs(inference_start, inference_end);
 
             const auto d2h_start = Clock::now();
-            if (uses_tensorrt)
+            for (size_t i = 0; i < host_outputs.size(); ++i)
             {
-                for (size_t i = 0; i < host_outputs.size(); ++i)
-                {
-                    checkCuda(cudaMemcpyAsync(host_outputs[i].data(), device_outputs[i].data(),
-                                              host_outputs[i].sizeBytes(), cudaMemcpyDeviceToHost, stream),
-                              "cudaMemcpyAsync(SAM output)");
-                }
-                checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(SAM output)");
+                checkCuda(cudaMemcpyAsync(host_outputs[i].data(), device_outputs[i].data(), host_outputs[i].sizeBytes(),
+                                          cudaMemcpyDeviceToHost, stream),
+                          "cudaMemcpyAsync(RF-DETR-Seg output)");
             }
+            checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(RF-DETR-Seg output)");
             const auto d2h_end = Clock::now();
             timing.d2h_ms      = elapsedMs(d2h_start, d2h_end);
             return timing;
@@ -596,13 +1046,33 @@ int main(int argc, char *argv[])
         }
         const auto infer_end = Clock::now();
 
-        const auto  post_start  = Clock::now();
-        const auto *mask_values = static_cast<const float *>(host_outputs.front().data());
-        saveMaskOverlay(image, mask_values, output_mask_h, output_mask_w, input_h, input_w, preprocessed.resized_h,
-                        preprocessed.resized_w, args.threshold, output_path);
+        const auto            post_start = Clock::now();
+        const auto            labels     = readLabels(label_path);
+        std::vector<Instance> instances;
+        if (args.family == SegmentationFamily::RFDETR)
+        {
+            instances
+                = decodeRFDETRSegOutputs(host_outputs[dets_index], output_dims[dets_index], host_outputs[labels_index],
+                                         output_dims[labels_index], output_dims[masks_index], args, image.size());
+        }
+        else
+        {
+            instances = decodeYoloV8SegOutputs(host_outputs, output_dims, yolo_branch_indices, args, letterbox);
+        }
+        printInstances(instances, labels);
+        if (args.family == SegmentationFamily::RFDETR)
+        {
+            drawInstances(image, instances, host_outputs[masks_index], output_dims[masks_index], labels,
+                          args.mask_threshold, output_path);
+        }
+        else
+        {
+            const auto masks
+                = buildYoloV8SegMasks(instances, host_outputs[proto_index], output_dims[proto_index], letterbox);
+            drawYoloInstances(image, instances, masks, labels, args.mask_threshold, output_path);
+        }
         const auto post_end = Clock::now();
 
-        std::cout << "Saved mask overlay to: " << fs::absolute(output_path).string() << std::endl;
         std::cout << "Backend: " << irt::model::modelBackendName(args.backend)
                   << ", device=" << irt::model::modelDeviceName(args.device) << std::endl;
         const auto h2d_stats        = summarizeTimings(h2d_times_ms);
