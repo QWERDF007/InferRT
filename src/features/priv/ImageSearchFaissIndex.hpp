@@ -54,6 +54,7 @@ namespace irt::features::priv {
 using BuildProgressCallback    = ImageSearchBuildProgressCallback;
 using LoadFeatureCallback      = std::function<std::vector<float>(size_t)>;
 using LoadFeatureBatchCallback = std::function<std::vector<float>(size_t, size_t)>;
+using LoadFeatureIndexedBatchCallback = std::function<std::vector<float>(const std::vector<size_t> &)>;
 
 inline void reportBuildProgress(const BuildProgressCallback &progress_callback, ImageSearchBuildStage stage,
                                 size_t batch_index = 0, size_t batch_begin = 0, size_t batch_count = 0,
@@ -415,12 +416,70 @@ inline std::vector<float> loadFeatureBatch(size_t begin, size_t count, int featu
  * @brief 通过批量回调加载连续图像特征，并校验返回的扁平化尺寸。
  */
 inline std::vector<float> loadFeatureBatch(size_t begin, size_t count, int feature_dim,
-                                           const LoadFeatureBatchCallback &load_features)
+                                            const LoadFeatureBatchCallback &load_features)
 {
     auto features = load_features(begin, count);
     if (features.size() != count * static_cast<size_t>(feature_dim))
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected ImageSearch feature batch size");
+    }
+    return features;
+}
+
+inline bool isContiguousIndexBatch(const std::vector<size_t> &indices)
+{
+    if (indices.empty())
+    {
+        return true;
+    }
+
+    const size_t begin = indices.front();
+    for (size_t i = 1; i < indices.size(); ++i)
+    {
+        if (indices[i] != begin + i)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+inline std::vector<float> loadFeatureIndexedBatch(size_t first_index, const std::vector<size_t> &indices,
+                                                  int feature_dim, const LoadFeatureCallback &load_feature,
+                                                  const LoadFeatureBatchCallback        &load_feature_batch,
+                                                  const LoadFeatureIndexedBatchCallback &load_feature_index_batch)
+{
+    if (indices.empty())
+    {
+        return {};
+    }
+
+    if (load_feature_batch && isContiguousIndexBatch(indices))
+    {
+        return loadFeatureBatch(first_index, indices.size(), feature_dim, load_feature_batch);
+    }
+
+    if (load_feature_index_batch)
+    {
+        auto features = load_feature_index_batch(indices);
+        if (features.size() != indices.size() * static_cast<size_t>(feature_dim))
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "Unexpected ImageSearch indexed feature batch size");
+        }
+        return features;
+    }
+
+    std::vector<float> features;
+    features.reserve(indices.size() * static_cast<size_t>(feature_dim));
+    for (const auto index : indices)
+    {
+        auto feature = load_feature(index);
+        if (feature.size() != static_cast<size_t>(feature_dim))
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected ImageSearch feature size");
+        }
+        features.insert(features.end(), feature.begin(), feature.end());
     }
     return features;
 }
@@ -433,28 +492,41 @@ struct TrainingFeatureSample
 };
 
 inline TrainingFeatureSample loadTrainingFeatures(size_t vector_count, int feature_dim, size_t training_count,
-                                                  size_t stride, const LoadFeatureCallback &load_feature,
+                                                  size_t stride, size_t training_batch_size,
+                                                  const LoadFeatureCallback             &load_feature,
+                                                  const LoadFeatureBatchCallback        &load_feature_batch,
+                                                  const LoadFeatureIndexedBatchCallback &load_feature_index_batch,
                                                   const BuildProgressCallback &progress_callback)
 {
     reportBuildProgress(progress_callback, ImageSearchBuildStage::TrainingFeatures, 0, 0, 0, 0, training_count);
 
+    training_batch_size = std::max<size_t>(1, training_batch_size);
+
     TrainingFeatureSample sample;
     sample.features.reserve(training_count * static_cast<size_t>(feature_dim));
     sample.indices.reserve(training_count);
-    for (size_t index_in_gallery = 0; index_in_gallery < vector_count && sample.count < training_count;
-         index_in_gallery += stride)
+    size_t              batch_index = 0;
+    size_t              index_in_gallery = 0;
+    std::vector<size_t> batch_indices;
+    batch_indices.reserve(training_batch_size);
+    while (index_in_gallery < vector_count && sample.count < training_count)
     {
-        auto feature = load_feature(index_in_gallery);
-        if (feature.size() != static_cast<size_t>(feature_dim))
+        batch_indices.clear();
+        const size_t batch_begin = index_in_gallery;
+        while (index_in_gallery < vector_count && sample.count + batch_indices.size() < training_count
+               && batch_indices.size() < training_batch_size)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected ImageSearch feature size");
+            batch_indices.push_back(index_in_gallery);
+            index_in_gallery += stride;
         }
 
-        sample.features.insert(sample.features.end(), feature.begin(), feature.end());
-        sample.indices.push_back(index_in_gallery);
-        ++sample.count;
-        reportBuildProgress(progress_callback, ImageSearchBuildStage::TrainingFeatures, sample.count - 1,
-                            index_in_gallery, 1, sample.count, training_count);
+        auto features = loadFeatureIndexedBatch(batch_begin, batch_indices, feature_dim, load_feature, load_feature_batch,
+                                                load_feature_index_batch);
+        sample.features.insert(sample.features.end(), features.begin(), features.end());
+        sample.indices.insert(sample.indices.end(), batch_indices.begin(), batch_indices.end());
+        sample.count += batch_indices.size();
+        reportBuildProgress(progress_callback, ImageSearchBuildStage::TrainingFeatures, batch_index++, batch_begin,
+                            batch_indices.size(), sample.count, training_count);
     }
     return sample;
 }
@@ -924,8 +996,11 @@ inline std::unique_ptr<faiss::Index> loadCpuOnDiskIvfFlatIndex(const std::filesy
 inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(size_t vector_count, int feature_dim,
                                                                 const std::filesystem::path    &index_path,
                                                                 size_t                          batch_size,
+                                                                size_t                          training_batch_size,
                                                                 const LoadFeatureCallback      &load_feature,
                                                                 const LoadFeatureBatchCallback &load_feature_batch,
+                                                                const LoadFeatureIndexedBatchCallback
+                                                                    &load_feature_index_batch,
                                                                 const BuildProgressCallback    &progress_callback = {});
 
 inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(size_t vector_count, int feature_dim,
@@ -934,8 +1009,8 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(size_t vector_co
                                                                 const LoadFeatureCallback   &load_feature,
                                                                 const BuildProgressCallback &progress_callback = {})
 {
-    return buildCpuOnDiskIvfFlatIndex(vector_count, feature_dim, index_path, batch_size, load_feature, {},
-                                      progress_callback);
+    return buildCpuOnDiskIvfFlatIndex(vector_count, feature_dim, index_path, batch_size, batch_size, load_feature, {},
+                                      {}, progress_callback);
 }
 
 inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(size_t vector_count, int feature_dim,
@@ -943,6 +1018,20 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(size_t vector_co
                                                                 size_t                          batch_size,
                                                                 const LoadFeatureCallback      &load_feature,
                                                                 const LoadFeatureBatchCallback &load_feature_batch,
+                                                                const BuildProgressCallback    &progress_callback = {})
+{
+    return buildCpuOnDiskIvfFlatIndex(vector_count, feature_dim, index_path, batch_size, batch_size, load_feature,
+                                      load_feature_batch, {}, progress_callback);
+}
+
+inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(size_t vector_count, int feature_dim,
+                                                                const std::filesystem::path    &index_path,
+                                                                size_t                          batch_size,
+                                                                size_t                          training_batch_size,
+                                                                const LoadFeatureCallback      &load_feature,
+                                                                const LoadFeatureBatchCallback &load_feature_batch,
+                                                                const LoadFeatureIndexedBatchCallback
+                                                                    &load_feature_index_batch,
                                                                 const BuildProgressCallback    &progress_callback)
 {
     if (vector_count == 0 || feature_dim <= 0)
@@ -956,7 +1045,8 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(size_t vector_co
     const size_t stride         = std::max<size_t>(1, vector_count / training_count);
 
     const auto training
-        = loadTrainingFeatures(vector_count, feature_dim, training_count, stride, load_feature, progress_callback);
+        = loadTrainingFeatures(vector_count, feature_dim, training_count, stride, training_batch_size, load_feature,
+                               load_feature_batch, load_feature_index_batch, progress_callback);
     const size_t actual_training_count = training.count;
     if (actual_training_count < nlist)
     {
@@ -987,8 +1077,11 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(size_t vector_co
 }
 
 inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int feature_dim, size_t batch_size,
+                                                        size_t training_batch_size,
                                                         const LoadFeatureCallback      &load_feature,
                                                         const LoadFeatureBatchCallback &load_feature_batch,
+                                                        const LoadFeatureIndexedBatchCallback
+                                                            &load_feature_index_batch,
                                                         const BuildProgressCallback    &progress_callback      = {},
                                                         bool                            require_gpu_compatible = false);
 
@@ -997,7 +1090,7 @@ inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int
                                                         const BuildProgressCallback &progress_callback      = {},
                                                         bool                         require_gpu_compatible = false)
 {
-    return buildRamIvfPqIndex(vector_count, feature_dim, batch_size, load_feature, {}, progress_callback,
+    return buildRamIvfPqIndex(vector_count, feature_dim, batch_size, batch_size, load_feature, {}, {}, progress_callback,
                               require_gpu_compatible);
 }
 
@@ -1006,6 +1099,19 @@ inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int
                                                         const LoadFeatureBatchCallback &load_feature_batch,
                                                         const BuildProgressCallback    &progress_callback,
                                                         bool                            require_gpu_compatible)
+{
+    return buildRamIvfPqIndex(vector_count, feature_dim, batch_size, batch_size, load_feature, load_feature_batch, {},
+                              progress_callback, require_gpu_compatible);
+}
+
+inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int feature_dim, size_t batch_size,
+                                                        size_t training_batch_size,
+                                                        const LoadFeatureCallback      &load_feature,
+                                                        const LoadFeatureBatchCallback &load_feature_batch,
+                                                        const LoadFeatureIndexedBatchCallback
+                                                            &load_feature_index_batch,
+                                                        const BuildProgressCallback &progress_callback,
+                                                        bool                         require_gpu_compatible)
 {
     if (vector_count == 0 || feature_dim <= 0)
     {
@@ -1022,7 +1128,8 @@ inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int
     const size_t stride         = std::max<size_t>(1, vector_count / training_count);
 
     auto training
-        = loadTrainingFeatures(vector_count, feature_dim, training_count, stride, load_feature, progress_callback);
+        = loadTrainingFeatures(vector_count, feature_dim, training_count, stride, training_batch_size, load_feature,
+                               load_feature_batch, load_feature_index_batch, progress_callback);
     const size_t actual_training_count = training.count;
     if (actual_training_count < nlist)
     {

@@ -457,6 +457,147 @@ TEST(ImageSearchTest, RamIndexBuildReportsStagesAndAddBatches)
     EXPECT_EQ(add_progress, vector_count);
 }
 
+TEST(ImageSearchTest, TrainingFeatureSamplingUsesContiguousBatchCallback)
+{
+    constexpr int    feature_dim     = 2;
+    constexpr size_t vector_count    = 10;
+    constexpr size_t training_count  = 10;
+    constexpr size_t stride          = 1;
+    constexpr size_t training_batch  = 4;
+    size_t           single_loads    = 0;
+    size_t           indexed_loads   = 0;
+
+    auto load_feature = [&](size_t row)
+    {
+        ++single_loads;
+        return std::vector<float>{static_cast<float>(row), static_cast<float>(row + 1)};
+    };
+
+    std::vector<std::pair<size_t, size_t>> loaded_batches;
+    auto load_feature_batch = [&](size_t begin, size_t count)
+    {
+        loaded_batches.emplace_back(begin, count);
+        std::vector<float> features;
+        features.reserve(count * feature_dim);
+        for (size_t row = begin; row < begin + count; ++row)
+        {
+            features.push_back(static_cast<float>(row));
+            features.push_back(static_cast<float>(row + 1));
+        }
+        return features;
+    };
+
+    auto load_feature_index_batch = [&](const std::vector<size_t> &indices)
+    {
+        ++indexed_loads;
+        std::vector<float> features;
+        features.reserve(indices.size() * feature_dim);
+        for (const auto row : indices)
+        {
+            features.push_back(static_cast<float>(row));
+            features.push_back(static_cast<float>(row + 1));
+        }
+        return features;
+    };
+
+    std::vector<std::pair<size_t, size_t>> progress_batches;
+    auto progress_callback = [&](const irt::features::ImageSearchBuildProgress &progress)
+    {
+        if (progress.stage == irt::features::ImageSearchBuildStage::TrainingFeatures && progress.batch_count > 0)
+        {
+            progress_batches.emplace_back(progress.batch_begin, progress.batch_count);
+        }
+    };
+
+    const auto sample = irt::features::priv::loadTrainingFeatures(
+        vector_count, feature_dim, training_count, stride, training_batch, load_feature, load_feature_batch,
+        load_feature_index_batch, progress_callback);
+
+    const std::vector<std::pair<size_t, size_t>> expected_batches{
+        {0, 4},
+        {4, 4},
+        {8, 2}
+    };
+    EXPECT_EQ(loaded_batches, expected_batches);
+    EXPECT_EQ(progress_batches, expected_batches);
+    EXPECT_EQ(single_loads, 0U);
+    EXPECT_EQ(indexed_loads, 0U);
+    EXPECT_EQ(sample.count, training_count);
+    EXPECT_EQ(sample.indices, (std::vector<size_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}));
+}
+
+TEST(ImageSearchTest, TrainingFeatureSamplingUsesIndexedBatchCallbackForStridedSamples)
+{
+    constexpr int    feature_dim     = 2;
+    constexpr size_t vector_count    = 10;
+    constexpr size_t training_count  = 5;
+    constexpr size_t stride          = 2;
+    constexpr size_t training_batch  = 3;
+    size_t           single_loads    = 0;
+    size_t           contiguous_loads = 0;
+
+    auto load_feature = [&](size_t row)
+    {
+        ++single_loads;
+        return std::vector<float>{static_cast<float>(row), static_cast<float>(row + 1)};
+    };
+
+    auto load_feature_batch = [&](size_t begin, size_t count)
+    {
+        ++contiguous_loads;
+        std::vector<float> features;
+        features.reserve(count * feature_dim);
+        for (size_t row = begin; row < begin + count; ++row)
+        {
+            features.push_back(static_cast<float>(row));
+            features.push_back(static_cast<float>(row + 1));
+        }
+        return features;
+    };
+
+    std::vector<std::vector<size_t>> loaded_index_batches;
+    auto load_feature_index_batch = [&](const std::vector<size_t> &indices)
+    {
+        loaded_index_batches.push_back(indices);
+        std::vector<float> features;
+        features.reserve(indices.size() * feature_dim);
+        for (const auto row : indices)
+        {
+            features.push_back(static_cast<float>(row));
+            features.push_back(static_cast<float>(row + 1));
+        }
+        return features;
+    };
+
+    std::vector<std::pair<size_t, size_t>> progress_batches;
+    auto progress_callback = [&](const irt::features::ImageSearchBuildProgress &progress)
+    {
+        if (progress.stage == irt::features::ImageSearchBuildStage::TrainingFeatures && progress.batch_count > 0)
+        {
+            progress_batches.emplace_back(progress.batch_begin, progress.batch_count);
+        }
+    };
+
+    const auto sample = irt::features::priv::loadTrainingFeatures(
+        vector_count, feature_dim, training_count, stride, training_batch, load_feature, load_feature_batch,
+        load_feature_index_batch, progress_callback);
+
+    const std::vector<std::vector<size_t>> expected_index_batches{
+        {0, 2, 4},
+        {6, 8}
+    };
+    const std::vector<std::pair<size_t, size_t>> expected_progress{
+        {0, 3},
+        {6, 2}
+    };
+    EXPECT_EQ(loaded_index_batches, expected_index_batches);
+    EXPECT_EQ(progress_batches, expected_progress);
+    EXPECT_EQ(single_loads, 0U);
+    EXPECT_EQ(contiguous_loads, 0U);
+    EXPECT_EQ(sample.count, training_count);
+    EXPECT_EQ(sample.indices, (std::vector<size_t>{0, 2, 4, 6, 8}));
+}
+
 /**
  * @brief GPU-compatible RAM IVF-PQ indexes use fixed 8-bit PQ codes.
  */

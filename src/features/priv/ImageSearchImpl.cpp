@@ -806,6 +806,27 @@ public:
         return features;
     }
 
+    std::vector<float> extractBatch(const std::vector<fs::path> &image_paths, const std::vector<size_t> &indices)
+    {
+        if (indices.empty())
+        {
+            return {};
+        }
+
+        std::vector<fs::path> selected_images;
+        selected_images.reserve(indices.size());
+        for (const auto index : indices)
+        {
+            if (index >= image_paths.size())
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                     "ImageSearch feature batch index is invalid");
+            }
+            selected_images.push_back(image_paths[index]);
+        }
+        return extractBatch(selected_images, 0, selected_images.size());
+    }
+
 private:
     /**
      * @brief 解析模型输入 batch，并把动态 graph 后端设置到配置的最大 batch。
@@ -977,8 +998,11 @@ FaissIndexBundle buildCpuOnDiskIndex(const std::vector<fs::path>       &gallery_
     FaissIndexBundle bundle;
     bundle.index = priv::buildCpuOnDiskIvfFlatIndex(
         gallery_images.size(), extractor.featureDim(), index_path, config.disk_build_batch_size,
+        config.model_batch_size,
         [&](size_t index) { return extractor.extract(gallery_images[index]); }, [&](size_t begin, size_t count)
-        { return extractor.extractBatch(gallery_images, begin, count); }, progress_callback);
+        { return extractor.extractBatch(gallery_images, begin, count); },
+        [&](const std::vector<size_t> &indices) { return extractor.extractBatch(gallery_images, indices); },
+        progress_callback);
     savePathMapping(mappingPathFromIndex(index_path), gallery_images);
     return bundle;
 }
@@ -992,9 +1016,10 @@ FaissIndexBundle buildRamIvfPqIndex(const std::vector<fs::path>       &gallery_i
                                     const ImageSearchBuildProgressCallback &progress_callback)
 {
     auto cpu_index = priv::buildRamIvfPqIndex(
-        gallery_images.size(), extractor.featureDim(), config.disk_build_batch_size,
+        gallery_images.size(), extractor.featureDim(), config.disk_build_batch_size, config.model_batch_size,
         [&](size_t index) { return extractor.extract(gallery_images[index]); },
         [&](size_t begin, size_t count) { return extractor.extractBatch(gallery_images, begin, count); },
+        [&](const std::vector<size_t> &indices) { return extractor.extractBatch(gallery_images, indices); },
         progress_callback, config.faiss_backend == ImageSearchFaissBackend::GPU);
 
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::WritingIndex, 0, 0, 0, 0, 1);
