@@ -226,6 +226,16 @@ def irt_module(build_dir: Path):
 
 
 @pytest.fixture(scope="session")
+def ops_module(build_dir: Path):
+    """已配置 DLL 搜索路径并导入的 ``inferrt_ops_py`` 模块。"""
+
+    ensure_module_path(build_dir)
+    import inferrt_ops_py as ops
+
+    return ops
+
+
+@pytest.fixture(scope="session")
 def default_image(repo_root: Path) -> Path:
     """默认测试图片路径。
 
