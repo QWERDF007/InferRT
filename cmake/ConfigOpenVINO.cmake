@@ -1,7 +1,7 @@
 # OpenVINO Runtime 发现与导入：
 # - 定位 OpenVINO CMake package；
 # - 确保 openvino::runtime 目标可用；
-# - tools/*.bat 也会读取 INFERRT_OPENVINO_ROOT，用同一份配置收集运行时 DLL。
+# - tools/*.py 也会读取 INFERRT_OPENVINO_ROOT，用同一份配置收集运行时 DLL。
 set(INFERRT_OPENVINO_PROVIDER "required")
 set(INFERRT_OPENVINO_ROOT "D:/Software/openvino_toolkit" CACHE PATH "OpenVINO toolkit root directory")
 

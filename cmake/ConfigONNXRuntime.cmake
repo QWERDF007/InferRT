@@ -1,7 +1,7 @@
 # ONNX Runtime 发现与导入：
 # - 定位 C++ API 头文件和链接库；
 # - 创建 ONNXRuntime::ONNXRuntime 导入目标；
-# - tools/*.bat 也会读取 ONNXRUNTIME_ROOT，用同一份配置收集运行时 DLL。
+# - tools/*.py 也会读取 ONNXRUNTIME_ROOT，用同一份配置收集运行时 DLL。
 set(ONNXRUNTIME_ROOT "D:/Software/onnxruntime-gpu-1.19.0" CACHE PATH "ONNX Runtime installation directory")
 
 # 清除历史缓存，避免修改 ONNXRUNTIME_ROOT 后仍沿用旧探测结果。

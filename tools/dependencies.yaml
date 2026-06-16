@@ -1,0 +1,117 @@
+# Runtime dependency manifest used by link_dependencies.py and package_runtime_dlls.py.
+# root may be a path or a variable read from CMakeCache.txt / the listed CMake file.
+dependencies:
+  - name: onnxruntime
+    cmake: cmake/ConfigONNXRuntime.cmake
+    root: ONNXRUNTIME_ROOT
+    destinations:
+      - build/bin
+    windows:
+      - lib/*.dll
+    linux:
+      - lib/libonnxruntime.so*
+    macos:
+      - lib/libonnxruntime*.dylib
+
+  - name: tensorrt
+    cmake: cmake/ConfigTensorRT.cmake
+    root: TRT_ROOT
+    destinations:
+      - build/bin
+    windows:
+      - bin/*.dll
+    linux:
+      - lib/libnvinfer.so*
+      - lib/libnvinfer_plugin.so*
+      - lib/libnvonnxparser.so*
+    macos:
+      - lib/libnvinfer*.dylib
+      - lib/libnvonnxparser*.dylib
+
+  - name: opencv
+    cmake: cmake/ConfigOpenCV.cmake
+    root: OpenCV_HOME
+    destinations:
+      - build/bin
+    windows:
+      - bin/*.dll
+    linux:
+      - lib/libopencv*.so*
+    macos:
+      - lib/libopencv*.dylib
+
+  - name: faiss
+    cmake: cmake/ConfigFaiss.cmake
+    root: Faiss_HOME
+    destinations:
+      - build/bin
+    windows:
+      - bin/*.dll
+    linux:
+      - lib/libfaiss*.so*
+    macos:
+      - lib/libfaiss*.dylib
+
+  - name: openvino-runtime
+    cmake: cmake/ConfigOpenVINO.cmake
+    root: INFERRT_OPENVINO_ROOT
+    destinations:
+      - build/bin
+    windows:
+      - runtime/bin/intel64/{build_config}/*.dll
+      - runtime/bin/intel64/{build_config}/cache.json
+    linux:
+      - runtime/lib/intel64/*.so*
+    macos:
+      - runtime/lib/intel64/*.dylib
+
+  - name: openvino-tbb
+    cmake: cmake/ConfigOpenVINO.cmake
+    root: INFERRT_OPENVINO_ROOT
+    destinations:
+      - build/bin
+    windows:
+      - runtime/3rdparty/tbb/bin/tbb12.dll
+      - runtime/3rdparty/tbb/bin/tbbbind_2_5.dll
+      - runtime/3rdparty/tbb/bin/tbbmalloc.dll
+      - runtime/3rdparty/tbb/bin/tbbmalloc_proxy.dll
+
+  - name: cuda
+    cmake: cmake/ConfigCUDA.cmake
+    env: CUDA_PATH
+    root: INFERRT_CUDA_ROOT
+    destinations:
+      - build/bin
+    windows:
+      - bin/cudart64_*.dll
+      - bin/cublas64_*.dll
+      - bin/cublasLt64_*.dll
+      - bin/cufft64_*.dll
+      - bin/cudnn*.dll
+      - bin/zlibwapi.dll
+    linux:
+      - lib64/libcudart.so*
+      - lib64/libcublas.so*
+      - lib64/libcublasLt.so*
+      - lib64/libcufft.so*
+      - lib64/libcudnn.so*
+    macos:
+      - lib/libcudart*.dylib
+      - lib/libcublas*.dylib
+      - lib/libcufft*.dylib
+
+  - name: onnxruntime-zlib
+    root: ort1190_cuda118_dlls
+    destinations:
+      - build/bin
+    windows:
+      - zlibwapi.dll
+
+  - name: python-torch-zlib
+    cmake: cmake/ConfigPython.cmake
+    root: INFERRT_PYTHON_ROOT
+    default: D:/Software/anaconda3/envs/py312
+    destinations:
+      - build/bin
+    windows:
+      - Lib/site-packages/torch/lib/zlibwapi.dll
