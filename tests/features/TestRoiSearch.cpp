@@ -86,6 +86,8 @@ TEST(RoiSearchTest, DefaultConstructsNotReadySearcher)
     EXPECT_EQ(search.config().pooled_width, irt::features::kDefaultRoiSearchPooledWidth);
     EXPECT_EQ(search.config().sampling_ratio, -1);
     EXPECT_FALSE(search.config().aligned);
+    EXPECT_FALSE(search.config().use_pca);
+    EXPECT_EQ(search.config().pca_dim, 0);
     EXPECT_FALSE(search.isReady());
     EXPECT_TRUE(search.indexPath().empty());
     EXPECT_TRUE(search.galleryItems().empty());
@@ -107,6 +109,8 @@ TEST(RoiSearchTest, ConstructorStoresConfig)
     config.pooled_width          = 5;
     config.sampling_ratio        = 2;
     config.aligned               = true;
+    config.use_pca               = true;
+    config.pca_dim               = 32;
 
     const irt::features::RoiSearch search(config);
 
@@ -122,6 +126,8 @@ TEST(RoiSearchTest, ConstructorStoresConfig)
     EXPECT_EQ(search.config().pooled_width, 5);
     EXPECT_EQ(search.config().sampling_ratio, 2);
     EXPECT_TRUE(search.config().aligned);
+    EXPECT_TRUE(search.config().use_pca);
+    EXPECT_EQ(search.config().pca_dim, 32);
 }
 
 TEST(RoiSearchTest, ConstructorNormalizesGpuFaissStorage)
@@ -157,6 +163,16 @@ TEST(RoiSearchTest, ConstructorRejectsInvalidConfig)
     irt::features::RoiSearchConfig bad_sampling;
     bad_sampling.sampling_ratio = -2;
     expectIrtExceptionCode([&] { irt::features::RoiSearch search(bad_sampling); }, irt::Status::ERROR_INVALID_ARGUMENT);
+
+    irt::features::RoiSearchConfig bad_pca_dim;
+    bad_pca_dim.pca_dim = -1;
+    expectIrtExceptionCode([&] { irt::features::RoiSearch search(bad_pca_dim); }, irt::Status::ERROR_INVALID_ARGUMENT);
+
+    irt::features::RoiSearchConfig missing_pca_dim;
+    missing_pca_dim.use_pca = true;
+    missing_pca_dim.pca_dim = 0;
+    expectIrtExceptionCode([&] { irt::features::RoiSearch search(missing_pca_dim); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 TEST(RoiSearchTest, DefaultIndexPathUsesRoiExtension)
