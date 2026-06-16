@@ -16,6 +16,7 @@ add_plugin_library(features
 
         inferrt_core
         inferrt_model
+        inferrt_ops
 )
 
 target_include_directories(${PROJECT_NAME_LOWER}_features

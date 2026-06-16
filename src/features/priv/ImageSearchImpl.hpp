@@ -23,8 +23,8 @@ class StandardGpuResources;
 namespace irt::features {
 
 namespace priv {
-/** @brief 图像检索特征提取器（定义于 ``ImageSearchImpl.cpp``）。 */
-class ImageSearchFeatureExtractor;
+/** @brief 图像检索与 ROI 检索共用的模型特征抽取器。 */
+class ImageFeatureExtractor;
 } // namespace priv
 
 /**
@@ -185,7 +185,7 @@ private:
     std::unique_ptr<faiss::Index> index_;
 
     ///< 查询侧特征提取器；加载索引后可能为空直至首次检索。
-    std::unique_ptr<priv::ImageSearchFeatureExtractor> extractor_;
+    std::unique_ptr<priv::ImageFeatureExtractor> extractor_;
 
     int feature_dim_{0}; ///< 特征向量维度。
 };

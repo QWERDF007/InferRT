@@ -5,6 +5,8 @@
 
 #include "ImageSearchImpl.hpp"
 
+#include "FeatureSearchCommon.hpp"
+#include "ImageFeatureExtractor.hpp"
 #include "ImageSearchFaissIndex.hpp"
 
 #include <cuda_runtime_api.h>
@@ -1015,8 +1017,8 @@ namespace {
  * @param progress_callback 构建进度回调。
  * @return 索引及相关资源包。
  */
-FaissIndexBundle buildCpuOnDiskIndex(const std::vector<fs::path>       &gallery_images,
-                                     priv::ImageSearchFeatureExtractor &extractor, const fs::path &index_path,
+FaissIndexBundle buildCpuOnDiskIndex(const std::vector<fs::path> &gallery_images,
+                                     priv::ImageFeatureExtractor &extractor, const fs::path &index_path,
                                      const ImageSearchConfig                &config,
                                      const ImageSearchBuildProgressCallback &progress_callback)
 {
@@ -1040,9 +1042,8 @@ FaissIndexBundle buildCpuOnDiskIndex(const std::vector<fs::path>       &gallery_
  * @param progress_callback 构建进度回调。
  * @return 索引及相关资源包；GPU 后端会额外持有 ``StandardGpuResources``。
  */
-FaissIndexBundle buildRamIvfPqIndex(const std::vector<fs::path>       &gallery_images,
-                                    priv::ImageSearchFeatureExtractor &extractor, const fs::path &index_path,
-                                    const ImageSearchConfig                &config,
+FaissIndexBundle buildRamIvfPqIndex(const std::vector<fs::path> &gallery_images, priv::ImageFeatureExtractor &extractor,
+                                    const fs::path &index_path, const ImageSearchConfig &config,
                                     const ImageSearchBuildProgressCallback &progress_callback)
 {
     auto cpu_index = priv::buildRamIvfPqIndex(
@@ -1072,7 +1073,7 @@ FaissIndexBundle buildRamIvfPqIndex(const std::vector<fs::path>       &gallery_i
  * @param progress_callback 构建进度回调。
  * @return 构建完成的索引资源包。
  */
-FaissIndexBundle buildIndex(const std::vector<fs::path> &gallery_images, priv::ImageSearchFeatureExtractor &extractor,
+FaissIndexBundle buildIndex(const std::vector<fs::path> &gallery_images, priv::ImageFeatureExtractor &extractor,
                             const fs::path &index_path, const ImageSearchConfig &config,
                             const ImageSearchBuildProgressCallback &progress_callback)
 {
@@ -1235,8 +1236,8 @@ void ImageSearch::Impl::buildWithImages(const fs::path &weights_file, const fs::
                                         ImageSearchBuildProgressCallback progress_callback)
 {
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingModel, 0, 0, 0, 0, 1);
-    auto extractor = std::make_unique<priv::ImageSearchFeatureExtractor>(config_.model_name, config_.feature_name,
-                                                                         weights_file, config_);
+    auto extractor = std::make_unique<priv::ImageFeatureExtractor>(config_.model_name, config_.feature_name,
+                                                                   weights_file, config_);
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingModel, 0, 0, 0, 1, 1);
     if (!index_path.parent_path().empty())
     {
@@ -1327,8 +1328,8 @@ void ImageSearch::Impl::ensureExtractor()
 {
     if (!extractor_)
     {
-        extractor_   = std::make_unique<priv::ImageSearchFeatureExtractor>(config_.model_name, config_.feature_name,
-                                                                           weights_file_, config_);
+        extractor_   = std::make_unique<priv::ImageFeatureExtractor>(config_.model_name, config_.feature_name,
+                                                                     weights_file_, config_);
         feature_dim_ = extractor_->featureDim();
     }
 }
