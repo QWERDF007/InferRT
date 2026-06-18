@@ -1,10 +1,12 @@
 #include <inferrt/core/Exception.hpp>
+#include <inferrt/ops/NMS.hpp>
 #include <inferrt/ops/RoIAlign.hpp>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include <array>
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -59,6 +61,28 @@ int64_t numRois(const py::array_t<float, py::array::c_style | py::array::forceca
     return rois.shape(0);
 }
 
+int64_t numBoxes(const py::array_t<float, py::array::c_style | py::array::forcecast> &boxes)
+{
+    if (boxes.ndim() != 2 || boxes.shape(1) != 4)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "boxes must have shape [N, 4]");
+    }
+    return boxes.shape(0);
+}
+
+void validateScores(const py::array_t<float, py::array::c_style | py::array::forcecast> &scores, int64_t expected)
+{
+    if (scores.ndim() != 1)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "scores must have shape [N]");
+    }
+    if (scores.shape(0) != expected)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "boxes and scores must contain the same number of elements");
+    }
+}
+
 py::array_t<float> runRoIAlign(const irt::ops::RoIAlign &roi_align, const py::handle &input_object,
                                const py::handle &rois_object)
 {
@@ -76,6 +100,25 @@ py::array_t<float> runRoIAlign(const irt::ops::RoIAlign &roi_align, const py::ha
         roi_align.forward(input.data(), shape.data(), rois.data(), k, output.mutable_data());
     }
 
+    return output;
+}
+
+py::array_t<int64_t> runNMS(const py::handle &boxes_object, const py::handle &scores_object, float iou_threshold)
+{
+    auto boxes  = asFloat32CArray(boxes_object, "boxes");
+    auto scores = asFloat32CArray(scores_object, "scores");
+
+    const auto n = numBoxes(boxes);
+    validateScores(scores, n);
+
+    std::vector<int64_t> keep;
+    {
+        py::gil_scoped_release release;
+        keep = irt::ops::nms(boxes.data(), scores.data(), n, iou_threshold);
+    }
+
+    py::array_t<int64_t> output(static_cast<py::ssize_t>(keep.size()));
+    std::copy(keep.begin(), keep.end(), output.mutable_data());
     return output;
 }
 
@@ -121,4 +164,7 @@ PYBIND11_MODULE(inferrt_ops_py, m)
         },
         py::arg("input"), py::arg("rois"), py::arg("output_size"), py::arg("spatial_scale") = 1.0f,
         py::arg("sampling_ratio") = -1, py::arg("aligned") = false);
+
+    m.def("nms", &runNMS, py::arg("boxes"), py::arg("scores"), py::arg("iou_threshold"),
+          "Performs non-maximum suppression on boxes in xyxy format.");
 }
