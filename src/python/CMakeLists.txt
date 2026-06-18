@@ -42,7 +42,10 @@ target_link_libraries(inferrt_ops_py
     PRIVATE
         inferrt_core
         inferrt_ops
+        inferrt_cvcuda
+        CUDA::cudart
         Python::NumPy
+        dlpack::dlpack
 )
 
 target_include_directories(inferrt_model_py
