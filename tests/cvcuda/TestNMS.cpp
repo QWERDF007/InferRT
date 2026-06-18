@@ -1,6 +1,6 @@
 /**
  * @file TestNMS.cpp
- * @brief CUDA NMS operator tests.
+ * @brief CUDA NMS 算子的单元测试。
  */
 
 #include "TestCVCudaCommon.hpp"
@@ -19,6 +19,11 @@ namespace {
 
 using irt::cvcuda::test::AssertInferRTSuccess;
 
+/**
+ * @brief 计算 xyxy 框面积，退化边长按 0 处理。
+ * @param box 指向长度为 4 的 xyxy 框坐标数组。
+ * @return 非负框面积。
+ */
 float area(const float *box)
 {
     const float width  = std::max(box[2] - box[0], 0.0f);
@@ -26,6 +31,12 @@ float area(const float *box)
     return width * height;
 }
 
+/**
+ * @brief 计算两个 xyxy 框的 IoU，作为 CPU 参考实现的一部分。
+ * @param lhs 左侧 xyxy 框坐标数组。
+ * @param rhs 右侧 xyxy 框坐标数组。
+ * @return 两个框的 IoU；并集面积为 0 时返回 0。
+ */
 float iou(const float *lhs, const float *rhs)
 {
     const float xx1   = std::max(lhs[0], rhs[0]);
@@ -39,6 +50,13 @@ float iou(const float *lhs, const float *rhs)
     return uni > 0.0f ? inter / uni : 0.0f;
 }
 
+/**
+ * @brief 使用朴素 CPU NMS 生成期望索引序列。
+ * @param boxes 按 xyxy 连续存储的框数组，长度为 ``scores.size() * 4``。
+ * @param scores 每个框对应的分数数组。
+ * @param iou_threshold 抑制重叠框使用的 IoU 阈值。
+ * @return CPU 参考实现保留下来的原始框索引。
+ */
 std::vector<int64_t> makeNMSReference(const std::vector<float> &boxes, const std::vector<float> &scores,
                                       float iou_threshold)
 {
@@ -79,6 +97,14 @@ std::vector<int64_t> makeNMSReference(const std::vector<float> &boxes, const std
     return keep;
 }
 
+/**
+ * @brief 将输入拷到 GPU，调用待测 NMS 接口，并与 CPU 参考结果比较。
+ * @tparam Caller 可调用对象类型，签名与 ``nms`` 或 ``NMS::operator()`` 保持一致。
+ * @param boxes 按 xyxy 连续存储的框数组，长度为 ``scores.size() * 4``。
+ * @param scores 每个框对应的分数数组。
+ * @param iou_threshold 抑制重叠框使用的 IoU 阈值。
+ * @param caller 实际待测的 CUDA NMS 调用器。
+ */
 template<typename Caller>
 void runNMSTest(const std::vector<float> &boxes, const std::vector<float> &scores, float iou_threshold, Caller caller)
 {
@@ -116,6 +142,9 @@ void runNMSTest(const std::vector<float> &boxes, const std::vector<float> &score
 
 } // namespace
 
+/**
+ * @brief 验证函数式 NMS 会抑制低分重叠框。
+ */
 TEST(NMSFunctionTest, SuppressesLowerScoringOverlaps)
 {
     const std::vector<float> boxes{
@@ -132,6 +161,9 @@ TEST(NMSFunctionTest, SuppressesLowerScoringOverlaps)
                { return irt::cvcuda::nms(boxes, scores, keep, keep_count, num_boxes, threshold, stream); });
 }
 
+/**
+ * @brief 验证类封装返回的索引仍按分数降序选择。
+ */
 TEST(NMSClassTest, ReturnsIndicesSortedByScore)
 {
     const std::vector<float> boxes{
@@ -148,6 +180,9 @@ TEST(NMSClassTest, ReturnsIndicesSortedByScore)
                { return op(boxes, scores, keep, keep_count, num_boxes, threshold, stream); });
 }
 
+/**
+ * @brief 构造超过单个 bitmask block 的输入，覆盖 block-wise 并行路径。
+ */
 TEST(NMSFunctionTest, HandlesMultipleBitmaskBlocks)
 {
     constexpr int num_boxes = 160;
@@ -171,6 +206,9 @@ TEST(NMSFunctionTest, HandlesMultipleBitmaskBlocks)
                { return irt::cvcuda::nms(boxes, scores, keep, keep_count, num_boxes, threshold, stream); });
 }
 
+/**
+ * @brief 验证空输入只写出 keep_count=0。
+ */
 TEST(NMSFunctionEdgeCaseTest, SupportsEmptyInput)
 {
     int *d_keep_count = nullptr;
@@ -187,6 +225,9 @@ TEST(NMSFunctionEdgeCaseTest, SupportsEmptyInput)
     cudaFree(d_keep_count);
 }
 
+/**
+ * @brief 验证 keep_count 指针为空时返回参数错误。
+ */
 TEST(NMSFunctionEdgeCaseTest, RejectsNullCount)
 {
     const int ret = irt::cvcuda::nms(nullptr, nullptr, nullptr, nullptr, 0, 0.5f, nullptr);

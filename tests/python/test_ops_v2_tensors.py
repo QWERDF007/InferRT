@@ -1,4 +1,4 @@
-"""DLPack tensor parity tests for ops v2 bindings."""
+"""ops v2 DLPack Tensor 接口与 torchvision 的一致性测试。"""
 
 from __future__ import annotations
 
@@ -6,6 +6,14 @@ import pytest
 
 
 def _device_or_skip(device: str):
+    """按目标设备导入 torch，并在 CUDA 不可用时跳过 CUDA 用例。
+
+    Args:
+        device: 目标测试设备，取值为 ``"cpu"`` 或 ``"cuda"``。
+
+    Returns:
+        已导入的 ``torch`` 模块。
+    """
     torch = pytest.importorskip("torch")
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA is not available")
@@ -14,6 +22,15 @@ def _device_or_skip(device: str):
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_nms_v2_matches_torchvision_tensor(ops_module, device: str) -> None:
+    """验证 ``nms_v2`` 在 CPU/CUDA Tensor 上与 torchvision 保持一致。
+
+    Args:
+        ops_module: pytest fixture 提供的 InferRT ops Python 绑定模块。
+        device: 目标测试设备，取值为 ``"cpu"`` 或 ``"cuda"``。
+
+    Returns:
+        None。
+    """
     torch = _device_or_skip(device)
     tv_nms = pytest.importorskip("torchvision.ops").nms
 
@@ -40,6 +57,15 @@ def test_nms_v2_matches_torchvision_tensor(ops_module, device: str) -> None:
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_roi_align_v2_matches_torchvision_tensor(ops_module, device: str) -> None:
+    """验证 ``roi_align_v2`` 在 CPU/CUDA Tensor 上与 torchvision 保持一致。
+
+    Args:
+        ops_module: pytest fixture 提供的 InferRT ops Python 绑定模块。
+        device: 目标测试设备，取值为 ``"cpu"`` 或 ``"cuda"``。
+
+    Returns:
+        None。
+    """
     torch = _device_or_skip(device)
     roi_align = pytest.importorskip("torchvision.ops").roi_align
 

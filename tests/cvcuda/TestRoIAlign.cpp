@@ -1,6 +1,6 @@
 /**
  * @file TestRoIAlign.cpp
- * @brief CUDA RoIAlign operator tests.
+ * @brief CUDA RoIAlign 算子的单元测试。
  */
 
 #include "TestCVCudaCommon.hpp"
@@ -20,6 +20,19 @@ namespace {
 
 using irt::cvcuda::test::AssertInferRTSuccess;
 
+/**
+ * @brief 对单个 batch/channel 的连续特征图做双线性插值。
+ * @param input NCHW 连续存储的输入特征图。
+ * @param batch 目标 batch 索引。
+ * @param channel 目标 channel 索引。
+ * @param batches 输入特征图的 batch 数，用于保持签名与布局描述一致。
+ * @param channels 输入特征图的 channel 数。
+ * @param height 输入特征图高度。
+ * @param width 输入特征图宽度。
+ * @param y 插值采样点的 y 坐标。
+ * @param x 插值采样点的 x 坐标。
+ * @return 双线性插值得到的单点值。
+ */
 float bilinearInterpolate(const std::vector<float> &input, int batch, int channel, int batches, int channels,
                           int height, int width, float y, float x)
 {
@@ -68,6 +81,21 @@ float bilinearInterpolate(const std::vector<float> &input, int batch, int channe
     return hy * hx * v1 + hy * lx * v2 + ly * hx * v3 + ly * lx * v4;
 }
 
+/**
+ * @brief 使用 CPU 实现生成 RoIAlign 的期望输出。
+ * @param input NCHW 连续存储的输入特征图。
+ * @param batches 输入特征图的 batch 数。
+ * @param channels 输入特征图的 channel 数。
+ * @param height 输入特征图高度。
+ * @param width 输入特征图宽度。
+ * @param rois 按 ``[batch_index, x1, y1, x2, y2]`` 连续存储的 RoI 数组。
+ * @param pooled_height 输出池化高度。
+ * @param pooled_width 输出池化宽度。
+ * @param spatial_scale RoI 坐标到特征图坐标的缩放比例。
+ * @param sampling_ratio 每个 bin 的采样点数量，负数表示自适应采样。
+ * @param aligned 是否启用 torchvision aligned 坐标规则。
+ * @return NCHW 连续存储的 RoIAlign 参考输出。
+ */
 std::vector<float> makeRoIAlignReference(const std::vector<float> &input, int batches, int channels, int height,
                                          int width, const std::vector<float> &rois, int pooled_height,
                                          int pooled_width, float spatial_scale, int sampling_ratio, bool aligned)
@@ -137,6 +165,20 @@ std::vector<float> makeRoIAlignReference(const std::vector<float> &input, int ba
     return output;
 }
 
+/**
+ * @brief 将输入拷到 GPU，调用待测 RoIAlign 接口，并与 CPU 参考结果比较。
+ * @tparam Caller 可调用对象类型，签名与 ``roiAlign`` 或 ``RoIAlign::operator()`` 保持一致。
+ * @param batches 输入特征图的 batch 数。
+ * @param channels 输入特征图的 channel 数。
+ * @param height 输入特征图高度。
+ * @param width 输入特征图宽度。
+ * @param rois 按 ``[batch_index, x1, y1, x2, y2]`` 连续存储的 RoI 数组。
+ * @param output_size 输出池化尺寸。
+ * @param spatial_scale RoI 坐标到特征图坐标的缩放比例。
+ * @param sampling_ratio 每个 bin 的采样点数量，负数表示自适应采样。
+ * @param aligned 是否启用 torchvision aligned 坐标规则。
+ * @param caller 实际待测的 CUDA RoIAlign 调用器。
+ */
 template<typename Caller>
 void runRoIAlignTest(int batches, int channels, int height, int width, const std::vector<float> &rois,
                      cv::Size output_size, float spatial_scale, int sampling_ratio, bool aligned, Caller caller)
@@ -184,6 +226,9 @@ void runRoIAlignTest(int batches, int channels, int height, int width, const std
 
 } // namespace
 
+/**
+ * @brief 验证函数式接口在固定采样、非 aligned 模式下匹配参考实现。
+ */
 TEST(RoIAlignFunctionTest, MatchesReferenceLegacySampling)
 {
     const std::vector<float> rois{
@@ -202,6 +247,9 @@ TEST(RoIAlignFunctionTest, MatchesReferenceLegacySampling)
                     });
 }
 
+/**
+ * @brief 验证函数式接口在自适应采样、aligned 模式下匹配参考实现。
+ */
 TEST(RoIAlignFunctionTest, MatchesReferenceAdaptiveAligned)
 {
     const std::vector<float> rois{
@@ -219,6 +267,9 @@ TEST(RoIAlignFunctionTest, MatchesReferenceAdaptiveAligned)
                     });
 }
 
+/**
+ * @brief 验证类封装调用路径与函数式接口保持一致。
+ */
 TEST(RoIAlignClassTest, MatchesReferenceWithClassWrapper)
 {
     const std::vector<float> rois{
@@ -239,6 +290,9 @@ TEST(RoIAlignClassTest, MatchesReferenceWithClassWrapper)
                     });
 }
 
+/**
+ * @brief 验证无效 output_size 会返回参数错误。
+ */
 TEST(RoIAlignFunctionEdgeCaseTest, RejectsInvalidOutputSize)
 {
     float *d_input  = nullptr;

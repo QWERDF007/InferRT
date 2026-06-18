@@ -1,4 +1,4 @@
-"""NMS Python binding parity tests against torchvision."""
+"""NMS Python 绑定与 torchvision 的一致性测试。"""
 
 from __future__ import annotations
 
@@ -7,6 +7,16 @@ import pytest
 
 
 def _torchvision_nms(boxes_array, scores_array, iou_threshold):
+    """使用 torchvision 计算 NMS 参考输出。
+
+    Args:
+        boxes_array: ``[N, 4]`` 的 xyxy 框数组。
+        scores_array: ``[N]`` 的置信度数组。
+        iou_threshold: NMS 的 IoU 阈值。
+
+    Returns:
+        torchvision 返回的保留框索引数组。
+    """
     torch = pytest.importorskip("torch")
     nms = pytest.importorskip("torchvision.ops").nms
 
@@ -72,6 +82,17 @@ def _torchvision_nms(boxes_array, scores_array, iou_threshold):
     ],
 )
 def test_nms_matches_torchvision(ops_module, boxes, scores, iou_threshold) -> None:
+    """验证 NumPy 路径 NMS 与 torchvision 的索引结果一致。
+
+    Args:
+        ops_module: pytest fixture 提供的 InferRT ops Python 绑定模块。
+        boxes: 当前参数组合的 xyxy 框数组。
+        scores: 当前参数组合的置信度数组。
+        iou_threshold: 当前参数组合的 IoU 阈值。
+
+    Returns:
+        None。
+    """
     expected = _torchvision_nms(boxes, scores, iou_threshold)
     actual = ops_module.nms(boxes, scores, iou_threshold)
 
@@ -79,6 +100,14 @@ def test_nms_matches_torchvision(ops_module, boxes, scores, iou_threshold) -> No
 
 
 def test_nms_empty_matches_torchvision(ops_module) -> None:
+    """验证空输入时 NMS 与 torchvision 一样返回空 int64 索引。
+
+    Args:
+        ops_module: pytest fixture 提供的 InferRT ops Python 绑定模块。
+
+    Returns:
+        None。
+    """
     boxes = np.empty((0, 4), dtype=np.float32)
     scores = np.empty((0,), dtype=np.float32)
 
@@ -90,6 +119,14 @@ def test_nms_empty_matches_torchvision(ops_module) -> None:
 
 
 def test_nms_rejects_invalid_shapes(ops_module) -> None:
+    """验证 NMS Python 绑定会拒绝非法输入形状。
+
+    Args:
+        ops_module: pytest fixture 提供的 InferRT ops Python 绑定模块。
+
+    Returns:
+        None。
+    """
     scores = np.array([0.5], dtype=np.float32)
 
     with pytest.raises(ops_module.InferRTOpsError):

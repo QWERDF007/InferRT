@@ -1,4 +1,4 @@
-"""RoIAlign Python binding parity tests against torchvision."""
+"""RoIAlign Python 绑定与 torchvision 的一致性测试。"""
 
 from __future__ import annotations
 
@@ -7,6 +7,19 @@ import pytest
 
 
 def _torchvision_roi_align(input_array, rois_array, output_size, spatial_scale, sampling_ratio, aligned):
+    """使用 torchvision 计算 RoIAlign 参考输出。
+
+    Args:
+        input_array: ``[N, C, H, W]`` 的输入特征图数组。
+        rois_array: ``[K, 5]`` 的 RoI 数组，每行为 batch index 与 xyxy 坐标。
+        output_size: 输出池化尺寸，支持整数或 ``(height, width)``。
+        spatial_scale: RoI 坐标到特征图坐标的缩放比例。
+        sampling_ratio: 每个 bin 的采样点数量，负数表示自适应采样。
+        aligned: 是否启用 torchvision aligned 坐标规则。
+
+    Returns:
+        torchvision 返回的 RoIAlign 输出数组。
+    """
     torch = pytest.importorskip("torch")
     roi_align = pytest.importorskip("torchvision.ops").roi_align
 
@@ -35,6 +48,18 @@ def _torchvision_roi_align(input_array, rois_array, output_size, spatial_scale, 
     ],
 )
 def test_roi_align_matches_torchvision(ops_module, output_size, spatial_scale, sampling_ratio, aligned) -> None:
+    """验证 NumPy 路径 RoIAlign 与 torchvision 的数值结果一致。
+
+    Args:
+        ops_module: pytest fixture 提供的 InferRT ops Python 绑定模块。
+        output_size: 当前参数组合的输出池化尺寸。
+        spatial_scale: 当前参数组合的坐标缩放比例。
+        sampling_ratio: 当前参数组合的采样点数量。
+        aligned: 当前参数组合是否启用 aligned 坐标规则。
+
+    Returns:
+        None。
+    """
     input_array = np.arange(2 * 3 * 5 * 6, dtype=np.float32).reshape(2, 3, 5, 6) / 10.0
     rois_array = np.array(
         [
@@ -66,6 +91,14 @@ def test_roi_align_matches_torchvision(ops_module, output_size, spatial_scale, s
 
 
 def test_roi_align_class_matches_function(ops_module) -> None:
+    """验证 RoIAlign 类封装与函数式接口输出一致。
+
+    Args:
+        ops_module: pytest fixture 提供的 InferRT ops Python 绑定模块。
+
+    Returns:
+        None。
+    """
     input_array = np.linspace(0.0, 1.0, num=1 * 2 * 4 * 4, dtype=np.float32).reshape(1, 2, 4, 4)
     rois_array = np.array([[0.0, 0.5, 0.5, 3.0, 3.0]], dtype=np.float32)
 
@@ -87,6 +120,14 @@ def test_roi_align_class_matches_function(ops_module) -> None:
 
 
 def test_roi_align_rejects_invalid_shapes(ops_module) -> None:
+    """验证 RoIAlign Python 绑定会拒绝非法输入形状。
+
+    Args:
+        ops_module: pytest fixture 提供的 InferRT ops Python 绑定模块。
+
+    Returns:
+        None。
+    """
     input_array = np.zeros((1, 1, 4, 4), dtype=np.float32)
     bad_rois = np.zeros((1, 4), dtype=np.float32)
 
