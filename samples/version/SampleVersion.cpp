@@ -1,5 +1,5 @@
 #include <cxxopts.hpp>
-#include <inferrt/core/version.h>
+#include <inferrt/core/Version.h>
 
 #include <iostream>
 

@@ -3,6 +3,7 @@
 #include "Status.hpp"
 
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 namespace irt::core::priv {

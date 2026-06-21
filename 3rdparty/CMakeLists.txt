@@ -29,8 +29,10 @@ endif()
 
 # benchmark
 if (${PROJECT_NAME_UPPER}_BUILD_BENCHMARK)
-    set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "Disable benchmark testing.")
-    set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "Disable benchmark install to avoid overwriting vendor install.")
+    set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "Disable benchmark testing." FORCE)
+    set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "Disable benchmark install to avoid overwriting vendor install." FORCE)
+    set(BENCHMARK_ENABLE_WERROR OFF CACHE BOOL "Disable benchmark warnings as errors." FORCE)
+    set(BENCHMARK_FORCE_WERROR OFF CACHE BOOL "Disable forced benchmark warnings as errors." FORCE)
     add_subdirectory(benchmark)
 endif()
 

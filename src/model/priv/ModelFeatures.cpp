@@ -1,5 +1,7 @@
 #include <inferrt/model/ModelFeatures.hpp>
 
+#include <cctype>
+#include <cstring>
 #include <string>
 #include <vector>
 

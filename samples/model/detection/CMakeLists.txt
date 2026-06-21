@@ -3,4 +3,5 @@ add_inferrt_sample(detection
         inferrt_core
         inferrt_model
         inferrt_util
+        opencv_imgcodecs
 )

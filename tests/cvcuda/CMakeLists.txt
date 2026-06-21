@@ -5,5 +5,6 @@ add_inferrt_test(cvcuda
         inferrt_core
         inferrt_cvcuda
         opencv_core
+        opencv_imgproc
         vtest
 )
