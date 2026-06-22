@@ -3,6 +3,10 @@
 
 cmake_minimum_required(VERSION 3.17.0)
 
+if(TARGET TensorRT)
+  return()
+endif()
+
 # 内部辅助函数：根据必需文件猜测有效路径
 # 参数：
 #   var_name - 用于存储结果的变量名
@@ -54,7 +58,7 @@ endfunction()
 
 # 创建 TensorRT 导入接口库
 # IMPORTED INTERFACE 表示这是一个外部库的接口目标
-add_library(TensorRT IMPORTED INTERFACE)
+add_library(TensorRT INTERFACE IMPORTED GLOBAL)
 # 创建别名，允许使用 TensorRT::TensorRT 命名空间形式
 add_library(TensorRT::TensorRT ALIAS TensorRT)
 

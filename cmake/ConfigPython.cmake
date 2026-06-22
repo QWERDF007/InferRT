@@ -2,8 +2,8 @@
 # InferRT Python 绑定的环境配置
 
 # 设置首选的 Python 环境根目录
-set(INFERRT_PYTHON_ROOT "D:/Software/anaconda3/envs/py312" CACHE PATH 
-    "InferRT 绑定首选的 Python 环境")
+set(INFERRT_PYTHON_ROOT "/home/pc/anaconda3/envs/test" CACHE PATH 
+    "InferRT 绑定首选的 Python 环境" FORCE)
 
 # 如果 Python_ROOT_DIR 未设置且 INFERRT_PYTHON_ROOT 存在，则配置 Python_ROOT_DIR
 if(NOT Python_ROOT_DIR AND EXISTS "${INFERRT_PYTHON_ROOT}")

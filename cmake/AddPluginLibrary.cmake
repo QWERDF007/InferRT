@@ -19,6 +19,11 @@ function(add_plugin_library PLUGIN_NAME)
     file(GLOB_RECURSE HEADERS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.h *.hpp *.cuh)
 
     add_library(${TARGET_NAME} SHARED ${SOURCES} ${HEADERS})
+    add_library(${PROJECT_NAME}::${PLUGIN_NAME} ALIAS ${TARGET_NAME})
+
+    set_target_properties(${TARGET_NAME} PROPERTIES
+        EXPORT_NAME ${PLUGIN_NAME}
+    )
 
     # 链接库
     target_link_libraries(${TARGET_NAME}
@@ -61,11 +66,10 @@ function(add_plugin_library PLUGIN_NAME)
     add_library(${PLUGIN_HEADER} INTERFACE)
     target_include_directories(${PLUGIN_HEADER}
         INTERFACE 
-            ${CMAKE_CURRENT_SOURCE_DIR}/include 
-            ${CMAKE_CURRENT_BINARY_DIR}/include
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+            $<INSTALL_INTERFACE:include>
     )
-
-    target_link_libraries(${TARGET_NAME} PUBLIC ${PLUGIN_HEADER})
 
     # DIRECTORY path/to/dir 会安装 dir 目录本身及其内容
     # DIRECTORY path/to/dir/ - 只安装 dir 目录的内容（不包含 dir 本身）
@@ -78,6 +82,7 @@ function(add_plugin_library PLUGIN_NAME)
 
     install(
         TARGETS ${TARGET_NAME}
+        EXPORT ${PROJECT_NAME}Targets
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

@@ -2,7 +2,11 @@
 # - 定位 C++ API 头文件和链接库；
 # - 创建 ONNXRuntime::ONNXRuntime 导入目标；
 # - tools/*.py 也会读取 ONNXRUNTIME_ROOT，用同一份配置收集运行时 DLL。
-set(ONNXRUNTIME_ROOT "D:/Software/onnxruntime-gpu-1.19.0" CACHE PATH "ONNX Runtime installation directory")
+if(TARGET ONNXRuntime::ONNXRuntime)
+    return()
+endif()
+
+set(ONNXRUNTIME_ROOT "/home/pc/workspace/onnxruntime-linux-x64-gpu-1.26.0" CACHE PATH "ONNX Runtime installation directory" FORCE)
 
 # 清除历史缓存，避免修改 ONNXRUNTIME_ROOT 后仍沿用旧探测结果。
 unset(ONNXRUNTIME_DLL CACHE)
@@ -35,7 +39,7 @@ if(NOT ONNXRUNTIME_INCLUDE_DIR_FOUND OR NOT ONNXRUNTIME_LIBRARY)
 endif()
 
 # 创建导入目标。运行时 DLL 由系统 loader 解析，不再由 C++ 代码手动加载。
-add_library(ONNXRuntime::ONNXRuntime UNKNOWN IMPORTED)
+add_library(ONNXRuntime::ONNXRuntime UNKNOWN IMPORTED GLOBAL)
 set_target_properties(ONNXRuntime::ONNXRuntime PROPERTIES
     IMPORTED_LOCATION "${ONNXRUNTIME_LIBRARY}"
     INTERFACE_INCLUDE_DIRECTORIES "${ONNXRUNTIME_INCLUDE_DIR_FOUND}")
