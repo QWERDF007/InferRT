@@ -1,5 +1,4 @@
 cmake_minimum_required(VERSION 3.20)
-include(CMakePackageConfigHelpers)
 
 project("InferRT"
         LANGUAGES C CXX
@@ -73,36 +72,7 @@ if (${PROJECT_NAME_UPPER}_BUILD_BENCHMARK)
     add_subdirectory(benchmark)
 endif()
 
-set(INFERRT_INSTALL_CMAKEDIR "cmake" CACHE STRING
-    "InferRT CMake package install directory" FORCE)
-
-install(EXPORT ${PROJECT_NAME}Targets
-    FILE "${PROJECT_NAME}Targets.cmake"
-    NAMESPACE ${PROJECT_NAME}::
-    DESTINATION "${INFERRT_INSTALL_CMAKEDIR}"
-)
-
-configure_package_config_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/${PROJECT_NAME}Config.cmake.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
-    INSTALL_DESTINATION "${INFERRT_INSTALL_CMAKEDIR}"
-)
-
-write_basic_package_version_file(
-    "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake"
-    VERSION "${PROJECT_VERSION}"
-    COMPATIBILITY SameMajorVersion
-)
-
-install(FILES
-    "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
-    "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake"
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/FindTensorRT.cmake"
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ConfigONNXRuntime.cmake"
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ConfigOpenVINO.cmake"
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ConfigFaiss.cmake"
-    DESTINATION "${INFERRT_INSTALL_CMAKEDIR}"
-)
+include(ConfigCMakePackage)
 
 message(STATUS "")
 include(PrintConfig)
