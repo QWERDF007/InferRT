@@ -7,7 +7,7 @@ function(add_plugin_library PLUGIN_NAME)
     # 解析函数参数
     set(options "")
     set(oneValueArgs "")
-    set(multiValueArgs PRIVATE_LIBS PUBLIC_LIBS)
+    set(multiValueArgs PRIVATE_LIBS PUBLIC_LIBS PRIVATE_INCS PUBLIC_INCS)
     cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
     
     set(TARGET_NAME "${PROJECT_NAME_LOWER}_${PLUGIN_NAME}")
@@ -34,11 +34,14 @@ function(add_plugin_library PLUGIN_NAME)
     )
 
     target_include_directories(${TARGET_NAME} 
+        PRIVATE
+            ${ARG_PRIVATE_INCS}
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
             $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/${PLUGIN_NAME}> 
             $<INSTALL_INTERFACE:include>
+            ${ARG_PUBLIC_INCS}
     )
 
     # 将名称转换为大写

@@ -97,6 +97,16 @@ message(STATUS "    CUDAToolkit lib dir     : ${CUDAToolkit_LIBRARY_DIR}")
 message(STATUS "    cudnn lib               : ${CUDNN_LIB}")
 message(STATUS "")
 
+message(STATUS "Faiss")
+message(STATUS "    Faiss version     : ${Faiss_VERSION}")
+message(STATUS "    Faiss libs        : ${Faiss_LIBS}")
+message(STATUS "")
+
+message(STATUS "MKL")
+message(STATUS "    MKL Root          : ${MKL_ROOT}")
+message(STATUS "    MKL libs          : ${MKL_INTEL_LP64_LIB};${MKL_GNU_THREAD_LIB};${MKL_CORE_LIB}")
+message(STATUS "")
+
 message(STATUS "Model backends")
 message(STATUS "    TensorRT required         : ON")
 message(STATUS "    ONNX Runtime required     : ON")
