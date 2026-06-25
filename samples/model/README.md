@@ -178,7 +178,7 @@ Use the dedicated image search sample to build an image retrieval index from a g
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg
 build/bin/inferrt_sample_image_search.exe -w samples/model/classification/resnet18.wts -g assets/pics -q assets/pics/dog.jpg
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --topk 5 --rebuild-index
-build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --faiss-backend cpu --index-storage disk --disk-build-batch-size 128 --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --faiss-backend cpu --index-storage disk --model-batch-size 4 --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --norm l2 --preprocess-backend cpu --faiss-backend gpu --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --backend onnxruntime --device cpu --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --backend openvino --device cpu --rebuild-index
@@ -199,7 +199,7 @@ Behavior:
 - `--preprocess-backend` selects `cpu` or `gpu`; GPU preprocessing is reserved and currently reports not implemented
 - `--faiss-backend` selects `cpu` or `gpu`
 - `--index-storage` selects `ram` or `disk` for CPU Faiss search; `disk` uses IVF with an on-disk inverted-list sidecar for large galleries; GPU Faiss currently keeps RAM behavior
-- `--disk-build-batch-size` controls CPU disk index build memory; default is `256`
+- `--model-batch-size` controls both feature extraction and Faiss index build batches; default is `1`
 - default `top_k`: `5`
 - if the target Faiss index already exists, the sample reuses it by default
 - pass `--rebuild-index` to rescan the gallery and include newly added images

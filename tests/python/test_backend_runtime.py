@@ -560,8 +560,6 @@ def test_image_search_sample_graph_backend_uses_dynamic_model_batch(
         "tiny_cls",
         "--model-batch-size",
         "2",
-        "--disk-build-batch-size",
-        "2",
         "--topk",
         "2",
         "--rebuild-index",

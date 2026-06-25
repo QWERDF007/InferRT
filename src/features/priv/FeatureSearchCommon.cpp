@@ -156,10 +156,6 @@ void validateFeatureSearchConfig(const ImageSearchConfig &config, const char *ow
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported %s index storage", owner);
     }
 
-    if (config.disk_build_batch_size == 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "%s disk build batch size must be positive", owner);
-    }
     if (config.model_batch_size == 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "%s model batch size must be positive", owner);
@@ -301,15 +297,15 @@ FaissIndexBundle buildConfiguredFaissIndex(size_t vector_count, int feature_dim,
     if (useCpuDiskIndex(config))
     {
         FaissIndexBundle bundle;
-        bundle.index = buildCpuOnDiskIvfFlatIndex(vector_count, feature_dim, index_path, config.disk_build_batch_size,
-                                                  config.model_batch_size, load_feature, load_feature_batch,
-                                                  load_feature_index_batch, progress_callback);
+        bundle.index = buildCpuOnDiskIvfFlatIndex(vector_count, feature_dim, index_path, config.model_batch_size,
+                                                  load_feature, load_feature_batch, load_feature_index_batch,
+                                                  progress_callback);
         return bundle;
     }
 
     auto cpu_index
-        = buildRamIvfPqIndex(vector_count, feature_dim, config.disk_build_batch_size, config.model_batch_size,
-                             load_feature, load_feature_batch, load_feature_index_batch, progress_callback,
+        = buildRamIvfPqIndex(vector_count, feature_dim, config.model_batch_size, load_feature, load_feature_batch,
+                             load_feature_index_batch, progress_callback,
                              config.faiss_backend == ImageSearchFaissBackend::GPU);
 
     reportBuildProgress(progress_callback, ImageSearchBuildStage::WritingIndex, 0, 0, 0, 0, 1);

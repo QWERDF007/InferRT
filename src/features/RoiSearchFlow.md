@@ -26,8 +26,7 @@
 - `norm`：ROI 展平特征的归一化方式，默认 L2。
 - `faiss_backend`：Faiss 搜索后端，支持 CPU 或 GPU。
 - `index_storage`：CPU Faiss 可选择 RAM 或 Disk；GPU Faiss 会强制使用 RAM。
-- `disk_build_batch_size`：Faiss 添加/落盘向量时的外层批量。
-- `model_batch_size`：模型前向批量，用于图像特征图抽取。
+- `model_batch_size`：模型前向批量；ROI 特征提取和 Faiss 添加/落盘都会使用该批量推进。
 
 ROI 检索额外增加：
 
@@ -163,7 +162,7 @@ ROI 检索复用图像搜索的 Faiss 构建工具，支持两条路径。
 1. 抽样 ROI 特征作为训练数据。
 2. 按特征维度和样本量选择 IVF/PQ 参数。
 3. 训练 IVF-PQ。
-4. 分批提取所有 ROI 特征并添加到索引。
+4. 释放训练样本缓存；按 `model_batch_size` 分批重新提取 ROI 特征，并立即添加到索引。
 5. 写入 `.faiss`。
 6. 如果配置为 GPU Faiss，将 CPU 索引迁移到 GPU。
 
@@ -173,7 +172,7 @@ ROI 检索复用图像搜索的 Faiss 构建工具，支持两条路径。
 
 1. 抽样 ROI 特征生成 IVF 聚类中心。
 2. 写入 `.faiss` 索引骨架。
-3. 两遍扫描 ROI 特征：
+3. 两遍按 `model_batch_size` 扫描 ROI 特征：
    - 第一遍统计每个倒排列表大小。
    - 第二遍将 ID 和向量写入 `.ivfdata`。
 4. 重新加载 `.faiss`，并挂接磁盘上的 `.ivfdata`。

@@ -121,7 +121,6 @@ TEST(ImageSearchTest, DefaultConstructsNotReadySearcher)
     EXPECT_EQ(search.config().norm, irt::features::ImageSearchFeatureNorm::L2);
     EXPECT_EQ(search.config().faiss_backend, irt::features::ImageSearchFaissBackend::CPU);
     EXPECT_EQ(search.config().index_storage, irt::features::ImageSearchIndexStorage::RAM);
-    EXPECT_EQ(search.config().disk_build_batch_size, irt::features::kDefaultImageSearchDiskBuildBatchSize);
     EXPECT_EQ(search.config().model_batch_size, irt::features::kDefaultImageSearchModelBatchSize);
 }
 
@@ -137,7 +136,7 @@ TEST(ImageSearchTest, ConstructorStoresConfig)
     config.model_device          = irt::model::ModelDevice::CPU;
     config.norm                  = irt::features::ImageSearchFeatureNorm::L1;
     config.index_storage         = irt::features::ImageSearchIndexStorage::Disk;
-    config.disk_build_batch_size = 3;
+    config.model_batch_size      = 3;
 
     const irt::features::ImageSearch search(config);
 
@@ -149,8 +148,7 @@ TEST(ImageSearchTest, ConstructorStoresConfig)
     EXPECT_EQ(search.config().norm, irt::features::ImageSearchFeatureNorm::L1);
     EXPECT_EQ(search.config().faiss_backend, irt::features::ImageSearchFaissBackend::CPU);
     EXPECT_EQ(search.config().index_storage, irt::features::ImageSearchIndexStorage::Disk);
-    EXPECT_EQ(search.config().disk_build_batch_size, 3U);
-    EXPECT_EQ(search.config().model_batch_size, irt::features::kDefaultImageSearchModelBatchSize);
+    EXPECT_EQ(search.config().model_batch_size, 3U);
 
     config.norm = irt::features::ImageSearchFeatureNorm::None;
     const irt::features::ImageSearch default_search(config);
@@ -161,8 +159,7 @@ TEST(ImageSearchTest, ConstructorStoresConfig)
     EXPECT_EQ(default_search.config().model_device, irt::model::ModelDevice::CPU);
     EXPECT_EQ(default_search.config().norm, irt::features::ImageSearchFeatureNorm::None);
     EXPECT_EQ(default_search.config().index_storage, irt::features::ImageSearchIndexStorage::Disk);
-    EXPECT_EQ(default_search.config().disk_build_batch_size, 3U);
-    EXPECT_EQ(default_search.config().model_batch_size, irt::features::kDefaultImageSearchModelBatchSize);
+    EXPECT_EQ(default_search.config().model_batch_size, 3U);
 }
 
 /**
@@ -241,19 +238,6 @@ TEST(ImageSearchTest, ConstructorAcceptsGpuFaissBackend)
     EXPECT_EQ(search.config().faiss_backend, irt::features::ImageSearchFaissBackend::GPU);
     EXPECT_EQ(search.config().index_storage, irt::features::ImageSearchIndexStorage::RAM);
     EXPECT_FALSE(search.isReady());
-}
-
-/**
- * @brief CPU disk 构建批量必须为正数，避免批处理循环无法推进。
- */
-TEST(ImageSearchTest, ConstructorRejectsZeroDiskBuildBatchSize)
-{
-    irt::features::ImageSearchConfig config;
-    config.model_name            = "resnet18";
-    config.feature_name          = "layer4";
-    config.disk_build_batch_size = 0;
-
-    expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -410,8 +394,10 @@ TEST(ImageSearchTest, RamIndexBuildReportsStagesAndAddBatches)
         features[row * feature_dim + ((row * 5 + 3) % feature_dim)] += 0.125f;
     }
 
+    size_t single_loads = 0;
     auto load_feature = [&](size_t row)
     {
+        ++single_loads;
         const auto begin = features.begin() + static_cast<std::ptrdiff_t>(row * feature_dim);
         return std::vector<float>(begin, begin + feature_dim);
     };
@@ -455,6 +441,7 @@ TEST(ImageSearchTest, RamIndexBuildReportsStagesAndAddBatches)
     EXPECT_EQ(add_batches, expected_add_batches);
     EXPECT_EQ(training_progress, vector_count);
     EXPECT_EQ(add_progress, vector_count);
+    EXPECT_EQ(single_loads, vector_count * 2);
 }
 
 TEST(ImageSearchTest, TrainingFeatureSamplingUsesContiguousBatchCallback)
@@ -703,10 +690,10 @@ TEST(ImageSearchTest, CpuDiskIndexUsesOnDiskIvfInvertedLists)
 }
 
 /**
- * @brief 高维 DINO 特征下，IVF 训练/构建批大小应受内存上限约束。
+ * @brief 高维 DINO 特征下，IVF 训练/Faiss 建库批大小应受内存上限约束。
  *
  * 验证 ``chooseCpuOnDiskIvf*`` 在约 1369×384 维、12500 条向量规模下不会超出
- * ``kCpuOnDiskIvfMaxTrainingBytes`` 与 ``kCpuOnDiskIvfMaxBatchBytes``。
+ * ``kCpuOnDiskIvfMaxTrainingBytes`` 与 ``kFaissIndexBuildMaxBatchBytes``。
  */
 TEST(ImageSearchTest, CpuDiskIndexBoundsWideFeatureBuffers)
 {
@@ -715,7 +702,7 @@ TEST(ImageSearchTest, CpuDiskIndexBoundsWideFeatureBuffers)
 
     const auto nlist          = irt::features::priv::chooseCpuOnDiskIvfListCount(vector_count, feature_dim);
     const auto training_count = irt::features::priv::chooseCpuOnDiskIvfTrainingCount(vector_count, feature_dim, nlist);
-    const auto batch_size     = irt::features::priv::chooseCpuOnDiskIvfBuildBatchSize(256, vector_count, feature_dim);
+    const auto batch_size     = irt::features::priv::chooseFaissIndexBuildBatchSize(256, vector_count, feature_dim);
 
     const auto bytes_per_feature = static_cast<size_t>(feature_dim) * sizeof(float);
 
@@ -724,7 +711,7 @@ TEST(ImageSearchTest, CpuDiskIndexBoundsWideFeatureBuffers)
     EXPECT_LT(training_count, irt::features::priv::kCpuOnDiskIvfMaxTrainingVectors);
     EXPECT_LE(training_count * bytes_per_feature, irt::features::priv::kCpuOnDiskIvfMaxTrainingBytes);
     EXPECT_LT(batch_size, 256U);
-    EXPECT_LE(batch_size * bytes_per_feature, irt::features::priv::kCpuOnDiskIvfMaxBatchBytes);
+    EXPECT_LE(batch_size * bytes_per_feature, irt::features::priv::kFaissIndexBuildMaxBatchBytes);
 }
 
 /**

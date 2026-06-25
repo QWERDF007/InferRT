@@ -23,8 +23,7 @@
 - `norm`：特征归一化方式，默认 L2。
 - `faiss_backend`：Faiss 搜索后端，支持 CPU 或 GPU。
 - `index_storage`：CPU Faiss 搜索时索引常驻 RAM 或使用磁盘倒排列表。
-- `disk_build_batch_size`：Faiss 添加/落盘图库向量时的外层批量。
-- `model_batch_size`：特征提取模型前向批量；训练特征采样和图库向量提取都会尽量使用该批量。
+- `model_batch_size`：特征提取模型前向批量；训练特征采样、图库向量提取以及 Faiss 添加/落盘都会使用该批量推进。
 
 ## 3. 构建或加载索引
 
@@ -83,7 +82,7 @@ searcher.buildOrLoad(weights_file, gallery_dir, index_file, rebuild_index, progr
 2. 批量抽样训练特征。
 3. 选择 PQ 子量化器数量和 code 位宽。
 4. 训练 IVF-PQ。
-5. 按 `disk_build_batch_size` 分批添加所有图库向量。
+5. 释放训练样本缓存；按 `model_batch_size` 分批重新提取图库向量，并立即添加到索引。
 6. 写入 `.faiss`，并在需要时迁移到 GPU Faiss。
 
 ### CPU 磁盘 IVF+Flat
@@ -93,9 +92,9 @@ searcher.buildOrLoad(weights_file, gallery_dir, index_file, rebuild_index, progr
 1. 创建 `IndexIVFFlat` 骨架。
 2. 抽样训练特征并生成 IVF 聚类中心。
 3. 写入 `.faiss` 骨架。
-4. 第一遍扫描图库特征，统计每个倒排列表大小。
+4. 第一遍按 `model_batch_size` 扫描图库特征，统计每个倒排列表大小。
 5. 初始化 `.ivfdata` 侧车文件，写入文件头和列表元数据。
-6. 第二遍扫描图库特征，把 ID 和 float code 分组写入 `.ivfdata`。
+6. 第二遍按 `model_batch_size` 扫描图库特征，把 ID 和 float code 分组写入 `.ivfdata`。
 7. 重新加载 `.faiss`，并用 `InferRtOnDiskInvertedLists` 挂接 `.ivfdata`。
 
 ## 7. 旁路文件
@@ -125,11 +124,11 @@ auto results = searcher.search(query_image, top_k);
 
 ## 9. 批量和进度
 
-- `model_batch_size` 控制模型前向批量。
-- `disk_build_batch_size` 控制 Faiss 添加/落盘阶段的外层图库批量。
+- `model_batch_size` 同时控制模型前向批量和 Faiss 添加/落盘批量。
 - 进度回调的 `processed_count/total_count` 表示当前阶段已经处理的工作单元数量，通常是图片或向量数量，不是 batch 数。
 - `batch_begin` 和 `batch_count` 表示当前完成批次覆盖的图库下标区间或采样数量。
-- `TrainingFeatures` 已支持按 `model_batch_size` 批量提取训练特征。
+- 构建索引时不会一次性提取完整图库特征；每批特征提取完成后会立即进入 Faiss 添加或磁盘倒排列表写入流程。
+- RAM IVF-PQ 添加阶段不复用训练样本缓存，训练完成后会释放训练特征，再按图库顺序现提取现添加。
 
 ## 10. 常见注意事项
 

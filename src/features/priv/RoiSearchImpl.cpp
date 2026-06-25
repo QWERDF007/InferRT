@@ -330,7 +330,6 @@ void saveRoiMetadata(const fs::path &metadata_path, const RoiSearchConfig &confi
     output << "norm=" << priv::featureNormName(config.norm) << "\n";
     output << "faiss_backend=" << priv::faissBackendName(config.faiss_backend) << "\n";
     output << "index_storage=" << priv::indexStorageName(config.index_storage) << "\n";
-    output << "disk_build_batch_size=" << config.disk_build_batch_size << "\n";
     output << "model_batch_size=" << config.model_batch_size << "\n";
     output << "index_kind=" << priv::indexKindName(config) << "\n";
     output << "roi_pooled_height=" << config.pooled_height << "\n";

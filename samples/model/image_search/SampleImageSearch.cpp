@@ -226,8 +226,6 @@ cxxopts::Options makeOptions(const char *program_name)
         "faiss-backend", "Faiss backend: cpu, gpu", cxxopts::value<std::string>()->default_value("cpu"))(
         "index-storage", "Index storage for CPU Faiss search: ram, disk",
         cxxopts::value<std::string>()->default_value("ram"))(
-        "disk-build-batch-size", "Batch size used while building CPU disk indexes",
-        cxxopts::value<size_t>()->default_value(std::to_string(irt::features::kDefaultImageSearchDiskBuildBatchSize)))(
         "model-batch-size", "Feature extraction model inference batch size",
         cxxopts::value<size_t>()->default_value(std::to_string(irt::features::kDefaultImageSearchModelBatchSize)))(
         "rebuild-index", "Force rebuild of the Faiss index")("h,help", "Show help");
@@ -251,8 +249,7 @@ Arguments parseArguments(int argc, char *argv[])
         std::cout << "Default feature tensor: " << irt::features::ImageSearch::kDefaultFeatureName << std::endl;
         std::cout << "Default top-k: " << irt::features::ImageSearch::kDefaultTopK << std::endl;
         std::cout << "Default config: --norm l2 --backend tensorrt --device gpu --preprocess-backend cpu"
-                  << " --faiss-backend cpu --index-storage ram --disk-build-batch-size "
-                  << irt::features::kDefaultImageSearchDiskBuildBatchSize << " --model-batch-size "
+                  << " --faiss-backend cpu --index-storage ram --model-batch-size "
                   << irt::features::kDefaultImageSearchModelBatchSize << std::endl;
         std::cout << "If --index is omitted, the sample uses <gallery_dir>/<model>_<feature>.faiss" << std::endl;
         std::cout << "DINO feature hint: use x_norm_clstoken for compact image-level retrieval" << std::endl;
@@ -285,7 +282,6 @@ Arguments parseArguments(int argc, char *argv[])
     args.config.preprocess_backend    = parsePreprocessBackend(result["preprocess-backend"].as<std::string>());
     args.config.faiss_backend         = parseFaissBackend(result["faiss-backend"].as<std::string>());
     args.config.index_storage         = parseIndexStorage(result["index-storage"].as<std::string>());
-    args.config.disk_build_batch_size = result["disk-build-batch-size"].as<size_t>();
     args.config.model_batch_size      = result["model-batch-size"].as<size_t>();
     args.rebuild_index                = result.count("rebuild-index") > 0;
 
@@ -361,7 +357,6 @@ int main(int argc, char *argv[])
                   << ", preprocess=" << preprocessBackendName(searcher.config().preprocess_backend)
                   << ", faiss=" << faissBackendName(searcher.config().faiss_backend)
                   << ", index_storage=" << indexStorageName(searcher.config().index_storage)
-                  << ", disk_build_batch_size=" << searcher.config().disk_build_batch_size
                   << ", model_batch_size=" << searcher.config().model_batch_size << std::endl;
         std::cout << "Index: " << fs::absolute(searcher.indexPath()).string() << std::endl;
         std::cout << "Top " << results.size() << " similar images:" << std::endl;

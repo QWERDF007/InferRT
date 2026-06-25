@@ -23,9 +23,6 @@ inline constexpr const char *kDefaultImageSearchModelName = "resnet18";
 /// 默认导出的中间特征层名称。
 inline constexpr const char *kDefaultImageSearchFeatureName = "layer4";
 
-/// CPU 磁盘索引构建时的默认特征批大小。
-inline constexpr size_t kDefaultImageSearchDiskBuildBatchSize = 256;
-
 /// 图像检索特征提取模型的默认推理 batch 数。
 inline constexpr size_t kDefaultImageSearchModelBatchSize = 1;
 
@@ -164,18 +161,10 @@ struct ImageSearchConfig
     ImageSearchIndexStorage index_storage{ImageSearchIndexStorage::RAM};
 
     /**
-     * @brief CPU 磁盘索引写入阶段的外层特征批量。
+     * @brief 特征提取模型推理和 Faiss 建库批量。
      *
-     * 该值控制 Faiss 添加/落盘向量时一次处理多少图库向量；模型实际前向批量仍受
-     * ``model_batch_size`` 限制。
-     */
-    size_t disk_build_batch_size{kDefaultImageSearchDiskBuildBatchSize};
-
-    /**
-     * @brief 特征提取模型推理批量。
-     *
-     * 构建索引时，训练特征采样和图库向量提取都会尽量按该批量调用模型；TensorRT 使用动态
-     * profile，ONNX Runtime/OpenVINO 需要导出的图支持动态 batch。
+     * 构建索引时，训练特征采样、图库向量提取以及 Faiss 添加/落盘都会按该批量推进，避免
+     * 先缓存大批量特征再建库；TensorRT 使用动态 profile，ONNX Runtime/OpenVINO 需要导出的图支持动态 batch。
      */
     size_t model_batch_size{kDefaultImageSearchModelBatchSize};
 };

@@ -295,10 +295,6 @@ void validateConfig(const ImageSearchConfig &config)
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported ImageSearch index storage");
     }
 
-    if (config.disk_build_batch_size == 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch disk build batch size must be positive");
-    }
     if (config.model_batch_size == 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch model batch size must be positive");
@@ -531,7 +527,6 @@ void saveMetadata(const fs::path &metadata_path, const std::string &gallery_valu
     output << "norm=" << featureNormName(config.norm) << "\n";
     output << "faiss_backend=" << faissBackendName(config.faiss_backend) << "\n";
     output << "index_storage=" << indexStorageName(config.index_storage) << "\n";
-    output << "disk_build_batch_size=" << config.disk_build_batch_size << "\n";
     output << "model_batch_size=" << config.model_batch_size << "\n";
     output << "index_kind=" << indexKindName(config) << "\n";
 }
@@ -1024,8 +1019,8 @@ FaissIndexBundle buildCpuOnDiskIndex(const std::vector<fs::path> &gallery_images
 {
     FaissIndexBundle bundle;
     bundle.index = priv::buildCpuOnDiskIvfFlatIndex(
-        gallery_images.size(), extractor.featureDim(), index_path, config.disk_build_batch_size,
-        config.model_batch_size, [&](size_t index) { return extractor.extract(gallery_images[index]); },
+        gallery_images.size(), extractor.featureDim(), index_path, config.model_batch_size,
+        [&](size_t index) { return extractor.extract(gallery_images[index]); },
         [&](size_t begin, size_t count) { return extractor.extractBatch(gallery_images, begin, count); },
         [&](const std::vector<size_t> &indices) { return extractor.extractBatch(gallery_images, indices); },
         progress_callback);
@@ -1047,7 +1042,7 @@ FaissIndexBundle buildRamIvfPqIndex(const std::vector<fs::path> &gallery_images,
                                     const ImageSearchBuildProgressCallback &progress_callback)
 {
     auto cpu_index = priv::buildRamIvfPqIndex(
-        gallery_images.size(), extractor.featureDim(), config.disk_build_batch_size, config.model_batch_size,
+        gallery_images.size(), extractor.featureDim(), config.model_batch_size,
         [&](size_t index) { return extractor.extract(gallery_images[index]); },
         [&](size_t begin, size_t count) { return extractor.extractBatch(gallery_images, begin, count); },
         [&](const std::vector<size_t> &indices) { return extractor.extractBatch(gallery_images, indices); },

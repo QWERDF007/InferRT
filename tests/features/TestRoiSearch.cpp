@@ -103,7 +103,6 @@ TEST(RoiSearchTest, ConstructorStoresConfig)
     config.model_device          = irt::model::ModelDevice::CPU;
     config.norm                  = irt::features::ImageSearchFeatureNorm::L1;
     config.index_storage         = irt::features::ImageSearchIndexStorage::Disk;
-    config.disk_build_batch_size = 4;
     config.model_batch_size      = 2;
     config.pooled_height         = 3;
     config.pooled_width          = 5;
@@ -120,7 +119,6 @@ TEST(RoiSearchTest, ConstructorStoresConfig)
     EXPECT_EQ(search.config().model_device, irt::model::ModelDevice::CPU);
     EXPECT_EQ(search.config().norm, irt::features::ImageSearchFeatureNorm::L1);
     EXPECT_EQ(search.config().index_storage, irt::features::ImageSearchIndexStorage::Disk);
-    EXPECT_EQ(search.config().disk_build_batch_size, 4U);
     EXPECT_EQ(search.config().model_batch_size, 2U);
     EXPECT_EQ(search.config().pooled_height, 3);
     EXPECT_EQ(search.config().pooled_width, 5);

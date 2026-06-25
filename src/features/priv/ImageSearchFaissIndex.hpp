@@ -557,14 +557,14 @@ struct TrainingFeatureSample
 /**
  * @brief 按 stride 抽样并批量加载 Faiss 训练特征。
  *
- * 该函数只负责训练样本收集，不直接训练 Faiss；进度单位仍是训练向量数量，批次大小由
- * ``training_batch_size`` 控制，通常来自 ``ImageSearchConfig::model_batch_size``。
+ * 该函数只负责训练样本收集，不直接训练 Faiss；进度单位仍是训练向量数量，批次大小来自
+ * ``ImageSearchConfig::model_batch_size``。
  *
  * @param vector_count 图库向量总数。
  * @param feature_dim 单条特征维度。
  * @param training_count 需要采样的训练向量数量。
  * @param stride 采样步长。
- * @param training_batch_size 训练特征提取批量。
+ * @param batch_size 特征提取批量。
  * @param load_feature 单条特征加载回调。
  * @param load_feature_batch 连续区间批量加载回调。
  * @param load_feature_index_batch 任意下标批量加载回调。
@@ -572,7 +572,7 @@ struct TrainingFeatureSample
  * @return 训练特征及其图库下标。
  */
 inline TrainingFeatureSample loadTrainingFeatures(size_t vector_count, int feature_dim, size_t training_count,
-                                                  size_t stride, size_t training_batch_size,
+                                                  size_t stride, size_t batch_size,
                                                   const LoadFeatureCallback             &load_feature,
                                                   const LoadFeatureBatchCallback        &load_feature_batch,
                                                   const LoadFeatureIndexedBatchCallback &load_feature_index_batch,
@@ -580,7 +580,7 @@ inline TrainingFeatureSample loadTrainingFeatures(size_t vector_count, int featu
 {
     reportBuildProgress(progress_callback, ImageSearchBuildStage::TrainingFeatures, 0, 0, 0, 0, training_count);
 
-    training_batch_size = std::max<size_t>(1, training_batch_size);
+    batch_size = std::max<size_t>(1, batch_size);
 
     TrainingFeatureSample sample;
     sample.features.reserve(training_count * static_cast<size_t>(feature_dim));
@@ -588,13 +588,13 @@ inline TrainingFeatureSample loadTrainingFeatures(size_t vector_count, int featu
     size_t              batch_index      = 0;
     size_t              index_in_gallery = 0;
     std::vector<size_t> batch_indices;
-    batch_indices.reserve(training_batch_size);
+    batch_indices.reserve(batch_size);
     while (index_in_gallery < vector_count && sample.count < training_count)
     {
         batch_indices.clear();
         const size_t batch_begin = index_in_gallery;
         while (index_in_gallery < vector_count && sample.count + batch_indices.size() < training_count
-               && batch_indices.size() < training_batch_size)
+               && batch_indices.size() < batch_size)
         {
             batch_indices.push_back(index_in_gallery);
             index_in_gallery += stride;
@@ -721,8 +721,8 @@ inline void initializeCpuOnDiskIvfDataFile(const std::filesystem::path &data_pat
     }
 }
 
-/** @brief 前向声明：按内存上限裁剪磁盘构建批大小。 */
-inline size_t chooseCpuOnDiskIvfBuildBatchSize(size_t requested_batch_size, size_t vector_count, int feature_dim);
+/** @brief 前向声明：按内存上限裁剪 Faiss 建库批大小。 */
+inline size_t chooseFaissIndexBuildBatchSize(size_t requested_batch_size, size_t vector_count, int feature_dim);
 
 /**
  * @brief 分两趟扫描图库：先统计各 IVF 列表大小，再分批写入 ID 与编码到 ``.ivfdata``。
@@ -736,7 +736,7 @@ inline void writeCpuOnDiskIvfDataFileBatched(const faiss::IndexIVF &index, size_
 {
     if (batch_size == 0)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Faiss on-disk build batch size must be positive");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Faiss on-disk batch size must be positive");
     }
     if (index.code_size != static_cast<size_t>(feature_dim) * sizeof(float))
     {
@@ -748,7 +748,7 @@ inline void writeCpuOnDiskIvfDataFileBatched(const faiss::IndexIVF &index, size_
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Invalid IVF centroid buffer size");
     }
 
-    batch_size = chooseCpuOnDiskIvfBuildBatchSize(batch_size, vector_count, feature_dim);
+    batch_size = chooseFaissIndexBuildBatchSize(batch_size, vector_count, feature_dim);
 
     reportBuildProgress(progress_callback, ImageSearchBuildStage::AssigningVectors, 0, 0, 0, 0, vector_count);
 
@@ -891,8 +891,8 @@ inline size_t chooseCpuOnDiskIvfListCount(size_t vector_count)
 inline constexpr size_t kCpuOnDiskIvfMaxTrainingVectors = 8192;
 /// IVF 训练特征缓冲区的最大字节数（512 MiB）。
 inline constexpr size_t kCpuOnDiskIvfMaxTrainingBytes = 512ULL * 1024ULL * 1024ULL;
-/// 磁盘构建批特征缓冲区的最大字节数（256 MiB）。
-inline constexpr size_t kCpuOnDiskIvfMaxBatchBytes = 256ULL * 1024ULL * 1024ULL;
+/// Faiss 添加/落盘阶段单批特征缓冲区的最大字节数（256 MiB）。
+inline constexpr size_t kFaissIndexBuildMaxBatchBytes = 256ULL * 1024ULL * 1024ULL;
 
 /**
  * @brief 在给定字节预算下，计算可一次性缓冲的向量条数上限。
@@ -935,9 +935,9 @@ inline size_t chooseCpuOnDiskIvfTrainingCount(size_t vector_count, int feature_d
 /**
  * @brief 将用户请求的构建批大小限制在图库规模与批缓冲内存上限内。
  */
-inline size_t chooseCpuOnDiskIvfBuildBatchSize(size_t requested_batch_size, size_t vector_count, int feature_dim)
+inline size_t chooseFaissIndexBuildBatchSize(size_t requested_batch_size, size_t vector_count, int feature_dim)
 {
-    const auto by_memory = maxCpuOnDiskIvfBufferedVectorCount(feature_dim, kCpuOnDiskIvfMaxBatchBytes);
+    const auto by_memory = maxCpuOnDiskIvfBufferedVectorCount(feature_dim, kFaissIndexBuildMaxBatchBytes);
     return std::max<size_t>(1, std::min<size_t>({requested_batch_size, vector_count, by_memory}));
 }
 
@@ -1083,8 +1083,7 @@ inline std::unique_ptr<faiss::Index> loadCpuOnDiskIvfFlatIndex(const std::filesy
  * @param vector_count 图库向量数量。
  * @param feature_dim 特征维度。
  * @param index_path 输出索引文件路径。
- * @param batch_size 磁盘倒排列表构建时的特征批量。
- * @param training_batch_size 训练特征采样阶段的模型批量。
+ * @param batch_size 特征提取与磁盘倒排列表构建批量。
  * @param load_feature 按图库下标加载单条归一化特征的回调。
  * @param load_feature_batch 按连续下标区间批量加载特征的回调。
  * @param load_feature_index_batch 按任意下标列表批量加载训练特征的回调。
@@ -1094,8 +1093,8 @@ inline std::unique_ptr<faiss::Index> loadCpuOnDiskIvfFlatIndex(const std::filesy
  */
 inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
     size_t vector_count, int feature_dim, const std::filesystem::path &index_path, size_t batch_size,
-    size_t training_batch_size, const LoadFeatureCallback &load_feature,
-    const LoadFeatureBatchCallback &load_feature_batch, const LoadFeatureIndexedBatchCallback &load_feature_index_batch,
+    const LoadFeatureCallback &load_feature, const LoadFeatureBatchCallback &load_feature_batch,
+    const LoadFeatureIndexedBatchCallback &load_feature_index_batch,
     const BuildProgressCallback &progress_callback = {});
 
 inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(size_t vector_count, int feature_dim,
@@ -1104,8 +1103,8 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(size_t vector_co
                                                                 const LoadFeatureCallback   &load_feature,
                                                                 const BuildProgressCallback &progress_callback = {})
 {
-    return buildCpuOnDiskIvfFlatIndex(vector_count, feature_dim, index_path, batch_size, batch_size, load_feature, {},
-                                      {}, progress_callback);
+    return buildCpuOnDiskIvfFlatIndex(vector_count, feature_dim, index_path, batch_size, load_feature, {}, {},
+                                      progress_callback);
 }
 
 inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(size_t vector_count, int feature_dim,
@@ -1115,14 +1114,14 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(size_t vector_co
                                                                 const LoadFeatureBatchCallback &load_feature_batch,
                                                                 const BuildProgressCallback    &progress_callback = {})
 {
-    return buildCpuOnDiskIvfFlatIndex(vector_count, feature_dim, index_path, batch_size, batch_size, load_feature,
+    return buildCpuOnDiskIvfFlatIndex(vector_count, feature_dim, index_path, batch_size, load_feature,
                                       load_feature_batch, {}, progress_callback);
 }
 
 inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
     size_t vector_count, int feature_dim, const std::filesystem::path &index_path, size_t batch_size,
-    size_t training_batch_size, const LoadFeatureCallback &load_feature,
-    const LoadFeatureBatchCallback &load_feature_batch, const LoadFeatureIndexedBatchCallback &load_feature_index_batch,
+    const LoadFeatureCallback &load_feature, const LoadFeatureBatchCallback &load_feature_batch,
+    const LoadFeatureIndexedBatchCallback &load_feature_index_batch,
     const BuildProgressCallback &progress_callback)
 {
     if (vector_count == 0 || feature_dim <= 0)
@@ -1135,9 +1134,9 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
     const size_t training_count = chooseCpuOnDiskIvfTrainingCount(vector_count, feature_dim, nlist);
     const size_t stride         = std::max<size_t>(1, vector_count / training_count);
 
-    const auto training
-        = loadTrainingFeatures(vector_count, feature_dim, training_count, stride, training_batch_size, load_feature,
-                               load_feature_batch, load_feature_index_batch, progress_callback);
+    const auto training = loadTrainingFeatures(vector_count, feature_dim, training_count, stride, batch_size,
+                                               load_feature, load_feature_batch, load_feature_index_batch,
+                                               progress_callback);
     const size_t actual_training_count = training.count;
     if (actual_training_count < nlist)
     {
@@ -1170,13 +1169,12 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
 /**
  * @brief 构建 RAM 常驻的 IVF-PQ 内积索引。
  *
- * 训练样本按 ``training_batch_size`` 批量提取，添加图库向量时按 ``batch_size`` 分块；
+ * 训练样本和图库向量添加都按 ``batch_size`` 分块；
  * 若 ``require_gpu_compatible`` 为 true，则选择 GPU Faiss 可接受的 PQ code 位宽。
  *
  * @param vector_count 图库向量总数。
  * @param feature_dim 单条特征维度。
- * @param batch_size 添加图库向量阶段的特征批量。
- * @param training_batch_size 训练特征采样阶段的模型批量。
+ * @param batch_size 特征提取与图库向量添加批量。
  * @param load_feature 按图库下标加载单条归一化特征的回调。
  * @param load_feature_batch 按连续下标区间批量加载特征的回调。
  * @param load_feature_index_batch 按任意下标列表批量加载训练特征的回调。
@@ -1185,7 +1183,6 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
  * @return 已训练并添加图库向量的 CPU Faiss 索引。
  */
 inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int feature_dim, size_t batch_size,
-                                                        size_t                                 training_batch_size,
                                                         const LoadFeatureCallback             &load_feature,
                                                         const LoadFeatureBatchCallback        &load_feature_batch,
                                                         const LoadFeatureIndexedBatchCallback &load_feature_index_batch,
@@ -1197,8 +1194,8 @@ inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int
                                                         const BuildProgressCallback &progress_callback      = {},
                                                         bool                         require_gpu_compatible = false)
 {
-    return buildRamIvfPqIndex(vector_count, feature_dim, batch_size, batch_size, load_feature, {}, {},
-                              progress_callback, require_gpu_compatible);
+    return buildRamIvfPqIndex(vector_count, feature_dim, batch_size, load_feature, {}, {}, progress_callback,
+                              require_gpu_compatible);
 }
 
 inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int feature_dim, size_t batch_size,
@@ -1207,12 +1204,11 @@ inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int
                                                         const BuildProgressCallback    &progress_callback,
                                                         bool                            require_gpu_compatible)
 {
-    return buildRamIvfPqIndex(vector_count, feature_dim, batch_size, batch_size, load_feature, load_feature_batch, {},
+    return buildRamIvfPqIndex(vector_count, feature_dim, batch_size, load_feature, load_feature_batch, {},
                               progress_callback, require_gpu_compatible);
 }
 
 inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int feature_dim, size_t batch_size,
-                                                        size_t                                 training_batch_size,
                                                         const LoadFeatureCallback             &load_feature,
                                                         const LoadFeatureBatchCallback        &load_feature_batch,
                                                         const LoadFeatureIndexedBatchCallback &load_feature_index_batch,
@@ -1233,7 +1229,7 @@ inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int
     const size_t training_count = chooseRamIvfPqTrainingCount(vector_count, feature_dim, nlist);
     const size_t stride         = std::max<size_t>(1, vector_count / training_count);
 
-    auto training = loadTrainingFeatures(vector_count, feature_dim, training_count, stride, training_batch_size,
+    auto training = loadTrainingFeatures(vector_count, feature_dim, training_count, stride, batch_size,
                                          load_feature, load_feature_batch, load_feature_index_batch, progress_callback);
     const size_t actual_training_count = training.count;
     if (actual_training_count < nlist)
@@ -1281,26 +1277,18 @@ inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int
     ivfpq_index->nprobe = chooseCpuOnDiskIvfProbeCount(nlist);
     reportBuildProgress(progress_callback, ImageSearchBuildStage::TrainingIndex, 0, 0, 0, 1, 1);
 
-    auto load_cached_feature = [&](size_t index_in_gallery)
-    {
-        const auto found = std::lower_bound(training.indices.begin(), training.indices.end(), index_in_gallery);
-        if (found != training.indices.end() && *found == index_in_gallery)
-        {
-            const auto  training_index = static_cast<size_t>(std::distance(training.indices.begin(), found));
-            const auto *begin          = training.features.data() + training_index * static_cast<size_t>(feature_dim);
-            return std::vector<float>(begin, begin + static_cast<size_t>(feature_dim));
-        }
-        return load_feature(index_in_gallery);
-    };
+    std::vector<float>().swap(training.features);
+    std::vector<size_t>().swap(training.indices);
+    std::vector<float>().swap(padded_training_features);
 
-    batch_size = chooseCpuOnDiskIvfBuildBatchSize(batch_size, vector_count, feature_dim);
+    batch_size = chooseFaissIndexBuildBatchSize(batch_size, vector_count, feature_dim);
     reportBuildProgress(progress_callback, ImageSearchBuildStage::AddingVectors, 0, 0, 0, 0, vector_count);
     size_t add_batch_index = 0;
     for (size_t begin = 0; begin < vector_count; begin += batch_size)
     {
         const size_t count    = std::min(batch_size, vector_count - begin);
         const auto   features = load_feature_batch ? loadFeatureBatch(begin, count, feature_dim, load_feature_batch)
-                                                   : loadFeatureBatch(begin, count, feature_dim, load_cached_feature);
+                                                   : loadFeatureBatch(begin, count, feature_dim, load_feature);
         ivfpq_index->add(static_cast<faiss::idx_t>(count), features.data());
         reportBuildProgress(progress_callback, ImageSearchBuildStage::AddingVectors, add_batch_index++, begin, count,
                             std::min(vector_count, begin + count), vector_count);
