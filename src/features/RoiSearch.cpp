@@ -5,6 +5,8 @@
 
 #include "priv/RoiSearchImpl.hpp"
 
+#include <inferrt/util/FileManifest.hpp>
+
 #include <utility>
 
 namespace fs = std::filesystem;
@@ -73,9 +75,9 @@ int RoiSearch::featureDim() const noexcept
 fs::path RoiSearch::defaultIndexPath(const fs::path &output_dir, const std::string &model_name,
                                      const std::string &feature_name)
 {
-    auto path = ImageSearch::defaultIndexPath(output_dir, model_name, feature_name);
-    path.replace_extension(".roi.faiss");
-    return path;
+    (void)model_name;
+    (void)feature_name;
+    return irt::util::resolveOutputFilePath({}, output_dir, ".faiss");
 }
 
 } // namespace irt::features

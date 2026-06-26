@@ -1,10 +1,13 @@
 #include "IModelImpl.hpp"
 
 #include <inferrt/core/Exception.hpp>
+#include <inferrt/util/FileManifest.hpp>
 
 #include <cctype>
+#include <filesystem>
 #include <fstream>
 #include <functional>
+#include <sstream>
 #include <unordered_set>
 
 namespace irt::model::priv {
@@ -221,52 +224,101 @@ void ValidateModelConfig(const IModelImpl &impl)
 }
 
 /**
- * @brief 根据权重文件路径和模型基础配置生成主 engine 文件路径。
+ * @brief 根据权重文件路径生成 engine 文件路径。
  * @param impl 模型内部实现对象。
  * @param weights_file 权重文件路径。
  * @return 对应的 engine 文件路径。
  */
 std::string BuildEngineFileName(const IModelImpl &impl, const std::string &weights_file)
 {
-    std::string engine_file = weights_file;
-    size_t      pos         = engine_file.rfind(impl.wtsExtension());
-    if (pos != std::string::npos)
+    return irt::util::deriveOutputFilePathFromSource(weights_file, impl.engineExtension()).string();
+}
+
+std::string boolValue(bool value)
+{
+    return value ? "true" : "false";
+}
+
+std::string joinStrings(const std::vector<std::string> &values)
+{
+    std::ostringstream stream;
+    for (size_t i = 0; i < values.size(); ++i)
     {
-        engine_file.replace(pos, impl.wtsExtension().size(), impl.engineExtension());
+        if (i > 0)
+        {
+            stream << ',';
+        }
+        stream << values[i];
     }
-    else
+    return stream.str();
+}
+
+std::string inputShapesValue(const std::vector<nvinfer1::Dims4> &input_shapes)
+{
+    std::ostringstream stream;
+    for (size_t i = 0; i < input_shapes.size(); ++i)
     {
-        engine_file += impl.engineExtension();
+        if (i > 0)
+        {
+            stream << ';';
+        }
+        const auto &shape = input_shapes[i];
+        stream << shape.d[0] << ',' << shape.d[1] << ',' << shape.d[2] << ',' << shape.d[3];
+    }
+    return stream.str();
+}
+
+std::string absolutePathValue(const std::string &path)
+{
+    return path.empty() ? std::string{} : std::filesystem::absolute(path).generic_string();
+}
+
+irt::util::ManifestEntries engineManifestEntries(const IModelImpl &impl, const std::string &source_file,
+                                                 const std::string &engine_file)
+{
+    const auto &config = impl.modelConfig();
+    return {
+        {"version", "1"},
+        {"kind", "tensorrt_engine"},
+        {"model_name", impl.name()},
+        {"source_file", absolutePathValue(source_file)},
+        {"engine_file", absolutePathValue(engine_file)},
+        {"num_classes", std::to_string(config.numClasses())},
+        {"input_shapes", inputShapesValue(config.inputShapes())},
+        {"input_tensor_names", joinStrings(config.inputTensorNames())},
+        {"output_tensor_names", joinStrings(config.outputTensorNames())},
+        {"dynamic_batch", boolValue(config.dynamicBatch())},
+        {"min_batch_size", std::to_string(config.minBatchSize())},
+        {"opt_batch_size", std::to_string(config.optBatchSize())},
+        {"max_batch_size", std::to_string(config.maxBatchSize())},
+        {"feature_only", boolValue(config.featureOnly())},
+        {"feature_tensor_names", joinStrings(config.featureTensorNames())},
+        {"config_suffix", impl.generateSuffix(config)},
+    };
+}
+
+void writeEngineManifest(const IModelImpl &impl, const std::string &source_file, const std::string &engine_file)
+{
+    irt::util::writeKeyValueManifest(irt::util::manifestPathForDataFile(engine_file),
+                                     engineManifestEntries(impl, source_file, engine_file));
+}
+
+bool engineManifestMatches(const IModelImpl &impl, const std::string &source_file, const std::string &engine_file)
+{
+    const auto manifest = irt::util::loadKeyValueManifest(irt::util::manifestPathForDataFile(engine_file));
+    if (manifest.empty())
+    {
+        return false;
     }
 
-    const auto &config       = impl.modelConfig();
-    const auto  ext_pos      = engine_file.rfind(impl.engineExtension());
-    auto        cache_config = IModelConfig{};
-    cache_config.setNumClasses(config.numClasses());
-    cache_config.setInputShapes(config.inputShapes());
-    cache_config.setInputTensorNames(config.inputTensorNames());
-    cache_config.setOutputTensorNames(config.outputTensorNames());
-    if (config.dynamicBatch())
+    for (const auto &[key, value] : engineManifestEntries(impl, source_file, engine_file))
     {
-        cache_config.setDynamicBatchRange(config.minBatchSize(), config.optBatchSize(), config.maxBatchSize());
+        if (irt::util::manifestValue(manifest, key) != value)
+        {
+            return false;
+        }
     }
-    if (config.featureOnly())
-    {
-        cache_config.setFeatureTensorNames(config.featureTensorNames());
-        cache_config.setFeatureOnly(true);
-    }
-    const auto suffix = impl.generateSuffix(cache_config);
-
-    if (ext_pos != std::string::npos)
-    {
-        engine_file.insert(ext_pos, suffix);
-    }
-    else
-    {
-        engine_file += suffix;
-    }
-
-    return engine_file;
+    return true;
 }
 
 } // namespace
@@ -706,8 +758,11 @@ void IModelImpl::save(const std::string &engine_file)
     {
         initLogger();
     }
-    LOG_INFO(*trt_params.logger) << "Saving TensorRT engine to: " << engine_file << std::endl;
-    saveRuntimeToFile(engine_file);
+    const std::string resolved_engine_file
+        = irt::util::resolveOutputFilePath(engine_file, {}, engineExtension()).string();
+    LOG_INFO(*trt_params.logger) << "Saving TensorRT engine to: " << resolved_engine_file << std::endl;
+    saveRuntimeToFile(resolved_engine_file);
+    writeEngineManifest(*this, {}, resolved_engine_file);
 }
 
 /**
@@ -722,7 +777,12 @@ void IModelImpl::load(const std::string &engine_file)
         return;
     }
 
-    loadRuntimeFromFile(engine_file);
+    if (engine_file.empty())
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "engine_file must not be empty when loading");
+    }
+
+    loadRuntimeFromFile(irt::util::ensureFileExtension(engine_file, engineExtension()).string());
     tensorRTBackend().setFeatureOnly(isFeatureOnlyConfig());
 }
 
@@ -752,7 +812,7 @@ void IModelImpl::buildOrLoad(const std::string &weights_file)
     bool          engine_exists = file.good();
     file.close();
 
-    if (engine_exists)
+    if (engine_exists && engineManifestMatches(*this, weights_file, engine_file))
     {
         LOG_INFO(*trt_params.logger) << "Found existing engine file: " << engine_file << ", loading..." << std::endl;
         try
@@ -766,6 +826,11 @@ void IModelImpl::buildOrLoad(const std::string &weights_file)
             LOG_INFO(*trt_params.logger) << "Will rebuild engine from weights file: " << weights_file << std::endl;
         }
     }
+    else if (engine_exists)
+    {
+        LOG_INFO(*trt_params.logger) << "Engine manifest mismatch or missing, rebuilding: " << engine_file
+                                     << std::endl;
+    }
 
     LOG_INFO(*trt_params.logger) << "Building engine from weights file: " << weights_file << std::endl;
     build(weights_file);
@@ -773,6 +838,7 @@ void IModelImpl::buildOrLoad(const std::string &weights_file)
     try
     {
         save(engine_file);
+        writeEngineManifest(*this, weights_file, engine_file);
     }
     catch (const std::exception &e)
     {

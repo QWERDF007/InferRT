@@ -22,3 +22,7 @@
 	path = 3rdparty/dlpack
 	url = https://github.com/dmlc/dlpack.git
 	branch = main
+[submodule "3rdparty/yaml-cpp"]
+	path = 3rdparty/yaml-cpp
+	url = https://github.com/jbeder/yaml-cpp.git
+	branch = master

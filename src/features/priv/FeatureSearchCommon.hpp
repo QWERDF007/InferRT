@@ -84,20 +84,6 @@ void normalizeFeature(float *values, size_t count, ImageSearchFeatureNorm norm);
 void normalizeFeature(std::vector<float> &values, ImageSearchFeatureNorm norm);
 
 /**
- * @brief 由索引路径推导向量映射文件路径。
- * @param index_path Faiss 索引路径。
- * @return ``<index_path>.paths.txt``。
- */
-std::filesystem::path mappingPathFromIndex(const std::filesystem::path &index_path);
-
-/**
- * @brief 由索引路径推导元数据文件路径。
- * @param index_path Faiss 索引路径。
- * @return ``<index_path>.meta.txt``。
- */
-std::filesystem::path metadataPathFromIndex(const std::filesystem::path &index_path);
-
-/**
  * @brief 将 CPU Faiss 索引按配置保留在 CPU 或迁移到 GPU。
  * @param cpu_index 已构建或已加载的 CPU 索引。
  * @param backend 目标 Faiss 后端。

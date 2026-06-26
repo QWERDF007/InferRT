@@ -21,17 +21,18 @@
 #include <inferrt/model/Buffers.hpp>
 #include <inferrt/model/IModel.h>
 #include <inferrt/model/Utils.hpp>
+#include <inferrt/util/FileManifest.hpp>
 #include <opencv2/imgcodecs.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <filesystem>
-#include <fstream>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <system_error>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -357,49 +358,43 @@ FaissIndexBundle moveCpuIndexToConfiguredBackend(std::unique_ptr<faiss::Index> c
 }
 
 /**
- * @brief 由索引文件路径推导图库路径映射文件路径。
- * @param index_path Faiss 索引路径。
- * @return ``<index_path>.paths.txt``。
- */
-fs::path mappingPathFromIndex(const fs::path &index_path)
-{
-    return index_path.string() + ".paths.txt";
-}
-
-/**
- * @brief 由索引文件路径推导元数据文件路径。
- * @param index_path Faiss 索引路径。
- * @return ``<index_path>.meta.txt``。
- */
-fs::path metadataPathFromIndex(const fs::path &index_path)
-{
-    return index_path.string() + ".meta.txt";
-}
-
-/**
  * @brief 解析 Faiss 索引文件路径。
  *
- * 若 ``index_file`` 为空，则根据图库目录与模型/特征名生成默认路径。
+ * 若 ``index_file`` 为空，则在图库目录下生成时间戳文件名。
  *
  * @param gallery_dir 图库目录。
  * @param index_file 用户指定的索引路径；可为空。
- * @param config 检索配置，用于推导默认索引文件名。
  * @return 最终使用的索引文件路径。
  */
-fs::path resolveIndexPath(const fs::path &gallery_dir, const fs::path &index_file, const ImageSearchConfig &config)
+fs::path resolveIndexPath(const fs::path &gallery_dir, const fs::path &index_file)
 {
-    return index_file.empty() ? ImageSearch::defaultIndexPath(gallery_dir, config.model_name, config.feature_name)
-                              : index_file;
+    return irt::util::resolveOutputFilePath(index_file, gallery_dir, ".faiss");
+}
+
+/**
+ * @brief 解析显式图片列表构建时的 Faiss 输出路径。
+ */
+fs::path resolveExplicitIndexPath(const fs::path &index_file)
+{
+    return irt::util::resolveOutputFilePath(index_file, {}, ".faiss");
+}
+
+/**
+ * @brief 生成绝对路径形式的 manifest 值。
+ */
+std::string absolutePathManifestValue(const fs::path &path)
+{
+    return path.empty() ? std::string{} : fs::absolute(path).generic_string();
 }
 
 /**
  * @brief 生成图库目录在元数据文件中的 canonical 值。
  * @param gallery_dir 图库目录。
- * @return 绝对路径的 generic 字符串，用于 ``gallery_dir`` 元数据字段校验。
+ * @return 绝对路径的 generic 字符串，用于 ``gallery_dir`` manifest 字段校验。
  */
 std::string galleryDirectoryMetadataValue(const fs::path &gallery_dir)
 {
-    return fs::absolute(gallery_dir).generic_string();
+    return absolutePathManifestValue(gallery_dir);
 }
 
 /**
@@ -455,168 +450,138 @@ std::vector<fs::path> normalizeExplicitGalleryImages(const std::vector<fs::path>
 }
 
 /**
- * @brief 将图库图片路径列表写入映射文件（每行一条 generic 路径）。
- * @param mapping_path 输出路径。
- * @param image_paths 与 Faiss 向量顺序一致的图库路径。
+ * @brief 构造图像检索 manifest 条目。
  */
-void savePathMapping(const fs::path &mapping_path, const std::vector<fs::path> &image_paths)
+irt::util::ManifestEntries imageSearchManifestEntries(const fs::path &index_path, const std::string &gallery_value,
+                                                      const ImageSearchConfig     &config,
+                                                      const std::vector<fs::path> &image_paths)
 {
-    std::ofstream output(mapping_path);
-    if (!output)
+    irt::util::ManifestEntries entries{
+        {"version", "1"},
+        {"kind", "image_search"},
+        {"index_file", absolutePathManifestValue(index_path)},
+        {"model", config.model_name},
+        {"feature", config.feature_name},
+        {"gallery_dir", gallery_value},
+        {"model_backend", modelBackendName(config.model_backend)},
+        {"model_device", modelDeviceName(config.model_device)},
+        {"preprocess_backend", preprocessBackendName(config.preprocess_backend)},
+        {"norm", featureNormName(config.norm)},
+        {"faiss_backend", faissBackendName(config.faiss_backend)},
+        {"index_storage", indexStorageName(config.index_storage)},
+        {"model_batch_size", std::to_string(config.model_batch_size)},
+        {"index_kind", indexKindName(config)},
+    };
+    if (useCpuDiskIndex(config))
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to open mapping file: %s",
-                             mapping_path.string().c_str());
+        entries.emplace_back("ivf_data_file", absolutePathManifestValue(priv::cpuOnDiskIvfDataPath(index_path)));
     }
-
-    for (const auto &image_path : image_paths)
+    entries.emplace_back("image_count", std::to_string(image_paths.size()));
+    for (size_t i = 0; i < image_paths.size(); ++i)
     {
-        output << image_path.generic_string() << "\n";
+        entries.emplace_back("image." + std::to_string(i), image_paths[i].generic_string());
     }
+    return entries;
 }
 
 /**
- * @brief 从映射文件加载图库路径列表。
- * @param mapping_path ``.paths.txt`` 路径。
- * @return 图库路径向量。
+ * @brief 将图像检索配置和路径映射写入 ``xxx.manifest.txt``。
  */
-std::vector<fs::path> loadPathMapping(const fs::path &mapping_path)
+void saveImageSearchManifest(const fs::path &index_path, const std::string &gallery_value,
+                             const ImageSearchConfig &config, const std::vector<fs::path> &image_paths)
 {
-    std::ifstream input(mapping_path);
-    if (!input)
+    irt::util::writeKeyValueManifest(irt::util::manifestPathForDataFile(index_path),
+                                     imageSearchManifestEntries(index_path, gallery_value, config, image_paths));
+}
+
+/**
+ * @brief 判断 manifest 字段是否严格匹配。
+ */
+bool manifestValueEquals(const irt::util::ManifestMap &manifest, const std::string &key, const std::string &expected)
+{
+    const auto it = manifest.find(key);
+    return it != manifest.end() && it->second == expected;
+}
+
+/**
+ * @brief 从 manifest 解析图库图片路径。
+ */
+std::vector<fs::path> loadImagePathsFromManifest(const fs::path &index_path)
+{
+    const auto manifest = irt::util::loadKeyValueManifest(irt::util::manifestPathForDataFile(index_path));
+    if (manifest.empty() || !manifestValueEquals(manifest, "kind", "image_search"))
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to open mapping file: %s",
-                             mapping_path.string().c_str());
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch manifest is missing or invalid: %s",
+                             irt::util::manifestPathForDataFile(index_path).string().c_str());
+    }
+
+    const auto count_text = irt::util::manifestValue(manifest, "image_count");
+    if (count_text.empty())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch manifest has no image_count: %s",
+                             irt::util::manifestPathForDataFile(index_path).string().c_str());
+    }
+
+    size_t image_count{0};
+    try
+    {
+        image_count = static_cast<size_t>(std::stoull(count_text));
+    }
+    catch (const std::exception &)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Invalid image_count in ImageSearch manifest: %s",
+                             count_text.c_str());
     }
 
     std::vector<fs::path> image_paths;
-    std::string           line;
-    while (std::getline(input, line))
+    image_paths.reserve(image_count);
+    for (size_t i = 0; i < image_count; ++i)
     {
-        if (!line.empty())
+        const auto key   = "image." + std::to_string(i);
+        const auto value = irt::util::manifestValue(manifest, key);
+        if (value.empty())
         {
-            image_paths.emplace_back(line);
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch manifest is missing %s",
+                                 key.c_str());
         }
+        image_paths.emplace_back(value);
     }
     return image_paths;
 }
 
 /**
- * @brief 将模型、特征与检索配置写入元数据文件，供增量加载时校验。
- * @param metadata_path ``.meta.txt`` 路径。
- * @param gallery_value 写入元数据的图库标识（图库目录 canonical 路径或显式路径列表占位值）。
- * @param model_name 模型名称。
- * @param feature_name 特征层名称。
- * @param config 当前检索配置。
- */
-void saveMetadata(const fs::path &metadata_path, const std::string &gallery_value, const std::string &model_name,
-                  const std::string &feature_name, const ImageSearchConfig &config)
-{
-    std::ofstream output(metadata_path);
-    if (!output)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to open metadata file: %s",
-                             metadata_path.string().c_str());
-    }
-
-    output << "model=" << model_name << "\n";
-    output << "feature=" << feature_name << "\n";
-    output << "gallery_dir=" << gallery_value << "\n";
-    output << "model_backend=" << modelBackendName(config.model_backend) << "\n";
-    output << "model_device=" << modelDeviceName(config.model_device) << "\n";
-    output << "preprocess_backend=" << preprocessBackendName(config.preprocess_backend) << "\n";
-    output << "norm=" << featureNormName(config.norm) << "\n";
-    output << "faiss_backend=" << faissBackendName(config.faiss_backend) << "\n";
-    output << "index_storage=" << indexStorageName(config.index_storage) << "\n";
-    output << "model_batch_size=" << config.model_batch_size << "\n";
-    output << "index_kind=" << indexKindName(config) << "\n";
-}
-
-/**
- * @brief 从元数据文件解析 ``key=value`` 行。
- * @param metadata_path ``.meta.txt`` 路径。
- * @return 键值映射；文件不存在或无法打开时返回空映射。
- */
-std::unordered_map<std::string, std::string> loadMetadata(const fs::path &metadata_path)
-{
-    std::ifstream input(metadata_path);
-    if (!input)
-    {
-        return {};
-    }
-
-    std::unordered_map<std::string, std::string> metadata;
-    std::string                                  line;
-    while (std::getline(input, line))
-    {
-        const auto separator = line.find('=');
-        if (separator == std::string::npos)
-        {
-            continue;
-        }
-        metadata.emplace(line.substr(0, separator), line.substr(separator + 1));
-    }
-    return metadata;
-}
-
-/**
- * @brief 判断元数据中某键的值是否与期望一致（键缺失视为匹配）。
- */
-bool metadataValueEquals(const std::unordered_map<std::string, std::string> &metadata, const std::string &key,
-                         const std::string &expected)
-{
-    const auto it = metadata.find(key);
-    return it == metadata.end() || it->second == expected;
-}
-
-/**
- * @brief 判断配置项元数据是否匹配；旧索引无该键时与 ``legacy_default`` 比较。
- */
-bool metadataConfigValueEquals(const std::unordered_map<std::string, std::string> &metadata, const std::string &key,
-                               const std::string &expected, const std::string &legacy_default)
-{
-    const auto it = metadata.find(key);
-    return it == metadata.end() ? expected == legacy_default : it->second == expected;
-}
-
-/** @brief 校验元数据中的 ``index_kind`` 与当前配置是否一致。 */
-bool metadataIndexKindEquals(const std::unordered_map<std::string, std::string> &metadata,
-                             const ImageSearchConfig                            &config)
-{
-    const auto it = metadata.find("index_kind");
-    return it != metadata.end() && it->second == indexKindName(config);
-}
-
-/**
  * @brief 判断磁盘上已有索引是否与当前图库及配置兼容，可直接加载。
- *
- * 无元数据文件时，仅当配置为默认参数时才视为可复用。
  */
-bool existingIndexMatchesConfig(const fs::path &index_path, const fs::path &gallery_dir, const std::string &model_name,
-                                const std::string &feature_name, const ImageSearchConfig &config)
+bool existingIndexMatchesConfig(const fs::path &index_path, const fs::path &gallery_dir,
+                                const ImageSearchConfig &config)
 {
-    const fs::path metadata_path = metadataPathFromIndex(index_path);
-    if (!fs::exists(metadata_path))
+    const auto manifest_path = irt::util::manifestPathForDataFile(index_path);
+    if (!fs::exists(manifest_path))
     {
         return false;
     }
 
-    const auto metadata = loadMetadata(metadata_path);
-    if (metadata.empty())
+    const auto manifest = irt::util::loadKeyValueManifest(manifest_path);
+    if (manifest.empty())
     {
         return false;
     }
 
-    return metadataValueEquals(metadata, "model", model_name) && metadataValueEquals(metadata, "feature", feature_name)
-        && (metadataValueEquals(metadata, "gallery_dir", galleryDirectoryMetadataValue(gallery_dir))
-            || metadataValueEquals(metadata, "gallery_dir", explicitPathListMetadataValue()))
-        && metadataConfigValueEquals(metadata, "model_backend", modelBackendName(config.model_backend), "tensorrt")
-        && metadataConfigValueEquals(metadata, "model_device", modelDeviceName(config.model_device), "gpu")
-        && metadataConfigValueEquals(metadata, "preprocess_backend", preprocessBackendName(config.preprocess_backend),
-                                     "cpu")
-        && metadataConfigValueEquals(metadata, "norm", featureNormName(config.norm), "l2")
-        && metadataConfigValueEquals(metadata, "faiss_backend", faissBackendName(config.faiss_backend), "cpu")
-        && metadataConfigValueEquals(metadata, "index_storage", indexStorageName(config.index_storage), "ram")
-        && metadataIndexKindEquals(metadata, config);
+    return manifestValueEquals(manifest, "kind", "image_search")
+        && manifestValueEquals(manifest, "index_file", absolutePathManifestValue(index_path))
+        && manifestValueEquals(manifest, "model", config.model_name)
+        && manifestValueEquals(manifest, "feature", config.feature_name)
+        && (manifestValueEquals(manifest, "gallery_dir", galleryDirectoryMetadataValue(gallery_dir))
+            || manifestValueEquals(manifest, "gallery_dir", explicitPathListMetadataValue()))
+        && manifestValueEquals(manifest, "model_backend", modelBackendName(config.model_backend))
+        && manifestValueEquals(manifest, "model_device", modelDeviceName(config.model_device))
+        && manifestValueEquals(manifest, "preprocess_backend", preprocessBackendName(config.preprocess_backend))
+        && manifestValueEquals(manifest, "norm", featureNormName(config.norm))
+        && manifestValueEquals(manifest, "faiss_backend", faissBackendName(config.faiss_backend))
+        && manifestValueEquals(manifest, "index_storage", indexStorageName(config.index_storage))
+        && manifestValueEquals(manifest, "model_batch_size", std::to_string(config.model_batch_size))
+        && manifestValueEquals(manifest, "index_kind", indexKindName(config))
+        && manifest.find("image_count") != manifest.end();
 }
 
 } // namespace
@@ -1024,7 +989,6 @@ FaissIndexBundle buildCpuOnDiskIndex(const std::vector<fs::path> &gallery_images
         [&](size_t begin, size_t count) { return extractor.extractBatch(gallery_images, begin, count); },
         [&](const std::vector<size_t> &indices) { return extractor.extractBatch(gallery_images, indices); },
         progress_callback);
-    savePathMapping(mappingPathFromIndex(index_path), gallery_images);
     return bundle;
 }
 
@@ -1050,7 +1014,6 @@ FaissIndexBundle buildRamIvfPqIndex(const std::vector<fs::path> &gallery_images,
 
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::WritingIndex, 0, 0, 0, 0, 1);
     faiss::write_index(cpu_index.get(), index_path.string().c_str());
-    savePathMapping(mappingPathFromIndex(index_path), gallery_images);
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::WritingIndex, 0, 0, 0, 1, 1);
 
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 0, 1);
@@ -1097,7 +1060,7 @@ FaissIndexBundle loadIndex(const fs::path &index_path, const ImageSearchConfig &
                              index_path.string().c_str());
     }
 
-    auto image_paths = loadPathMapping(mappingPathFromIndex(index_path));
+    auto image_paths = loadImagePathsFromManifest(index_path);
     if (static_cast<faiss::idx_t>(image_paths.size()) != cpu_index->ntotal)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
@@ -1144,21 +1107,21 @@ void ImageSearch::Impl::buildOrLoad(const fs::path &weights_file, const fs::path
                                     const fs::path &index_file, bool rebuild_index,
                                     ImageSearchBuildProgressCallback progress_callback)
 {
-    const fs::path resolved_index_path = resolveIndexPath(gallery_dir, index_file, config_);
-    if (!rebuild_index && fs::exists(resolved_index_path) && fs::exists(mappingPathFromIndex(resolved_index_path))
-        && existingIndexMatchesConfig(resolved_index_path, gallery_dir, config_.model_name, config_.feature_name,
-                                      config_))
+    const fs::path resolved_index_path = resolveIndexPath(gallery_dir, index_file);
+    if (!rebuild_index && fs::exists(resolved_index_path)
+        && fs::exists(irt::util::manifestPathForDataFile(resolved_index_path))
+        && existingIndexMatchesConfig(resolved_index_path, gallery_dir, config_))
     {
         priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Started);
         priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 0, 1);
-        load(weights_file, gallery_dir, index_file);
+        load(weights_file, gallery_dir, resolved_index_path);
         priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 1, 1);
         priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Finished, 0, 0, 0, gallery_images_.size(),
                                   gallery_images_.size());
         return;
     }
 
-    build(weights_file, gallery_dir, index_file, std::move(progress_callback));
+    build(weights_file, gallery_dir, resolved_index_path, std::move(progress_callback));
 }
 
 void ImageSearch::Impl::build(const fs::path &weights_file, const fs::path &gallery_dir, const fs::path &index_file,
@@ -1169,47 +1132,44 @@ void ImageSearch::Impl::build(const fs::path &weights_file, const fs::path &gall
     auto images = ImageSearch::collectGalleryImages(gallery_dir);
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::CollectingImages, 0, 0, 0, images.size(),
                               images.size());
-    buildWithImages(weights_file, gallery_dir, std::move(images), resolveIndexPath(gallery_dir, index_file, config_),
+    buildWithImages(weights_file, gallery_dir, std::move(images), resolveIndexPath(gallery_dir, index_file),
                     galleryDirectoryMetadataValue(gallery_dir), std::move(progress_callback));
 }
 
 void ImageSearch::Impl::build(const fs::path &weights_file, const std::vector<fs::path> &gallery_images,
                               const fs::path &index_file, ImageSearchBuildProgressCallback progress_callback)
 {
-    if (index_file.empty())
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "index_file must not be empty when building from explicit image paths");
-    }
-
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Started);
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::CollectingImages);
     auto normalized_images = normalizeExplicitGalleryImages(gallery_images);
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::CollectingImages, 0, 0, 0,
                               normalized_images.size(), normalized_images.size());
-    buildWithImages(weights_file, {}, std::move(normalized_images), index_file, explicitPathListMetadataValue(),
-                    std::move(progress_callback));
+    buildWithImages(weights_file, {}, std::move(normalized_images), resolveExplicitIndexPath(index_file),
+                    explicitPathListMetadataValue(), std::move(progress_callback));
 }
 
 void ImageSearch::Impl::load(const fs::path &weights_file, const fs::path &gallery_dir, const fs::path &index_file)
 {
-    const fs::path resolved_index_path = resolveIndexPath(gallery_dir, index_file, config_);
+    if (index_file.empty())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch index_file must not be empty when loading");
+    }
+    const fs::path resolved_index_path = resolveIndexPath(gallery_dir, index_file);
     if (!fs::exists(resolved_index_path))
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Index file does not exist: %s",
                              resolved_index_path.string().c_str());
     }
-    if (!fs::exists(mappingPathFromIndex(resolved_index_path)))
+    if (!fs::exists(irt::util::manifestPathForDataFile(resolved_index_path)))
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Index path mapping file does not exist: %s",
-                             mappingPathFromIndex(resolved_index_path).string().c_str());
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Index manifest file does not exist: %s",
+                             irt::util::manifestPathForDataFile(resolved_index_path).string().c_str());
     }
-    if (!existingIndexMatchesConfig(resolved_index_path, gallery_dir, config_.model_name, config_.feature_name,
-                                    config_))
+    if (!existingIndexMatchesConfig(resolved_index_path, gallery_dir, config_))
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "Index metadata does not match current ImageSearch config: %s",
-                             metadataPathFromIndex(resolved_index_path).string().c_str());
+                             "Index manifest does not match current ImageSearch config: %s",
+                             irt::util::manifestPathForDataFile(resolved_index_path).string().c_str());
     }
 
     auto loaded = loadIndex(resolved_index_path, config_);
@@ -1251,8 +1211,7 @@ void ImageSearch::Impl::buildWithImages(const fs::path &weights_file, const fs::
     feature_dim_         = extractor->featureDim();
     extractor_           = std::move(extractor);
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::SavingMetadata, 0, 0, 0, 0, 1);
-    saveMetadata(metadataPathFromIndex(index_path_), metadata_gallery_value, config_.model_name, config_.feature_name,
-                 config_);
+    saveImageSearchManifest(index_path_, metadata_gallery_value, config_, gallery_images_);
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::SavingMetadata, 0, 0, 0, 1, 1);
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Finished, 0, 0, 0, gallery_images_.size(),
                               gallery_images_.size());

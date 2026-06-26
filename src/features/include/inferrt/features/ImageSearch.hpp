@@ -29,7 +29,7 @@ inline constexpr size_t kDefaultImageSearchModelBatchSize = 1;
 /**
  * @brief 图像检索结果。
  *
- * 每个结果对应 Faiss 返回的一个向量 ID；实现层会通过索引旁边的 ``.paths.txt`` 映射文件
+ * 每个结果对应 Faiss 返回的一个向量 ID；实现层会通过索引旁边的 ``.manifest.txt`` 文件
  * 将 ID 还原为图库图片路径。
  */
 struct ImageSearchResult
@@ -53,7 +53,7 @@ enum class ImageSearchBuildStage
     AddingVectors,    ///< 正在向 Faiss 索引或磁盘倒排列表写入图库向量。
     WritingIndex,     ///< 正在写入 ``.faiss`` 索引文件。
     LoadingIndex,     ///< 正在从磁盘加载索引或迁移到 GPU。
-    SavingMetadata,   ///< 正在写入路径映射和元数据。
+    SavingMetadata,   ///< 正在写入 manifest。
     Finished,         ///< 构建或加载流程完成。
 };
 
@@ -202,7 +202,7 @@ using ImageSearchBuildProgressCallback = std::function<void(const ImageSearchBui
  * @brief 基于 InferRT 中间特征与 Faiss 的图像检索器。
  *
  * 该类负责从分类、ViT 或 DINO 模型的指定中间层提取特征，按配置做归一化，
- * 构建或加载 Faiss 内积索引，并对查询图片返回 Top-K 相似图片。索引会伴随保存路径映射文件，
+ * 构建或加载 Faiss 内积索引，并对查询图片返回 Top-K 相似图片。索引会伴随保存 manifest，
  * 因此后续运行可直接加载已有索引。
  */
 class INFERRT_FEATURES_API ImageSearch
@@ -250,7 +250,7 @@ public:
     /**
      * @brief 构建或加载图库索引。
      *
-     * 当 `rebuild_index` 为 false 且索引文件及路径映射文件均存在时，会直接加载；
+     * 当 `rebuild_index` 为 false 且索引文件及 manifest 均存在且匹配时，会直接加载；
      * 否则递归扫描图库目录并重建索引。
      *
      * @param weights_file 模型 `.wts` 权重文件路径。
@@ -277,26 +277,26 @@ public:
     /**
      * @brief 从显式图片路径列表构建图像检索索引。
      *
-     * 向量顺序决定 Faiss id 与图片路径的映射关系。由于无图库目录可用于推导默认索引路径，
-     * 必须显式指定 ``index_file``。
+     * 向量顺序决定 Faiss id 与图片路径的映射关系；当 ``index_file`` 为空时，
+     * 会在当前工作目录下生成时间戳 ``.faiss`` 文件。
      *
      * @param weights_file 模型 `.wts` 权重文件路径。
      * @param gallery_images 待加入索引的图片路径列表。
-     * @param index_file Faiss 索引文件路径；不可为空。
+     * @param index_file Faiss 索引文件路径；为空时使用时间戳默认路径。
      * @param progress_callback 可选回调；构建阶段切换或可度量进度推进时调用。
      */
     void build(const std::filesystem::path &weights_file, const std::vector<std::filesystem::path> &gallery_images,
-               const std::filesystem::path &index_file, ImageSearchBuildProgressCallback progress_callback = {});
+               const std::filesystem::path &index_file = {}, ImageSearchBuildProgressCallback progress_callback = {});
 
     /**
      * @brief 为图库目录加载已有图像检索索引。
      *
      * @param weights_file 模型 `.wts` 权重文件路径。
      * @param gallery_dir 用于校验元数据的图库目录。
-     * @param index_file Faiss 索引文件路径；为空时使用默认路径。
+     * @param index_file 已存在的 Faiss 索引文件路径；加载时不可为空。
      */
     void load(const std::filesystem::path &weights_file, const std::filesystem::path &gallery_dir,
-              const std::filesystem::path &index_file = {});
+              const std::filesystem::path &index_file);
 
     /**
      * @brief 查询单张图片的 Top-K 相似图片。
@@ -355,7 +355,7 @@ public:
      * @param gallery_dir 图库目录。
      * @param model_name 模型名称。
      * @param feature_name 特征名称。
-     * @return `<gallery_dir>/<model>_<feature>.faiss`。
+     * @return `<gallery_dir>/<timestamp>.faiss`。
      */
     static std::filesystem::path defaultIndexPath(const std::filesystem::path &gallery_dir,
                                                   const std::string &model_name, const std::string &feature_name);

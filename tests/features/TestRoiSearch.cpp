@@ -173,11 +173,15 @@ TEST(RoiSearchTest, ConstructorRejectsInvalidConfig)
                            irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
-TEST(RoiSearchTest, DefaultIndexPathUsesRoiExtension)
+TEST(RoiSearchTest, DefaultIndexPathUsesTimestampFaissFile)
 {
     const auto path = irt::features::RoiSearch::defaultIndexPath("gallery", "wide_resnet50_2", "layer/4.out");
 
-    EXPECT_EQ(path.generic_string(), "gallery/wide_resnet50_2_layer_4_out.roi.faiss");
+    EXPECT_EQ(path.parent_path().generic_string(), "gallery");
+    EXPECT_EQ(path.extension().string(), ".faiss");
+    EXPECT_FALSE(path.stem().empty());
+    EXPECT_EQ(path.filename().string().find("wide_resnet50_2"), std::string::npos);
+    EXPECT_EQ(path.filename().string().find("layer"), std::string::npos);
 }
 
 TEST(RoiSearchTest, SearchBeforeBuildThrowsInvalidOperation)
@@ -191,17 +195,11 @@ TEST(RoiSearchTest, SearchBeforeBuildThrowsInvalidOperation)
                            irt::Status::ERROR_INVALID_OPERATION);
 }
 
-TEST(RoiSearchTest, BuildRequiresExplicitIndexFile)
+TEST(RoiSearchTest, LoadRequiresExplicitIndexFile)
 {
-    TempDir temp;
-    writeFile(temp.path() / "a.jpg");
-
     irt::features::RoiSearch                        search;
-    const std::vector<irt::features::RoiSearchItem> items{
-        {temp.path() / "a.jpg", {0.0f, 0.0f, 10.0f, 10.0f}},
-    };
 
-    expectIrtExceptionCode([&] { search.build("weights.wts", items, {}); }, irt::Status::ERROR_INVALID_ARGUMENT);
+    expectIrtExceptionCode([&] { search.load("weights.wts", {}); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 TEST(RoiSearchTest, BuildRejectsBadItemsBeforeLoadingModel)

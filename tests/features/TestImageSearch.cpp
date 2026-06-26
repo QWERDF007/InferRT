@@ -321,24 +321,33 @@ TEST(ImageSearchTest, IsImageFileAcceptsKnownExtensions)
 }
 
 /**
- * @brief 默认索引路径应将模型名和特征名消毒为安全文件名。
+ * @brief 默认索引路径使用图库目录下的时间戳文件名。
  */
-TEST(ImageSearchTest, DefaultIndexPathSanitizesModelAndFeatureNames)
+TEST(ImageSearchTest, DefaultIndexPathUsesTimestampFileName)
 {
     const auto path = irt::features::ImageSearch::defaultIndexPath("gallery", "wide_resnet50_2", "layer/4.out");
-    EXPECT_EQ(path.generic_string(), "gallery/wide_resnet50_2_layer_4_out.faiss");
+
+    EXPECT_EQ(path.parent_path().generic_string(), "gallery");
+    EXPECT_EQ(path.extension().string(), ".faiss");
+    EXPECT_FALSE(path.stem().empty());
+    EXPECT_EQ(path.filename().string().find("wide_resnet50_2"), std::string::npos);
+    EXPECT_EQ(path.filename().string().find("layer"), std::string::npos);
 }
 
 /**
- * @brief DINO 特征名包含下划线或点号时，也应生成稳定的索引文件名。
+ * @brief DINO 模型和特征名不再写入默认索引文件名。
  */
-TEST(ImageSearchTest, DefaultIndexPathHandlesDinoFeatureNames)
+TEST(ImageSearchTest, DefaultIndexPathOmitsDinoFeatureNames)
 {
     const auto cls_path   = irt::features::ImageSearch::defaultIndexPath("gallery", "dinov3_vitb16", "x_norm_clstoken");
     const auto block_path = irt::features::ImageSearch::defaultIndexPath("gallery", "dinov2_vits14", "blocks.11");
 
-    EXPECT_EQ(cls_path.generic_string(), "gallery/dinov3_vitb16_x_norm_clstoken.faiss");
-    EXPECT_EQ(block_path.generic_string(), "gallery/dinov2_vits14_blocks_11.faiss");
+    EXPECT_EQ(cls_path.parent_path().generic_string(), "gallery");
+    EXPECT_EQ(block_path.parent_path().generic_string(), "gallery");
+    EXPECT_EQ(cls_path.extension().string(), ".faiss");
+    EXPECT_EQ(block_path.extension().string(), ".faiss");
+    EXPECT_EQ(cls_path.filename().string().find("dinov3"), std::string::npos);
+    EXPECT_EQ(block_path.filename().string().find("blocks"), std::string::npos);
 }
 
 /**
@@ -794,17 +803,15 @@ TEST(ImageSearchTest, CollectGalleryImagesRejectsEmptyGallery)
 }
 
 /**
- * @brief 显式图片路径列表构建时必须指定 Faiss 索引路径。
+ * @brief 加载已有索引时必须显式指定 Faiss 索引路径。
  */
-TEST(ImageSearchTest, BuildFromExplicitImagePathsRequiresIndexFile)
+TEST(ImageSearchTest, LoadRequiresExplicitIndexFile)
 {
     TempDir temp;
-    writeFile(temp.path() / "a.jpg");
 
     irt::features::ImageSearch  search;
-    const std::vector<fs::path> images{temp.path() / "a.jpg"};
 
-    expectIrtExceptionCode([&] { search.build("weights.wts", images, {}); }, irt::Status::ERROR_INVALID_ARGUMENT);
+    expectIrtExceptionCode([&] { search.load("weights.wts", temp.path(), {}); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**

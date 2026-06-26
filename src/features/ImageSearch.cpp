@@ -6,13 +6,13 @@
 #include "priv/ImageSearchImpl.hpp"
 
 #include <inferrt/core/Exception.hpp>
+#include <inferrt/util/FileManifest.hpp>
 
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <memory>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -32,32 +32,6 @@ std::string toLower(std::string value)
     std::transform(value.begin(), value.end(), value.begin(),
                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return value;
-}
-
-/**
- * @brief 将字符串规范化为安全的文件名片段。
- *
- * 非字母数字字符替换为下划线，用于生成默认索引文件名。
- *
- * @param value 原始字符串（如模型名、特征名）。
- * @return 可用于文件名的 stem 字符串。
- */
-std::string sanitizeFileStem(std::string_view value)
-{
-    std::string stem;
-    stem.reserve(value.size());
-    for (unsigned char ch : value)
-    {
-        if (std::isalnum(ch))
-        {
-            stem.push_back(static_cast<char>(ch));
-        }
-        else
-        {
-            stem.push_back('_');
-        }
-    }
-    return stem;
 }
 
 } // namespace
@@ -171,8 +145,9 @@ std::vector<fs::path> ImageSearch::collectGalleryImages(const fs::path &gallery_
 fs::path ImageSearch::defaultIndexPath(const fs::path &gallery_dir, const std::string &model_name,
                                        const std::string &feature_name)
 {
-    // 模型名和特征名可能包含 '.'、'/' 等字符，写入文件名之前需要折叠为安全 stem。
-    return gallery_dir / (sanitizeFileStem(model_name) + "_" + sanitizeFileStem(feature_name) + ".faiss");
+    (void)model_name;
+    (void)feature_name;
+    return irt::util::resolveOutputFilePath({}, gallery_dir, ".faiss");
 }
 
 } // namespace irt::features

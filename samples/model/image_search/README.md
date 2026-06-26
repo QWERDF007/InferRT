@@ -57,7 +57,7 @@ Use `--rebuild-index` when the gallery directory has changed and you want to inc
 - `--faiss-backend`: selects Faiss backend, one of `cpu`, `gpu`; default is `cpu`
 - `--index-storage`: selects CPU Faiss search storage, one of `ram`, `disk`; default is `ram`; `disk` uses IVF with an on-disk inverted-list sidecar for large galleries; GPU Faiss currently keeps the default RAM behavior
 - `--model-batch-size`: controls both feature extraction and Faiss index build batch size; default is `1`; TensorRT uses a dynamic profile, while ONNX Runtime/OpenVINO require an exported graph with dynamic batch
-- if `--index` is omitted, the sample writes `<gallery_dir>/<model>_<feature>.faiss`
+- if `--index` is omitted, the sample writes `<gallery_dir>/<timestamp>.faiss`
 - DINO models use the engine input size during preprocessing, so `dinov2_vits14` runs at its registered `518x518` default and `dinov3_*` official keys run at `224x224` unless the model config is overridden.
 - ONNX Runtime and OpenVINO backends use graph outputs directly. Export the feature you want to search, such as `x_norm_clstoken`, as an ONNX/OpenVINO output first.
 - During index construction the sample passes a progress callback to `ImageSearch::buildOrLoad` and prints the current stage plus counts when a stage has measurable progress.
@@ -79,6 +79,5 @@ Patch-token features can also be indexed, but they flatten to much larger vector
 Generated files:
 
 - `*.faiss`: Faiss index file
-- `*.faiss.ivfdata`: CPU disk inverted-list sidecar
-- `*.faiss.paths.txt`: line-by-line mapping from Faiss vector ids to image paths
-- `*.faiss.meta.txt`: simple metadata about the sample configuration
+- `*.manifest.txt`: model, feature, gallery mapping, and configuration metadata
+- `*.faiss.ivfdata`: CPU disk inverted-list data, only when `--index-storage disk` is used

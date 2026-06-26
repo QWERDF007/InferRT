@@ -251,7 +251,7 @@ Arguments parseArguments(int argc, char *argv[])
         std::cout << "Default config: --norm l2 --backend tensorrt --device gpu --preprocess-backend cpu"
                   << " --faiss-backend cpu --index-storage ram --model-batch-size "
                   << irt::features::kDefaultImageSearchModelBatchSize << std::endl;
-        std::cout << "If --index is omitted, the sample uses <gallery_dir>/<model>_<feature>.faiss" << std::endl;
+        std::cout << "If --index is omitted, the sample writes <gallery_dir>/<timestamp>.faiss" << std::endl;
         std::cout << "DINO feature hint: use x_norm_clstoken for compact image-level retrieval" << std::endl;
         std::cout << "Supported models:";
         for (const auto &model_name : irt::model::getRegisteredModelNames())

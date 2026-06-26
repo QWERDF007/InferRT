@@ -17,6 +17,7 @@ add_plugin_library(features
         ${Faiss_LIBS}
 
         inferrt_core
+        inferrt_util
         inferrt_model
         inferrt_ops
 )

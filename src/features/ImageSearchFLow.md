@@ -36,8 +36,8 @@ searcher.buildOrLoad(weights_file, gallery_dir, index_file, rebuild_index, progr
 
 `buildOrLoad` 的决策如下：
 
-1. 根据 `gallery_dir`、`model_name`、`feature_name` 和可选 `index_file` 解析最终 `.faiss` 路径。
-2. 如果 `rebuild_index == false`，且 `.faiss`、`.paths.txt`、`.meta.txt` 都存在并匹配当前配置，则直接加载索引。
+1. 根据可选 `index_file` 解析最终 `.faiss` 路径；未指定时在 `gallery_dir` 下生成时间戳文件名。
+2. 如果 `rebuild_index == false`，且 `.faiss`、`.manifest.txt` 都存在并匹配当前配置，则直接加载索引。
 3. 否则进入完整重建流程。
 
 元数据匹配会校验模型名、特征名、图库目录、模型后端、设备、归一化方式、Faiss 后端、索引存储类型和索引类型。这样可以避免使用旧配置生成的索引。
@@ -55,7 +55,7 @@ searcher.buildOrLoad(weights_file, gallery_dir, index_file, rebuild_index, progr
 7. `AddingVectors`：提取图库特征并添加到 Faiss 索引或写入磁盘倒排列表。
 8. `WritingIndex`：写入 `.faiss` 文件。
 9. `LoadingIndex`：按配置加载索引，RAM 索引可迁移到 GPU。
-10. `SavingMetadata`：写入路径映射和元数据。
+10. `SavingMetadata`：写入 manifest。
 11. `Finished`：构建完成。
 
 ## 5. 特征提取
@@ -101,8 +101,7 @@ searcher.buildOrLoad(weights_file, gallery_dir, index_file, rebuild_index, progr
 
 给定索引路径 `<index>.faiss`，模块还会生成：
 
-- `<index>.faiss.paths.txt`：每行一个图库图片路径，行号对应 Faiss 向量 ID。
-- `<index>.faiss.meta.txt`：记录模型、特征、图库、后端、归一化、批量和索引类型。
+- `<index>.manifest.txt`：记录模型、特征、图库路径映射、后端、归一化、批量和索引类型。
 - `<index>.faiss.ivfdata`：仅 CPU 磁盘 IVF 模式使用，保存倒排列表中的 ID 和向量编码。
 
 ## 8. 查询流程
@@ -119,7 +118,7 @@ auto results = searcher.search(query_image, top_k);
 2. 如果索引是从磁盘直接加载的，首次查询前懒加载 `ImageSearchFeatureExtractor`。
 3. 对查询图片执行同样的预处理、特征提取和归一化。
 4. 调用 Faiss `search(1, query_feature, top_k, distances, indices)`。
-5. 用 `.paths.txt` 映射把 Faiss ID 转成图片路径。
+5. 用 manifest 中的路径映射把 Faiss ID 转成图片路径。
 6. 返回按相似度从高到低排列的 `ImageSearchResult`。
 
 ## 9. 批量和进度

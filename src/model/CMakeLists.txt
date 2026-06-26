@@ -9,6 +9,7 @@ add_plugin_library(model
         openvino::runtime
 
         inferrt_core
+        inferrt_util
 )
 
 # 确保 OpenVINO 前端与 CPU/GPU 插件在 inferrt_model 之前完成构建，避免链接时缺少对应产物。

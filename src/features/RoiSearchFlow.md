@@ -76,13 +76,13 @@ RoiSearch searcher(config);
 searcher.buildOrLoad(weights_file, gallery_items, index_file, rebuild_index, progress_callback);
 ```
 
-`index_file` 必须显式指定。`buildOrLoad` 的决策流程：
+`index_file` 为空时会在当前工作目录生成时间戳 `.faiss` 文件。`buildOrLoad` 的决策流程：
 
-1. 校验 `index_file` 非空。
+1. 解析最终 `.faiss` 路径。
 2. 校验并规范化 `gallery_items`，图像路径统一转为绝对路径。
-3. 如果 `rebuild_index == false`，并且 `.faiss`、`.rois.txt`、`.meta.txt` 均存在：
-   - 校验元数据是否匹配当前模型、特征、后端、归一化、索引类型和 ROIAlign 配置。
-   - 加载 `.rois.txt`，确认 ROI 条目列表与本次输入一致。
+3. 如果 `rebuild_index == false`，并且 `.faiss`、`.manifest.txt` 均存在：
+   - 校验 manifest 是否匹配当前模型、特征、后端、归一化、索引类型和 ROIAlign 配置。
+   - 加载 manifest 中的 ROI 条目，确认与本次输入一致。
    - 匹配成功则直接加载 Faiss 索引。
 4. 否则创建模型和 ROI 特征抽取器，重新构建索引。
 
@@ -139,9 +139,8 @@ search_dim = pca_dim * pooled_height * pooled_width
    - 单条回调：`extract(gallery_items[index])`
    - 连续批量回调：`extractBatch(gallery_items, begin, count)`
    - 任意下标批量回调：`extractBatch(gallery_items, indices)`
-7. 写入 ROI 映射文件 `<index>.rois.txt`。
-8. 写入元数据文件 `<index>.meta.txt`。
-9. 保存或加载完成后的 Faiss 索引进入可查询状态。
+7. 写入 `<index>.manifest.txt`，包含 ROI 映射和配置。
+8. 保存或加载完成后的 Faiss 索引进入可查询状态。
 
 当前 ROI 批量接口会复用相同的特征抽取和 ROIAlign 逻辑。后续如果同一张图有多个 ROI，可以在 `RoiFeatureExtractor`
 中进一步合并同图 ROI，减少重复模型前向。
@@ -178,11 +177,10 @@ ROI 检索复用图像搜索的 Faiss 构建工具，支持两条路径。
 
 给定索引路径 `<index>.faiss`，ROI 检索会生成：
 
-- `<index>.faiss.rois.txt`：每行一个 ROI 条目，包含图像路径和原图 ROI 坐标。
-- `<index>.faiss.meta.txt`：记录模型、特征、后端、归一化、Faiss 配置和 ROIAlign 配置。
+- `<index>.manifest.txt`：记录 ROI 条目、模型、特征、后端、归一化、Faiss 配置和 ROIAlign 配置。
 - `<index>.faiss.ivfdata`：仅 CPU 磁盘 IVF 模式使用，保存倒排列表数据。
 
-`.rois.txt` 的行号与 Faiss 向量 ID 一一对应，因此查询结果可以从 Faiss ID 还原到图像路径和 ROI 框。
+manifest 中的 ROI 条目顺序与 Faiss 向量 ID 一一对应，因此查询结果可以从 Faiss ID 还原到图像路径和 ROI 框。
 
 ## 9. 查询流程
 
@@ -208,7 +206,7 @@ auto results = searcher.search(query_image, query_roi, top_k);
 index_->search(1, query_feature.data(), result_count, distances.data(), indices.data());
 ```
 
-10. 使用 `.rois.txt` 中的映射将 Faiss ID 还原为 `RoiSearchResult`。
+10. 使用 manifest 中的映射将 Faiss ID 还原为 `RoiSearchResult`。
 11. 返回按相似度从高到低排序的结果列表。
 
 `RoiSearchResult` 包含：

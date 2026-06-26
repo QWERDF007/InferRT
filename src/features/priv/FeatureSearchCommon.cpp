@@ -243,16 +243,6 @@ void normalizeFeature(std::vector<float> &values, ImageSearchFeatureNorm norm)
     normalizeFeature(values.data(), values.size(), norm);
 }
 
-std::filesystem::path mappingPathFromIndex(const std::filesystem::path &index_path)
-{
-    return index_path.string() + ".paths.txt";
-}
-
-std::filesystem::path metadataPathFromIndex(const std::filesystem::path &index_path)
-{
-    return index_path.string() + ".meta.txt";
-}
-
 FaissIndexBundle moveCpuIndexToConfiguredBackend(std::unique_ptr<faiss::Index> cpu_index,
                                                  ImageSearchFaissBackend       backend)
 {

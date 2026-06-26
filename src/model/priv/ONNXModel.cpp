@@ -14,33 +14,6 @@ namespace irt::model {
 
 namespace {
 
-std::string BuildEngineFileName(const ONNXModel &model, const std::string &onnx_file)
-{
-    std::string engine_file = onnx_file;
-    size_t      pos         = engine_file.rfind(model.wtsExtension());
-    if (pos != std::string::npos)
-    {
-        engine_file.replace(pos, model.wtsExtension().size(), model.engineExtension());
-    }
-    else
-    {
-        engine_file += model.engineExtension();
-    }
-
-    const auto ext_pos = engine_file.rfind(model.engineExtension());
-    const auto suffix  = model.generateSuffix(model.modelConfig());
-    if (ext_pos != std::string::npos)
-    {
-        engine_file.insert(ext_pos, suffix);
-    }
-    else
-    {
-        engine_file += suffix;
-    }
-
-    return engine_file;
-}
-
 void ValidateConfig(const ONNXModel &model)
 {
     const auto &config  = model.modelConfig();
@@ -263,45 +236,7 @@ void ONNXModel::buildOrLoad(const std::string &onnx_file)
     }
 
     ValidateConfig(*this);
-
-    auto &trt_params = trtParams();
-    if (trt_params.logger == nullptr)
-    {
-        initLogger();
-    }
-
-    std::string engine_file = BuildEngineFileName(*this, onnx_file);
-
-    std::ifstream file(engine_file);
-    bool          engine_exists = file.good();
-    file.close();
-
-    if (engine_exists)
-    {
-        LOG_INFO(*trt_params.logger) << "Found existing engine file: " << engine_file << ", loading..." << std::endl;
-        try
-        {
-            load(engine_file);
-            return;
-        }
-        catch (const std::exception &e)
-        {
-            LOG_WARN(*trt_params.logger) << "Failed to load engine: " << e.what() << std::endl;
-            LOG_INFO(*trt_params.logger) << "Will rebuild engine from ONNX file: " << onnx_file << std::endl;
-        }
-    }
-
-    LOG_INFO(*trt_params.logger) << "Building engine from ONNX file: " << onnx_file << std::endl;
-    build(onnx_file);
-
-    try
-    {
-        save(engine_file);
-    }
-    catch (const std::exception &e)
-    {
-        LOG_WARN(*trt_params.logger) << "Failed to save engine: " << e.what() << std::endl;
-    }
+    priv::IModelImpl::buildOrLoad(onnx_file);
 }
 
 } // namespace irt::model
