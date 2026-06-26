@@ -18,8 +18,6 @@
 #pragma warning(pop)
 
 #include <opencv2/core.hpp>
-#include <opencv2/core/persistence.hpp>
-
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -126,19 +124,16 @@ fs::path roiMappingPathFromIndex(const fs::path &index_path)
 }
 
 /**
- * @brief 由索引路径推导 ROI PCA 参数文件路径。
- */
-fs::path roiPcaPathFromIndex(const fs::path &index_path)
-{
-    return index_path.string() + ".pca.yml";
-}
-
-/**
  * @brief 获取写入元数据的有效 PCA 维度。
  */
 int effectivePcaDim(const RoiSearchConfig &config) noexcept
 {
     return config.use_pca ? config.pca_dim : 0;
+}
+
+const char *roiPcaModeName(const RoiSearchConfig &config) noexcept
+{
+    return config.use_pca ? "local_image" : "none";
 }
 
 /**
@@ -337,6 +332,7 @@ void saveRoiMetadata(const fs::path &metadata_path, const RoiSearchConfig &confi
     output << "roi_sampling_ratio=" << config.sampling_ratio << "\n";
     output << "roi_aligned=" << boolName(config.aligned) << "\n";
     output << "roi_use_pca=" << boolName(config.use_pca) << "\n";
+    output << "roi_pca_mode=" << roiPcaModeName(config) << "\n";
     output << "roi_pca_dim=" << effectivePcaDim(config) << "\n";
 }
 
@@ -376,16 +372,6 @@ bool metadataEquals(const std::unordered_map<std::string, std::string> &metadata
 }
 
 /**
- * @brief 判断元数据字段是否匹配，缺失时按默认值处理。
- */
-bool metadataEqualsOrDefault(const std::unordered_map<std::string, std::string> &metadata, const std::string &key,
-                             const std::string &expected, const std::string &default_value)
-{
-    const auto it = metadata.find(key);
-    return (it == metadata.end() ? default_value : it->second) == expected;
-}
-
-/**
  * @brief 判断磁盘上的 ROI 索引是否匹配当前配置。
  */
 bool existingRoiIndexMatchesConfig(const fs::path &index_path, const RoiSearchConfig &config)
@@ -409,8 +395,9 @@ bool existingRoiIndexMatchesConfig(const fs::path &index_path, const RoiSearchCo
         && metadataEquals(metadata, "roi_pooled_width", std::to_string(config.pooled_width))
         && metadataEquals(metadata, "roi_sampling_ratio", std::to_string(config.sampling_ratio))
         && metadataEquals(metadata, "roi_aligned", boolName(config.aligned))
-        && metadataEqualsOrDefault(metadata, "roi_use_pca", boolName(config.use_pca), "false")
-        && metadataEqualsOrDefault(metadata, "roi_pca_dim", std::to_string(effectivePcaDim(config)), "0");
+        && metadataEquals(metadata, "roi_use_pca", boolName(config.use_pca))
+        && metadataEquals(metadata, "roi_pca_mode", roiPcaModeName(config))
+        && metadataEquals(metadata, "roi_pca_dim", std::to_string(effectivePcaDim(config)));
 }
 
 } // namespace
@@ -418,7 +405,7 @@ bool existingRoiIndexMatchesConfig(const fs::path &index_path, const RoiSearchCo
 namespace priv {
 
 /**
- * @brief OpenCV PCA 投影器，负责按通道维训练、保存、加载和批量投影。
+ * @brief OpenCV PCA 投影器，负责按通道维训练和批量投影。
  */
 class RoiPcaProjector
 {
@@ -454,55 +441,6 @@ public:
         pca_        = cv::PCA(input, cv::Mat(), cv::PCA::DATA_AS_ROW, output_dim);
         input_dim_  = input_dim;
         output_dim_ = output_dim;
-        normalizeLoadedMats();
-        validateReady();
-    }
-
-    /**
-     * @brief 保存 PCA 参数到磁盘。
-     */
-    void save(const fs::path &path) const
-    {
-        validateReady();
-        cv::FileStorage storage(path.string(), cv::FileStorage::WRITE);
-        if (!storage.isOpened())
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to open ROI PCA file: %s",
-                                 path.string().c_str());
-        }
-
-        storage << "version" << 1;
-        storage << "input_dim" << input_dim_;
-        storage << "output_dim" << output_dim_;
-        storage << "mean" << pca_.mean;
-        storage << "eigenvectors" << pca_.eigenvectors;
-        storage << "eigenvalues" << pca_.eigenvalues;
-    }
-
-    /**
-     * @brief 从磁盘加载 PCA 参数。
-     */
-    void load(const fs::path &path)
-    {
-        cv::FileStorage storage(path.string(), cv::FileStorage::READ);
-        if (!storage.isOpened())
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to open ROI PCA file: %s",
-                                 path.string().c_str());
-        }
-
-        int version{0};
-        storage["version"] >> version;
-        storage["input_dim"] >> input_dim_;
-        storage["output_dim"] >> output_dim_;
-        storage["mean"] >> pca_.mean;
-        storage["eigenvectors"] >> pca_.eigenvectors;
-        storage["eigenvalues"] >> pca_.eigenvalues;
-        if (version != 1)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported ROI PCA file version");
-        }
-
         normalizeLoadedMats();
         validateReady();
     }
@@ -651,6 +589,12 @@ public:
                 "RoiSearch feature tensor must be NCHW map or DINO x_norm_patchtokens with shape BxTokensxDim");
         }
 
+        if (config_.use_pca && (config_.pca_dim <= 0 || config_.pca_dim > feature_channels_))
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "ROI PCA dim must be positive and not exceed feature channel count");
+        }
+
         feature_dim_ = roiFeatureDim(feature_channels_);
     }
 
@@ -659,15 +603,7 @@ public:
      */
     int featureDim() const noexcept
     {
-        return feature_dim_;
-    }
-
-    /**
-     * @brief 获取指定 PCA 配置下的 ROI 特征向量维度。
-     */
-    int featureDim(const RoiPcaProjector *pca_projector) const noexcept
-    {
-        return pca_projector == nullptr ? feature_dim_ : roiFeatureDim(pca_projector->outputDim());
+        return config_.use_pca ? roiFeatureDim(config_.pca_dim) : feature_dim_;
     }
 
     /**
@@ -681,9 +617,9 @@ public:
     /**
      * @brief 提取单个 ROI 的归一化特征。
      */
-    std::vector<float> extract(const RoiSearchItem &item, const RoiPcaProjector *pca_projector = nullptr)
+    std::vector<float> extract(const RoiSearchItem &item)
     {
-        auto feature = extractRaw(item, pca_projector);
+        auto feature = extractRaw(item);
         normalizeFeature(feature, config_.norm);
         return feature;
     }
@@ -691,22 +627,21 @@ public:
     /**
      * @brief 提取单个 ROI 的未归一化特征。
      */
-    std::vector<float> extractRaw(const RoiSearchItem &item, const RoiPcaProjector *pca_projector = nullptr)
+    std::vector<float> extractRaw(const RoiSearchItem &item)
     {
         validateRoi(item.roi);
         const std::vector<fs::path> paths{item.image_path};
         const auto                  tensor = image_extractor_.extractFeatureTensorBatch(paths, 0, 1);
-        return roiAlignAndFlatten(tensor, item.roi, 0, pca_projector);
+        return roiAlignAndFlatten(tensor, item.roi, 0);
     }
 
     /**
      * @brief 批量提取 ROI 特征。
      */
-    std::vector<float> extractBatch(const std::vector<RoiSearchItem> &items, size_t begin, size_t count,
-                                    const RoiPcaProjector *pca_projector = nullptr)
+    std::vector<float> extractBatch(const std::vector<RoiSearchItem> &items, size_t begin, size_t count)
     {
-        const int dim      = featureDim(pca_projector);
-        auto      features = extractRawBatch(items, begin, count, pca_projector);
+        const int dim      = featureDim();
+        auto      features = extractRawBatch(items, begin, count);
         for (size_t i = 0; i < count; ++i)
         {
             normalizeFeature(features.data() + i * static_cast<size_t>(dim), static_cast<size_t>(dim), config_.norm);
@@ -717,20 +652,19 @@ public:
     /**
      * @brief 批量提取未归一化 ROI 特征。
      */
-    std::vector<float> extractRawBatch(const std::vector<RoiSearchItem> &items, size_t begin, size_t count,
-                                       const RoiPcaProjector *pca_projector = nullptr)
+    std::vector<float> extractRawBatch(const std::vector<RoiSearchItem> &items, size_t begin, size_t count)
     {
         if (begin > items.size() || count > items.size() - begin)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI feature batch range is invalid");
         }
 
-        const int          dim = featureDim(pca_projector);
+        const int          dim = featureDim();
         std::vector<float> features;
         features.reserve(count * static_cast<size_t>(dim));
         for (size_t i = 0; i < count; ++i)
         {
-            auto feature = extractRaw(items[begin + i], pca_projector);
+            auto feature = extractRaw(items[begin + i]);
             features.insert(features.end(), feature.begin(), feature.end());
         }
         return features;
@@ -739,11 +673,10 @@ public:
     /**
      * @brief 按任意下标批量提取 ROI 特征。
      */
-    std::vector<float> extractBatch(const std::vector<RoiSearchItem> &items, const std::vector<size_t> &indices,
-                                    const RoiPcaProjector *pca_projector = nullptr)
+    std::vector<float> extractBatch(const std::vector<RoiSearchItem> &items, const std::vector<size_t> &indices)
     {
-        const int dim      = featureDim(pca_projector);
-        auto      features = extractRawBatch(items, indices, pca_projector);
+        const int dim      = featureDim();
+        auto      features = extractRawBatch(items, indices);
         for (size_t i = 0; i < indices.size(); ++i)
         {
             normalizeFeature(features.data() + i * static_cast<size_t>(dim), static_cast<size_t>(dim), config_.norm);
@@ -754,10 +687,9 @@ public:
     /**
      * @brief 按任意下标批量提取未归一化 ROI 特征。
      */
-    std::vector<float> extractRawBatch(const std::vector<RoiSearchItem> &items, const std::vector<size_t> &indices,
-                                       const RoiPcaProjector *pca_projector = nullptr)
+    std::vector<float> extractRawBatch(const std::vector<RoiSearchItem> &items, const std::vector<size_t> &indices)
     {
-        const int          dim = featureDim(pca_projector);
+        const int          dim = featureDim();
         std::vector<float> features;
         features.reserve(indices.size() * static_cast<size_t>(dim));
         for (const auto index : indices)
@@ -766,43 +698,10 @@ public:
             {
                 throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI feature batch index is invalid");
             }
-            auto feature = extractRaw(items[index], pca_projector);
+            auto feature = extractRaw(items[index]);
             features.insert(features.end(), feature.begin(), feature.end());
         }
         return features;
-    }
-
-    /**
-     * @brief 提取整张特征图的通道向量，用于训练 PCA。
-     */
-    std::vector<float> extractFeatureMapRows(const fs::path &image_path)
-    {
-        const std::vector<fs::path> paths{image_path};
-        const auto                  tensor      = image_extractor_.extractFeatureTensorBatch(paths, 0, 1);
-        const auto                  feature_map = prepareFeatureMap(tensor);
-        return featureMapRows(feature_map);
-    }
-
-    /**
-     * @brief 批量提取整张特征图的通道向量，用于训练 PCA。
-     */
-    std::vector<float> extractFeatureMapRows(const std::vector<RoiSearchItem> &items, size_t begin, size_t count)
-    {
-        if (begin > items.size() || count > items.size() - begin)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI PCA feature-map batch range is invalid");
-        }
-
-        std::vector<fs::path> paths;
-        paths.reserve(count);
-        for (size_t i = 0; i < count; ++i)
-        {
-            paths.push_back(items[begin + i].image_path);
-        }
-
-        const auto tensor      = image_extractor_.extractFeatureTensorBatch(paths, 0, count);
-        const auto feature_map = prepareFeatureMap(tensor);
-        return featureMapRows(feature_map);
     }
 
 private:
@@ -968,24 +867,27 @@ private:
     }
 
     /**
-     * @brief 对特征图通道维执行 PCA，并还原为 ROIAlign 可消费的 NCHW 特征图。
+     * @brief 对当前特征图通道维训练本地 PCA，并还原为 ROIAlign 可消费的 NCHW 特征图。
      */
-    PreparedFeatureMap applyPcaToFeatureMap(PreparedFeatureMap feature_map, const RoiPcaProjector &projector) const
+    PreparedFeatureMap applyLocalPcaToFeatureMap(PreparedFeatureMap feature_map) const
     {
         validatePreparedFeatureMap(feature_map);
         const int batch    = static_cast<int>(feature_map.dims.d[0]);
         const int channels = static_cast<int>(feature_map.dims.d[1]);
         const int height   = static_cast<int>(feature_map.dims.d[2]);
         const int width    = static_cast<int>(feature_map.dims.d[3]);
-        if (projector.inputDim() != channels)
+        const auto row_count = static_cast<size_t>(batch) * static_cast<size_t>(height) * static_cast<size_t>(width);
+        if (config_.pca_dim <= 0 || config_.pca_dim > channels || static_cast<size_t>(config_.pca_dim) > row_count)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI PCA input channel count mismatch");
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "ROI PCA dim must not exceed feature channel count or local feature-map sample count");
         }
 
-        const auto rows       = featureMapRows(feature_map);
-        const auto row_count  = static_cast<size_t>(batch) * static_cast<size_t>(height) * static_cast<size_t>(width);
+        auto            rows = featureMapRows(feature_map);
+        RoiPcaProjector projector;
+        projector.train(rows, row_count, channels, config_.pca_dim);
         const auto projected  = projector.project(rows.data(), row_count);
-        const int  out_ch     = projector.outputDim();
+        const int  out_ch     = config_.pca_dim;
         const auto out_stride = static_cast<size_t>(out_ch);
 
         PreparedFeatureMap reduced;
@@ -1022,13 +924,13 @@ private:
     /**
      * @brief 将原图 ROI 映射到特征图坐标并执行 ROIAlign。
      */
-    std::vector<float> roiAlignAndFlatten(const FeatureTensorBatch &tensor, const RoiSearchBox &roi, size_t batch_index,
-                                          const RoiPcaProjector *pca_projector) const
+    std::vector<float> roiAlignAndFlatten(const FeatureTensorBatch &tensor, const RoiSearchBox &roi,
+                                          size_t batch_index) const
     {
         auto feature_map = prepareFeatureMap(tensor);
-        if (pca_projector != nullptr)
+        if (config_.use_pca)
         {
-            feature_map = applyPcaToFeatureMap(std::move(feature_map), *pca_projector);
+            feature_map = applyLocalPcaToFeatureMap(std::move(feature_map));
         }
 
         if (batch_index >= tensor.original_sizes.size() || batch_index >= static_cast<size_t>(feature_map.dims.d[0]))
@@ -1078,57 +980,6 @@ private:
 } // namespace priv
 
 namespace {
-
-/**
- * @brief 计算启用通道 PCA 后的最终 ROI 检索向量维度。
- */
-int pcaRoiFeatureDim(const RoiSearchConfig &config, const priv::RoiPcaProjector &projector)
-{
-    return projector.outputDim() * config.pooled_height * config.pooled_width;
-}
-
-/**
- * @brief 从图库特征图的通道向量训练 PCA 投影器。
- */
-void trainPcaProjector(priv::RoiFeatureExtractor &extractor, const std::vector<RoiSearchItem> &gallery_items,
-                       priv::RoiPcaProjector &projector, const RoiSearchConfig &config,
-                       const RoiSearchBuildProgressCallback &progress_callback)
-{
-    const int input_dim = extractor.featureChannels();
-    if (config.pca_dim <= 0 || config.pca_dim > input_dim)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "ROI PCA dim must be positive and not exceed feature channel count");
-    }
-
-    std::vector<float> training_rows;
-    size_t             sample_count = 0;
-    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::TrainingFeatures, 0, 0, 0, 0,
-                              gallery_items.size());
-    const size_t batch_size  = std::max<size_t>(1, config.model_batch_size);
-    size_t       batch_index = 0;
-    for (size_t begin = 0; begin < gallery_items.size(); begin += batch_size)
-    {
-        const size_t count = std::min(batch_size, gallery_items.size() - begin);
-        auto         rows  = extractor.extractFeatureMapRows(gallery_items, begin, count);
-        if (rows.size() % static_cast<size_t>(input_dim) != 0)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI PCA feature-map row size mismatch");
-        }
-        sample_count += rows.size() / static_cast<size_t>(input_dim);
-        training_rows.insert(training_rows.end(), rows.begin(), rows.end());
-        priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::TrainingFeatures, batch_index++, begin,
-                                  count, std::min(gallery_items.size(), begin + count), gallery_items.size());
-    }
-
-    if (sample_count == 0 || static_cast<size_t>(config.pca_dim) > sample_count)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "ROI PCA dim must not exceed feature-map sample count");
-    }
-
-    projector.train(training_rows, sample_count, input_dim, config.pca_dim);
-}
 
 } // namespace
 
@@ -1184,7 +1035,6 @@ void RoiSearch::Impl::buildOrLoad(const fs::path &weights_file, const std::vecto
                               normalized_items.size(), normalized_items.size());
 
     if (!rebuild_index && fs::exists(index_file) && fs::exists(roiMappingPathFromIndex(index_file))
-        && (!config_.use_pca || fs::exists(roiPcaPathFromIndex(index_file)))
         && existingRoiIndexMatchesConfig(index_file, config_))
     {
         const auto mapped_items = loadRoiMapping(roiMappingPathFromIndex(index_file));
@@ -1241,16 +1091,14 @@ void RoiSearch::Impl::load(const fs::path &weights_file, const fs::path &index_f
                              priv::metadataPathFromIndex(index_file).string().c_str());
     }
 
-    auto                                   items = loadRoiMapping(roiMappingPathFromIndex(index_file));
-    auto                                   faiss = priv::loadConfiguredFaissIndex(index_file, config_);
-    std::unique_ptr<priv::RoiPcaProjector> pca_projector;
+    auto items = loadRoiMapping(roiMappingPathFromIndex(index_file));
+    auto faiss = priv::loadConfiguredFaissIndex(index_file, config_);
     if (config_.use_pca)
     {
-        pca_projector = std::make_unique<priv::RoiPcaProjector>();
-        pca_projector->load(roiPcaPathFromIndex(index_file));
-        if (!faiss.index || pcaRoiFeatureDim(config_, *pca_projector) != static_cast<int>(faiss.index->d))
+        const auto expected_dim = static_cast<faiss::idx_t>(config_.pca_dim * config_.pooled_height * config_.pooled_width);
+        if (!faiss.index || faiss.index->d != expected_dim)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI PCA dim does not match Faiss index dim");
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI local PCA dim does not match Faiss index dim");
         }
     }
     if (static_cast<faiss::idx_t>(items.size()) != faiss.index->ntotal)
@@ -1268,8 +1116,7 @@ void RoiSearch::Impl::load(const fs::path &weights_file, const fs::path &index_f
     index_               = std::move(faiss.index);
     gallery_items_       = std::move(items);
     extractor_.reset();
-    pca_projector_ = std::move(pca_projector);
-    feature_dim_   = static_cast<int>(index_->d);
+    feature_dim_ = static_cast<int>(index_->d);
 }
 
 void RoiSearch::Impl::buildWithItems(const fs::path &weights_file, std::vector<RoiSearchItem> gallery_items,
@@ -1284,30 +1131,12 @@ void RoiSearch::Impl::buildWithItems(const fs::path &weights_file, std::vector<R
         fs::create_directories(index_file.parent_path());
     }
 
-    priv::FaissIndexBundle                 faiss;
-    std::unique_ptr<priv::RoiPcaProjector> pca_projector;
-    int                                    final_feature_dim = extractor->featureDim();
-    if (config_.use_pca)
-    {
-        pca_projector = std::make_unique<priv::RoiPcaProjector>();
-        trainPcaProjector(*extractor, gallery_items, *pca_projector, config_, progress_callback);
-        final_feature_dim = extractor->featureDim(pca_projector.get());
-        faiss             = priv::buildConfiguredFaissIndex(
-            gallery_items.size(), final_feature_dim, index_file, config_, [&](size_t index)
-            { return extractor->extract(gallery_items[index], pca_projector.get()); }, [&](size_t begin, size_t count)
-            { return extractor->extractBatch(gallery_items, begin, count, pca_projector.get()); },
-            [&](const std::vector<size_t> &indices)
-            { return extractor->extractBatch(gallery_items, indices, pca_projector.get()); }, progress_callback);
-        pca_projector->save(roiPcaPathFromIndex(index_file));
-    }
-    else
-    {
-        faiss = priv::buildConfiguredFaissIndex(
-            gallery_items.size(), final_feature_dim, index_file, config_,
-            [&](size_t index) { return extractor->extract(gallery_items[index]); }, [&](size_t begin, size_t count)
-            { return extractor->extractBatch(gallery_items, begin, count); }, [&](const std::vector<size_t> &indices)
-            { return extractor->extractBatch(gallery_items, indices); }, progress_callback);
-    }
+    const int final_feature_dim = extractor->featureDim();
+    auto      faiss             = priv::buildConfiguredFaissIndex(
+        gallery_items.size(), final_feature_dim, index_file, config_,
+        [&](size_t index) { return extractor->extract(gallery_items[index]); }, [&](size_t begin, size_t count)
+        { return extractor->extractBatch(gallery_items, begin, count); }, [&](const std::vector<size_t> &indices)
+        { return extractor->extractBatch(gallery_items, indices); }, progress_callback);
     saveRoiMapping(roiMappingPathFromIndex(index_file), gallery_items);
 
     index_.reset();
@@ -1319,7 +1148,6 @@ void RoiSearch::Impl::buildWithItems(const fs::path &weights_file, std::vector<R
     gallery_items_       = std::move(gallery_items);
     feature_dim_         = final_feature_dim;
     extractor_           = std::move(extractor);
-    pca_projector_       = std::move(pca_projector);
 
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::SavingMetadata, 0, 0, 0, 0, 1);
     saveRoiMetadata(priv::metadataPathFromIndex(index_path_), config_);
@@ -1345,16 +1173,7 @@ std::vector<RoiSearchResult> RoiSearch::Impl::search(const fs::path &query_image
 
     const auto query_item = normalizeItem(RoiSearchItem{query_image, roi});
     ensureExtractor();
-    std::vector<float> query_feature;
-    if (config_.use_pca)
-    {
-        ensurePcaProjector();
-        query_feature = extractor_->extract(query_item, pca_projector_.get());
-    }
-    else
-    {
-        query_feature = extractor_->extract(query_item);
-    }
+    const auto query_feature = extractor_->extract(query_item);
     if (query_feature.size() != static_cast<size_t>(index_->d))
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI query feature dimension mismatch");
@@ -1410,31 +1229,7 @@ void RoiSearch::Impl::ensureExtractor()
     if (!extractor_)
     {
         extractor_ = std::make_unique<priv::RoiFeatureExtractor>(config_, weights_file_);
-        if (!config_.use_pca)
-        {
-            feature_dim_ = extractor_->featureDim();
-        }
-    }
-}
-
-void RoiSearch::Impl::ensurePcaProjector()
-{
-    if (!config_.use_pca)
-    {
-        return;
-    }
-    if (!pca_projector_)
-    {
-        pca_projector_ = std::make_unique<priv::RoiPcaProjector>();
-        pca_projector_->load(roiPcaPathFromIndex(index_path_));
-    }
-    if (extractor_ && pca_projector_->inputDim() != extractor_->featureChannels())
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI PCA channel count does not match extractor");
-    }
-    if (index_ && pcaRoiFeatureDim(config_, *pca_projector_) != static_cast<int>(index_->d))
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI PCA dim does not match Faiss index dim");
+        feature_dim_ = extractor_->featureDim();
     }
 }
 

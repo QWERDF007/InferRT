@@ -23,7 +23,6 @@ namespace irt::features {
 
 namespace priv {
 class RoiFeatureExtractor;
-class RoiPcaProjector;
 } // namespace priv
 
 /**
@@ -59,7 +58,6 @@ private:
     void buildWithItems(const std::filesystem::path &weights_file, std::vector<RoiSearchItem> gallery_items,
                         const std::filesystem::path &index_file, RoiSearchBuildProgressCallback progress_callback);
     void ensureExtractor();
-    void ensurePcaProjector();
 
     RoiSearchConfig config_{}; ///< ROI 检索配置。
 
@@ -71,7 +69,6 @@ private:
     std::unique_ptr<faiss::gpu::StandardGpuResources> faiss_gpu_resources_; ///< GPU Faiss 资源。
     std::unique_ptr<faiss::Index>                     index_;               ///< Faiss 索引。
     std::unique_ptr<priv::RoiFeatureExtractor>        extractor_;           ///< ROI 特征抽取器。
-    std::unique_ptr<priv::RoiPcaProjector>            pca_projector_;       ///< ROI PCA 降维投影器。
 
     int feature_dim_{0}; ///< ROI 特征向量维度。
 };

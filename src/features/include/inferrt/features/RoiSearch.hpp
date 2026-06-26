@@ -80,8 +80,8 @@ struct RoiSearchConfig : public ImageSearchConfig
     int  pooled_width{kDefaultRoiSearchPooledWidth};   ///< ROIAlign 输出宽度。
     int  sampling_ratio{-1};                           ///< ROIAlign 采样率，-1 表示自适应。
     bool aligned{false};                               ///< 是否使用 aligned ROIAlign 坐标规则。
-    bool use_pca{false};                               ///< 是否先使用 OpenCV PCA 对特征图通道降维。
-    int  pca_dim{0};                                   ///< PCA 输出通道数；启用 ``use_pca`` 时必须为正数。
+    bool use_pca{false};                               ///< 是否对每张图自己的特征图通道维训练本地 PCA 并降维。
+    int  pca_dim{0};                                   ///< PCA 输出通道数；必须为正数且不超过特征图通道数。
 };
 
 using RoiSearchBuildProgress         = ImageSearchBuildProgress;

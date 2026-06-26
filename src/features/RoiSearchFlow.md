@@ -33,8 +33,8 @@ ROI 检索额外增加：
 - `pooled_height` / `pooled_width`：`RoIAlign` 输出空间大小，默认 `7 x 7`。
 - `sampling_ratio`：`RoIAlign` 每个 bin 的采样率，`-1` 表示自适应。
 - `aligned`：是否启用 aligned ROIAlign 坐标规则。
-- `use_pca`：是否先对特征图通道维使用 OpenCV PCA 降维，默认关闭；该配置适用于所有可输出空间特征图的网络，不限于 DINO 系列。
-- `pca_dim`：PCA 输出通道数；`use_pca=true` 时必须大于 0，且不能超过原始特征图通道数和 PCA 训练样本数量。
+- `use_pca`：是否对每张图自己的特征图通道维训练本地 OpenCV PCA 并降维，默认关闭。
+- `pca_dim`：PCA 输出通道数；`use_pca=true` 时必须大于 0，且不能超过原始特征图通道数和当前特征图空间位置数量。
 
 ## 3. 输入数据模型
 
@@ -108,7 +108,7 @@ mapped_x2 = roi.x2 * scale_x
 mapped_y2 = roi.y2 * scale_y
 ```
 
-6. 如果 `use_pca=true`，构建阶段先用特征图每个空间位置的通道向量训练 OpenCV PCA，并在抽取 ROI 前把特征图从 `C x H x W` 投影为 `pca_dim x H x W`。
+6. 如果 `use_pca=true`，对当前图的特征图空间位置通道向量训练本地 OpenCV PCA，并在抽取 ROI 前把特征图从 `C x H x W` 投影为 `pca_dim x H x W`。
 7. 构造 ROIAlign 输入 `[batch_index, mapped_x1, mapped_y1, mapped_x2, mapped_y2]`。
 8. 调用 `irt::ops::RoIAlign`，输出形状为 `C x pooled_height x pooled_width`；启用 PCA 时输出形状为 `pca_dim x pooled_height x pooled_width`。
 9. 将 ROIAlign 输出展平为一维向量。
@@ -132,11 +132,7 @@ search_dim = pca_dim * pooled_height * pooled_width
 
 1. `LoadingModel`：创建 `RoiFeatureExtractor`，内部持有 `ImageFeatureExtractor`。
 2. 根据输出特征图通道数和 ROIAlign 输出尺寸确定原始 `feature_dim`。
-3. 如果 `use_pca=true`：
-   - 先提取图库图像的空间特征图。
-   - 将特征图整理为 `N*H*W x C` 的通道向量矩阵，用 `cv::PCA` 训练 PCA 参数。
-   - 后续 Faiss 构建回调先把整张特征图投影为 `pca_dim x H x W`，再执行 ROIAlign、展平和归一化。
-   - 最终写入 Faiss 的单条 ROI 向量维度为 `pca_dim * pooled_height * pooled_width`。
+3. 如果 `use_pca=true`，Faiss 构建回调会对当前 ROI 所在图像的特征图现场训练本地 PCA，投影为 `pca_dim x H x W` 后再执行 ROIAlign、展平和归一化。
 4. 如果 `use_pca=false`，直接通过 ROI 特征抽取回调现算特征。
 5. 调用 `buildConfiguredFaissIndex()` 构建 Faiss 索引。
 6. Faiss 构建过程中通过回调按 ROI 条目下标提取特征：
@@ -144,9 +140,8 @@ search_dim = pca_dim * pooled_height * pooled_width
    - 连续批量回调：`extractBatch(gallery_items, begin, count)`
    - 任意下标批量回调：`extractBatch(gallery_items, indices)`
 7. 写入 ROI 映射文件 `<index>.rois.txt`。
-8. 如果启用 PCA，写入 PCA 参数文件 `<index>.pca.yml`。
-9. 写入元数据文件 `<index>.meta.txt`。
-10. 保存或加载完成后的 Faiss 索引进入可查询状态。
+8. 写入元数据文件 `<index>.meta.txt`。
+9. 保存或加载完成后的 Faiss 索引进入可查询状态。
 
 当前 ROI 批量接口会复用相同的特征抽取和 ROIAlign 逻辑。后续如果同一张图有多个 ROI，可以在 `RoiFeatureExtractor`
 中进一步合并同图 ROI，减少重复模型前向。
@@ -185,7 +180,6 @@ ROI 检索复用图像搜索的 Faiss 构建工具，支持两条路径。
 
 - `<index>.faiss.rois.txt`：每行一个 ROI 条目，包含图像路径和原图 ROI 坐标。
 - `<index>.faiss.meta.txt`：记录模型、特征、后端、归一化、Faiss 配置和 ROIAlign 配置。
-- `<index>.faiss.pca.yml`：仅 `use_pca=true` 时生成，保存 OpenCV PCA 的均值、特征向量、特征值和输入/输出维度。
 - `<index>.faiss.ivfdata`：仅 CPU 磁盘 IVF 模式使用，保存倒排列表数据。
 
 `.rois.txt` 的行号与 Faiss 向量 ID 一一对应，因此查询结果可以从 Faiss ID 还原到图像路径和 ROI 框。
@@ -202,10 +196,10 @@ auto results = searcher.search(query_image, query_roi, top_k);
 
 1. 校验索引已就绪，且 `top_k > 0`。
 2. 校验查询图像路径和查询 ROI。
-3. 如果索引是从磁盘加载的，首次查询前懒加载 `RoiFeatureExtractor`；启用 PCA 时同步加载 `<index>.pca.yml`。
+3. 如果索引是从磁盘加载的，首次查询前懒加载 `RoiFeatureExtractor`。
 4. 对查询图像执行模型特征图抽取。
 5. 将查询 ROI 从原图坐标映射到特征图坐标。
-6. 如果启用 PCA，使用构建阶段保存的 PCA 参数先对整张查询特征图做通道投影。
+6. 如果启用 PCA，对当前查询图的特征图训练本地 PCA 并做通道投影。
 7. 对当前查询特征图执行 ROIAlign 和展平；启用 PCA 时这里使用的是投影后的特征图。
 8. 按 `config.norm` 执行归一化。
 9. 调用 Faiss：
@@ -231,7 +225,7 @@ ROI 搜索复用 `ImageSearchBuildProgress` 和 `ImageSearchBuildStage`：
 - `Started`：流程开始。
 - `CollectingImages`：校验并规范化 ROI 条目。
 - `LoadingModel`：加载模型与创建 ROI 特征抽取器。
-- `TrainingFeatures`：提取 PCA 训练用的特征图通道向量，或抽样提取 Faiss 训练特征。
+- `TrainingFeatures`：抽样提取 Faiss 训练特征。
 - `TrainingIndex`：训练 Faiss 索引结构。
 - `AssigningVectors`：CPU 磁盘 IVF 模式统计倒排列表。
 - `AddingVectors`：提取 ROI 特征并添加到索引或写入磁盘倒排列表。
@@ -248,6 +242,6 @@ ROI 搜索复用 `ImageSearchBuildProgress` 和 `ImageSearchBuildStage`：
 - `feature_name` 应选择保留空间信息的特征：标准空间特征图使用 NCHW；DINOv2/DINOv3 可使用 `x_norm_patchtokens`。
 - 如果输出是 CLS token、register/storage token 或纯向量，ROI 检索会拒绝构建。
 - ROIAlign 输出越大，单条 ROI 向量维度越高，索引训练和搜索成本也越高。
-- PCA 先在特征图通道维上训练，再对整张特征图投影；ROIAlign 只作用于降维后的空间特征图，因此修改 `use_pca` 或 `pca_dim` 后需要重建索引。
+- PCA 在每张图自己的特征图通道维上训练并投影；ROIAlign 只作用于降维后的空间特征图，因此修改 `use_pca` 或 `pca_dim` 后需要重建索引。
 - 同一张图多个 ROI 当前会逐条抽取特征图，后续可按图像分组优化。
 - GPU Faiss 只支持 RAM 索引路径，`index_storage=Disk` 对 GPU Faiss 会被归一化为 RAM。
