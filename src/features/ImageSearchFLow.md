@@ -37,7 +37,7 @@ searcher.buildOrLoad(weights_file, gallery_dir, index_file, rebuild_index, progr
 `buildOrLoad` 的决策如下：
 
 1. 根据可选 `index_file` 解析最终 `.faiss` 路径；未指定时在 `gallery_dir` 下生成时间戳文件名。
-2. 如果 `rebuild_index == false`，且 `.faiss`、`.manifest.txt` 都存在并匹配当前配置，则直接加载索引。
+2. 如果 `rebuild_index == false`，且 `.faiss`、`.manifest.yaml` 都存在并匹配当前配置，则直接加载索引。
 3. 否则进入完整重建流程。
 
 元数据匹配会校验模型名、特征名、图库目录、模型后端、设备、归一化方式、Faiss 后端、索引存储类型和索引类型。这样可以避免使用旧配置生成的索引。
@@ -101,7 +101,7 @@ searcher.buildOrLoad(weights_file, gallery_dir, index_file, rebuild_index, progr
 
 给定索引路径 `<index>.faiss`，模块还会生成：
 
-- `<index>.manifest.txt`：记录模型、特征、图库路径映射、后端、归一化、批量和索引类型。
+- `<index>.manifest.yaml`：记录模型、特征、图库路径映射、后端、归一化、批量和索引类型。
 - `<index>.faiss.ivfdata`：仅 CPU 磁盘 IVF 模式使用，保存倒排列表中的 ID 和向量编码。
 
 ## 8. 查询流程

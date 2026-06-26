@@ -1,11 +1,13 @@
 #include <gtest/gtest.h>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/util/CheckError.hpp>
+#include <inferrt/util/FileManifest.hpp>
 #include <inferrt/util/Path.hpp>
 
 #include <atomic>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -143,6 +145,50 @@ TEST(PathUtilTest, FallsBackToCurrentWorkingDirectoryWhenNoMarkerExists)
     const fs::path found = irt::util::findProjectRoot(nullptr, {"missing.marker"}, nullptr);
 
     EXPECT_EQ(fs::weakly_canonical(found), fs::weakly_canonical(cwd));
+}
+
+/**
+ * @brief FileManifest 应以 YAML map 写入，并能通过统一 API 读回和匹配字段。
+ */
+TEST(FileManifestUtilTest, WritesLoadsAndMatchesYamlManifest)
+{
+    TempDir temp;
+    const fs::path data_path     = temp.path() / "index.faiss";
+    const fs::path manifest_path = irt::util::manifestPathForDataFile(data_path);
+    EXPECT_EQ(manifest_path.filename().generic_string(), "index.manifest.yaml");
+
+    irt::util::writeYamlManifest(manifest_path,
+                                 {{"version", "1"},
+                                  {"kind", "image_search"},
+                                  {"index_file", "F:/data/index.faiss"},
+                                  {"feature", "x_norm_patchtokens"},
+                                  {"gallery_dir", "<explicit_path_list>"},
+                                  {"image.0", "F:/data/images/cat:01.png"}});
+
+    std::ifstream input(manifest_path);
+    ASSERT_TRUE(input);
+    const std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    EXPECT_NE(text.find("version:"), std::string::npos);
+    EXPECT_EQ(text.find("version=1"), std::string::npos);
+
+    const auto manifest = irt::util::loadYamlManifest(manifest_path);
+    EXPECT_EQ(irt::util::manifestValue(manifest, "kind"), "image_search");
+    EXPECT_TRUE(irt::util::manifestHasValue(manifest, "image.0"));
+    EXPECT_TRUE(irt::util::manifestValueEquals(manifest, "feature", "x_norm_patchtokens"));
+    EXPECT_TRUE(irt::util::manifestMatches(manifest, {{"version", "1"}, {"index_file", "F:/data/index.faiss"}}));
+    EXPECT_FALSE(irt::util::manifestMatches(manifest, {{"kind", "roi_search"}}));
+}
+
+/**
+ * @brief 缺失的 manifest 文件应返回空 map，便于调用方按“无可用缓存”处理。
+ */
+TEST(FileManifestUtilTest, MissingYamlManifestReturnsEmptyMap)
+{
+    TempDir temp;
+    const auto manifest = irt::util::loadYamlManifest(temp.path() / "missing.manifest.yaml");
+
+    EXPECT_TRUE(manifest.empty());
+    EXPECT_FALSE(irt::util::manifestHasValue(manifest, "kind"));
 }
 
 /**

@@ -80,7 +80,7 @@ searcher.buildOrLoad(weights_file, gallery_items, index_file, rebuild_index, pro
 
 1. 解析最终 `.faiss` 路径。
 2. 校验并规范化 `gallery_items`，图像路径统一转为绝对路径。
-3. 如果 `rebuild_index == false`，并且 `.faiss`、`.manifest.txt` 均存在：
+3. 如果 `rebuild_index == false`，并且 `.faiss`、`.manifest.yaml` 均存在：
    - 校验 manifest 是否匹配当前模型、特征、后端、归一化、索引类型和 ROIAlign 配置。
    - 加载 manifest 中的 ROI 条目，确认与本次输入一致。
    - 匹配成功则直接加载 Faiss 索引。
@@ -139,7 +139,7 @@ search_dim = pca_dim * pooled_height * pooled_width
    - 单条回调：`extract(gallery_items[index])`
    - 连续批量回调：`extractBatch(gallery_items, begin, count)`
    - 任意下标批量回调：`extractBatch(gallery_items, indices)`
-7. 写入 `<index>.manifest.txt`，包含 ROI 映射和配置。
+7. 写入 `<index>.manifest.yaml`，包含 ROI 映射和配置。
 8. 保存或加载完成后的 Faiss 索引进入可查询状态。
 
 当前 ROI 批量接口会复用相同的特征抽取和 ROIAlign 逻辑。后续如果同一张图有多个 ROI，可以在 `RoiFeatureExtractor`
@@ -177,7 +177,7 @@ ROI 检索复用图像搜索的 Faiss 构建工具，支持两条路径。
 
 给定索引路径 `<index>.faiss`，ROI 检索会生成：
 
-- `<index>.manifest.txt`：记录 ROI 条目、模型、特征、后端、归一化、Faiss 配置和 ROIAlign 配置。
+- `<index>.manifest.yaml`：记录 ROI 条目、模型、特征、后端、归一化、Faiss 配置和 ROIAlign 配置。
 - `<index>.faiss.ivfdata`：仅 CPU 磁盘 IVF 模式使用，保存倒排列表数据。
 
 manifest 中的 ROI 条目顺序与 Faiss 向量 ID 一一对应，因此查询结果可以从 Faiss ID 还原到图像路径和 ROI 框。

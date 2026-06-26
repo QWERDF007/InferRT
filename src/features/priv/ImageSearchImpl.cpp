@@ -485,22 +485,13 @@ irt::util::ManifestEntries imageSearchManifestEntries(const fs::path &index_path
 }
 
 /**
- * @brief 将图像检索配置和路径映射写入 ``xxx.manifest.txt``。
+ * @brief 将图像检索配置和路径映射写入 ``xxx.manifest.yaml``。
  */
 void saveImageSearchManifest(const fs::path &index_path, const std::string &gallery_value,
                              const ImageSearchConfig &config, const std::vector<fs::path> &image_paths)
 {
-    irt::util::writeKeyValueManifest(irt::util::manifestPathForDataFile(index_path),
-                                     imageSearchManifestEntries(index_path, gallery_value, config, image_paths));
-}
-
-/**
- * @brief 判断 manifest 字段是否严格匹配。
- */
-bool manifestValueEquals(const irt::util::ManifestMap &manifest, const std::string &key, const std::string &expected)
-{
-    const auto it = manifest.find(key);
-    return it != manifest.end() && it->second == expected;
+    irt::util::writeYamlManifest(irt::util::manifestPathForDataFile(index_path),
+                                 imageSearchManifestEntries(index_path, gallery_value, config, image_paths));
 }
 
 /**
@@ -508,8 +499,8 @@ bool manifestValueEquals(const irt::util::ManifestMap &manifest, const std::stri
  */
 std::vector<fs::path> loadImagePathsFromManifest(const fs::path &index_path)
 {
-    const auto manifest = irt::util::loadKeyValueManifest(irt::util::manifestPathForDataFile(index_path));
-    if (manifest.empty() || !manifestValueEquals(manifest, "kind", "image_search"))
+    const auto manifest = irt::util::loadYamlManifest(irt::util::manifestPathForDataFile(index_path));
+    if (manifest.empty() || !irt::util::manifestValueEquals(manifest, "kind", "image_search"))
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch manifest is missing or invalid: %s",
                              irt::util::manifestPathForDataFile(index_path).string().c_str());
@@ -561,27 +552,28 @@ bool existingIndexMatchesConfig(const fs::path &index_path, const fs::path &gall
         return false;
     }
 
-    const auto manifest = irt::util::loadKeyValueManifest(manifest_path);
+    const auto manifest = irt::util::loadYamlManifest(manifest_path);
     if (manifest.empty())
     {
         return false;
     }
 
-    return manifestValueEquals(manifest, "kind", "image_search")
-        && manifestValueEquals(manifest, "index_file", absolutePathManifestValue(index_path))
-        && manifestValueEquals(manifest, "model", config.model_name)
-        && manifestValueEquals(manifest, "feature", config.feature_name)
-        && (manifestValueEquals(manifest, "gallery_dir", galleryDirectoryMetadataValue(gallery_dir))
-            || manifestValueEquals(manifest, "gallery_dir", explicitPathListMetadataValue()))
-        && manifestValueEquals(manifest, "model_backend", modelBackendName(config.model_backend))
-        && manifestValueEquals(manifest, "model_device", modelDeviceName(config.model_device))
-        && manifestValueEquals(manifest, "preprocess_backend", preprocessBackendName(config.preprocess_backend))
-        && manifestValueEquals(manifest, "norm", featureNormName(config.norm))
-        && manifestValueEquals(manifest, "faiss_backend", faissBackendName(config.faiss_backend))
-        && manifestValueEquals(manifest, "index_storage", indexStorageName(config.index_storage))
-        && manifestValueEquals(manifest, "model_batch_size", std::to_string(config.model_batch_size))
-        && manifestValueEquals(manifest, "index_kind", indexKindName(config))
-        && manifest.find("image_count") != manifest.end();
+    return irt::util::manifestValueEquals(manifest, "kind", "image_search")
+        && irt::util::manifestValueEquals(manifest, "index_file", absolutePathManifestValue(index_path))
+        && irt::util::manifestValueEquals(manifest, "model", config.model_name)
+        && irt::util::manifestValueEquals(manifest, "feature", config.feature_name)
+        && (irt::util::manifestValueEquals(manifest, "gallery_dir", galleryDirectoryMetadataValue(gallery_dir))
+            || irt::util::manifestValueEquals(manifest, "gallery_dir", explicitPathListMetadataValue()))
+        && irt::util::manifestValueEquals(manifest, "model_backend", modelBackendName(config.model_backend))
+        && irt::util::manifestValueEquals(manifest, "model_device", modelDeviceName(config.model_device))
+        && irt::util::manifestValueEquals(manifest, "preprocess_backend",
+                                           preprocessBackendName(config.preprocess_backend))
+        && irt::util::manifestValueEquals(manifest, "norm", featureNormName(config.norm))
+        && irt::util::manifestValueEquals(manifest, "faiss_backend", faissBackendName(config.faiss_backend))
+        && irt::util::manifestValueEquals(manifest, "index_storage", indexStorageName(config.index_storage))
+        && irt::util::manifestValueEquals(manifest, "model_batch_size", std::to_string(config.model_batch_size))
+        && irt::util::manifestValueEquals(manifest, "index_kind", indexKindName(config))
+        && irt::util::manifestHasValue(manifest, "image_count");
 }
 
 } // namespace

@@ -79,5 +79,5 @@ Patch-token features can also be indexed, but they flatten to much larger vector
 Generated files:
 
 - `*.faiss`: Faiss index file
-- `*.manifest.txt`: model, feature, gallery mapping, and configuration metadata
+- `*.manifest.yaml`: model, feature, gallery mapping, and configuration metadata
 - `*.faiss.ivfdata`: CPU disk inverted-list data, only when `--index-storage disk` is used

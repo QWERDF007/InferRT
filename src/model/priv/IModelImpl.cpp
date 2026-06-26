@@ -299,26 +299,19 @@ irt::util::ManifestEntries engineManifestEntries(const IModelImpl &impl, const s
 
 void writeEngineManifest(const IModelImpl &impl, const std::string &source_file, const std::string &engine_file)
 {
-    irt::util::writeKeyValueManifest(irt::util::manifestPathForDataFile(engine_file),
-                                     engineManifestEntries(impl, source_file, engine_file));
+    irt::util::writeYamlManifest(irt::util::manifestPathForDataFile(engine_file),
+                                 engineManifestEntries(impl, source_file, engine_file));
 }
 
 bool engineManifestMatches(const IModelImpl &impl, const std::string &source_file, const std::string &engine_file)
 {
-    const auto manifest = irt::util::loadKeyValueManifest(irt::util::manifestPathForDataFile(engine_file));
+    const auto manifest = irt::util::loadYamlManifest(irt::util::manifestPathForDataFile(engine_file));
     if (manifest.empty())
     {
         return false;
     }
 
-    for (const auto &[key, value] : engineManifestEntries(impl, source_file, engine_file))
-    {
-        if (irt::util::manifestValue(manifest, key) != value)
-        {
-            return false;
-        }
-    }
-    return true;
+    return irt::util::manifestMatches(manifest, engineManifestEntries(impl, source_file, engine_file));
 }
 
 } // namespace

@@ -29,7 +29,7 @@ inline constexpr size_t kDefaultImageSearchModelBatchSize = 1;
 /**
  * @brief 图像检索结果。
  *
- * 每个结果对应 Faiss 返回的一个向量 ID；实现层会通过索引旁边的 ``.manifest.txt`` 文件
+ * 每个结果对应 Faiss 返回的一个向量 ID；实现层会通过索引旁边的 ``.manifest.yaml`` 文件
  * 将 ID 还原为图库图片路径。
  */
 struct ImageSearchResult

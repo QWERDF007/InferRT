@@ -56,7 +56,7 @@ public:
     /**
      * @brief 构建或加载图库索引。
      *
-     * 当 ``rebuild_index`` 为 false 且索引文件及 ``.manifest.txt`` 均存在且匹配时，
+     * 当 ``rebuild_index`` 为 false 且索引文件及 ``.manifest.yaml`` 均存在且匹配时，
      * 直接加载 Faiss 索引；否则扫描图库、提取特征并按配置归一化后重建索引。
      *
      * @param weights_file 模型 ``.wts`` 权重文件路径。
@@ -142,7 +142,7 @@ private:
     /**
      * @brief 从已确定的图库图片列表构建索引并更新内部状态。
      *
-     * ``build`` 两个重载的公共实现：提取特征、构建 Faiss 索引、保存 ``.manifest.txt``，
+     * ``build`` 两个重载的公共实现：提取特征、构建 Faiss 索引、保存 ``.manifest.yaml``，
      * 并将索引实例与路径映射写入成员变量。
      *
      * @param weights_file 模型 ``.wts`` 权重文件路径。

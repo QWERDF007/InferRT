@@ -304,17 +304,8 @@ irt::util::ManifestEntries roiSearchManifestEntries(const fs::path &index_path, 
 void saveRoiManifest(const fs::path &index_path, const RoiSearchConfig &config,
                      const std::vector<RoiSearchItem> &items)
 {
-    irt::util::writeKeyValueManifest(irt::util::manifestPathForDataFile(index_path),
-                                     roiSearchManifestEntries(index_path, config, items));
-}
-
-/**
- * @brief 判断 manifest 字段是否严格匹配。
- */
-bool manifestEquals(const irt::util::ManifestMap &manifest, const std::string &key, const std::string &expected)
-{
-    const auto it = manifest.find(key);
-    return it != manifest.end() && it->second == expected;
+    irt::util::writeYamlManifest(irt::util::manifestPathForDataFile(index_path),
+                                 roiSearchManifestEntries(index_path, config, items));
 }
 
 /**
@@ -322,8 +313,8 @@ bool manifestEquals(const irt::util::ManifestMap &manifest, const std::string &k
  */
 std::vector<RoiSearchItem> loadRoiItemsFromManifest(const fs::path &index_path)
 {
-    const auto manifest = irt::util::loadKeyValueManifest(irt::util::manifestPathForDataFile(index_path));
-    if (manifest.empty() || !manifestEquals(manifest, "kind", "roi_search"))
+    const auto manifest = irt::util::loadYamlManifest(irt::util::manifestPathForDataFile(index_path));
+    if (manifest.empty() || !irt::util::manifestValueEquals(manifest, "kind", "roi_search"))
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI manifest is missing or invalid: %s",
                              irt::util::manifestPathForDataFile(index_path).string().c_str());
@@ -390,32 +381,34 @@ bool existingRoiIndexMatchesConfig(const fs::path &index_path, const RoiSearchCo
         return false;
     }
 
-    const auto manifest = irt::util::loadKeyValueManifest(manifest_path);
+    const auto manifest = irt::util::loadYamlManifest(manifest_path);
     if (manifest.empty())
     {
         return false;
     }
 
-    return manifestEquals(manifest, "kind", "roi_search")
-        && manifestEquals(manifest, "index_file", absolutePathManifestValue(index_path))
-        && manifestEquals(manifest, "model", config.model_name)
-        && manifestEquals(manifest, "feature", config.feature_name)
-        && manifestEquals(manifest, "model_backend", irt::model::modelBackendName(config.model_backend))
-        && manifestEquals(manifest, "model_device", irt::model::modelDeviceName(config.model_device))
-        && manifestEquals(manifest, "preprocess_backend", priv::preprocessBackendName(config.preprocess_backend))
-        && manifestEquals(manifest, "norm", priv::featureNormName(config.norm))
-        && manifestEquals(manifest, "faiss_backend", priv::faissBackendName(config.faiss_backend))
-        && manifestEquals(manifest, "index_storage", priv::indexStorageName(config.index_storage))
-        && manifestEquals(manifest, "model_batch_size", std::to_string(config.model_batch_size))
-        && manifestEquals(manifest, "index_kind", priv::indexKindName(config))
-        && manifestEquals(manifest, "roi_pooled_height", std::to_string(config.pooled_height))
-        && manifestEquals(manifest, "roi_pooled_width", std::to_string(config.pooled_width))
-        && manifestEquals(manifest, "roi_sampling_ratio", std::to_string(config.sampling_ratio))
-        && manifestEquals(manifest, "roi_aligned", boolName(config.aligned))
-        && manifestEquals(manifest, "roi_use_pca", boolName(config.use_pca))
-        && manifestEquals(manifest, "roi_pca_mode", roiPcaModeName(config))
-        && manifestEquals(manifest, "roi_pca_dim", std::to_string(effectivePcaDim(config)))
-        && manifest.find("roi_count") != manifest.end();
+    return irt::util::manifestValueEquals(manifest, "kind", "roi_search")
+        && irt::util::manifestValueEquals(manifest, "index_file", absolutePathManifestValue(index_path))
+        && irt::util::manifestValueEquals(manifest, "model", config.model_name)
+        && irt::util::manifestValueEquals(manifest, "feature", config.feature_name)
+        && irt::util::manifestValueEquals(manifest, "model_backend",
+                                           irt::model::modelBackendName(config.model_backend))
+        && irt::util::manifestValueEquals(manifest, "model_device", irt::model::modelDeviceName(config.model_device))
+        && irt::util::manifestValueEquals(manifest, "preprocess_backend",
+                                           priv::preprocessBackendName(config.preprocess_backend))
+        && irt::util::manifestValueEquals(manifest, "norm", priv::featureNormName(config.norm))
+        && irt::util::manifestValueEquals(manifest, "faiss_backend", priv::faissBackendName(config.faiss_backend))
+        && irt::util::manifestValueEquals(manifest, "index_storage", priv::indexStorageName(config.index_storage))
+        && irt::util::manifestValueEquals(manifest, "model_batch_size", std::to_string(config.model_batch_size))
+        && irt::util::manifestValueEquals(manifest, "index_kind", priv::indexKindName(config))
+        && irt::util::manifestValueEquals(manifest, "roi_pooled_height", std::to_string(config.pooled_height))
+        && irt::util::manifestValueEquals(manifest, "roi_pooled_width", std::to_string(config.pooled_width))
+        && irt::util::manifestValueEquals(manifest, "roi_sampling_ratio", std::to_string(config.sampling_ratio))
+        && irt::util::manifestValueEquals(manifest, "roi_aligned", boolName(config.aligned))
+        && irt::util::manifestValueEquals(manifest, "roi_use_pca", boolName(config.use_pca))
+        && irt::util::manifestValueEquals(manifest, "roi_pca_mode", roiPcaModeName(config))
+        && irt::util::manifestValueEquals(manifest, "roi_pca_dim", std::to_string(effectivePcaDim(config)))
+        && irt::util::manifestHasValue(manifest, "roi_count");
 }
 
 } // namespace

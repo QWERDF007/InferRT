@@ -8,6 +8,7 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <yaml-cpp/yaml.h>
 
 namespace fs = std::filesystem;
 
@@ -53,7 +54,7 @@ std::string timestampFileStem()
 fs::path manifestPathForDataFile(const fs::path &data_path)
 {
     auto manifest_path = data_path;
-    manifest_path.replace_extension(".manifest.txt");
+    manifest_path.replace_extension(".manifest.yaml");
     return manifest_path;
 }
 
@@ -103,7 +104,7 @@ fs::path deriveOutputFilePathFromSource(const fs::path &source_path, std::string
     return output_path;
 }
 
-void writeKeyValueManifest(const fs::path &manifest_path, const ManifestEntries &entries)
+void writeYamlManifest(const fs::path &manifest_path, const ManifestEntries &entries)
 {
     if (!manifest_path.parent_path().empty())
     {
@@ -117,30 +118,55 @@ void writeKeyValueManifest(const fs::path &manifest_path, const ManifestEntries 
                              manifest_path.string().c_str());
     }
 
+    YAML::Emitter emitter;
+    emitter << YAML::BeginMap;
     for (const auto &[key, value] : entries)
     {
-        output << key << '=' << value << '\n';
+        emitter << YAML::Key << key << YAML::Value << value;
     }
+    emitter << YAML::EndMap;
+
+    if (!emitter.good())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to serialize YAML manifest: %s",
+                             manifest_path.string().c_str());
+    }
+    output << emitter.c_str() << '\n';
 }
 
-ManifestMap loadKeyValueManifest(const fs::path &manifest_path)
+ManifestMap loadYamlManifest(const fs::path &manifest_path)
 {
-    std::ifstream input(manifest_path);
-    if (!input)
+    std::error_code ec;
+    if (!fs::exists(manifest_path, ec))
     {
         return {};
     }
 
     ManifestMap manifest;
-    std::string line;
-    while (std::getline(input, line))
+    try
     {
-        const auto separator = line.find('=');
-        if (separator == std::string::npos)
+        const YAML::Node root = YAML::LoadFile(manifest_path.string());
+        if (!root || root.IsNull())
         {
-            continue;
+            return {};
         }
-        manifest[line.substr(0, separator)] = line.substr(separator + 1);
+        if (!root.IsMap())
+        {
+            return {};
+        }
+
+        for (const auto &entry : root)
+        {
+            if (!entry.first.IsScalar() || !entry.second.IsScalar())
+            {
+                continue;
+            }
+            manifest[entry.first.as<std::string>()] = entry.second.as<std::string>();
+        }
+    }
+    catch (const YAML::Exception &)
+    {
+        return {};
     }
     return manifest;
 }
@@ -149,6 +175,29 @@ std::string manifestValue(const ManifestMap &manifest, const std::string &key)
 {
     const auto it = manifest.find(key);
     return it == manifest.end() ? std::string{} : it->second;
+}
+
+bool manifestHasValue(const ManifestMap &manifest, const std::string &key)
+{
+    return manifest.find(key) != manifest.end();
+}
+
+bool manifestValueEquals(const ManifestMap &manifest, const std::string &key, const std::string &expected)
+{
+    const auto it = manifest.find(key);
+    return it != manifest.end() && it->second == expected;
+}
+
+bool manifestMatches(const ManifestMap &manifest, const ManifestEntries &expected)
+{
+    for (const auto &[key, value] : expected)
+    {
+        if (!manifestValueEquals(manifest, key, value))
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace irt::util

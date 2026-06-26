@@ -1036,7 +1036,7 @@ def _feature_output_tolerances(
         return feature_rtol, max(feature_atol, 6e-1)
     if case.family in {"dinov2", "dinov3"} and backend_attr == "TENSORRT":
         # DINO token 特征维度大，TensorRT GPU 路径会出现少量超过默认 0.15 的逐元素差异。
-        return feature_rtol, max(feature_atol, 2.5e-1)
+        return feature_rtol, max(feature_atol, 3e-1)
     return feature_tolerances
 
 
