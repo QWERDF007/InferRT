@@ -15,6 +15,13 @@ set(CXXOPTS_ENABLE_INSTALL OFF CACHE BOOL "Disable cxxopts install" FORCE)
 set(CXXOPTS_ENABLE_WARNINGS OFF CACHE BOOL "Disable cxxopts warnings" FORCE)
 add_subdirectory(cxxopts)
 
+# yaml-cpp -----------------------------
+set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "Disable yaml-cpp contrib" FORCE)
+set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "Disable yaml-cpp tools" FORCE)
+set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "Disable yaml-cpp tests" FORCE)
+set(YAML_CPP_INSTALL OFF CACHE BOOL "Disable yaml-cpp install" FORCE)
+add_subdirectory(yaml-cpp)
+
 # vtest -----------------------------
 # 父项目使用了 EXCLUDE_FROM_ALL，会导致该子目录中的所有目标不会被默认构建，
 # 除非它们被其他目标依赖。
