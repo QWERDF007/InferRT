@@ -1,0 +1,9 @@
+add_inferrt_sample(dino_pca_visualize
+    PRIVATE_LIBS
+        inferrt_core
+        inferrt_model
+        inferrt_util
+        opencv_core
+        opencv_imgcodecs
+        opencv_imgproc
+)

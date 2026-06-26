@@ -1,5 +1,6 @@
 add_subdirectory(classification)
 add_subdirectory(detection)
+add_subdirectory(dino_pca_visualize)
 add_subdirectory(feature_extract)
 add_subdirectory(image_search)
 add_subdirectory(onnx)
