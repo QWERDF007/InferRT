@@ -87,11 +87,11 @@ build/bin/inferrt_sample_classification.exe --help
 Examples:
 
 ```bash
-build/bin/inferrt_sample_classification.exe --model alexnet --weights-file samples/model/classification/alexnet.wts --image-path assets/pics/dog.jpg
-build/bin/inferrt_sample_classification.exe --model mobilenet_v2 --weights-file samples/model/classification/mobilenet_v2.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt
-build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file samples/model/classification/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt
+build/bin/inferrt_sample_classification.exe --model alexnet --weights-file assets/models/alexnet/alexnet.wts --image-path assets/pics/dog.jpg
+build/bin/inferrt_sample_classification.exe --model mobilenet_v2 --weights-file assets/models/mobilenet/mobilenet_v2.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt
+build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file assets/models/resnet/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt
 build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file D:/Models/resnet/<checkpoint-stem-or-dir>/resnet50.onnx --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend openvino --device cpu
-build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file samples/model/classification/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend tensorrt --device gpu --warmup 10 --repeat 100
+build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file assets/models/resnet/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend tensorrt --device gpu --warmup 10 --repeat 100
 ```
 
 Defaults:

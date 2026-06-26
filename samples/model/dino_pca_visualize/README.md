@@ -19,14 +19,14 @@ cmake --build build --config Debug --target inferrt_sample_dino_pca_visualize
 ```bash
 build/bin/inferrt_sample_dino_pca_visualize.exe ^
   --model dinov2_vitb14 ^
-  --weights-file samples/model/classification/dinov2_vitb14.wts ^
+  --weights-file assets/models/dinov2/dinov2_vitb14.wts ^
   --feature x_norm_patchtokens ^
   --image-path assets/pics/dog.jpg ^
   --output-dir build/dino_pca_visualize
 ```
 
 If `--weights-file` is omitted for TensorRT, the sample uses
-`samples/model/classification/<model>.wts`.
+`assets/models/<family>/<model>.wts`.
 
 Default values:
 

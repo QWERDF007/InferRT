@@ -25,7 +25,7 @@ def parse_args() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(description="Dump intermediate features from InferRT Python bindings")
     parser.add_argument("-m", "--model", default="resnet18", help="Built-in model name")
-    parser.add_argument("-w", "--weights", default="samples/model/classification/resnet18.wts", help="Path to .wts file")
+    parser.add_argument("-w", "--weights", default="assets/models/resnet/resnet18.wts", help="Path to .wts file")
     parser.add_argument("-f", "--features", required=True, help="Comma-separated feature names, e.g. layer1,layer4")
     parser.add_argument("-i", "--image", default="assets/pics/dog.jpg", help="Input image path(s), comma-separated")
     parser.add_argument("-o", "--output-dir", default="feature_dump_py", help="Output directory for dumped features")

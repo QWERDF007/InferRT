@@ -219,7 +219,7 @@ cxxopts::Options makeOptions(const char *program_name)
     cxxopts::Options options(program_name, "Visualize DINO patch tokens with OpenCV PCA");
     options.add_options()("model,m", "Built-in DINO model name",
                           cxxopts::value<std::string>()->default_value(kDefaultModel))(
-        "weights-file,w", "Weights/model file. Empty uses samples/model/classification/<model>.wts",
+        "weights-file,w", "Weights/model file. Empty uses assets/models/<family>/<model>.wts",
         cxxopts::value<std::string>()->default_value(""))(
         "feature,f", "Feature tensor name", cxxopts::value<std::string>()->default_value(kDefaultFeature))(
         "image-path,i", "Input image path", cxxopts::value<std::string>()->default_value(""))(
@@ -308,7 +308,8 @@ fs::path resolveWeightsPath(const fs::path &project_root, const Arguments &args)
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "--weights-file is required for non-TensorRT backends");
     }
-    return project_root / "samples" / "model" / "classification" / (args.model_name + ".wts");
+    std::string family = args.model_name.find("dinov3") != std::string::npos ? "dinov3" : "dinov2";
+    return project_root / "assets" / "models" / family / (args.model_name + ".wts");
 }
 
 fs::path resolveOutputDir(const fs::path &configured)

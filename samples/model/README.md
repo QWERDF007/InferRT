@@ -1,21 +1,21 @@
-# Model Samples
+# Model 示例
 
-This directory contains the ImageNet-style classification sample assets provided by InferRT.
+本目录包含 InferRT 提供的 ImageNet 风格分类示例资源。
 
-## Layout
+## 目录结构
 
-- `classification/`: classification inference sample for all supported classification models
-- `detection/`: YOLOv5/YOLOv8/RF-DETR single-image detection sample with decode + NMS
-- `feature_extract/`: feature dump sample for checking InferRT vs PyTorch feature consistency
-- `image_search/`: Faiss-based image retrieval sample, including CNN and DINO feature tensors
-- `onnx/`: ONNX -> TensorRT inference sample
-- `python/`: centralized Python scripts, including weight exporters, ONNX exporters, comparators, and pybind11 samples
-- `sam/`: SAM/SAM2/SAM3 prompt segmentation sample
-- `segmentation/`: RF-DETR-Seg and YOLOv8-Seg image-only instance segmentation sample
+- `classification/`：所有已支持分类模型的分类推理示例
+- `detection/`：YOLOv5/YOLOv8/RF-DETR 单图检测示例（含 decode + NMS）
+- `feature_extract/`：特征导出示例，用于对比 InferRT 与 PyTorch 的特征一致性
+- `image_search/`：基于 Faiss 的图像检索示例，涵盖 CNN 与 DINO 特征张量
+- `onnx/`：ONNX -> TensorRT 推理示例
+- `python/`：Python 脚本集中目录，包括权重导出、ONNX 导出、对比工具及 pybind11 示例
+- `sam/`：SAM/SAM2/SAM3 提示分割示例
+- `segmentation/`：RF-DETR-Seg 和 YOLOv8-Seg 纯图像实例分割示例
 
-## Build
+## 构建
 
-Build the shared sample from the project root:
+在项目根目录下构建各示例：
 
 ```bash
 cmake --build build --config Debug --target inferrt_sample_classification
@@ -27,20 +27,20 @@ cmake --build build --config Debug --target inferrt_sample_segmentation
 cmake --build build --config Debug --target inferrt_model_py
 ```
 
-## Run
+## 运行
 
 ```bash
 build/bin/inferrt_sample_classification.exe --model <model_name> --weights-file <weights_or_model_file> [--image-path PATH] [--label-file PATH] [--backend tensorrt|openvino|onnxruntime] [--device cpu|gpu] [--warmup N] [--repeat N]
 build/bin/inferrt_sample_classification.exe --help
 ```
 
-Examples:
+示例：
 
 ```bash
-build/bin/inferrt_sample_classification.exe --model alexnet --weights-file samples/model/classification/alexnet.wts --image-path assets/pics/dog.jpg
-build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file samples/model/classification/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt
+build/bin/inferrt_sample_classification.exe --model alexnet --weights-file assets/models/alexnet/alexnet.wts --image-path assets/pics/dog.jpg
+build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file assets/models/resnet/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt
 build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file D:/Models/resnet/<checkpoint-stem-or-dir>/resnet50.onnx --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend openvino --device cpu
-build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file samples/model/classification/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend tensorrt --device gpu --warmup 10 --repeat 100
+build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file assets/models/resnet/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend tensorrt --device gpu --warmup 10 --repeat 100
 build/bin/inferrt_sample_detection.exe -m yolov8n -w samples/model/detection/yolov8n.wts -i assets/pics/dog.jpg -l assets/coco80.names -o build/yolov8n_result.jpg --backend tensorrt --device gpu --warmup 10 --repeat 100
 build/bin/inferrt_sample_detection.exe -m rfdetr_nano -w build/python_test_artifacts/rfdetr/rfdetr_nano.wts -i assets/pics/dog.jpg -l assets/coco80.names -o build/rfdetr_nano_result.jpg --backend tensorrt --device gpu --warmup 5 --repeat 20
 build/bin/inferrt_sample_segmentation.exe -m rfdetr_seg_nano -w build/python_test_artifacts/rfdetr/rfdetr_seg_nano.wts -i assets/pics/dog.jpg -o build/rfdetr_seg_nano_result.jpg --backend tensorrt --device gpu --warmup 5 --repeat 20
@@ -48,9 +48,9 @@ build/bin/inferrt_sample_segmentation.exe -m yolov8n_seg -w build/python_test_ar
 build/bin/inferrt_sample_sam.exe -m sam_vit_b -w samples/model/sam/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_mask.jpg --point-x 0.5 --point-y 0.5 --backend tensorrt --device gpu --warmup 5 --repeat 20
 ```
 
-## Weight export
+## 权重导出
 
-Generate weights with the shared script:
+使用统一脚本导出权重：
 
 ```bash
 python samples/model/python/classification_gen_wts.py -m alexnet
@@ -69,62 +69,58 @@ python samples/model/python/export_sam_onnx.py -m sam2_1_hiera_tiny -c D:/Models
 python samples/model/python/export_sam_onnx.py -m sam3 -c D:/Models/sam3 -o sam3.onnx
 ```
 
-SAM3 ONNX export uses `transformers.Sam3Model`; pass a Hugging Face model id or local model directory as
-`--checkpoint`.
-SAM3 `.wts` export writes the Hugging Face `Sam3Model.state_dict()` for inspection and future native TensorRT
-integration; the current SAM3 TensorRT model entry still returns `ERROR_NOT_IMPLEMENTED`.
+SAM3 ONNX 导出使用 `transformers.Sam3Model`；通过 `--checkpoint` 传入 Hugging Face 模型 id 或本地模型目录。
+SAM3 `.wts` 导出会写出 Hugging Face `Sam3Model.state_dict()` 供检查及后续原生 TensorRT 集成使用；当前 SAM3 TensorRT 模型条目仍返回 `ERROR_NOT_IMPLEMENTED`。
 
-## Notes
+## 说明
 
-- Input preprocessing is aligned with standard ImageNet classification
-- The shared sample reads input and output tensor shapes from the built engine, so ViT/DINO variants can use their registered default sizes or a custom size exported by `classification_gen_wts.py --input-size`
-- DINO backbones output feature vectors; the sample prints feature top values when the primary output is not a 1000-class logits tensor
-- The first run builds an engine from `.wts`, and later runs reuse the generated `.engine`
+- 输入预处理与标准 ImageNet 分类对齐
+- 示例从构建好的 engine 中读取输入/输出张量形状，因此 ViT/DINO 变体可使用其注册的默认尺寸，或使用 `classification_gen_wts.py --input-size` 导出的自定义尺寸
+- DINO 主干输出特征向量；当主输出不是 1000 类 logits 张量时，示例会打印特征 top 值
+- 首次运行会从 `.wts` 构建 engine，后续运行复用已生成的 `.engine`
 
-## Feature Extraction API
+## 特征提取 API
 
-Built-in classification models can now expose intermediate feature tensors through `IModelConfig`.
-This is an API-level capability in `inferrt_model`; the existing samples still run the default single-output path unless you provide a custom config in your own code.
+内置分类模型现可通过 `IModelConfig` 暴露中间特征张量。这是 `inferrt_model` 的 API 层能力；现有示例在不提供自定义配置的情况下仍走默认单输出路径。
 
-Example:
+示例：
 
 ```cpp
 auto config = std::make_unique<irt::model::IModelConfig>();
-config->setFeatureTensorNames({"layer1", "layer4"});   // layer keys used while building the network
-config->setOutputTensorNames({"feat_low", "feat_high"}); // TRT output tensor names (same count as above)
+config->setFeatureTensorNames({"layer1", "layer4"});   // 构建网络时使用的层 key
+config->setOutputTensorNames({"feat_low", "feat_high"}); // TRT 输出张量名（与上面对应）
 config->setFeatureOnly(true);
 
 auto model = irt::model::CreateModel("resnet50", std::move(config));
-model->buildOrLoad("samples/model/classification/resnet50.wts");
+model->buildOrLoad("assets/models/resnet/resnet50.wts");
 model->forwardFeatures(feature_buffers);
 ```
 
-Behavior:
+行为：
 
-- default mode: `output_tensor_names` is typically `{"output"}`; `buildOrLoad` builds a full classifier for `infer(...)`
-- `featureOnly`: set `feature_tensor_names` and `output_tensor_names` with the same length; runtime binding always uses `output_tensor_names`
-- `forwardFeatures(...)` expects buffers ordered as inputs followed by feature outputs listed in `output_tensor_names`
+- 默认模式：`output_tensor_names` 通常为 `{"output"}`；`buildOrLoad` 构建完整分类器供 `infer(...)` 使用
+- `featureOnly`：设置 `feature_tensor_names` 和 `output_tensor_names` 为相同长度；运行时绑定始终使用 `output_tensor_names`
+- `forwardFeatures(...)` 要求缓冲区按"输入在前、特征输出在后"的顺序排列，特征输出顺序与 `output_tensor_names` 一致
 
-Common feature keys exposed by built-in models:
+内置模型常用的特征 key：
 
-- `alexnet`: `conv1`, `pool1`, `conv2`, `pool2`, `conv3`, `conv4`, `conv5`, `pool3`, `avgpool`, `flatten`, `fc1`, `fc2`, `logits`
-- `resnet*`: `stem.conv1`, `stem.relu`, `stem.pool`, `layer1`, `layer2`, `layer3`, `layer4`, `avgpool`, `flatten`, `logits`
-- `mobilenet_v2`: `stem`, `features.1` ... `features.18`, `flatten`, `logits`
-- `mobilenet_v3_large` / `mobilenet_v3_small`: `stem`, `features.1` ... final feature block, `flatten`, `classifier.0`, `logits`
-- `vgg*`: `block1`, `block2`, `block3`, `block4`, `block5`, `avgpool`, `flatten`, `fc1`, `fc2`, `logits`
-- `vit*`: `patch_embed`, `tokens`, `blockN` / `blocks.N`, `norm`, `cls`, `pre_logits`, `logits`
-- `dinov2*`: `patch_embed`, `tokens`, `blockN` / `blocks.N`, `x_prenorm`, `norm`, `cls`, `pre_logits`, `x_norm_clstoken`, `x_norm_regtokens`, `x_norm_patchtokens`
-- `dinov3*`: `patch_embed`, `tokens`, `blockN` / `blocks.N`, `x_prenorm`, `norm`, `cls`, `pre_logits`, `x_norm_clstoken`, `x_storage_tokens`, `x_norm_patchtokens`
+- `alexnet`：`conv1`、`pool1`、`conv2`、`pool2`、`conv3`、`conv4`、`conv5`、`pool3`、`avgpool`、`flatten`、`fc1`、`fc2`、`logits`
+- `resnet*`：`stem.conv1`、`stem.relu`、`stem.pool`、`layer1`、`layer2`、`layer3`、`layer4`、`avgpool`、`flatten`、`logits`
+- `mobilenet_v2`：`stem`、`features.1` ... `features.18`、`flatten`、`logits`
+- `mobilenet_v3_large` / `mobilenet_v3_small`：`stem`、`features.1` ... 最终特征块、`flatten`、`classifier.0`、`logits`
+- `vgg*`：`block1`、`block2`、`block3`、`block4`、`block5`、`avgpool`、`flatten`、`fc1`、`fc2`、`logits`
+- `vit*`：`patch_embed`、`tokens`、`blockN` / `blocks.N`、`norm`、`cls`、`pre_logits`、`logits`
+- `dinov2*`：`patch_embed`、`tokens`、`blockN` / `blocks.N`、`x_prenorm`、`norm`、`cls`、`pre_logits`、`x_norm_clstoken`、`x_norm_regtokens`、`x_norm_patchtokens`
+- `dinov3*`：`patch_embed`、`tokens`、`blockN` / `blocks.N`、`x_prenorm`、`norm`、`cls`、`pre_logits`、`x_norm_clstoken`、`x_storage_tokens`、`x_norm_patchtokens`
 
-ONNX / OpenVINO note:
+ONNX / OpenVINO 注意事项：
 
-- ONNX graph backends cannot select hidden tensors after export; export the desired features as graph outputs first.
-- Use `python/export_feature_onnx.py` to turn `forward_features()` keys such as `x_norm_clstoken` into ONNX/OpenVINO output tensors.
+- ONNX 图后端无法在导出后选取隐藏张量；需要先将目标特征导出为图输出
+- 使用 `python/export_feature_onnx.py` 将 `forward_features()` 的 key（如 `x_norm_clstoken`）转为 ONNX/OpenVINO 输出张量
 
-## Instance Segmentation Sample
+## 实例分割示例
 
-The `segmentation` sample is image-only and does not accept point or box prompts. RF-DETR-Seg returns
-`dets`/`labels`/`masks`; YOLOv8-Seg returns three DFL outputs plus `proto`.
+`segmentation` 示例为纯图像输入，不接受点或框提示。RF-DETR-Seg 返回 `dets`/`labels`/`masks`；YOLOv8-Seg 返回三个 DFL 输出加上 `proto`。
 
 ```bash
 build/bin/inferrt_sample_segmentation.exe -m rfdetr_seg_nano -w build/python_test_artifacts/rfdetr/rfdetr_seg_nano.wts -i assets/pics/dog.jpg -o build/rfdetr_seg_nano_result.jpg --backend tensorrt --device gpu
@@ -132,14 +128,11 @@ build/bin/inferrt_sample_segmentation.exe -m yolov8n_seg -w build/python_test_ar
 build/bin/inferrt_sample_segmentation.exe --help
 ```
 
-## SAM Prompt Sample
+## SAM 提示分割示例
 
-The SAM sample exercises the selected InferRT backend and uses the default prompt contract:
-`image`, `point_coords`, `point_labels`, `mask_input`, `has_mask_input` -> `masks`, `iou_predictions`, `low_res_masks`.
-SAM v1 builds the official ViT image encoder, prompt encoder, and mask decoder from official `segment_anything`
-checkpoints exported by `python/gen_sam_wts.py`. SAM2/SAM2.1 builds the official Hiera image encoder, FPN
-neck, prompt encoder, and high-resolution mask decoder from checkpoints exported by `python/gen_sam_wts.py`.
-SAM3 keys are registered, but their native backbone currently fails explicitly with `ERROR_NOT_IMPLEMENTED`.
+SAM 示例驱动所选 InferRT 后端，使用默认提示协议：
+`image`、`point_coords`、`point_labels`、`mask_input`、`has_mask_input` -> `masks`、`iou_predictions`、`low_res_masks`。
+SAM v1 基于 `python/gen_sam_wts.py` 导出的官方 `segment_anything` 权重构建 ViT 图像编码器、提示编码器和掩码解码器。SAM2/SAM2.1 基于 `python/gen_sam_wts.py` 导出的权重构建 Hiera 图像编码器、FPN 颈部、提示编码器和高分辨率掩码解码器。SAM3 key 已注册，但其原生主干目前显式返回 `ERROR_NOT_IMPLEMENTED`。
 
 ```bash
 build/bin/inferrt_sample_sam.exe -m sam_vit_b -w samples/model/sam/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_vit_b_mask.jpg --box 0.2,0.2,0.8,0.8 --backend tensorrt --device gpu --warmup 5 --repeat 20
@@ -147,69 +140,65 @@ build/bin/inferrt_sample_sam.exe -m sam2_1_hiera_tiny -w samples/model/sam/sam2_
 build/bin/inferrt_sample_sam.exe --help
 ```
 
-Detection, segmentation, and SAM samples report `build_or_load`, `preprocess`, H2D, inference, D2H, end-to-end,
-timed-loop wall time, and postprocess. See [`detection/README.md`](detection/README.md),
-[`segmentation/README.md`](segmentation/README.md), and [`sam/README.md`](sam/README.md) for options and runtime
-contracts.
+检测、分割和 SAM 示例均会报告 `build_or_load`、预处理、H2D、推理、D2H、端到端耗时、计时循环耗时及后处理耗时。选项和运行时协议详见 [`detection/README.md`](detection/README.md)、[`segmentation/README.md`](segmentation/README.md) 和 [`sam/README.md`](sam/README.md)。
 
-## Feature Comparison Sample
+## 特征对比示例
 
-Use the dedicated feature sample to dump InferRT tensors and compare them with a PyTorch reference:
+使用专用特征示例导出 InferRT 张量并与 PyTorch 参考输出对比：
 
 ```bash
-build/bin/inferrt_sample_feature_extract.exe -m resnet18 -w samples/model/classification/resnet18.wts -f layer1,layer4 -i assets/pics/dog.jpg -o build/feature_dump_cpp
-build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w samples/model/classification/dinov2_vits14.wts -f x_norm_clstoken,x_norm_patchtokens -i assets/pics/dog.jpg -o build/dinov2_feature_dump_cpp
+build/bin/inferrt_sample_feature_extract.exe -m resnet18 -w assets/models/resnet/resnet18.wts -f layer1,layer4 -i assets/pics/dog.jpg -o build/feature_dump_cpp
+build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w assets/models/dinov2/dinov2_vits14.wts -f x_norm_clstoken,x_norm_patchtokens -i assets/pics/dog.jpg -o build/dinov2_feature_dump_cpp
 build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx -f x_norm_clstoken -i assets/pics/dog.jpg -o build/dinov2_openvino_cpu_feature_dump --backend openvino --device cpu --warmup 10 --repeat 100
-build/bin/inferrt_sample_feature_extract.exe -m dinov3_vitb16 -w samples/model/classification/dinov3_vitb16.wts -f x_norm_clstoken,x_storage_tokens,x_norm_patchtokens -i assets/pics/dog.jpg -o build/dinov3_feature_dump_cpp
+build/bin/inferrt_sample_feature_extract.exe -m dinov3_vitb16 -w assets/models/dinov3/dinov3_vitb16.wts -f x_norm_clstoken,x_storage_tokens,x_norm_patchtokens -i assets/pics/dog.jpg -o build/dinov3_feature_dump_cpp
 build/bin/inferrt_sample_feature_extract.exe --help
 python samples/model/python/compare_features.py --compare_dir build/feature_dump_cpp
 ```
 
-The dedicated feature sample always configures the model as `featureOnly=true`, so it builds/loads the truncated
-feature extractor directly.
+特征示例始终将模型配置为 `featureOnly=true`，因此直接构建/加载截断后的特征提取器。
 
-See [`feature_extract/README.md`](feature_extract/README.md) for the dump format and more usage examples.
+导出格式和更多用法示例见 [`feature_extract/README.md`](feature_extract/README.md)。
 
-## Faiss Image Search Sample
+## Faiss 图像搜索示例
 
-Use the dedicated image search sample to build an image retrieval index from a gallery directory and query top-k similar images:
+使用专用图像搜索示例从图库目录构建图像检索索引并查询 top-k 相似图像：
 
 ```bash
-build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg
-build/bin/inferrt_sample_image_search.exe -w samples/model/classification/resnet18.wts -g assets/pics -q assets/pics/dog.jpg
-build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --topk 5 --rebuild-index
-build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --faiss-backend cpu --index-storage disk --model-batch-size 4 --rebuild-index
-build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --norm l2 --preprocess-backend cpu --faiss-backend gpu --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file assets/models/resnet/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg
+build/bin/inferrt_sample_image_search.exe -w assets/models/resnet/resnet18.wts -g assets/pics -q assets/pics/dog.jpg
+build/bin/inferrt_sample_image_search.exe --weights-file assets/models/resnet/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --topk 5 --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file assets/models/resnet/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --faiss-backend cpu --index-storage disk --model-batch-size 4 --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file assets/models/resnet/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --norm l2 --preprocess-backend cpu --faiss-backend gpu --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --backend onnxruntime --device cpu --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --backend openvino --device cpu --rebuild-index
-build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/resnet50.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model resnet50 --feature layer3
-build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/dinov2_vits14.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --index build/gallery/dinov2_vits14_x_norm_clstoken.faiss
-build/bin/inferrt_sample_image_search.exe --weights-file samples/model/classification/dinov3_vitb16.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov3_vitb16 --feature x_norm_clstoken --index build/gallery/dinov3_vitb16_x_norm_clstoken.faiss
+build/bin/inferrt_sample_image_search.exe --weights-file assets/models/resnet/resnet50.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model resnet50 --feature layer3
+build/bin/inferrt_sample_image_search.exe --weights-file assets/models/dinov2/dinov2_vits14.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --index build/gallery/dinov2_vits14_x_norm_clstoken.faiss
+build/bin/inferrt_sample_image_search.exe --weights-file assets/models/dinov3/dinov3_vitb16.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov3_vitb16 --feature x_norm_clstoken --index build/gallery/dinov3_vitb16_x_norm_clstoken.faiss
 build/bin/inferrt_sample_image_search.exe --help
 ```
 
-Behavior:
+行为：
 
-- default model: `resnet18`
-- default feature tensor: `layer4`
-- `--model` and `--feature` can be used to switch to other built-in classification, ViT, and DINO feature tensors
-- `--backend` selects feature extraction runtime: `tensorrt`, `openvino`, or `onnxruntime`; graph backends require the requested feature to be exported as a graph output
-- `--device` selects `cpu` or `gpu`; TensorRT requires `gpu`
-- `--norm` selects `l2`, `l1`, or `none`
-- `--preprocess-backend` selects `cpu` or `gpu`; GPU preprocessing is reserved and currently reports not implemented
-- `--faiss-backend` selects `cpu` or `gpu`
-- `--index-storage` selects `ram` or `disk` for CPU Faiss search; `disk` uses IVF with an on-disk inverted-list sidecar for large galleries; GPU Faiss currently keeps RAM behavior
-- `--model-batch-size` controls both feature extraction and Faiss index build batches; default is `1`
-- default `top_k`: `5`
-- if the target Faiss index already exists, the sample reuses it by default
-- pass `--rebuild-index` to rescan the gallery and include newly added images
-- the sample prints index build progress through the new batch completion callback
+- 默认模型：`resnet18`
+- 默认特征张量：`layer4`
+- `--model` 和 `--feature` 可切换至其他内置分类、ViT 和 DINO 特征张量
+- `--backend` 选择特征提取运行时：`tensorrt`、`openvino` 或 `onnxruntime`；图后端要求目标特征已导出为图输出
+- `--device` 选择 `cpu` 或 `gpu`；TensorRT 需要 `gpu`
+- `--norm` 选择归一化方式：`l2`、`l1` 或 `none`
+- `--preprocess-backend` 选择预处理后端：`cpu` 或 `gpu`；GPU 预处理为预留项，当前报告未实现
+- `--faiss-backend` 选择 Faiss 后端：`cpu` 或 `gpu`
+- `--index-storage` 选择 CPU Faiss 搜索存储方式：`ram` 或 `disk`；`disk` 使用 IVF 配合磁盘倒排链表侧文件以支持大规模图库；GPU Faiss 当前保持 RAM 行为
+- `--model-batch-size` 同时控制特征提取和 Faiss 索引构建的批大小；默认为 `1`
+- 默认 `top_k`：`5`
+- 若目标 Faiss 索引已存在，默认复用
+- 传入 `--rebuild-index` 可重新扫描图库以纳入新增图像
+- 示例通过批次完成回调打印索引构建进度
 
-See [`image_search/README.md`](image_search/README.md) for details.
+详见 [`image_search/README.md`](image_search/README.md)。
 
-## Python Binding Sample
+## Python 绑定示例
 
-The pybind11-based Python samples show how to create an InferRT model, run NumPy inference, and dump intermediate features directly from Python:
+基于 pybind11 的 Python 示例展示如何创建 InferRT 模型、执行 NumPy 推理以及直接从 Python 导出中间特征：
 
 ```bash
 cmake -S . -B build -DINFERRT_BUILD_PYTHON=ON -DINFERRT_PYTHON_ROOT=D:/Software/anaconda3/envs/py312
@@ -217,12 +206,12 @@ cmake --build build --config Debug --target inferrt_model_py
 D:/Software/anaconda3/envs/py312/python.exe samples/model/python/SamplePythonClassification.py
 ```
 
-The Python extension is generated under `build/bin` together with the dependent InferRT DLLs.
+Python 扩展与依赖的 InferRT DLL 一起生成在 `build/bin` 下。
 
-Feature extraction from Python:
+Python 特征提取：
 
 ```bash
-D:/Software/anaconda3/envs/py312/python.exe samples/model/python/python_feature_extract.py --build-dir build_py312_final --model resnet18 --weights samples/model/classification/resnet18.wts --features layer1,layer4 --output-dir build/feature_dump_py
+D:/Software/anaconda3/envs/py312/python.exe samples/model/python/python_feature_extract.py --build-dir build_py312_final --model resnet18 --weights assets/models/resnet/resnet18.wts --features layer1,layer4 --output-dir build/feature_dump_py
 ```
 
-See [`python/README.md`](python/README.md) for details.
+详见 [`python/README.md`](python/README.md)。

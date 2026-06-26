@@ -30,7 +30,7 @@ D:/Software/anaconda3/envs/py312/python.exe samples/model/python/SamplePythonCla
 ```bash
 D:/Software/anaconda3/envs/py312/python.exe samples/model/python/SamplePythonClassification.py ^
   --model resnet18 ^
-  --weights samples/model/classification/resnet18.wts ^
+  --weights assets/models/resnet/resnet18.wts ^
   --image assets/pics/dog.jpg ^
   --labels assets/imagenet1000_clsidx_to_labels.txt ^
   --build-dir build_py312_final
@@ -42,7 +42,7 @@ D:/Software/anaconda3/envs/py312/python.exe samples/model/python/SamplePythonCla
 D:/Software/anaconda3/envs/py312/python.exe samples/model/python/python_feature_extract.py ^
   --build-dir build_py312_final ^
   --model resnet18 ^
-  --weights samples/model/classification/resnet18.wts ^
+  --weights assets/models/resnet/resnet18.wts ^
   --features layer1,layer4 ^
   --image assets/pics/dog.jpg ^
   --output-dir build/feature_dump_py

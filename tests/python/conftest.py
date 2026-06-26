@@ -7,7 +7,7 @@
     --inferrt-atol: 分类/infer_v2 张量比对绝对容差。默认 ``5e-2``。
     --inferrt-feature-rtol: 特征提取张量比对相对容差。默认 ``1e-4``。
     --inferrt-feature-atol: 特征提取张量比对绝对容差。默认 ``1.5e-1``。
-    --inferrt-model-root: 真实模型根目录。默认 ``INFERRT_MODEL_ROOT`` 或 ``D:/Models``。
+    --inferrt-model-root: 真实模型根目录。默认 ``INFERRT_MODEL_ROOT`` 或 ``assets/models``。
     --inferrt-ultralytics-repo: 本地 ultralytics 仓库。默认 ``INFERRT_ULTRALYTICS_REPO`` 或
         ``D:/Github/ultralytics``。
     --inferrt-yolov5-repo: 本地 YOLOv5 仓库。默认 ``INFERRT_YOLOV5_REPO`` 或
@@ -130,7 +130,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--inferrt-model-root",
         action="store",
         default="",
-        help="真实模型根目录；默认 INFERRT_MODEL_ROOT 或 D:/Models",
+        help="真实模型根目录；默认 INFERRT_MODEL_ROOT 或 assets/models",
     )
     parser.addoption(
         "--inferrt-ultralytics-repo",
@@ -357,7 +357,7 @@ def _configured_path(pytestconfig: pytest.Config, option: str, env_name: str, de
 
 @pytest.fixture(scope="session")
 def model_root(pytestconfig: pytest.Config) -> Path:
-    """真实模型根目录，默认指向 ``D:/Models``。
+    """真实模型根目录，默认指向 ``assets/models``。
 
     Args:
         pytestconfig: pytest 配置对象，用于读取 ``--inferrt-model-root``。
@@ -366,7 +366,7 @@ def model_root(pytestconfig: pytest.Config) -> Path:
         Path: 已存在的模型根目录；不存在时跳过依赖真实权重的集成测试。
     """
 
-    path = _configured_path(pytestconfig, "--inferrt-model-root", "INFERRT_MODEL_ROOT", "D:/Models")
+    path = _configured_path(pytestconfig, "--inferrt-model-root", "INFERRT_MODEL_ROOT", "assets/models")
     if not path.exists():
         pytest.skip(f"Model root not found: {path}")
     return path

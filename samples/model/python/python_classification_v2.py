@@ -13,7 +13,7 @@ from util import ensure_module_path, load_labels, preprocess_images, resolve_pro
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run InferRT classification with infer_v2 and DLPack tensors")
     parser.add_argument("-m", "--model", default="resnet18", help="Built-in model name")
-    parser.add_argument("-w", "--weights", default="samples/model/classification/resnet18.wts", help="Path to .wts file")
+    parser.add_argument("-w", "--weights", default="assets/models/resnet/resnet18.wts", help="Path to .wts file")
     parser.add_argument("-i", "--image", default="assets/pics/dog.jpg", help="Input image path(s), comma-separated")
     parser.add_argument("-l", "--labels", default="assets/imagenet1000_clsidx_to_labels.txt", help="Label file path")
     parser.add_argument("-k", "--topk", type=int, default=3, help="Number of top results to print")

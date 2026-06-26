@@ -16,7 +16,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.slow]
 def _resnet18_weights(repo_root: Path) -> Path:
     """返回示例 ResNet18 权重；缺失时跳过依赖真实权重的测试。"""
 
-    weights = repo_root / "samples" / "model" / "classification" / "resnet18.wts"
+    weights = repo_root / "assets" / "models" / "resnet" / "resnet18.wts"
     if not weights.exists():
         pytest.skip(f"ResNet18 weights not found: {weights}")
     return weights
@@ -25,7 +25,7 @@ def _resnet18_weights(repo_root: Path) -> Path:
 def _dinov2_vits14_weights(repo_root: Path) -> Path:
     """返回示例 DINOv2 ViT-S/14 权重；缺失时跳过真实模型对比。"""
 
-    weights = repo_root / "samples" / "model" / "classification" / "dinov2_vits14.wts"
+    weights = repo_root / "assets" / "models" / "dinov2" / "dinov2_vits14.wts"
     if not weights.exists():
         pytest.skip(f"DINOv2 ViT-S/14 weights not found: {weights}")
     return weights

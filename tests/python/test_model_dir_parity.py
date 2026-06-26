@@ -104,7 +104,10 @@ class ModelDirCase:
     def feature_names(self) -> list[str]:
         """返回当前模型族用于特征对比的输出名列表。"""
 
-        return FEATURE_NAMES[self.family]
+        names = list(FEATURE_NAMES[self.family])
+        if self.family == "dinov2" and "_reg" in self.model_name:
+            names.insert(1, "x_norm_regtokens")
+        return names
 
 
 class ResNetFeatureOutputWrapper:
@@ -1050,7 +1053,7 @@ def _model_root_from_options(pytestconfig: pytest.Config) -> Path:
         已解析的模型根目录路径。
     """
 
-    value = pytestconfig.getoption("--inferrt-model-root") or os.environ.get("INFERRT_MODEL_ROOT") or "D:/Models"
+    value = pytestconfig.getoption("--inferrt-model-root") or os.environ.get("INFERRT_MODEL_ROOT") or "assets/models"
     path = Path(value).expanduser().resolve()
     if not path.exists():
         pytest.skip(f"Model root not found: {path}")
