@@ -77,13 +77,6 @@ public:
      */
     void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 
-    /**
-     * @brief 生成包含 RF-DETR 结构参数的 engine 缓存后缀。
-     * @param config 模型配置。
-     * @return engine 文件名后缀。
-     */
-    std::string generateSuffix(const IModelConfig &config) const noexcept override;
-
 protected:
     /**
      * @brief 按 RF-DETR 官方变体补齐默认输入、类别数和输出张量名。

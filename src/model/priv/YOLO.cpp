@@ -516,19 +516,6 @@ void YOLOModelBase::normalizeModelConfig(IModelConfig &config) const
     }
 }
 
-std::string YOLOModelBase::generateSuffix(const IModelConfig &config) const noexcept
-{
-    std::string suffix;
-    for (const auto &input_shape : config.inputShapes())
-    {
-        suffix += "_" + std::to_string(input_shape.d[0]) + "x" + std::to_string(input_shape.d[1]) + "x"
-                + std::to_string(input_shape.d[2]) + "x" + std::to_string(input_shape.d[3]);
-    }
-    suffix += "_" + std::to_string(config.numClasses()) + "cls";
-    suffix += "_3det";
-    return suffix;
-}
-
 void YOLOModelBase::validateDetectionConfig() const
 {
     const auto &config = modelConfig();
@@ -689,19 +676,6 @@ void YOLOv8Segmenter::normalizeModelConfig(IModelConfig &config) const
     {
         config.setOutputTensorNames({"output0", "output1", "output2", "proto"});
     }
-}
-
-std::string YOLOv8Segmenter::generateSuffix(const IModelConfig &config) const noexcept
-{
-    std::string suffix;
-    for (const auto &input_shape : config.inputShapes())
-    {
-        suffix += "_" + std::to_string(input_shape.d[0]) + "x" + std::to_string(input_shape.d[1]) + "x"
-                + std::to_string(input_shape.d[2]) + "x" + std::to_string(input_shape.d[3]);
-    }
-    suffix += "_" + std::to_string(config.numClasses()) + "cls";
-    suffix += "_3det_1proto";
-    return suffix;
 }
 
 void YOLOv8Segmenter::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)

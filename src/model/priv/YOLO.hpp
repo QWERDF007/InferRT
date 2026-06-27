@@ -33,9 +33,6 @@ struct YOLOv8Spec
  */
 class YOLOModelBase : public priv::IModelImpl
 {
-public:
-    std::string generateSuffix(const IModelConfig &config) const noexcept override;
-
 protected:
     /**
      * @brief 将默认 ImageNet 分类配置规整为 YOLO 检测配置。
@@ -128,7 +125,6 @@ public:
     {
     }
 
-    std::string generateSuffix(const IModelConfig &config) const noexcept override;
     void        buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 
 protected:

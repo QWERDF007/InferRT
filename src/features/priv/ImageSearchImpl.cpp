@@ -564,16 +564,9 @@ bool existingIndexMatchesConfig(const fs::path &index_path, const fs::path &gall
         && irt::util::manifestValueEquals(manifest, "feature", config.feature_name)
         && (irt::util::manifestValueEquals(manifest, "gallery_dir", galleryDirectoryMetadataValue(gallery_dir))
             || irt::util::manifestValueEquals(manifest, "gallery_dir", explicitPathListMetadataValue()))
-        && irt::util::manifestValueEquals(manifest, "model_backend", modelBackendName(config.model_backend))
-        && irt::util::manifestValueEquals(manifest, "model_device", modelDeviceName(config.model_device))
-        && irt::util::manifestValueEquals(manifest, "preprocess_backend",
-                                           preprocessBackendName(config.preprocess_backend))
         && irt::util::manifestValueEquals(manifest, "norm", featureNormName(config.norm))
-        && irt::util::manifestValueEquals(manifest, "faiss_backend", faissBackendName(config.faiss_backend))
         && irt::util::manifestValueEquals(manifest, "index_storage", indexStorageName(config.index_storage))
-        && irt::util::manifestValueEquals(manifest, "model_batch_size", std::to_string(config.model_batch_size))
-        && irt::util::manifestValueEquals(manifest, "index_kind", indexKindName(config))
-        && irt::util::manifestHasValue(manifest, "image_count");
+        && irt::util::manifestValueEquals(manifest, "index_kind", indexKindName(config));
 }
 
 } // namespace

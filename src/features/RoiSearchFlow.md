@@ -239,6 +239,7 @@ ROI 搜索复用 `ImageSearchBuildProgress` 和 `ImageSearchBuildStage`：
 - ROI 坐标始终使用原图坐标，不使用模型输入尺寸坐标。
 - `feature_name` 应选择保留空间信息的特征：标准空间特征图使用 NCHW；DINOv2/DINOv3 可使用 `x_norm_patchtokens`。
 - 如果输出是 CLS token、register/storage token 或纯向量，ROI 检索会拒绝构建。
+- 已加载索引的 Faiss 维度必须等于当前配置下的 ROIAlign 输出维度，否则查询前会报错并要求重建索引。
 - ROIAlign 输出越大，单条 ROI 向量维度越高，索引训练和搜索成本也越高。
 - PCA 在每张图自己的特征图通道维上训练并投影；ROIAlign 只作用于降维后的空间特征图，因此修改 `use_pca` 或 `pca_dim` 后需要重建索引。
 - 同一张图多个 ROI 当前会逐条抽取特征图，后续可按图像分组优化。

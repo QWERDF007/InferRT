@@ -3,7 +3,7 @@
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/util/FileManifest.hpp>
 
-#include <cctype>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -293,7 +293,6 @@ irt::util::ManifestEntries engineManifestEntries(const IModelImpl &impl, const s
         {"max_batch_size", std::to_string(config.maxBatchSize())},
         {"feature_only", boolValue(config.featureOnly())},
         {"feature_tensor_names", joinStrings(config.featureTensorNames())},
-        {"config_suffix", impl.generateSuffix(config)},
     };
 }
 
@@ -311,7 +310,23 @@ bool engineManifestMatches(const IModelImpl &impl, const std::string &source_fil
         return false;
     }
 
-    return irt::util::manifestMatches(manifest, engineManifestEntries(impl, source_file, engine_file));
+    auto entries = engineManifestEntries(impl, source_file, engine_file);
+
+    // ponytail: dynamic batch engine supports any opt in [stored_min, stored_max]
+    if (irt::util::manifestValueEquals(manifest, "dynamic_batch", "true") && impl.modelConfig().dynamicBatch())
+    {
+        const auto stored_min = std::stoi(irt::util::manifestValue(manifest, "min_batch_size"));
+        const auto stored_max = std::stoi(irt::util::manifestValue(manifest, "max_batch_size"));
+        const auto cur_opt   = impl.modelConfig().optBatchSize();
+        if (cur_opt >= stored_min && cur_opt <= stored_max)
+        {
+            entries.erase(std::remove_if(entries.begin(), entries.end(),
+                                         [](const auto &e) { return e.first == "opt_batch_size"; }),
+                          entries.end());
+        }
+    }
+
+    return irt::util::manifestMatches(manifest, entries);
 }
 
 } // namespace
@@ -321,41 +336,6 @@ IModelImpl::~IModelImpl() = default;
 nvinfer1::ILogger::Severity IModelImpl::logLevel() const noexcept
 {
     return backend_runtime_ ? backend_runtime_->logLevel() : nvinfer1::ILogger::Severity::kWARNING;
-}
-
-std::string IModelImpl::generateSuffix(const IModelConfig &config) const noexcept
-{
-    auto sanitize = [](const std::string &value)
-    {
-        std::string result;
-        result.reserve(value.size());
-        for (unsigned char ch : value)
-        {
-            result.push_back(std::isalnum(ch) ? static_cast<char>(ch) : '_');
-        }
-        return result;
-    };
-
-    std::string suffix;
-    for (const auto &input_shape : config.inputShapes())
-    {
-        suffix += "_" + std::to_string(input_shape.d[0]) + "x" + std::to_string(input_shape.d[1]) + "x"
-                + std::to_string(input_shape.d[2]) + "x" + std::to_string(input_shape.d[3]);
-    }
-    suffix += "_" + std::to_string(config.numClasses());
-    if (config.dynamicBatch())
-    {
-        suffix += "_dynb_" + std::to_string(config.minBatchSize()) + "x" + std::to_string(config.optBatchSize()) + "x"
-                + std::to_string(config.maxBatchSize());
-    }
-    if (config.featureOnly())
-    {
-        for (const auto &output_tensor_name : config.outputTensorNames())
-        {
-            suffix += "_out_" + sanitize(output_tensor_name);
-        }
-    }
-    return suffix;
 }
 
 void IModelImpl::setModelConfig(std::unique_ptr<IModelConfig> config)

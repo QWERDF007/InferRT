@@ -75,13 +75,6 @@ public:
     }
 
     /**
-     * @brief 根据模型配置生成 engine 文件名后缀。
-     * @param config 模型配置。
-     * @return 后缀字符串，例如 `_3x224x224_1000`。
-     */
-    virtual std::string generateSuffix(const IModelConfig &config) const noexcept;
-
-    /**
      * @brief 获取当前日志级别。
      * @return TensorRT 日志严重性级别。
      */

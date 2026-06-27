@@ -1666,19 +1666,6 @@ void RFDETRModel::normalizeModelConfig(IModelConfig &config) const
     }
 }
 
-std::string RFDETRModel::generateSuffix(const IModelConfig &config) const noexcept
-{
-    auto suffix = priv::IModelImpl::generateSuffix(config);
-    suffix += spec_.segmentation ? "_seg" : "_det";
-    suffix += "_" + std::to_string(spec_.patch_size) + "p";
-    suffix += "_" + std::to_string(spec_.num_windows) + "win";
-    suffix += "_" + std::to_string(spec_.hidden_dim) + "d";
-    suffix += "_" + std::to_string(spec_.decoder_layers) + "dec";
-    suffix += "_" + std::to_string(spec_.num_queries) + "q";
-    suffix += "_" + std::to_string(spec_.num_select) + "sel";
-    return suffix;
-}
-
 void RFDETRModel::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
 {
     if (network == nullptr)
