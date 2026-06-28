@@ -97,18 +97,6 @@ SAMImageResizeMode resolveResizeMode(const SAMImagePredictorConfig &config)
 }
 
 /**
- * @brief 根据配置解析实际使用的 mask 后处理几何模式。
- * @param config 预测器配置。
- * @param preprocess_mode 已解析的图像预处理模式。
- * @return 已解析的 mask 后处理几何模式。
- */
-SAMImageResizeMode resolveMaskPostprocessMode(const SAMImagePredictorConfig &config,
-                                              SAMImageResizeMode             preprocess_mode)
-{
-    return config.use_sam2_mask_postprocess ? SAMImageResizeMode::StretchSquare : preprocess_mode;
-}
-
-/**
  * @brief 校验 SAMImagePredictor 配置。
  * @param config 待校验配置。
  */
@@ -589,8 +577,7 @@ public:
         : config_(std::move(config))
     {
         validateConfig(config_);
-        resolved_resize_mode_          = resolveResizeMode(config_);
-        resolved_mask_postprocess_mode_ = resolveMaskPostprocessMode(config_, resolved_resize_mode_);
+        resolved_resize_mode_ = resolveResizeMode(config_);
     }
 
     /**
@@ -750,7 +737,7 @@ public:
         geometry.model_height    = input_height;
         geometry.resized_width   = preprocessed.resized_width;
         geometry.resized_height  = preprocessed.resized_height;
-        geometry.resize_mode     = resolved_mask_postprocess_mode_;
+        geometry.resize_mode     = resolved_resize_mode_;
 
         (void)mask_output_index;
         return SAMImagePredictor::postprocessMasks(output_vectors[low_res_output_index], mask_count, low_res_height,
@@ -842,9 +829,7 @@ private:
     }
 
     SAMImagePredictorConfig config_{}; ///< 预测器配置。
-    SAMImageResizeMode      resolved_resize_mode_{SAMImageResizeMode::StretchSquare}; ///< 已解析的图像预处理模式。
-    SAMImageResizeMode      resolved_mask_postprocess_mode_{
-             SAMImageResizeMode::StretchSquare}; ///< 已解析的 mask 后处理模式。
+    SAMImageResizeMode      resolved_resize_mode_{SAMImageResizeMode::StretchSquare}; ///< 已解析的预处理和后处理几何模式。
     bool ready_{false}; ///< 模型是否已经加载完成。
 
     std::unique_ptr<irt::model::IModel> model_; ///< SAM 推理模型。
@@ -926,7 +911,7 @@ const SAMImagePredictorConfig &SAMImagePredictor::config() const noexcept
 }
 
 /**
- * @brief 对低分辨率 mask logits 执行 SAM2ImagePredictor 风格后处理。
+ * @brief 对低分辨率 mask logits 执行几何一致的 mask 后处理。
  * @param low_res_masks 低分辨率 mask logits，按 CxHxW 排列。
  * @param mask_count mask 数量。
  * @param low_res_height 低分辨率 logits 高度。

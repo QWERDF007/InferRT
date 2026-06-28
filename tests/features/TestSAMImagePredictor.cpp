@@ -53,6 +53,23 @@ irt::features::SAMMaskPostprocessGeometry makeDirectGeometry(int width, int heig
     return geometry;
 }
 
+/**
+ * @brief 构造最长边缩放并带右侧 padding 的 SAM1/EdgeSAM 后处理几何。
+ * @return SAM mask 后处理几何信息。
+ */
+irt::features::SAMMaskPostprocessGeometry makeLongestSidePaddedGeometry()
+{
+    irt::features::SAMMaskPostprocessGeometry geometry;
+    geometry.original_width  = 2;
+    geometry.original_height = 4;
+    geometry.model_width     = 4;
+    geometry.model_height    = 4;
+    geometry.resized_width   = 2;
+    geometry.resized_height  = 4;
+    geometry.resize_mode     = irt::features::SAMImageResizeMode::ResizeLongestSide;
+    return geometry;
+}
+
 } // namespace
 
 TEST(SAMImagePredictorTest, DefaultConstructsNotReadyPredictor)
@@ -63,18 +80,7 @@ TEST(SAMImagePredictorTest, DefaultConstructsNotReadyPredictor)
     EXPECT_EQ(predictor.config().model_backend, irt::model::ModelBackend::TensorRT);
     EXPECT_EQ(predictor.config().model_device, irt::model::ModelDevice::GPU);
     EXPECT_EQ(predictor.config().resize_mode, irt::features::SAMImageResizeMode::Auto);
-    EXPECT_TRUE(predictor.config().use_sam2_mask_postprocess);
     EXPECT_FALSE(predictor.isReady());
-}
-
-TEST(SAMImagePredictorTest, ConstructorStoresMaskPostprocessOverride)
-{
-    irt::features::SAMImagePredictorConfig config;
-    config.use_sam2_mask_postprocess = false;
-
-    const irt::features::SAMImagePredictor predictor(config);
-
-    EXPECT_FALSE(predictor.config().use_sam2_mask_postprocess);
 }
 
 TEST(SAMImagePredictorTest, ConstructorRejectsTensorRtCpuDevice)
@@ -122,6 +128,23 @@ TEST(SAMImagePredictorTest, PostprocessReturnLogitsKeepsHighResValuesUnclamped)
     EXPECT_TRUE(std::all_of(prediction.masks.begin(), prediction.masks.end(),
                             [](float value) { return value == 40.0F; }));
     EXPECT_EQ(prediction.low_res_masks, (std::vector<float>{32.0F}));
+}
+
+TEST(SAMImagePredictorTest, PostprocessResizeLongestSideCropsPaddingBeforeResize)
+{
+    const std::vector<float> low_res_masks{
+        -10.0F, 10.0F,
+        -10.0F, 10.0F,
+    };
+    const auto geometry = makeLongestSidePaddedGeometry();
+
+    const auto prediction
+        = irt::features::SAMImagePredictor::postprocessMasks(low_res_masks, 1, 2, 2, {}, geometry);
+
+    EXPECT_EQ(prediction.width, 2);
+    EXPECT_EQ(prediction.height, 4);
+    EXPECT_EQ(prediction.masks, (std::vector<float>{0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F}));
+    EXPECT_EQ(prediction.binary_masks, (std::vector<std::uint8_t>{0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U}));
 }
 
 TEST(SAMImagePredictorTest, PostprocessFillsSmallHolesInLowResLogitSpace)

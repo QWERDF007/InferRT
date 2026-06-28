@@ -91,8 +91,7 @@ struct SAMImagePredictorConfig
     std::string              model_name{kDefaultSAMImagePredictorModelName};    ///< 内置 SAM/SAM2 模型名称。
     irt::model::ModelBackend model_backend{irt::model::ModelBackend::TensorRT}; ///< 模型运行时后端。
     irt::model::ModelDevice  model_device{irt::model::ModelDevice::GPU};        ///< 模型运行设备。
-    SAMImageResizeMode       resize_mode{SAMImageResizeMode::Auto};             ///< 图像预处理模式。
-    bool                     use_sam2_mask_postprocess{true}; ///< 所有 SAM 模型默认使用 SAM2 风格 mask 后处理。
+    SAMImageResizeMode       resize_mode{SAMImageResizeMode::Auto};             ///< 图像预处理和 mask 还原几何模式。
 };
 
 /**
@@ -130,7 +129,7 @@ struct SAMImagePrediction
 /**
  * @brief SAM/SAM2 单图 prompt 分割预测器。
  *
- * 该类封装 InferRT SAM 五输入三输出契约，并集成 SAM2ImagePredictor 风格的 mask 后处理。
+ * 该类封装 InferRT SAM 五输入三输出契约，并按模型对应几何集成 mask 后处理。
  */
 class INFERRT_FEATURES_API SAMImagePredictor
 {
@@ -191,7 +190,7 @@ public:
     const SAMImagePredictorConfig &config() const noexcept;
 
     /**
-     * @brief 对模型输出的低分辨率 mask logits 执行 SAM2ImagePredictor 风格后处理。
+     * @brief 对模型输出的低分辨率 mask logits 执行几何一致的 mask 后处理。
      * @param low_res_masks 低分辨率 mask logits，按 CxHxW 排列。
      * @param mask_count mask 数量。
      * @param low_res_height 低分辨率 logits 高度。
