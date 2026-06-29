@@ -572,12 +572,11 @@ def run_sam_v1_reference_forward(
     prompt_end = time.perf_counter()
 
     decoder_start = time.perf_counter()
-    low_res_masks, iou_predictions = model.mask_decoder(
+    low_res_masks, iou_predictions = model.mask_decoder.predict_masks(
         image_embeddings=image_embeddings,
         image_pe=model.prompt_encoder.get_dense_pe(),
         sparse_prompt_embeddings=sparse_embeddings,
         dense_prompt_embeddings=dense_embeddings,
-        multimask_output=True,
     )
     decoder_end = time.perf_counter()
 
@@ -622,7 +621,7 @@ def run_edge_sam_reference_forward(
         image_pe=model.prompt_encoder.get_dense_pe(),
         sparse_prompt_embeddings=sparse_embeddings,
         dense_prompt_embeddings=dense_embeddings,
-        num_multimask_outputs=3,
+        num_multimask_outputs=4,
     )
     decoder_end = time.perf_counter()
 
@@ -667,12 +666,11 @@ def run_sam2_reference_forward(model: torch.nn.Module, image: torch.Tensor, orig
 
     high_res_features = [backbone_out["backbone_fpn"][0], backbone_out["backbone_fpn"][1]]
     decoder_start = time.perf_counter()
-    low_res_masks, iou_predictions, _, _ = model.sam_mask_decoder(
+    low_res_masks, iou_predictions, _, _ = model.sam_mask_decoder.predict_masks(
         image_embeddings=image_embeddings,
         image_pe=model.sam_prompt_encoder.get_dense_pe(),
         sparse_prompt_embeddings=sparse_embeddings,
         dense_prompt_embeddings=dense_embeddings,
-        multimask_output=True,
         repeat_image=False,
         high_res_features=high_res_features,
     )

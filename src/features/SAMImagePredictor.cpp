@@ -3,10 +3,9 @@
  * @brief SAMImagePredictor implementation.
  */
 
-#include <inferrt/features/SAMImagePredictor.hpp>
-
 #include <cuda_runtime_api.h>
 #include <inferrt/core/Exception.hpp>
+#include <inferrt/features/SAMImagePredictor.hpp>
 #include <inferrt/model/Buffers.hpp>
 #include <inferrt/model/IModel.h>
 #include <inferrt/model/ModelFactory.h>
@@ -21,6 +20,7 @@
 #include <cstddef>
 #include <limits>
 #include <utility>
+
 
 namespace fs = std::filesystem;
 
@@ -37,12 +37,14 @@ constexpr std::array<const char *, 5> kSamInputNames{
 };
 
 constexpr std::array<const char *, 3> kSamOutputNames{
-    "masks", "iou_predictions", "low_res_masks",
+    "masks",
+    "iou_predictions",
+    "low_res_masks",
 };
 
 struct PreprocessedSAMImage
 {
-    std::vector<float> tensor; ///< 预处理后的 1x3xHxW 输入张量。
+    std::vector<float> tensor;             ///< 预处理后的 1x3xHxW 输入张量。
     int                original_width{0};  ///< 原图宽度。
     int                original_height{0}; ///< 原图高度。
     int                resized_width{0};   ///< padding 前或拉伸后的图像宽度。
@@ -157,6 +159,16 @@ void validateOptions(const SAMImagePredictOptions &options)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM max_sprinkle_area must be >= 0");
     }
+    switch (options.mask_output_mode)
+    {
+    case SAMMaskOutputMode::Auto:
+    case SAMMaskOutputMode::Single:
+    case SAMMaskOutputMode::Multimask:
+    case SAMMaskOutputMode::All:
+        break;
+    default:
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported SAM mask output mode");
+    }
 }
 
 /**
@@ -182,13 +194,12 @@ void validateImageInputShape(const nvinfer1::Dims &dims)
     if (dims.nbDims != 4 || dims.d[0] != 1 || dims.d[1] != 3 || dims.d[2] <= 0 || dims.d[3] <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "SAMImagePredictor expects image input shape 1x3xHxW, got %s",
-                             dimsToCsv(dims).c_str());
+                             "SAMImagePredictor expects image input shape 1x3xHxW, got %s", dimsToCsv(dims).c_str());
     }
     if (dims.d[2] != dims.d[3])
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAMImagePredictor expects square image input, got %s",
-                             dimsToCsv(dims).c_str());
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "SAMImagePredictor expects square image input, got %s", dimsToCsv(dims).c_str());
     }
 }
 
@@ -246,9 +257,8 @@ PreprocessedSAMImage preprocessImage(const cv::Mat &image, int input_height, int
             {
                 for (int c = 0; c < 3; ++c)
                 {
-                    const size_t offset
-                        = static_cast<size_t>(c) * input_height * input_width + static_cast<size_t>(y) * input_width
-                        + static_cast<size_t>(x);
+                    const size_t offset = static_cast<size_t>(c) * input_height * input_width
+                                        + static_cast<size_t>(y) * input_width + static_cast<size_t>(x);
                     output.tensor[offset] = (static_cast<float>(row[x][c]) / 255.0F - kMean[c]) / kStd[c];
                 }
             }
@@ -258,7 +268,8 @@ PreprocessedSAMImage preprocessImage(const cv::Mat &image, int input_height, int
 
     if (mode != SAMImageResizeMode::ResizeLongestSide)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAMImagePredictor cannot preprocess Auto resize mode");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "SAMImagePredictor cannot preprocess Auto resize mode");
     }
 
     static constexpr std::array<float, 3> kMean{123.675F, 116.28F, 103.53F};
@@ -278,9 +289,8 @@ PreprocessedSAMImage preprocessImage(const cv::Mat &image, int input_height, int
         {
             for (int c = 0; c < 3; ++c)
             {
-                const size_t offset
-                    = static_cast<size_t>(c) * input_height * input_width + static_cast<size_t>(y) * input_width
-                    + static_cast<size_t>(x);
+                const size_t offset = static_cast<size_t>(c) * input_height * input_width
+                                    + static_cast<size_t>(y) * input_width + static_cast<size_t>(x);
                 output.tensor[offset] = (static_cast<float>(row[x][c]) - kMean[c]) / kStd[c];
             }
         }
@@ -321,13 +331,12 @@ std::vector<float> makePointCoords(const SAMImagePrompt &prompt, const Preproces
     {
         if (index >= max_points)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM prompt has more than %d points",
-                                 max_points);
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM prompt has more than %d points", max_points);
         }
-        coords[static_cast<size_t>(index) * 2]     = scaleCoordinate(x, image.original_width, image.resized_width,
-                                                                     prompt.coordinate_mode);
-        coords[static_cast<size_t>(index) * 2 + 1] = scaleCoordinate(y, image.original_height, image.resized_height,
-                                                                     prompt.coordinate_mode);
+        coords[static_cast<size_t>(index) * 2]
+            = scaleCoordinate(x, image.original_width, image.resized_width, prompt.coordinate_mode);
+        coords[static_cast<size_t>(index) * 2 + 1]
+            = scaleCoordinate(y, image.original_height, image.resized_height, prompt.coordinate_mode);
         ++index;
     };
 
@@ -360,8 +369,7 @@ std::vector<float> makePointLabels(const SAMImagePrompt &prompt, int max_points)
     {
         if (index >= max_points)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM prompt has more than %d points",
-                                 max_points);
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM prompt has more than %d points", max_points);
         }
         labels[static_cast<size_t>(index)] = static_cast<float>(label);
         ++index;
@@ -379,6 +387,134 @@ std::vector<float> makePointLabels(const SAMImagePrompt &prompt, int max_points)
     }
 
     return labels;
+}
+
+/**
+ * @brief 判断 prompt 是否属于官方建议使用 multimask 的单点歧义输入。
+ * @param prompt 用户 prompt。
+ * @return 只有单个点且无 box/mask 输入时返回 true。
+ */
+bool isAmbiguousSinglePointPrompt(const SAMImagePrompt &prompt)
+{
+    return !prompt.box && prompt.mask_input.empty() && prompt.points.size() <= 1;
+}
+
+/**
+ * @brief 将 Auto 输出模式解析成明确的 single/multimask。
+ * @param mode 用户指定模式。
+ * @param prompt 用户 prompt。
+ * @return 明确的输出模式。
+ */
+SAMMaskOutputMode resolveMaskOutputMode(SAMMaskOutputMode mode, const SAMImagePrompt &prompt)
+{
+    if (mode != SAMMaskOutputMode::Auto)
+    {
+        return mode;
+    }
+    return isAmbiguousSinglePointPrompt(prompt) ? SAMMaskOutputMode::Multimask : SAMMaskOutputMode::Single;
+}
+
+/**
+ * @brief mask 输出模式对应的通道切片。
+ */
+struct MaskChannelSlice
+{
+    int offset{0}; ///< 起始 mask 通道。
+    int count{0};  ///< 输出 mask 通道数。
+};
+
+/**
+ * @brief 根据输出模式解析 mask 通道切片。
+ * @param mask_count 模型实际输出的 mask 通道数。
+ * @param mode 已解析的输出模式。
+ * @return 需要保留的通道切片。
+ */
+MaskChannelSlice resolveMaskChannelSlice(int mask_count, SAMMaskOutputMode mode)
+{
+    if (mask_count <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM mask_count must be positive");
+    }
+
+    switch (mode)
+    {
+    case SAMMaskOutputMode::Single:
+        if (mask_count == 1 || mask_count >= 4)
+        {
+            return {0, 1};
+        }
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "SAM single-mask output requires a 4-mask raw model output; rebuild the SAM engine");
+    case SAMMaskOutputMode::Multimask:
+        if (mask_count >= 4)
+        {
+            return {1, 3};
+        }
+        if (mask_count == 3)
+        {
+            return {0, 3};
+        }
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "SAM multimask output requires at least 3 masks, got %d", mask_count);
+    case SAMMaskOutputMode::All:
+    case SAMMaskOutputMode::Auto:
+        return {0, mask_count};
+    default:
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported SAM mask output mode");
+    }
+}
+
+/**
+ * @brief 复制指定 mask 通道范围。
+ */
+std::vector<float> selectMaskChannels(const std::vector<float> &values, int source_count, int height, int width,
+                                      MaskChannelSlice slice)
+{
+    if (slice.offset < 0 || slice.count <= 0 || slice.offset + slice.count > source_count)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Invalid SAM mask channel slice offset=%d count=%d",
+                             slice.offset, slice.count);
+    }
+    const size_t plane_size = static_cast<size_t>(height) * width;
+    const size_t expected   = static_cast<size_t>(source_count) * plane_size;
+    if (values.size() != expected)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM low_res_masks has %zu values, expected %zu",
+                             values.size(), expected);
+    }
+
+    std::vector<float> selected(static_cast<size_t>(slice.count) * plane_size);
+    const auto         first = values.begin() + static_cast<std::ptrdiff_t>(slice.offset) * plane_size;
+    const auto         last  = first + static_cast<std::ptrdiff_t>(slice.count) * plane_size;
+    std::copy(first, last, selected.begin());
+    return selected;
+}
+
+/**
+ * @brief 复制指定 mask 通道对应的 IoU 预测。
+ */
+std::vector<float> selectIouChannels(const std::vector<float> &values, int source_count, MaskChannelSlice slice)
+{
+    if (values.empty())
+    {
+        return {};
+    }
+    if (slice.offset < 0 || slice.count <= 0 || slice.offset + slice.count > source_count)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Invalid SAM IoU channel slice offset=%d count=%d",
+                             slice.offset, slice.count);
+    }
+    if (static_cast<int>(values.size()) < source_count)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM iou_predictions has %zu values, expected >= %d",
+                             values.size(), source_count);
+    }
+
+    std::vector<float> selected(static_cast<size_t>(slice.count));
+    const auto         first = values.begin() + slice.offset;
+    const auto         last  = first + slice.count;
+    std::copy(first, last, selected.begin());
+    return selected;
 }
 
 /**
@@ -464,13 +600,13 @@ void applyComponentEdit(cv::Mat &values, const cv::Mat &source, bool foreground,
         for (int x = 0; x < source.cols; ++x)
         {
             const bool selected = foreground ? (src_row[x] > threshold) : (src_row[x] <= threshold);
-            mask_row[x]        = selected ? 255U : 0U;
+            mask_row[x]         = selected ? 255U : 0U;
         }
     }
 
-    cv::Mat labels;
-    cv::Mat stats;
-    cv::Mat centroids;
+    cv::Mat   labels;
+    cv::Mat   stats;
+    cv::Mat   centroids;
     const int components = cv::connectedComponentsWithStats(mask, labels, stats, centroids, 8, CV_32S);
     for (int component = 1; component < components; ++component)
     {
@@ -501,7 +637,7 @@ void applyLowResMaskCleanup(std::vector<float> &masks, int mask_count, int heigh
     const size_t plane_size = static_cast<size_t>(height) * width;
     for (int mask_index = 0; mask_index < mask_count; ++mask_index)
     {
-        auto  *data = masks.data() + static_cast<size_t>(mask_index) * plane_size;
+        auto   *data = masks.data() + static_cast<size_t>(mask_index) * plane_size;
         cv::Mat values(height, width, CV_32FC1, data);
         cv::Mat original = values.clone();
 
@@ -524,7 +660,7 @@ void applyLowResMaskCleanup(std::vector<float> &masks, int mask_count, int heigh
 std::vector<float> resizeMasks(const std::vector<float> &low_res_masks, int mask_count, int low_res_height,
                                int low_res_width, const SAMMaskPostprocessGeometry &geometry)
 {
-    const size_t output_plane = static_cast<size_t>(geometry.original_height) * geometry.original_width;
+    const size_t       output_plane = static_cast<size_t>(geometry.original_height) * geometry.original_width;
     std::vector<float> output(static_cast<size_t>(mask_count) * output_plane);
     const size_t       low_res_plane = static_cast<size_t>(low_res_height) * low_res_width;
 
@@ -545,13 +681,14 @@ std::vector<float> resizeMasks(const std::vector<float> &low_res_masks, int mask
             cv::resize(low_res, padded, cv::Size(geometry.model_width, geometry.model_height), 0, 0, cv::INTER_LINEAR);
             const int crop_width  = std::min(geometry.resized_width, geometry.model_width);
             const int crop_height = std::min(geometry.resized_height, geometry.model_height);
-            cv::Mat   cropped    = padded(cv::Rect(0, 0, crop_width, crop_height));
+            cv::Mat   cropped     = padded(cv::Rect(0, 0, crop_width, crop_height));
             cv::resize(cropped, resized, cv::Size(geometry.original_width, geometry.original_height), 0, 0,
                        cv::INTER_LINEAR);
         }
         else
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM postprocess geometry must resolve resize mode");
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "SAM postprocess geometry must resolve resize mode");
         }
 
         const auto *resized_data = resized.ptr<float>(0);
@@ -687,20 +824,19 @@ public:
         const int input_width  = static_cast<int>(image_dims_.d[3]);
         auto      preprocessed = preprocessImage(image, input_height, input_width, resolved_resize_mode_);
 
-        const int max_points = static_cast<int>(prompt_coords_dims_.d[1]);
+        const int max_points   = static_cast<int>(prompt_coords_dims_.d[1]);
         auto      point_coords = makePointCoords(prompt, preprocessed, max_points);
         auto      point_labels = makePointLabels(prompt, max_points);
 
-        const size_t mask_input_count = elementCount(mask_input_dims_);
+        const size_t       mask_input_count = elementCount(mask_input_dims_);
         std::vector<float> mask_input(mask_input_count, 0.0F);
         std::vector<float> has_mask_input(elementCount(has_mask_dims_), prompt.mask_input.empty() ? 0.0F : 1.0F);
         if (!prompt.mask_input.empty())
         {
             if (prompt.mask_input.size() != mask_input_count)
             {
-                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                     "SAM mask_input has %zu values, expected %zu", prompt.mask_input.size(),
-                                     mask_input_count);
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM mask_input has %zu values, expected %zu",
+                                     prompt.mask_input.size(), mask_input_count);
             }
             mask_input = prompt.mask_input;
         }
@@ -717,8 +853,7 @@ public:
 
         runModel(input_vectors, output_vectors);
 
-        const size_t mask_output_index
-            = tensorIndexOrDefault(output_names_, kSamOutputNames[0], 0);
+        const size_t mask_output_index = tensorIndexOrDefault(output_names_, kSamOutputNames[0], 0);
         const size_t iou_output_index
             = tensorIndexOrDefault(output_names_, kSamOutputNames[1], std::min<size_t>(1, output_names_.size() - 1));
         const size_t low_res_output_index
@@ -739,10 +874,13 @@ public:
         geometry.resized_height  = preprocessed.resized_height;
         geometry.resize_mode     = resolved_resize_mode_;
 
+        SAMImagePredictOptions resolved_options = options;
+        resolved_options.mask_output_mode       = resolveMaskOutputMode(options.mask_output_mode, prompt);
+
         (void)mask_output_index;
         return SAMImagePredictor::postprocessMasks(output_vectors[low_res_output_index], mask_count, low_res_height,
-                                                   low_res_width,
-                                                   output_vectors[iou_output_index], geometry, options);
+                                                   low_res_width, output_vectors[iou_output_index], geometry,
+                                                   resolved_options);
     }
 
     /**
@@ -770,7 +908,7 @@ private:
      * @param output_vectors 主机侧输出数组列表，函数会写入推理结果。
      */
     void runModel(const std::vector<std::vector<float> *> &input_vectors,
-                  std::vector<std::vector<float>>        &output_vectors)
+                  std::vector<std::vector<float>>         &output_vectors)
     {
         const bool use_trt = usesTensorRt(config_.model_backend);
         if (!use_trt)
@@ -789,7 +927,7 @@ private:
             return;
         }
 
-        const auto stream = model_->resolveExecutionStream();
+        const auto                stream = model_->resolveExecutionStream();
         std::vector<DeviceBuffer> device_inputs;
         std::vector<DeviceBuffer> device_outputs;
         std::vector<void *>       buffers;
@@ -828,11 +966,11 @@ private:
         checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(SAM predictor)");
     }
 
-    SAMImagePredictorConfig config_{}; ///< 预测器配置。
-    SAMImageResizeMode      resolved_resize_mode_{SAMImageResizeMode::StretchSquare}; ///< 已解析的预处理和后处理几何模式。
-    bool ready_{false}; ///< 模型是否已经加载完成。
+    SAMImagePredictorConfig config_{};                                           ///< 预测器配置。
+    SAMImageResizeMode resolved_resize_mode_{SAMImageResizeMode::StretchSquare}; ///< 已解析的预处理和后处理几何模式。
+    bool               ready_{false};                                            ///< 模型是否已经加载完成。
 
-    std::unique_ptr<irt::model::IModel> model_; ///< SAM 推理模型。
+    std::unique_ptr<irt::model::IModel> model_;        ///< SAM 推理模型。
     std::vector<std::string>            input_names_;  ///< 模型输入张量名称列表。
     std::vector<std::string>            output_names_; ///< 模型输出张量名称列表。
 
@@ -921,13 +1059,11 @@ const SAMImagePredictorConfig &SAMImagePredictor::config() const noexcept
  * @param options mask 后处理选项。
  * @return 原图尺寸预测结果和 clamp 后的低分辨率 logits。
  */
-SAMImagePrediction SAMImagePredictor::postprocessMasks(const std::vector<float>        &low_res_masks,
-                                                       int                              mask_count,
-                                                       int                              low_res_height,
-                                                       int                              low_res_width,
-                                                       const std::vector<float>        &iou_predictions,
+SAMImagePrediction SAMImagePredictor::postprocessMasks(const std::vector<float> &low_res_masks, int mask_count,
+                                                       int low_res_height, int low_res_width,
+                                                       const std::vector<float>         &iou_predictions,
                                                        const SAMMaskPostprocessGeometry &geometry,
-                                                       const SAMImagePredictOptions    &options)
+                                                       const SAMImagePredictOptions     &options)
 {
     validateOptions(options);
     if (mask_count <= 0 || low_res_height <= 0 || low_res_width <= 0)
@@ -939,26 +1075,24 @@ SAMImagePrediction SAMImagePredictor::postprocessMasks(const std::vector<float> 
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM postprocess geometry must be positive");
     }
-    const size_t expected_size = static_cast<size_t>(mask_count) * low_res_height * low_res_width;
-    if (low_res_masks.size() != expected_size)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM low_res_masks has %zu values, expected %zu",
-                             low_res_masks.size(), expected_size);
-    }
+    const auto         slice = resolveMaskChannelSlice(mask_count, options.mask_output_mode);
+    std::vector<float> selected_masks
+        = selectMaskChannels(low_res_masks, mask_count, low_res_height, low_res_width, slice);
+    std::vector<float> selected_ious = selectIouChannels(iou_predictions, mask_count, slice);
 
-    std::vector<float> cleaned_masks = low_res_masks;
-    applyLowResMaskCleanup(cleaned_masks, mask_count, low_res_height, low_res_width, options);
-    auto high_res_logits = resizeMasks(cleaned_masks, mask_count, low_res_height, low_res_width, geometry);
+    std::vector<float> cleaned_masks = selected_masks;
+    applyLowResMaskCleanup(cleaned_masks, slice.count, low_res_height, low_res_width, options);
+    auto high_res_logits = resizeMasks(cleaned_masks, slice.count, low_res_height, low_res_width, geometry);
 
     SAMImagePrediction prediction;
-    prediction.mask_count     = mask_count;
-    prediction.width          = geometry.original_width;
-    prediction.height         = geometry.original_height;
-    prediction.low_res_width  = low_res_width;
-    prediction.low_res_height = low_res_height;
+    prediction.mask_count       = slice.count;
+    prediction.width            = geometry.original_width;
+    prediction.height           = geometry.original_height;
+    prediction.low_res_width    = low_res_width;
+    prediction.low_res_height   = low_res_height;
     prediction.masks_are_logits = options.return_logits;
-    prediction.low_res_masks    = low_res_masks;
-    prediction.iou_predictions  = iou_predictions;
+    prediction.low_res_masks    = std::move(selected_masks);
+    prediction.iou_predictions  = std::move(selected_ious);
 
     for (auto &value : prediction.low_res_masks)
     {
@@ -975,7 +1109,7 @@ SAMImagePrediction SAMImagePredictor::postprocessMasks(const std::vector<float> 
     prediction.binary_masks.resize(high_res_logits.size());
     for (size_t i = 0; i < high_res_logits.size(); ++i)
     {
-        const bool foreground       = high_res_logits[i] > options.mask_threshold;
+        const bool foreground      = high_res_logits[i] > options.mask_threshold;
         prediction.masks[i]        = foreground ? 1.0F : 0.0F;
         prediction.binary_masks[i] = foreground ? std::uint8_t{1} : std::uint8_t{0};
     }

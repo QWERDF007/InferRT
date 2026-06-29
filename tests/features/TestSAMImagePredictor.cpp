@@ -98,8 +98,8 @@ TEST(SAMImagePredictorTest, PostprocessThresholdsMasksAndClampsReturnedLowResLog
     const std::vector<float> iou_predictions{0.25F};
     const auto               geometry = makeDirectGeometry(2, 2);
 
-    const auto prediction = irt::features::SAMImagePredictor::postprocessMasks(
-        low_res_masks, 1, 2, 2, iou_predictions, geometry);
+    const auto prediction
+        = irt::features::SAMImagePredictor::postprocessMasks(low_res_masks, 1, 2, 2, iou_predictions, geometry);
 
     EXPECT_EQ(prediction.mask_count, 1);
     EXPECT_EQ(prediction.width, 2);
@@ -109,6 +109,60 @@ TEST(SAMImagePredictorTest, PostprocessThresholdsMasksAndClampsReturnedLowResLog
     EXPECT_EQ(prediction.binary_masks, (std::vector<std::uint8_t>{0U, 0U, 1U, 1U}));
     EXPECT_EQ(prediction.low_res_masks, (std::vector<float>{-32.0F, -0.1F, 0.2F, 32.0F}));
     EXPECT_EQ(prediction.iou_predictions, iou_predictions);
+}
+
+TEST(SAMImagePredictorTest, PostprocessSingleModeSelectsFirstRawMaskToken)
+{
+    const std::vector<float> low_res_masks{-1.0F, 2.0F, 3.0F, 4.0F};
+    const std::vector<float> iou_predictions{0.1F, 0.2F, 0.3F, 0.4F};
+    const auto               geometry = makeDirectGeometry(1, 1);
+
+    irt::features::SAMImagePredictOptions options;
+    options.mask_output_mode = irt::features::SAMMaskOutputMode::Single;
+
+    const auto prediction = irt::features::SAMImagePredictor::postprocessMasks(low_res_masks, 4, 1, 1, iou_predictions,
+                                                                               geometry, options);
+
+    EXPECT_EQ(prediction.mask_count, 1);
+    EXPECT_EQ(prediction.low_res_masks, (std::vector<float>{-1.0F}));
+    EXPECT_EQ(prediction.iou_predictions, (std::vector<float>{0.1F}));
+    EXPECT_EQ(prediction.binary_masks, (std::vector<std::uint8_t>{0U}));
+}
+
+TEST(SAMImagePredictorTest, PostprocessMultimaskModeSelectsDisambiguationTokens)
+{
+    const std::vector<float> low_res_masks{-1.0F, 2.0F, -3.0F, 4.0F};
+    const std::vector<float> iou_predictions{0.1F, 0.2F, 0.3F, 0.4F};
+    const auto               geometry = makeDirectGeometry(1, 1);
+
+    irt::features::SAMImagePredictOptions options;
+    options.mask_output_mode = irt::features::SAMMaskOutputMode::Multimask;
+
+    const auto prediction = irt::features::SAMImagePredictor::postprocessMasks(low_res_masks, 4, 1, 1, iou_predictions,
+                                                                               geometry, options);
+
+    EXPECT_EQ(prediction.mask_count, 3);
+    EXPECT_EQ(prediction.low_res_masks, (std::vector<float>{2.0F, -3.0F, 4.0F}));
+    EXPECT_EQ(prediction.iou_predictions, (std::vector<float>{0.2F, 0.3F, 0.4F}));
+    EXPECT_EQ(prediction.binary_masks, (std::vector<std::uint8_t>{1U, 0U, 1U}));
+}
+
+TEST(SAMImagePredictorTest, PostprocessSingleModeRejectsOldThreeMaskOutput)
+{
+    const std::vector<float> low_res_masks{1.0F, 2.0F, 3.0F};
+    const std::vector<float> iou_predictions{0.2F, 0.3F, 0.4F};
+    const auto               geometry = makeDirectGeometry(1, 1);
+
+    irt::features::SAMImagePredictOptions options;
+    options.mask_output_mode = irt::features::SAMMaskOutputMode::Single;
+
+    expectIrtExceptionCode(
+        [&]
+        {
+            (void)irt::features::SAMImagePredictor::postprocessMasks(low_res_masks, 3, 1, 1, iou_predictions, geometry,
+                                                                     options);
+        },
+        irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 TEST(SAMImagePredictorTest, PostprocessReturnLogitsKeepsHighResValuesUnclamped)
@@ -125,21 +179,22 @@ TEST(SAMImagePredictorTest, PostprocessReturnLogitsKeepsHighResValuesUnclamped)
     EXPECT_TRUE(prediction.masks_are_logits);
     EXPECT_TRUE(prediction.binary_masks.empty());
     ASSERT_EQ(prediction.masks.size(), 6U);
-    EXPECT_TRUE(std::all_of(prediction.masks.begin(), prediction.masks.end(),
-                            [](float value) { return value == 40.0F; }));
+    EXPECT_TRUE(
+        std::all_of(prediction.masks.begin(), prediction.masks.end(), [](float value) { return value == 40.0F; }));
     EXPECT_EQ(prediction.low_res_masks, (std::vector<float>{32.0F}));
 }
 
 TEST(SAMImagePredictorTest, PostprocessResizeLongestSideCropsPaddingBeforeResize)
 {
     const std::vector<float> low_res_masks{
-        -10.0F, 10.0F,
-        -10.0F, 10.0F,
+        -10.0F,
+        10.0F,
+        -10.0F,
+        10.0F,
     };
     const auto geometry = makeLongestSidePaddedGeometry();
 
-    const auto prediction
-        = irt::features::SAMImagePredictor::postprocessMasks(low_res_masks, 1, 2, 2, {}, geometry);
+    const auto prediction = irt::features::SAMImagePredictor::postprocessMasks(low_res_masks, 1, 2, 2, {}, geometry);
 
     EXPECT_EQ(prediction.width, 2);
     EXPECT_EQ(prediction.height, 4);
@@ -150,9 +205,7 @@ TEST(SAMImagePredictorTest, PostprocessResizeLongestSideCropsPaddingBeforeResize
 TEST(SAMImagePredictorTest, PostprocessFillsSmallHolesInLowResLogitSpace)
 {
     const std::vector<float> low_res_masks{
-        1.0F, 1.0F, 1.0F,
-        1.0F, -0.5F, 1.0F,
-        1.0F, 1.0F, 1.0F,
+        1.0F, 1.0F, 1.0F, 1.0F, -0.5F, 1.0F, 1.0F, 1.0F, 1.0F,
     };
     const auto geometry = makeDirectGeometry(3, 3);
 
@@ -172,16 +225,14 @@ TEST(SAMImagePredictorTest, PostprocessFillsSmallHolesInLowResLogitSpace)
 TEST(SAMImagePredictorTest, PostprocessRemovesSmallSprinklesInLowResLogitSpace)
 {
     const std::vector<float> low_res_masks{
-        -1.0F, -1.0F, -1.0F,
-        -1.0F, 0.5F, -1.0F,
-        -1.0F, -1.0F, -1.0F,
+        -1.0F, -1.0F, -1.0F, -1.0F, 0.5F, -1.0F, -1.0F, -1.0F, -1.0F,
     };
     const auto geometry = makeDirectGeometry(3, 3);
 
     irt::features::SAMImagePredictOptions options;
-    options.return_logits      = true;
-    options.max_sprinkle_area  = 1;
-    options.mask_threshold     = 0.0F;
+    options.return_logits     = true;
+    options.max_sprinkle_area = 1;
+    options.mask_threshold    = 0.0F;
 
     const auto prediction
         = irt::features::SAMImagePredictor::postprocessMasks(low_res_masks, 1, 3, 3, {}, geometry, options);

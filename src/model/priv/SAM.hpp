@@ -28,7 +28,7 @@ struct SAMSpec
     int              image_size;          ///< 输入图像边长。
     int              mask_size;           ///< 低分辨率 mask 边长。
     int              max_points;          ///< 固定点提示容量。
-    int              multimask_outputs;   ///< 输出候选 mask 数量。
+    int              multimask_outputs;   ///< 模型导出的 raw mask token 数量。
     int              encoder_embed_dim;   ///< SAM v1 ViT token 维度。
     int              encoder_depth;       ///< SAM v1 ViT block 数量。
     int              encoder_num_heads;   ///< SAM v1 ViT 注意力头数量。
@@ -82,12 +82,12 @@ public:
     }
 
     /**
-     * @brief SAM2 图结构修正后需要重建历史 engine。
-     * @return SAM2 使用版本 2，其它 SAM 族保持版本 1。
+     * @brief SAM 图结构修正后需要重建历史 engine。
+     * @return 当前 SAM/EdgeSAM/SAM2 输出 4 个 raw mask token，使用版本 3。
      */
     std::string engineCacheVersion() const noexcept override
     {
-        return spec_.family == SAMFamily::SAM2 ? "2" : "1";
+        return "3";
     }
 
     /**

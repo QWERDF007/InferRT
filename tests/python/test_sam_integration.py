@@ -101,7 +101,7 @@ def test_sam2_sample_runs_with_models_root(
     )
     output = completed.stdout + completed.stderr
 
-    assert "Output masks dims=[1,3,256,256]" in output
-    assert "Output iou_predictions dims=[1,3,1,1]" in output
+    assert "Output masks dims=[1,4,256,256]" in output
+    assert "Output iou_predictions dims=[1,4,1,1]" in output
     assert "Saved mask overlay to:" in output
     assert_output_image(output_image)

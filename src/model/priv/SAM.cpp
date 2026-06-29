@@ -36,7 +36,7 @@ constexpr int   kSamEmbedGrid        = 64;
 constexpr int   kSamMaxPoints        = 16;
 constexpr int   kSamPointTokens      = kSamMaxPoints + 1;
 constexpr int   kSamMaskTokens       = 4;
-constexpr int   kSamOutputMasks      = 3;
+constexpr int   kSamOutputMasks      = kSamMaskTokens;
 constexpr int   kSamTwoWayDepth      = 2;
 constexpr int   kSamTwoWayHeads      = 8;
 constexpr int   kSamTwoWayMlpDim     = 2048;
@@ -1904,9 +1904,6 @@ void addSAMMaskDecoder(nvinfer1::INetworkDefinition *network, const WeightsMap &
                        "Failed to add SAM hyper mask matmul");
     auto *mask_view = requireLayer(network->addShuffle(*mask_logits->getOutput(0)), "Failed to reshape SAM masks");
     mask_view->setReshapeDimensions(nvinfer1::Dims4{0, kSamMaskTokens, kSamMaskSize, kSamMaskSize});
-    auto *selected_masks = slicePreserveFirstDim(network, *mask_view->getOutput(0), nvinfer1::Dims4{0, 1, 0, 0},
-                                                 {kSamOutputMasks, kSamMaskSize, kSamMaskSize});
-
     auto *iou0 = addLinear3D(network, weights_map, *iou_token_out, mask_prefix + ".iou_prediction_head.layers.0",
                              kSamPromptDim, kSamPromptDim);
     auto *iou_r0
@@ -1924,7 +1921,7 @@ void addSAMMaskDecoder(nvinfer1::INetworkDefinition *network, const WeightsMap &
                                   "Failed to add SAM2 iou sigmoid")
                          ->getOutput(0);
     }
-    auto *iou_slice = requireLayer(network->addSlice(*iou_logits, nvinfer1::Dims3{0, 0, 1},
+    auto *iou_slice = requireLayer(network->addSlice(*iou_logits, nvinfer1::Dims3{0, 0, 0},
                                                      nvinfer1::Dims3{1, 1, kSamOutputMasks}, nvinfer1::Dims3{1, 1, 1}),
                                    "Failed to slice SAM iou predictions");
     iou_slice->setInput(2, *shapeWithFirstDimOf(network, *iou_logits, {1, kSamOutputMasks}));
@@ -1932,10 +1929,10 @@ void addSAMMaskDecoder(nvinfer1::INetworkDefinition *network, const WeightsMap &
         = requireLayer(network->addShuffle(*iou_slice->getOutput(0)), "Failed to reshape SAM iou predictions");
     iou_view->setReshapeDimensions(nvinfer1::Dims4{0, kSamOutputMasks, 1, 1});
 
-    masks                            = selected_masks;
+    masks                            = mask_view->getOutput(0);
     iou_predictions                  = iou_view->getOutput(0);
-    named_tensors["low_res_masks"]   = selected_masks;
-    named_tensors["masks"]           = selected_masks;
+    named_tensors["low_res_masks"]   = masks;
+    named_tensors["masks"]           = masks;
     named_tensors["iou_predictions"] = iou_predictions;
 }
 

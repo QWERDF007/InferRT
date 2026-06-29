@@ -41,6 +41,17 @@ enum class SAMPromptCoordinateMode
 };
 
 /**
+ * @brief SAM mask token 输出选择模式。
+ */
+enum class SAMMaskOutputMode
+{
+    Auto,      ///< 单点提示返回 multimask，多点/box/mask 输入返回 single-mask。
+    Single,    ///< 返回官方 `multimask_output=false` 的 single-mask token。
+    Multimask, ///< 返回官方 `multimask_output=true` 的 3 个候选 token。
+    All,       ///< 返回模型的全部 raw mask token。
+};
+
+/**
  * @brief SAM 点 prompt。
  */
 struct SAMPromptPoint
@@ -77,10 +88,11 @@ struct SAMImagePrompt
  */
 struct SAMImagePredictOptions
 {
-    bool  return_logits{false};                     ///< 为 true 时返回高分辨率 logits；为 false 时返回阈值化 0/1 mask。
-    float mask_threshold{kDefaultSAMMaskThreshold}; ///< logits 二值化阈值，默认 0。
-    int   max_hole_area{0};                         ///< 填充面积不超过该值的低分辨率背景洞；0 表示关闭。
-    int   max_sprinkle_area{0};                     ///< 移除面积不超过该值的低分辨率前景噪点；0 表示关闭。
+    bool              return_logits{false}; ///< 为 true 时返回高分辨率 logits；为 false 时返回阈值化 0/1 mask。
+    float             mask_threshold{kDefaultSAMMaskThreshold};  ///< logits 二值化阈值，默认 0。
+    int               max_hole_area{0};                          ///< 填充面积不超过该值的低分辨率背景洞；0 表示关闭。
+    int               max_sprinkle_area{0};                      ///< 移除面积不超过该值的低分辨率前景噪点；0 表示关闭。
+    SAMMaskOutputMode mask_output_mode{SAMMaskOutputMode::Auto}; ///< single/multimask 输出选择策略。
 };
 
 /**

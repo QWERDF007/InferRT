@@ -249,12 +249,11 @@ def _run_torch_sam_v1_reference(
             boxes=None,
             masks=None,
         )
-        low_res_masks, iou_predictions = model.mask_decoder(
+        low_res_masks, iou_predictions = model.mask_decoder.predict_masks(
             image_embeddings=image_embeddings,
             image_pe=model.prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
-            multimask_output=True,
         )
     if device.type == "cuda":
         torch.cuda.synchronize()
@@ -269,7 +268,9 @@ def _run_torch_sam_v1_reference(
     outputs = {
         "masks": low_res_masks.detach().cpu().numpy().astype(np.float32, copy=False),
         "low_res_masks": low_res_masks.detach().cpu().numpy().astype(np.float32, copy=False),
-        "iou_predictions": iou_predictions.detach().cpu().numpy().astype(np.float32, copy=False).reshape(1, 3, 1, 1),
+        "iou_predictions": iou_predictions.detach().cpu().numpy().astype(np.float32, copy=False).reshape(
+            1, iou_predictions.shape[1], 1, 1
+        ),
     }
 
     del model, image, point_coords, point_labels, image_embeddings, low_res_masks, iou_predictions
@@ -319,7 +320,7 @@ def _run_torch_edge_sam_reference(
             image_pe=model.prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
-            num_multimask_outputs=3,
+            num_multimask_outputs=4,
         )
     if device.type == "cuda":
         torch.cuda.synchronize()
@@ -334,7 +335,9 @@ def _run_torch_edge_sam_reference(
     outputs = {
         "masks": low_res_masks.detach().cpu().numpy().astype(np.float32, copy=False),
         "low_res_masks": low_res_masks.detach().cpu().numpy().astype(np.float32, copy=False),
-        "iou_predictions": iou_predictions.detach().cpu().numpy().astype(np.float32, copy=False).reshape(1, 3, 1, 1),
+        "iou_predictions": iou_predictions.detach().cpu().numpy().astype(np.float32, copy=False).reshape(
+            1, iou_predictions.shape[1], 1, 1
+        ),
     }
 
     del model, image, point_coords, point_labels, image_embeddings, low_res_masks, iou_predictions
@@ -376,12 +379,11 @@ def _run_torch_sam2_reference(
             boxes=None,
             masks=None,
         )
-        low_res_masks, iou_predictions, _, _ = model.sam_mask_decoder(
+        low_res_masks, iou_predictions, _, _ = model.sam_mask_decoder.predict_masks(
             image_embeddings=image_embeddings,
             image_pe=model.sam_prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
-            multimask_output=True,
             repeat_image=False,
             high_res_features=[backbone_out["backbone_fpn"][0], backbone_out["backbone_fpn"][1]],
         )
@@ -398,7 +400,9 @@ def _run_torch_sam2_reference(
     outputs = {
         "masks": low_res_masks.detach().cpu().numpy().astype(np.float32, copy=False),
         "low_res_masks": low_res_masks.detach().cpu().numpy().astype(np.float32, copy=False),
-        "iou_predictions": iou_predictions.detach().cpu().numpy().astype(np.float32, copy=False).reshape(1, 3, 1, 1),
+        "iou_predictions": iou_predictions.detach().cpu().numpy().astype(np.float32, copy=False).reshape(
+            1, iou_predictions.shape[1], 1, 1
+        ),
     }
 
     del model, image, point_coords, point_labels, low_res_masks, iou_predictions

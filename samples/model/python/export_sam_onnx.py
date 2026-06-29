@@ -74,16 +74,15 @@ class SAMV1OnnxWrapper(torch.nn.Module):
             boxes=None,
             masks=None,
         )
-        low_res_masks, iou_predictions = self.wrapped.mask_decoder(
+        low_res_masks, iou_predictions = self.wrapped.mask_decoder.predict_masks(
             image_embeddings=image_embeddings,
             image_pe=self.wrapped.prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
-            multimask_output=True,
         )
         keep_inputs = (mask_input.sum() + has_mask_input.sum()) * 0.0
         low_res_masks = low_res_masks + keep_inputs
-        iou_predictions = iou_predictions.reshape(iou_predictions.shape[0], 3, 1, 1) + keep_inputs
+        iou_predictions = iou_predictions.reshape(iou_predictions.shape[0], iou_predictions.shape[1], 1, 1) + keep_inputs
         return low_res_masks, iou_predictions, low_res_masks
 
 
@@ -104,19 +103,18 @@ class SAM2OnnxWrapper(torch.nn.Module):
             boxes=None,
             masks=None,
         )
-        low_res_masks, iou_predictions, _, _ = self.wrapped.sam_mask_decoder(
+        low_res_masks, iou_predictions, _, _ = self.wrapped.sam_mask_decoder.predict_masks(
             image_embeddings=self._image_embedding(backbone_out),
             image_pe=self.wrapped.sam_prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
-            multimask_output=True,
             repeat_image=False,
             high_res_features=[backbone_out["backbone_fpn"][0], backbone_out["backbone_fpn"][1]],
         )
 
         keep_inputs = (mask_input.sum() + has_mask_input.sum()) * 0.0
         low_res_masks = low_res_masks + keep_inputs
-        iou_predictions = iou_predictions.reshape(iou_predictions.shape[0], 3, 1, 1) + keep_inputs
+        iou_predictions = iou_predictions.reshape(iou_predictions.shape[0], iou_predictions.shape[1], 1, 1) + keep_inputs
         return low_res_masks, iou_predictions, low_res_masks
 
     def _image_embedding(self, backbone_out: dict[str, torch.Tensor]) -> torch.Tensor:
