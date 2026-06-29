@@ -82,6 +82,15 @@ public:
     }
 
     /**
+     * @brief SAM2 图结构修正后需要重建历史 engine。
+     * @return SAM2 使用版本 2，其它 SAM 族保持版本 1。
+     */
+    std::string engineCacheVersion() const noexcept override
+    {
+        return spec_.family == SAMFamily::SAM2 ? "2" : "1";
+    }
+
+    /**
      * @brief 根据 SAM 变体补齐默认输入/输出配置。
      * @param config 待规整配置。
      */

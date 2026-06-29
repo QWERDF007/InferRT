@@ -367,13 +367,17 @@ def _run_torch_sam2_reference(
 
     with torch.inference_mode():
         backbone_out = model.forward_image(image)
+        image_embeddings = backbone_out["vision_features"]
+        if getattr(model, "directly_add_no_mem_embed", False):
+            no_mem_embed = model.no_mem_embed.reshape(1, 1, -1).permute(0, 2, 1).reshape(1, -1, 1, 1)
+            image_embeddings = image_embeddings + no_mem_embed
         sparse_embeddings, dense_embeddings = model.sam_prompt_encoder(
             points=(point_coords, point_labels),
             boxes=None,
             masks=None,
         )
         low_res_masks, iou_predictions, _, _ = model.sam_mask_decoder(
-            image_embeddings=backbone_out["vision_features"],
+            image_embeddings=image_embeddings,
             image_pe=model.sam_prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,

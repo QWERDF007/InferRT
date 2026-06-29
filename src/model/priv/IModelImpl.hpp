@@ -123,6 +123,15 @@ public:
     }
 
     /**
+     * @brief 获取 TensorRT engine 缓存契约版本。
+     * @return 用于 engine manifest 的版本字符串；派生类图结构变化时可覆盖以触发重建。
+     */
+    virtual std::string engineCacheVersion() const noexcept
+    {
+        return "1";
+    }
+
+    /**
      * @brief 在指定 CUDA stream 上执行一次推理。
      * @param buffers 输入输出缓冲区地址列表。
      * @param stream 调用方提供的 CUDA stream；为空时使用模型当前默认 stream。

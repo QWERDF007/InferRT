@@ -105,7 +105,7 @@ class SAM2OnnxWrapper(torch.nn.Module):
             masks=None,
         )
         low_res_masks, iou_predictions, _, _ = self.wrapped.sam_mask_decoder(
-            image_embeddings=backbone_out["vision_features"],
+            image_embeddings=self._image_embedding(backbone_out),
             image_pe=self.wrapped.sam_prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
@@ -118,6 +118,13 @@ class SAM2OnnxWrapper(torch.nn.Module):
         low_res_masks = low_res_masks + keep_inputs
         iou_predictions = iou_predictions.reshape(iou_predictions.shape[0], 3, 1, 1) + keep_inputs
         return low_res_masks, iou_predictions, low_res_masks
+
+    def _image_embedding(self, backbone_out: dict[str, torch.Tensor]) -> torch.Tensor:
+        image_embedding = backbone_out["vision_features"]
+        if getattr(self.wrapped, "directly_add_no_mem_embed", False):
+            no_mem_embed = self.wrapped.no_mem_embed.reshape(1, 1, -1).permute(0, 2, 1).reshape(1, -1, 1, 1)
+            image_embedding = image_embedding + no_mem_embed
+        return image_embedding
 
 
 class SAM3OnnxWrapper(torch.nn.Module):

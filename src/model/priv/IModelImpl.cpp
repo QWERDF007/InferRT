@@ -278,20 +278,20 @@ irt::util::ManifestEntries engineManifestEntries(const IModelImpl &impl, const s
 {
     const auto &config = impl.modelConfig();
     return {
-        {"version", "1"},
-        {"kind", "tensorrt_engine"},
-        {"model_name", impl.name()},
-        {"source_file", absolutePathValue(source_file)},
-        {"engine_file", absolutePathValue(engine_file)},
-        {"num_classes", std::to_string(config.numClasses())},
-        {"input_shapes", inputShapesValue(config.inputShapes())},
-        {"input_tensor_names", joinStrings(config.inputTensorNames())},
-        {"output_tensor_names", joinStrings(config.outputTensorNames())},
-        {"dynamic_batch", boolValue(config.dynamicBatch())},
-        {"min_batch_size", std::to_string(config.minBatchSize())},
-        {"opt_batch_size", std::to_string(config.optBatchSize())},
-        {"max_batch_size", std::to_string(config.maxBatchSize())},
-        {"feature_only", boolValue(config.featureOnly())},
+        {             "version",                impl.engineCacheVersion()},
+        {                "kind",                        "tensorrt_engine"},
+        {          "model_name",                              impl.name()},
+        {         "source_file",           absolutePathValue(source_file)},
+        {         "engine_file",           absolutePathValue(engine_file)},
+        {         "num_classes",      std::to_string(config.numClasses())},
+        {        "input_shapes",   inputShapesValue(config.inputShapes())},
+        {  "input_tensor_names",   joinStrings(config.inputTensorNames())},
+        { "output_tensor_names",  joinStrings(config.outputTensorNames())},
+        {       "dynamic_batch",         boolValue(config.dynamicBatch())},
+        {      "min_batch_size",    std::to_string(config.minBatchSize())},
+        {      "opt_batch_size",    std::to_string(config.optBatchSize())},
+        {      "max_batch_size",    std::to_string(config.maxBatchSize())},
+        {        "feature_only",          boolValue(config.featureOnly())},
         {"feature_tensor_names", joinStrings(config.featureTensorNames())},
     };
 }
@@ -317,7 +317,7 @@ bool engineManifestMatches(const IModelImpl &impl, const std::string &source_fil
     {
         const auto stored_min = std::stoi(irt::util::manifestValue(manifest, "min_batch_size"));
         const auto stored_max = std::stoi(irt::util::manifestValue(manifest, "max_batch_size"));
-        const auto cur_opt   = impl.modelConfig().optBatchSize();
+        const auto cur_opt    = impl.modelConfig().optBatchSize();
         if (cur_opt >= stored_min && cur_opt <= stored_max)
         {
             entries.erase(std::remove_if(entries.begin(), entries.end(),
@@ -801,8 +801,7 @@ void IModelImpl::buildOrLoad(const std::string &weights_file)
     }
     else if (engine_exists)
     {
-        LOG_INFO(*trt_params.logger) << "Engine manifest mismatch or missing, rebuilding: " << engine_file
-                                     << std::endl;
+        LOG_INFO(*trt_params.logger) << "Engine manifest mismatch or missing, rebuilding: " << engine_file << std::endl;
     }
 
     LOG_INFO(*trt_params.logger) << "Building engine from weights file: " << weights_file << std::endl;

@@ -1070,10 +1070,17 @@ nvinfer1::ITensor *addSAM2ImageEncoder(const SAMSegmentationModel &impl, nvinfer
     high_res_s0 = conv_s0->getOutput(0);
     high_res_s1 = conv_s1->getOutput(0);
 
+    auto *no_mem_embed    = requireLayer(network->addConstant(nvinfer1::Dims4{1, kSamPromptDim, 1, 1},
+                                                              requireWeight(weights_map, "no_mem_embed", kSamPromptDim)),
+                                         "Failed to add SAM2 no-memory embedding");
+    auto *image_embedding = requireLayer(network->addElementWise(*fpn[2], *no_mem_embed->getOutput(0), E::kSUM),
+                                         "Failed to add SAM2 no-memory embedding to image embedding")
+                                ->getOutput(0);
+
     named_tensors["high_res_s0"]     = high_res_s0;
     named_tensors["high_res_s1"]     = high_res_s1;
-    named_tensors["image_embedding"] = fpn[2];
-    return fpn[2];
+    named_tensors["image_embedding"] = image_embedding;
+    return image_embedding;
 }
 
 /**
