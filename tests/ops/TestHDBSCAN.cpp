@@ -45,6 +45,33 @@ TEST(HDBSCANTest, RecoversSevenClustersFromAssetData)
     }
 }
 
+TEST(HDBSCANTest, SupportsNeighborSearchAlgorithms)
+{
+    const auto data = irt::test::loadClusterTestData(__FILE__);
+
+    for (const auto algorithm : {irt::ops::ClusteringAlgorithm::Brute, irt::ops::ClusteringAlgorithm::KDTree,
+                                 irt::ops::ClusteringAlgorithm::BallTree, irt::ops::ClusteringAlgorithm::Auto})
+    {
+        irt::ops::HDBSCANConfig config;
+        config.min_cluster_size = 5;
+        config.min_samples      = 5;
+        config.algorithm        = algorithm;
+        config.leaf_size        = 8;
+
+        const auto result = irt::ops::hdbscan(data.samples.data(), data.num_samples, data.num_features, config);
+
+        EXPECT_EQ(std::count(result.labels.begin(), result.labels.end(), int64_t{-1}), 0);
+        EXPECT_EQ(irt::test::countClusters(result.labels), 7);
+        irt::test::expectSamePartition(result.labels, data.expected_labels);
+        ASSERT_EQ(result.probabilities.size(), result.labels.size());
+        for (const double probability : result.probabilities)
+        {
+            EXPECT_GE(probability, 0.0);
+            EXPECT_LE(probability, 1.0);
+        }
+    }
+}
+
 TEST(HDBSCANTest, RejectsInvalidArguments)
 {
     const std::vector<float> samples{0.0f, 0.0f, 1.0f, 1.0f};
@@ -63,5 +90,9 @@ TEST(HDBSCANTest, RejectsInvalidArguments)
 
     config.min_samples = 0;
     config.alpha       = 0.0;
+    EXPECT_THROW((void)irt::ops::hdbscan(samples.data(), 2, 2, config), irt::Exception);
+
+    config.alpha     = 1.0;
+    config.leaf_size = 0;
     EXPECT_THROW((void)irt::ops::hdbscan(samples.data(), 2, 2, config), irt::Exception);
 }

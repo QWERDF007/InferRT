@@ -12,6 +12,7 @@ namespace {
 void validateInputs(const float *samples, int64_t num_samples, int64_t num_features, const DBSCANConfig &config)
 {
     detail::validateSampleMatrix(samples, num_samples, num_features);
+    detail::validateNeighborSearchConfig(config.algorithm, config.leaf_size);
     if (!std::isfinite(config.eps) || config.eps <= 0.0f)
     {
         throw Exception(Status::ERROR_INVALID_ARGUMENT, "eps must be positive and finite");
@@ -33,20 +34,8 @@ DBSCANResult dbscan(const float *samples, int64_t num_samples, int64_t num_featu
         return {};
     }
 
-    const double                      eps_sq = static_cast<double>(config.eps) * static_cast<double>(config.eps);
-    std::vector<std::vector<int64_t>> neighborhoods(static_cast<size_t>(num_samples));
-    for (int64_t sample = 0; sample < num_samples; ++sample)
-    {
-        auto &neighbors = neighborhoods[static_cast<size_t>(sample)];
-        neighbors.reserve(static_cast<size_t>(num_samples));
-        for (int64_t other = 0; other < num_samples; ++other)
-        {
-            if (detail::squaredEuclideanDistance(samples, sample, other, num_features) <= eps_sq)
-            {
-                neighbors.push_back(other);
-            }
-        }
-    }
+    const auto neighborhoods = detail::radiusNeighborhoods(samples, num_samples, num_features, config.eps,
+                                                           config.algorithm, config.leaf_size);
 
     std::vector<uint8_t> is_core(static_cast<size_t>(num_samples), uint8_t{0});
     DBSCANResult         result;

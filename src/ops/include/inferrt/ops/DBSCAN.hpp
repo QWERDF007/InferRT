@@ -1,5 +1,6 @@
 #pragma once
 
+#include <inferrt/ops/Clustering.hpp>
 #include <inferrt/ops/Export.h>
 
 #include <cstdint>
@@ -12,8 +13,10 @@ inline constexpr int64_t kDefaultDBSCANMinSamples = 5;
 
 struct DBSCANConfig final
 {
-    float   eps{kDefaultDBSCANEps};
-    int64_t min_samples{kDefaultDBSCANMinSamples};
+    float               eps{kDefaultDBSCANEps};
+    int64_t             min_samples{kDefaultDBSCANMinSamples};
+    ClusteringAlgorithm algorithm{ClusteringAlgorithm::Auto};
+    int64_t             leaf_size{kDefaultClusteringLeafSize};
 };
 
 struct DBSCANResult final

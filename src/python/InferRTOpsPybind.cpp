@@ -590,10 +590,18 @@ PYBIND11_MODULE(inferrt_ops_py, m)
 
     py::register_exception<irt::Exception>(m, "InferRTOpsError");
 
+    py::enum_<irt::ops::ClusteringAlgorithm>(m, "ClusteringAlgorithm")
+        .value("Auto", irt::ops::ClusteringAlgorithm::Auto)
+        .value("Brute", irt::ops::ClusteringAlgorithm::Brute)
+        .value("KDTree", irt::ops::ClusteringAlgorithm::KDTree)
+        .value("BallTree", irt::ops::ClusteringAlgorithm::BallTree);
+
     py::class_<irt::ops::DBSCANConfig>(m, "DBSCANConfig")
         .def(py::init<>())
         .def_readwrite("eps", &irt::ops::DBSCANConfig::eps)
-        .def_readwrite("min_samples", &irt::ops::DBSCANConfig::min_samples);
+        .def_readwrite("min_samples", &irt::ops::DBSCANConfig::min_samples)
+        .def_readwrite("algorithm", &irt::ops::DBSCANConfig::algorithm)
+        .def_readwrite("leaf_size", &irt::ops::DBSCANConfig::leaf_size);
 
     py::class_<irt::ops::DBSCANResult>(m, "DBSCANResult")
         .def_readonly("core_sample_indices", &irt::ops::DBSCANResult::core_sample_indices)
@@ -610,6 +618,8 @@ PYBIND11_MODULE(inferrt_ops_py, m)
         .def_readwrite("cluster_selection_epsilon", &irt::ops::HDBSCANConfig::cluster_selection_epsilon)
         .def_readwrite("max_cluster_size", &irt::ops::HDBSCANConfig::max_cluster_size)
         .def_readwrite("alpha", &irt::ops::HDBSCANConfig::alpha)
+        .def_readwrite("algorithm", &irt::ops::HDBSCANConfig::algorithm)
+        .def_readwrite("leaf_size", &irt::ops::HDBSCANConfig::leaf_size)
         .def_readwrite("cluster_selection_method", &irt::ops::HDBSCANConfig::cluster_selection_method)
         .def_readwrite("allow_single_cluster", &irt::ops::HDBSCANConfig::allow_single_cluster);
 

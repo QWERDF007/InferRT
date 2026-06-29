@@ -39,6 +39,27 @@ TEST(DBSCANTest, RecoversSevenClustersFromAssetData)
     irt::test::expectSamePartition(result.labels, data.expected_labels);
 }
 
+TEST(DBSCANTest, SupportsNeighborSearchAlgorithms)
+{
+    const auto data = irt::test::loadClusterTestData(__FILE__);
+
+    for (const auto algorithm : {irt::ops::ClusteringAlgorithm::Brute, irt::ops::ClusteringAlgorithm::KDTree,
+                                 irt::ops::ClusteringAlgorithm::BallTree, irt::ops::ClusteringAlgorithm::Auto})
+    {
+        irt::ops::DBSCANConfig config;
+        config.eps         = 0.8f;
+        config.min_samples = 4;
+        config.algorithm   = algorithm;
+        config.leaf_size   = 8;
+
+        const auto result = irt::ops::dbscan(data.samples.data(), data.num_samples, data.num_features, config);
+
+        EXPECT_EQ(std::count(result.labels.begin(), result.labels.end(), int64_t{-1}), 0);
+        EXPECT_EQ(irt::test::countClusters(result.labels), 7);
+        irt::test::expectSamePartition(result.labels, data.expected_labels);
+    }
+}
+
 TEST(DBSCANTest, RejectsInvalidArguments)
 {
     const std::vector<float> samples{0.0f, 0.0f};
@@ -53,5 +74,9 @@ TEST(DBSCANTest, RejectsInvalidArguments)
 
     config.eps         = 0.5f;
     config.min_samples = 0;
+    EXPECT_THROW((void)irt::ops::dbscan(samples.data(), 1, 2, config), irt::Exception);
+
+    config.min_samples = 1;
+    config.leaf_size   = 0;
     EXPECT_THROW((void)irt::ops::dbscan(samples.data(), 1, 2, config), irt::Exception);
 }

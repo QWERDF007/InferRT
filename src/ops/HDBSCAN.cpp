@@ -140,6 +140,7 @@ private:
 void validateInputs(const float *samples, int64_t num_samples, int64_t num_features, const HDBSCANConfig &config)
 {
     detail::validateSampleMatrix(samples, num_samples, num_features);
+    detail::validateNeighborSearchConfig(config.algorithm, config.leaf_size);
     if (num_samples <= 1)
     {
         throw Exception(Status::ERROR_INVALID_ARGUMENT, "HDBSCAN requires more than one sample, got %lld",
@@ -192,17 +193,13 @@ std::vector<double> pairwiseDistances(const float *samples, int64_t num_samples,
     return distances;
 }
 
-std::vector<double> coreDistances(const std::vector<double> &distances, int64_t num_samples, int64_t min_samples)
+std::vector<double> coreDistances(const float *samples, int64_t num_samples, int64_t num_features, int64_t min_samples,
+                                  double alpha, ClusteringAlgorithm algorithm, int64_t leaf_size)
 {
-    std::vector<double> result(static_cast<size_t>(num_samples), 0.0);
-    std::vector<double> row(static_cast<size_t>(num_samples), 0.0);
-    const auto          kth = row.begin() + (min_samples - 1);
-    for (int64_t sample = 0; sample < num_samples; ++sample)
+    auto result = detail::kthNeighborDistances(samples, num_samples, num_features, min_samples, algorithm, leaf_size);
+    for (double &distance : result)
     {
-        const auto first = distances.begin() + sample * num_samples;
-        std::copy(first, first + num_samples, row.begin());
-        std::nth_element(row.begin(), kth, row.end());
-        result[static_cast<size_t>(sample)] = *kth;
+        distance /= alpha;
     }
     return result;
 }
@@ -923,7 +920,8 @@ HDBSCANResult hdbscan(const float *samples, int64_t num_samples, int64_t num_fea
 
     const int64_t min_samples    = config.min_samples == 0 ? config.min_cluster_size : config.min_samples;
     const auto    distances      = pairwiseDistances(samples, num_samples, num_features, config.alpha);
-    const auto    core_distances = coreDistances(distances, num_samples, min_samples);
+    const auto    core_distances = coreDistances(samples, num_samples, num_features, min_samples, config.alpha,
+                                                 config.algorithm, config.leaf_size);
     const auto    mst            = minimumSpanningTree(distances, core_distances, num_samples);
     const auto    linkage        = makeSingleLinkage(mst, num_samples);
     const auto    condensed_tree = condenseTree(linkage, config.min_cluster_size);
