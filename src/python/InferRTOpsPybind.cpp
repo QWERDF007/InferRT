@@ -3,6 +3,8 @@
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/cvcuda/OpNMS.h>
 #include <inferrt/cvcuda/OpRoIAlign.h>
+#include <inferrt/ops/DBSCAN.hpp>
+#include <inferrt/ops/HDBSCAN.hpp>
 #include <inferrt/ops/NMS.hpp>
 #include <inferrt/ops/RoIAlign.hpp>
 #include <pybind11/numpy.h>
@@ -145,8 +147,8 @@ bool dlDeviceIsCuda(const DLDevice &device)
 
 int currentCudaDevice()
 {
-    int device = 0;
-    const cudaError_t err = cudaGetDevice(&device);
+    int               device = 0;
+    const cudaError_t err    = cudaGetDevice(&device);
     if (err != cudaSuccess)
     {
         throw irt::Exception(irt::Status::ERROR_DEVICE, "Failed to query current CUDA device: %s",
@@ -274,7 +276,7 @@ py::object torchEmpty(const std::vector<int64_t> &shape, const char *dtype_attr,
     kwargs[py::str("dtype")]  = torch.attr(dtype_attr);
     kwargs[py::str("device")] = py::str(torchDeviceString(device));
 
-    py::tuple args = py::make_tuple(shapeTuple(shape));
+    py::tuple args   = py::make_tuple(shapeTuple(shape));
     PyObject *result = PyObject_Call(torch.attr("empty").ptr(), args.ptr(), kwargs.ptr());
     if (result == nullptr)
     {
@@ -368,6 +370,16 @@ int64_t numBoxes(const py::array_t<float, py::array::c_style | py::array::forcec
     return boxes.shape(0);
 }
 
+std::pair<int64_t, int64_t> sampleMatrixShape(
+    const py::array_t<float, py::array::c_style | py::array::forcecast> &samples)
+{
+    if (samples.ndim() != 2)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "samples must have shape [N, F]");
+    }
+    return {samples.shape(0), samples.shape(1)};
+}
+
 void validateScores(const py::array_t<float, py::array::c_style | py::array::forcecast> &scores, int64_t expected)
 {
     if (scores.ndim() != 1)
@@ -420,6 +432,27 @@ py::array_t<int64_t> runNMS(const py::handle &boxes_object, const py::handle &sc
     return output;
 }
 
+template<typename Result, typename Config>
+Result runSampleMatrixClustering(const py::handle &samples_object, const Config &config,
+                                 Result (*op)(const float *, int64_t, int64_t, const Config &))
+{
+    auto samples                           = asFloat32CArray(samples_object, "samples");
+    const auto [num_samples, num_features] = sampleMatrixShape(samples);
+
+    py::gil_scoped_release release;
+    return op(samples.data(), num_samples, num_features, config);
+}
+
+irt::ops::DBSCANResult runDBSCAN(const py::handle &samples_object, const irt::ops::DBSCANConfig &config)
+{
+    return runSampleMatrixClustering(samples_object, config, &irt::ops::dbscan);
+}
+
+irt::ops::HDBSCANResult runHDBSCAN(const py::handle &samples_object, const irt::ops::HDBSCANConfig &config)
+{
+    return runSampleMatrixClustering(samples_object, config, &irt::ops::hdbscan);
+}
+
 py::object runNMSV2(const py::handle &boxes_object, const py::handle &scores_object, float iou_threshold,
                     uintptr_t stream_ptr)
 {
@@ -441,8 +474,8 @@ py::object runNMSV2(const py::handle &boxes_object, const py::handle &scores_obj
     }
     ensureSameDevice(boxes, scores, "boxes", "scores");
 
-    const int num_boxes = checkedDimToInt(boxes.shape[0], "num_boxes");
-    py::object output   = torchEmpty({boxes.shape[0]}, "int64", boxes.tensor().device);
+    const int  num_boxes = checkedDimToInt(boxes.shape[0], "num_boxes");
+    py::object output    = torchEmpty({boxes.shape[0]}, "int64", boxes.tensor().device);
     if (num_boxes == 0)
     {
         return output;
@@ -458,9 +491,9 @@ py::object runNMSV2(const py::handle &boxes_object, const py::handle &scores_obj
         int keep_count = 0;
         {
             py::gil_scoped_release release;
-            const auto status = irt::cvcuda::nms(static_cast<const float *>(boxes.data),
-                                                 static_cast<const float *>(scores.data), out_ptr, count_ptr,
-                                                 num_boxes, iou_threshold, stream);
+            const auto             status
+                = irt::cvcuda::nms(static_cast<const float *>(boxes.data), static_cast<const float *>(scores.data),
+                                   out_ptr, count_ptr, num_boxes, iou_threshold, stream);
             throwIfStatus(status, "cvcuda.nms");
             checkCuda(cudaMemcpyAsync(&keep_count, count_ptr, sizeof(int), cudaMemcpyDeviceToHost, stream),
                       "Failed to copy NMS keep count to host");
@@ -472,9 +505,8 @@ py::object runNMSV2(const py::handle &boxes_object, const py::handle &scores_obj
     int64_t keep_size = 0;
     {
         py::gil_scoped_release release;
-        const auto keep
-            = irt::ops::nms(static_cast<const float *>(boxes.data), static_cast<const float *>(scores.data), num_boxes,
-                            iou_threshold);
+        const auto keep = irt::ops::nms(static_cast<const float *>(boxes.data), static_cast<const float *>(scores.data),
+                                        num_boxes, iou_threshold);
         std::copy(keep.begin(), keep.end(), out_ptr);
         keep_size = static_cast<int64_t>(keep.size());
     }
@@ -511,8 +543,8 @@ py::object runRoIAlignV2(const py::handle &input_object, const py::handle &rois_
     const int width    = checkedDimToInt(input.shape[3], "input.shape[3]");
     const int num_rois = checkedDimToInt(rois.shape[0], "rois.shape[0]");
 
-    py::object output = torchEmpty({rois.shape[0], input.shape[1], pooled_height, pooled_width}, "float32",
-                                   input.tensor().device);
+    py::object output
+        = torchEmpty({rois.shape[0], input.shape[1], pooled_height, pooled_width}, "float32", input.tensor().device);
     if (num_rois == 0)
     {
         return output;
@@ -524,22 +556,21 @@ py::object runRoIAlignV2(const py::handle &input_object, const py::handle &rois_
         const auto stream = reinterpret_cast<cudaStream_t>(stream_ptr);
         {
             py::gil_scoped_release release;
-            const auto status = irt::cvcuda::roiAlign(static_cast<const float *>(input.data),
-                                                      static_cast<const float *>(rois.data), out_ptr, batches, channels,
-                                                      cv::Size(width, height), num_rois,
-                                                      cv::Size(pooled_width, pooled_height), spatial_scale,
-                                                      sampling_ratio, aligned, stream);
+            const auto             status = irt::cvcuda::roiAlign(
+                static_cast<const float *>(input.data), static_cast<const float *>(rois.data), out_ptr, batches,
+                channels, cv::Size(width, height), num_rois, cv::Size(pooled_width, pooled_height), spatial_scale,
+                sampling_ratio, aligned, stream);
             throwIfStatus(status, "cvcuda.roiAlign");
         }
         return output;
     }
 
     {
-        py::gil_scoped_release release;
-        const int64_t input_shape[4] = {batches, channels, height, width};
+        py::gil_scoped_release   release;
+        const int64_t            input_shape[4] = {batches, channels, height, width};
         const irt::ops::RoIAlign op({pooled_height, pooled_width}, spatial_scale, sampling_ratio, aligned);
-        op.forward(static_cast<const float *>(input.data), input_shape, static_cast<const float *>(rois.data),
-                   num_rois, out_ptr);
+        op.forward(static_cast<const float *>(input.data), input_shape, static_cast<const float *>(rois.data), num_rois,
+                   out_ptr);
     }
     return output;
 }
@@ -558,6 +589,33 @@ PYBIND11_MODULE(inferrt_ops_py, m)
     m.doc() = "InferRT ops Python bindings";
 
     py::register_exception<irt::Exception>(m, "InferRTOpsError");
+
+    py::class_<irt::ops::DBSCANConfig>(m, "DBSCANConfig")
+        .def(py::init<>())
+        .def_readwrite("eps", &irt::ops::DBSCANConfig::eps)
+        .def_readwrite("min_samples", &irt::ops::DBSCANConfig::min_samples);
+
+    py::class_<irt::ops::DBSCANResult>(m, "DBSCANResult")
+        .def_readonly("core_sample_indices", &irt::ops::DBSCANResult::core_sample_indices)
+        .def_readonly("labels", &irt::ops::DBSCANResult::labels);
+
+    py::enum_<irt::ops::HDBSCANClusterSelectionMethod>(m, "HDBSCANClusterSelectionMethod")
+        .value("Eom", irt::ops::HDBSCANClusterSelectionMethod::Eom)
+        .value("Leaf", irt::ops::HDBSCANClusterSelectionMethod::Leaf);
+
+    py::class_<irt::ops::HDBSCANConfig>(m, "HDBSCANConfig")
+        .def(py::init<>())
+        .def_readwrite("min_cluster_size", &irt::ops::HDBSCANConfig::min_cluster_size)
+        .def_readwrite("min_samples", &irt::ops::HDBSCANConfig::min_samples)
+        .def_readwrite("cluster_selection_epsilon", &irt::ops::HDBSCANConfig::cluster_selection_epsilon)
+        .def_readwrite("max_cluster_size", &irt::ops::HDBSCANConfig::max_cluster_size)
+        .def_readwrite("alpha", &irt::ops::HDBSCANConfig::alpha)
+        .def_readwrite("cluster_selection_method", &irt::ops::HDBSCANConfig::cluster_selection_method)
+        .def_readwrite("allow_single_cluster", &irt::ops::HDBSCANConfig::allow_single_cluster);
+
+    py::class_<irt::ops::HDBSCANResult>(m, "HDBSCANResult")
+        .def_readonly("labels", &irt::ops::HDBSCANResult::labels)
+        .def_readonly("probabilities", &irt::ops::HDBSCANResult::probabilities);
 
     py::class_<irt::ops::RoIAlign>(m, "RoIAlign")
         .def(py::init<int, int, float, int, bool>(), py::arg("pooled_height"), py::arg("pooled_width"),
@@ -589,6 +647,12 @@ PYBIND11_MODULE(inferrt_ops_py, m)
 
     m.def("nms", &runNMS, py::arg("boxes"), py::arg("scores"), py::arg("iou_threshold"),
           "Performs non-maximum suppression on boxes in xyxy format.");
+
+    m.def("dbscan", &runDBSCAN, py::arg("samples"), py::arg("config"),
+          "Performs DBSCAN clustering on a float32 sample matrix using DBSCANConfig.");
+
+    m.def("hdbscan", &runHDBSCAN, py::arg("samples"), py::arg("config"),
+          "Performs HDBSCAN clustering on a float32 sample matrix using HDBSCANConfig.");
 
     m.def("nms_v2", &runNMSV2, py::arg("boxes"), py::arg("scores"), py::arg("iou_threshold"),
           py::arg("stream_ptr") = uintptr_t{0},
