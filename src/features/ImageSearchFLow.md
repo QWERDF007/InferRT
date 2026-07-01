@@ -101,7 +101,7 @@ searcher.buildOrLoad(weights_file, gallery_dir, index_file, rebuild_index, progr
 
 给定索引路径 `<index>.faiss`，模块还会生成：
 
-- `<index>.manifest.yaml`：记录模型、特征、图库路径映射、后端、归一化、批量和索引类型。
+- `<index>.manifest.yaml`：记录模型、特征、图库图像 ID 映射、后端、归一化、批量和索引类型。
 - `<index>.faiss.ivfdata`：仅 CPU 磁盘 IVF 模式使用，保存倒排列表中的 ID 和向量编码。
 
 ## 8. 查询流程
@@ -118,7 +118,7 @@ auto results = searcher.search(query_image, top_k);
 2. 如果索引是从磁盘直接加载的，首次查询前懒加载 `ImageSearchFeatureExtractor`。
 3. 对查询图片执行同样的预处理、特征提取和归一化。
 4. 调用 Faiss `search(1, query_feature, top_k, distances, indices)`。
-5. 用 manifest 中的路径映射把 Faiss ID 转成图片路径。
+5. 用 manifest 中的 ID 映射把 Faiss ID 转成调用方提供的图像 ID。
 6. 返回按相似度从高到低排列的 `ImageSearchResult`。
 
 ## 9. 批量和进度

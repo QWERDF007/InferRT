@@ -51,7 +51,7 @@ public:
     bool                         isReady() const noexcept;
     const RoiSearchConfig       &config() const noexcept;
     const std::filesystem::path &indexPath() const noexcept;
-    std::vector<RoiSearchItem>   galleryItems() const;
+    std::vector<int64_t>         galleryIds() const;
     int                          featureDim() const noexcept;
 
 private:
@@ -64,7 +64,7 @@ private:
     std::filesystem::path weights_file_; ///< 模型文件路径。
     std::filesystem::path index_path_;   ///< Faiss 索引路径。
 
-    std::vector<RoiSearchItem> gallery_items_; ///< 与 Faiss 向量 ID 对应的 ROI 条目。
+    std::vector<int64_t> gallery_ids_; ///< 与 Faiss 向量 ID 对应的 ROI ID。
 
     std::unique_ptr<faiss::gpu::StandardGpuResources> faiss_gpu_resources_; ///< GPU Faiss 资源。
     std::unique_ptr<faiss::Index>                     index_;               ///< Faiss 索引。

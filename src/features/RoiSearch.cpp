@@ -62,9 +62,9 @@ const fs::path &RoiSearch::indexPath() const noexcept
     return impl_->indexPath();
 }
 
-std::vector<RoiSearchItem> RoiSearch::galleryItems() const
+std::vector<int64_t> RoiSearch::galleryIds() const
 {
-    return impl_->galleryItems();
+    return impl_->galleryIds();
 }
 
 int RoiSearch::featureDim() const noexcept

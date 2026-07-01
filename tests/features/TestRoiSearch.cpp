@@ -90,7 +90,7 @@ TEST(RoiSearchTest, DefaultConstructsNotReadySearcher)
     EXPECT_EQ(search.config().pca_dim, 0);
     EXPECT_FALSE(search.isReady());
     EXPECT_TRUE(search.indexPath().empty());
-    EXPECT_TRUE(search.galleryItems().empty());
+    EXPECT_TRUE(search.galleryIds().empty());
     EXPECT_EQ(search.featureDim(), 0);
 }
 
@@ -213,13 +213,13 @@ TEST(RoiSearchTest, BuildRejectsBadItemsBeforeLoadingModel)
     expectIrtExceptionCode([&] { search.build("weights.wts", {}, index_path); }, irt::Status::ERROR_INVALID_ARGUMENT);
 
     const std::vector<irt::features::RoiSearchItem> bad_roi{
-        {temp.path() / "a.jpg", {10.0f, 0.0f, 5.0f, 10.0f}},
+        {1, temp.path() / "a.jpg", {10.0f, 0.0f, 5.0f, 10.0f}},
     };
     expectIrtExceptionCode([&] { search.build("weights.wts", bad_roi, index_path); },
                            irt::Status::ERROR_INVALID_ARGUMENT);
 
     const std::vector<irt::features::RoiSearchItem> missing_image{
-        {temp.path() / "missing.jpg", {0.0f, 0.0f, 5.0f, 10.0f}},
+        {1, temp.path() / "missing.jpg", {0.0f, 0.0f, 5.0f, 10.0f}},
     };
     expectIrtExceptionCode([&] { search.build("weights.wts", missing_image, index_path); },
                            irt::Status::ERROR_INVALID_ARGUMENT);

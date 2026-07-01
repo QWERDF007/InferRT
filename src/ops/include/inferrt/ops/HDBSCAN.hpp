@@ -26,9 +26,9 @@ struct HDBSCANConfig final
     int64_t                       min_samples{kDefaultHDBSCANMinSamples};
     double                        cluster_selection_epsilon{kDefaultHDBSCANClusterSelectionEpsilon};
     int64_t                       max_cluster_size{kDefaultHDBSCANMaxClusterSize};
-    double                        alpha{kDefaultHDBSCANAlpha};
-    ClusteringAlgorithm           algorithm{ClusteringAlgorithm::Auto};
-    int64_t                       leaf_size{kDefaultClusteringLeafSize};
+    double                        alpha{1.0};
+    ClusteringAlgorithm           algorithm{ClusteringAlgorithm::KDTree};
+    int64_t                       leaf_size{40};
     HDBSCANClusterSelectionMethod cluster_selection_method{HDBSCANClusterSelectionMethod::Eom};
     bool                          allow_single_cluster{false};
 };

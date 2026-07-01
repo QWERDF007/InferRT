@@ -363,7 +363,7 @@ int main(int argc, char *argv[])
 
         for (size_t i = 0; i < results.size(); ++i)
         {
-            std::cout << (i + 1) << ". score=" << results[i].score << " image=" << results[i].image_path.string()
+            std::cout << (i + 1) << ". score=" << results[i].score << " image_id=" << results[i].image_id
                       << std::endl;
         }
 

@@ -9,6 +9,7 @@
 #include <inferrt/features/ImageSearch.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -47,8 +48,9 @@ struct RoiSearchBox
  */
 struct RoiSearchItem
 {
-    std::filesystem::path image_path; ///< ROI 所属图像路径。
-    RoiSearchBox          roi;        ///< 原图坐标系下的 ROI。
+    int64_t               roi_id{0};    ///< 调用方提供的 ROI 唯一 ID。
+    std::filesystem::path image_path;   ///< ROI 所属图像路径。
+    RoiSearchBox          roi;          ///< 原图坐标系下的 ROI。
 };
 
 /**
@@ -56,10 +58,8 @@ struct RoiSearchItem
  */
 struct RoiSearchResult
 {
-    float                 score{0.0f};   ///< 与查询 ROI 的相似度分数。
-    std::filesystem::path image_path;    ///< 命中的图库图像路径。
-    RoiSearchBox          roi;           ///< 命中的图库 ROI。
-    size_t                item_index{0}; ///< 命中条目在特征库中的下标。
+    float   score{0.0f}; ///< 与查询 ROI 的相似度分数。
+    int64_t roi_id{0};   ///< 命中的图库 ROI ID。
 };
 
 /**
@@ -123,10 +123,10 @@ public:
     /**
      * @brief 构建或加载 ROI 特征库索引。
      *
-     * 当 ``rebuild_index`` 为 false 且索引和 manifest 均匹配当前配置及 ROI 条目时直接加载；否则重建。
+     * 当 ``rebuild_index`` 为 false 且索引和 manifest 均匹配当前配置及 ROI ID 序列时直接加载；否则重建。
      *
      * @param weights_file 模型权重、engine 或图模型文件。
-     * @param gallery_items 待写入特征库的 ROI 条目列表。
+     * @param gallery_items 待写入特征库的 ROI 条目列表；调用方负责保证 ID 顺序稳定且唯一。
      * @param index_file Faiss 索引路径；为空时使用当前工作目录下的时间戳 ``.faiss`` 文件。
      * @param rebuild_index 是否强制重建索引。
      * @param progress_callback 可选进度回调。
@@ -171,8 +171,8 @@ public:
     /** @brief 获取当前索引路径。 */
     const std::filesystem::path &indexPath() const noexcept;
 
-    /** @brief 获取当前特征库 ROI 条目列表。 */
-    std::vector<RoiSearchItem> galleryItems() const;
+    /** @brief 获取当前特征库 ROI ID 列表。 */
+    std::vector<int64_t> galleryIds() const;
 
     /** @brief 获取 ROI 特征向量维度。 */
     int featureDim() const noexcept;

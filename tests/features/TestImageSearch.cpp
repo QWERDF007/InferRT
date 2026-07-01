@@ -113,7 +113,7 @@ TEST(ImageSearchTest, DefaultConstructsNotReadySearcher)
     EXPECT_EQ(search.config().feature_name, irt::features::ImageSearch::kDefaultFeatureName);
     EXPECT_FALSE(search.isReady());
     EXPECT_TRUE(search.indexPath().empty());
-    EXPECT_TRUE(search.galleryImages().empty());
+    EXPECT_TRUE(search.galleryIds().empty());
     EXPECT_EQ(search.featureDim(), 0);
     EXPECT_EQ(search.config().preprocess_backend, irt::features::ImageSearchPreprocessBackend::CPU);
     EXPECT_EQ(search.config().model_backend, irt::model::ModelBackend::TensorRT);
@@ -811,7 +811,7 @@ TEST(ImageSearchTest, LoadRequiresExplicitIndexFile)
 
     irt::features::ImageSearch  search;
 
-    expectIrtExceptionCode([&] { search.load("weights.wts", temp.path(), {}); }, irt::Status::ERROR_INVALID_ARGUMENT);
+    expectIrtExceptionCode([&] { search.load("weights.wts", {}); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -822,7 +822,7 @@ TEST(ImageSearchTest, BuildFromExplicitImagePathsRejectsEmptyList)
     TempDir temp;
 
     irt::features::ImageSearch  search;
-    const std::vector<fs::path> images;
+    const std::vector<irt::features::ImageSearchItem> images;
 
     expectIrtExceptionCode([&] { search.build("weights.wts", images, temp.path() / "index.faiss"); },
                            irt::Status::ERROR_INVALID_ARGUMENT);

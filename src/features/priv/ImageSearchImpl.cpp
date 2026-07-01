@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <limits>
@@ -50,13 +51,13 @@ using irt::model::elementCount;
 /**
  * @brief Faiss 索引及其关联资源的打包结构。
  *
- * 构建或加载索引时的中间返回值，便于一并转移 GPU 资源、索引实例与路径映射。
+ * 构建或加载索引时的中间返回值，便于一并转移 GPU 资源、索引实例与 ID 映射。
  */
 struct FaissIndexBundle
 {
     std::unique_ptr<faiss::gpu::StandardGpuResources> gpu_resources; ///< GPU Faiss 资源（可选）。
     std::unique_ptr<faiss::Index>                     index;         ///< Faiss 内积索引。
-    std::vector<fs::path>                             image_paths;   ///< 与索引向量一一对应的图库路径。
+    std::vector<int64_t>                              image_ids;     ///< 与索引向量一一对应的图像 ID。
 };
 
 /**
@@ -407,46 +408,91 @@ std::string explicitPathListMetadataValue()
 }
 
 /**
- * @brief 校验并规范化显式传入的图库图片路径列表。
+ * @brief 校验并规范化显式传入的图库图片条目列表。
  *
  * 要求列表非空、路径存在且为支持的图片文件，并统一转为绝对路径。
- *
- * @param gallery_images 待加入索引的图片路径列表。
- * @return 规范化后的绝对路径列表，顺序与输入一致（对应 Faiss id）。
- * @throws irt::Exception 列表为空、路径无效或不支持的图片格式时抛出。
  */
-std::vector<fs::path> normalizeExplicitGalleryImages(const std::vector<fs::path> &gallery_images)
+std::vector<ImageSearchItem> normalizeImageItems(const std::vector<ImageSearchItem> &gallery_items)
 {
-    if (gallery_images.empty())
+    if (gallery_items.empty())
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Image path list must not be empty");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Image item list must not be empty");
     }
 
-    std::vector<fs::path> normalized;
-    normalized.reserve(gallery_images.size());
-    for (const auto &image_path : gallery_images)
+    std::vector<ImageSearchItem> normalized;
+    normalized.reserve(gallery_items.size());
+    for (const auto &item : gallery_items)
     {
-        if (image_path.empty())
+        if (item.image_path.empty())
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Image path must not be empty");
         }
 
         std::error_code ec;
-        const bool      exists          = fs::exists(image_path, ec);
-        const bool      is_regular_file = exists && fs::is_regular_file(image_path, ec);
+        const bool      exists          = fs::exists(item.image_path, ec);
+        const bool      is_regular_file = exists && fs::is_regular_file(item.image_path, ec);
         if (!is_regular_file)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Image path does not exist: %s",
-                                 image_path.string().c_str());
+                                 item.image_path.string().c_str());
         }
-        if (!ImageSearch::isImageFile(image_path))
+        if (!ImageSearch::isImageFile(item.image_path))
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported image file: %s",
-                                 image_path.string().c_str());
+                                 item.image_path.string().c_str());
         }
-        normalized.push_back(fs::absolute(image_path));
+        normalized.push_back(ImageSearchItem{item.image_id, fs::absolute(item.image_path)});
     }
     return normalized;
+}
+
+std::vector<ImageSearchItem> makeImageItemsFromPaths(const std::vector<fs::path> &image_paths)
+{
+    std::vector<ImageSearchItem> items;
+    items.reserve(image_paths.size());
+    for (size_t i = 0; i < image_paths.size(); ++i)
+    {
+        items.push_back(ImageSearchItem{static_cast<int64_t>(i), image_paths[i]});
+    }
+    return items;
+}
+
+std::vector<fs::path> imageItemPaths(const std::vector<ImageSearchItem> &items)
+{
+    std::vector<fs::path> paths;
+    paths.reserve(items.size());
+    for (const auto &item : items)
+    {
+        paths.push_back(item.image_path);
+    }
+    return paths;
+}
+
+std::vector<int64_t> imageItemIds(const std::vector<ImageSearchItem> &items)
+{
+    std::vector<int64_t> ids;
+    ids.reserve(items.size());
+    for (const auto &item : items)
+    {
+        ids.push_back(item.image_id);
+    }
+    return ids;
+}
+
+bool imageIdsMatch(const std::vector<ImageSearchItem> &items, const std::vector<int64_t> &ids)
+{
+    if (items.size() != ids.size())
+    {
+        return false;
+    }
+    for (size_t i = 0; i < items.size(); ++i)
+    {
+        if (items[i].image_id != ids[i])
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 /**
@@ -454,7 +500,7 @@ std::vector<fs::path> normalizeExplicitGalleryImages(const std::vector<fs::path>
  */
 irt::util::ManifestEntries imageSearchManifestEntries(const fs::path &index_path, const std::string &gallery_value,
                                                       const ImageSearchConfig     &config,
-                                                      const std::vector<fs::path> &image_paths)
+                                                      const std::vector<int64_t>  &image_ids)
 {
     irt::util::ManifestEntries entries{
         {"version", "1"},
@@ -476,28 +522,28 @@ irt::util::ManifestEntries imageSearchManifestEntries(const fs::path &index_path
     {
         entries.emplace_back("ivf_data_file", absolutePathManifestValue(priv::cpuOnDiskIvfDataPath(index_path)));
     }
-    entries.emplace_back("image_count", std::to_string(image_paths.size()));
-    for (size_t i = 0; i < image_paths.size(); ++i)
+    entries.emplace_back("image_count", std::to_string(image_ids.size()));
+    for (size_t i = 0; i < image_ids.size(); ++i)
     {
-        entries.emplace_back("image." + std::to_string(i), image_paths[i].generic_string());
+        entries.emplace_back("image." + std::to_string(i) + ".id", std::to_string(image_ids[i]));
     }
     return entries;
 }
 
 /**
- * @brief 将图像检索配置和路径映射写入 ``xxx.manifest.yaml``。
+ * @brief 将图像检索配置和 ID 映射写入 ``xxx.manifest.yaml``。
  */
 void saveImageSearchManifest(const fs::path &index_path, const std::string &gallery_value,
-                             const ImageSearchConfig &config, const std::vector<fs::path> &image_paths)
+                             const ImageSearchConfig &config, const std::vector<int64_t> &image_ids)
 {
     irt::util::writeYamlManifest(irt::util::manifestPathForDataFile(index_path),
-                                 imageSearchManifestEntries(index_path, gallery_value, config, image_paths));
+                                 imageSearchManifestEntries(index_path, gallery_value, config, image_ids));
 }
 
 /**
- * @brief 从 manifest 解析图库图片路径。
+ * @brief 从 manifest 解析图库图像 ID。
  */
-std::vector<fs::path> loadImagePathsFromManifest(const fs::path &index_path)
+std::vector<int64_t> loadImageIdsFromManifest(const fs::path &index_path)
 {
     const auto manifest = irt::util::loadYamlManifest(irt::util::manifestPathForDataFile(index_path));
     if (manifest.empty() || !irt::util::manifestValueEquals(manifest, "kind", "image_search"))
@@ -524,20 +570,28 @@ std::vector<fs::path> loadImagePathsFromManifest(const fs::path &index_path)
                              count_text.c_str());
     }
 
-    std::vector<fs::path> image_paths;
-    image_paths.reserve(image_count);
+    std::vector<int64_t> image_ids;
+    image_ids.reserve(image_count);
     for (size_t i = 0; i < image_count; ++i)
     {
-        const auto key   = "image." + std::to_string(i);
+        const auto key   = "image." + std::to_string(i) + ".id";
         const auto value = irt::util::manifestValue(manifest, key);
         if (value.empty())
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch manifest is missing %s",
                                  key.c_str());
         }
-        image_paths.emplace_back(value);
+        try
+        {
+            image_ids.push_back(std::stoll(value));
+        }
+        catch (const std::exception &)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Invalid image ID in ImageSearch manifest: %s",
+                                 value.c_str());
+        }
     }
-    return image_paths;
+    return image_ids;
 }
 
 /**
@@ -558,12 +612,16 @@ bool existingIndexMatchesConfig(const fs::path &index_path, const fs::path &gall
         return false;
     }
 
+    const bool gallery_matches
+        = gallery_dir.empty()
+       || irt::util::manifestValueEquals(manifest, "gallery_dir", galleryDirectoryMetadataValue(gallery_dir))
+       || irt::util::manifestValueEquals(manifest, "gallery_dir", explicitPathListMetadataValue());
+
     return irt::util::manifestValueEquals(manifest, "kind", "image_search")
         && irt::util::manifestValueEquals(manifest, "index_file", absolutePathManifestValue(index_path))
         && irt::util::manifestValueEquals(manifest, "model", config.model_name)
         && irt::util::manifestValueEquals(manifest, "feature", config.feature_name)
-        && (irt::util::manifestValueEquals(manifest, "gallery_dir", galleryDirectoryMetadataValue(gallery_dir))
-            || irt::util::manifestValueEquals(manifest, "gallery_dir", explicitPathListMetadataValue()))
+        && gallery_matches
         && irt::util::manifestValueEquals(manifest, "norm", featureNormName(config.norm))
         && irt::util::manifestValueEquals(manifest, "index_storage", indexStorageName(config.index_storage))
         && irt::util::manifestValueEquals(manifest, "index_kind", indexKindName(config));
@@ -954,7 +1012,7 @@ private:
 namespace {
 
 /**
- * @brief 构建 CPU 磁盘 IVF 索引并保存路径映射。
+ * @brief 构建 CPU 磁盘 IVF 索引。
  * @param gallery_images 图库图片路径列表，顺序对应 Faiss 向量 ID。
  * @param extractor 已加载的特征提取器。
  * @param index_path ``.faiss`` 输出路径。
@@ -1029,7 +1087,7 @@ FaissIndexBundle buildIndex(const std::vector<fs::path> &gallery_images, priv::I
 }
 
 /**
- * @brief 从磁盘加载 Faiss 索引、路径映射，并迁移到配置指定的后端。
+ * @brief 从磁盘加载 Faiss 索引、ID 映射，并迁移到配置指定的后端。
  * @param index_path ``.faiss`` 索引路径。
  * @param config 图像检索配置。
  * @return 加载完成的索引资源包。
@@ -1045,12 +1103,12 @@ FaissIndexBundle loadIndex(const fs::path &index_path, const ImageSearchConfig &
                              index_path.string().c_str());
     }
 
-    auto image_paths = loadImagePathsFromManifest(index_path);
-    if (static_cast<faiss::idx_t>(image_paths.size()) != cpu_index->ntotal)
+    auto image_ids = loadImageIdsFromManifest(index_path);
+    if (static_cast<faiss::idx_t>(image_ids.size()) != cpu_index->ntotal)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "Index size (%lld) does not match path mapping size (%zu)",
-                             static_cast<long long>(cpu_index->ntotal), image_paths.size());
+                             "Index size (%lld) does not match ID mapping size (%zu)",
+                             static_cast<long long>(cpu_index->ntotal), image_ids.size());
     }
 
     FaissIndexBundle bundle;
@@ -1062,7 +1120,7 @@ FaissIndexBundle loadIndex(const fs::path &index_path, const ImageSearchConfig &
     {
         bundle = moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend);
     }
-    bundle.image_paths = std::move(image_paths);
+    bundle.image_ids = std::move(image_ids);
     return bundle;
 }
 
@@ -1099,10 +1157,10 @@ void ImageSearch::Impl::buildOrLoad(const fs::path &weights_file, const fs::path
     {
         priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Started);
         priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 0, 1);
-        load(weights_file, gallery_dir, resolved_index_path);
+        load(weights_file, resolved_index_path);
         priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 1, 1);
-        priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Finished, 0, 0, 0, gallery_images_.size(),
-                                  gallery_images_.size());
+        priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Finished, 0, 0, 0, gallery_ids_.size(),
+                                  gallery_ids_.size());
         return;
     }
 
@@ -1117,29 +1175,61 @@ void ImageSearch::Impl::build(const fs::path &weights_file, const fs::path &gall
     auto images = ImageSearch::collectGalleryImages(gallery_dir);
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::CollectingImages, 0, 0, 0, images.size(),
                               images.size());
-    buildWithImages(weights_file, gallery_dir, std::move(images), resolveIndexPath(gallery_dir, index_file),
+    buildWithImages(weights_file, gallery_dir, makeImageItemsFromPaths(images), resolveIndexPath(gallery_dir, index_file),
                     galleryDirectoryMetadataValue(gallery_dir), std::move(progress_callback));
 }
 
-void ImageSearch::Impl::build(const fs::path &weights_file, const std::vector<fs::path> &gallery_images,
+void ImageSearch::Impl::buildOrLoad(const fs::path &weights_file, const std::vector<ImageSearchItem> &gallery_items,
+                                    const fs::path &index_file, bool rebuild_index,
+                                    ImageSearchBuildProgressCallback progress_callback)
+{
+    const fs::path resolved_index_path = resolveExplicitIndexPath(index_file);
+
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Started);
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::CollectingImages);
+    auto normalized_items = normalizeImageItems(gallery_items);
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::CollectingImages, 0, 0, 0,
+                              normalized_items.size(), normalized_items.size());
+
+    if (!rebuild_index && fs::exists(resolved_index_path)
+        && fs::exists(irt::util::manifestPathForDataFile(resolved_index_path))
+        && existingIndexMatchesConfig(resolved_index_path, {}, config_))
+    {
+        const auto mapped_ids = loadImageIdsFromManifest(resolved_index_path);
+        if (imageIdsMatch(normalized_items, mapped_ids))
+        {
+            priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 0, 1);
+            load(weights_file, resolved_index_path);
+            priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 1, 1);
+            priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Finished, 0, 0, 0,
+                                      gallery_ids_.size(), gallery_ids_.size());
+            return;
+        }
+    }
+
+    buildWithImages(weights_file, {}, std::move(normalized_items), resolved_index_path, explicitPathListMetadataValue(),
+                    std::move(progress_callback));
+}
+
+void ImageSearch::Impl::build(const fs::path &weights_file, const std::vector<ImageSearchItem> &gallery_items,
                               const fs::path &index_file, ImageSearchBuildProgressCallback progress_callback)
 {
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Started);
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::CollectingImages);
-    auto normalized_images = normalizeExplicitGalleryImages(gallery_images);
+    auto normalized_items = normalizeImageItems(gallery_items);
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::CollectingImages, 0, 0, 0,
-                              normalized_images.size(), normalized_images.size());
-    buildWithImages(weights_file, {}, std::move(normalized_images), resolveExplicitIndexPath(index_file),
+                              normalized_items.size(), normalized_items.size());
+    buildWithImages(weights_file, {}, std::move(normalized_items), resolveExplicitIndexPath(index_file),
                     explicitPathListMetadataValue(), std::move(progress_callback));
 }
 
-void ImageSearch::Impl::load(const fs::path &weights_file, const fs::path &gallery_dir, const fs::path &index_file)
+void ImageSearch::Impl::load(const fs::path &weights_file, const fs::path &index_file)
 {
     if (index_file.empty())
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch index_file must not be empty when loading");
     }
-    const fs::path resolved_index_path = resolveIndexPath(gallery_dir, index_file);
+    const fs::path resolved_index_path = index_file;
     if (!fs::exists(resolved_index_path))
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Index file does not exist: %s",
@@ -1150,7 +1240,7 @@ void ImageSearch::Impl::load(const fs::path &weights_file, const fs::path &galle
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Index manifest file does not exist: %s",
                              irt::util::manifestPathForDataFile(resolved_index_path).string().c_str());
     }
-    if (!existingIndexMatchesConfig(resolved_index_path, gallery_dir, config_))
+    if (!existingIndexMatchesConfig(resolved_index_path, {}, config_))
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "Index manifest does not match current ImageSearch config: %s",
@@ -1161,17 +1251,17 @@ void ImageSearch::Impl::load(const fs::path &weights_file, const fs::path &galle
     index_.reset();
     faiss_gpu_resources_.reset();
     weights_file_        = weights_file;
-    gallery_dir_         = gallery_dir;
+    gallery_dir_.clear();
     index_path_          = resolved_index_path;
     faiss_gpu_resources_ = std::move(loaded.gpu_resources);
     index_               = std::move(loaded.index);
-    gallery_images_      = std::move(loaded.image_paths);
+    gallery_ids_         = std::move(loaded.image_ids);
     extractor_.reset();
     feature_dim_ = static_cast<int>(index_->d);
 }
 
 void ImageSearch::Impl::buildWithImages(const fs::path &weights_file, const fs::path &gallery_dir,
-                                        std::vector<fs::path> gallery_images, const fs::path &index_path,
+                                        std::vector<ImageSearchItem> gallery_items, const fs::path &index_path,
                                         const std::string               &metadata_gallery_value,
                                         ImageSearchBuildProgressCallback progress_callback)
 {
@@ -1184,7 +1274,9 @@ void ImageSearch::Impl::buildWithImages(const fs::path &weights_file, const fs::
         fs::create_directories(index_path.parent_path());
     }
 
-    auto built = buildIndex(gallery_images, *extractor, index_path, config_, progress_callback);
+    auto gallery_paths = imageItemPaths(gallery_items);
+    auto gallery_ids   = imageItemIds(gallery_items);
+    auto built         = buildIndex(gallery_paths, *extractor, index_path, config_, progress_callback);
     index_.reset();
     faiss_gpu_resources_.reset();
     weights_file_        = weights_file;
@@ -1192,14 +1284,14 @@ void ImageSearch::Impl::buildWithImages(const fs::path &weights_file, const fs::
     index_path_          = index_path;
     faiss_gpu_resources_ = std::move(built.gpu_resources);
     index_               = std::move(built.index);
-    gallery_images_      = std::move(gallery_images);
+    gallery_ids_         = std::move(gallery_ids);
     feature_dim_         = extractor->featureDim();
     extractor_           = std::move(extractor);
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::SavingMetadata, 0, 0, 0, 0, 1);
-    saveImageSearchManifest(index_path_, metadata_gallery_value, config_, gallery_images_);
+    saveImageSearchManifest(index_path_, metadata_gallery_value, config_, gallery_ids_);
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::SavingMetadata, 0, 0, 0, 1, 1);
-    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Finished, 0, 0, 0, gallery_images_.size(),
-                              gallery_images_.size());
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Finished, 0, 0, 0, gallery_ids_.size(),
+                              gallery_ids_.size());
 }
 
 std::vector<ImageSearchResult> ImageSearch::Impl::search(const fs::path &query_image, int top_k)
@@ -1229,11 +1321,11 @@ std::vector<ImageSearchResult> ImageSearch::Impl::search(const fs::path &query_i
     results.reserve(static_cast<size_t>(result_count));
     for (int i = 0; i < result_count; ++i)
     {
-        if (indices[i] < 0 || static_cast<size_t>(indices[i]) >= gallery_images_.size())
+        if (indices[i] < 0 || static_cast<size_t>(indices[i]) >= gallery_ids_.size())
         {
             continue;
         }
-        results.push_back({distances[i], gallery_images_[static_cast<size_t>(indices[i])]});
+        results.push_back({distances[i], gallery_ids_[static_cast<size_t>(indices[i])]});
     }
     return results;
 }
@@ -1253,9 +1345,9 @@ const fs::path &ImageSearch::Impl::indexPath() const noexcept
     return index_path_;
 }
 
-std::vector<fs::path> ImageSearch::Impl::galleryImages() const
+std::vector<int64_t> ImageSearch::Impl::galleryIds() const
 {
-    return gallery_images_;
+    return gallery_ids_;
 }
 
 int ImageSearch::Impl::featureDim() const noexcept

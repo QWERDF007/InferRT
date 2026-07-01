@@ -27,9 +27,7 @@
 #include <cstring>
 #include <exception>
 #include <filesystem>
-#include <iomanip>
 #include <limits>
-#include <sstream>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -93,7 +91,7 @@ RoiSearchItem normalizeItem(const RoiSearchItem &item)
                              item.image_path.string().c_str());
     }
     validateRoi(item.roi);
-    return RoiSearchItem{fs::absolute(item.image_path), item.roi};
+    return RoiSearchItem{item.roi_id, fs::absolute(item.image_path), item.roi};
 }
 
 /**
@@ -206,27 +204,31 @@ PatchTokenGrid inferPatchTokenGrid(int64_t token_count, int input_height, int in
 }
 
 /**
- * @brief 判断两个 ROI 框是否近似相等。
+ * @brief 提取 ROI 条目的外部 ID。
  */
-bool roiNearlyEquals(const RoiSearchBox &lhs, const RoiSearchBox &rhs) noexcept
+std::vector<int64_t> roiItemIds(const std::vector<RoiSearchItem> &items)
 {
-    constexpr float eps = 1.0e-5f;
-    return std::abs(lhs.x1 - rhs.x1) <= eps && std::abs(lhs.y1 - rhs.y1) <= eps && std::abs(lhs.x2 - rhs.x2) <= eps
-        && std::abs(lhs.y2 - rhs.y2) <= eps;
+    std::vector<int64_t> ids;
+    ids.reserve(items.size());
+    for (const auto &item : items)
+    {
+        ids.push_back(item.roi_id);
+    }
+    return ids;
 }
 
 /**
- * @brief 判断 ROI 条目列表是否与映射文件内容一致。
+ * @brief 判断 ROI 条目列表是否与 manifest ID 序列一致。
  */
-bool itemsMatch(const std::vector<RoiSearchItem> &lhs, const std::vector<RoiSearchItem> &rhs)
+bool roiIdsMatch(const std::vector<RoiSearchItem> &items, const std::vector<int64_t> &ids)
 {
-    if (lhs.size() != rhs.size())
+    if (items.size() != ids.size())
     {
         return false;
     }
-    for (size_t i = 0; i < lhs.size(); ++i)
+    for (size_t i = 0; i < items.size(); ++i)
     {
-        if (lhs[i].image_path != rhs[i].image_path || !roiNearlyEquals(lhs[i].roi, rhs[i].roi))
+        if (items[i].roi_id != ids[i])
         {
             return false;
         }
@@ -243,20 +245,10 @@ const char *boolName(bool value) noexcept
 }
 
 /**
- * @brief 将浮点坐标序列化为可 round-trip 的 manifest 值。
- */
-std::string floatManifestValue(float value)
-{
-    std::ostringstream stream;
-    stream << std::setprecision(std::numeric_limits<float>::max_digits10) << value;
-    return stream.str();
-}
-
-/**
  * @brief 构造 ROI 搜索 manifest 条目。
  */
 irt::util::ManifestEntries roiSearchManifestEntries(const fs::path &index_path, const RoiSearchConfig &config,
-                                                    const std::vector<RoiSearchItem> &items)
+                                                    const std::vector<int64_t> &roi_ids)
 {
     irt::util::ManifestEntries entries{
         {"version", "1"},
@@ -284,15 +276,11 @@ irt::util::ManifestEntries roiSearchManifestEntries(const fs::path &index_path, 
         entries.emplace_back("ivf_data_file", absolutePathManifestValue(priv::cpuOnDiskIvfDataPath(index_path)));
     }
 
-    entries.emplace_back("roi_count", std::to_string(items.size()));
-    for (size_t i = 0; i < items.size(); ++i)
+    entries.emplace_back("roi_count", std::to_string(roi_ids.size()));
+    for (size_t i = 0; i < roi_ids.size(); ++i)
     {
         const auto prefix = "roi." + std::to_string(i);
-        entries.emplace_back(prefix + ".path", items[i].image_path.generic_string());
-        entries.emplace_back(prefix + ".x1", floatManifestValue(items[i].roi.x1));
-        entries.emplace_back(prefix + ".y1", floatManifestValue(items[i].roi.y1));
-        entries.emplace_back(prefix + ".x2", floatManifestValue(items[i].roi.x2));
-        entries.emplace_back(prefix + ".y2", floatManifestValue(items[i].roi.y2));
+        entries.emplace_back(prefix + ".id", std::to_string(roi_ids[i]));
     }
     return entries;
 }
@@ -301,16 +289,16 @@ irt::util::ManifestEntries roiSearchManifestEntries(const fs::path &index_path, 
  * @brief 写入 ROI 搜索 manifest。
  */
 void saveRoiManifest(const fs::path &index_path, const RoiSearchConfig &config,
-                     const std::vector<RoiSearchItem> &items)
+                     const std::vector<int64_t> &roi_ids)
 {
     irt::util::writeYamlManifest(irt::util::manifestPathForDataFile(index_path),
-                                 roiSearchManifestEntries(index_path, config, items));
+                                 roiSearchManifestEntries(index_path, config, roi_ids));
 }
 
 /**
- * @brief 解析 manifest 中的 ROI 条目列表。
+ * @brief 解析 manifest 中的 ROI ID 列表。
  */
-std::vector<RoiSearchItem> loadRoiItemsFromManifest(const fs::path &index_path)
+std::vector<int64_t> loadRoiIdsFromManifest(const fs::path &index_path)
 {
     const auto manifest = irt::util::loadYamlManifest(irt::util::manifestPathForDataFile(index_path));
     if (manifest.empty() || !irt::util::manifestValueEquals(manifest, "kind", "roi_search"))
@@ -337,36 +325,28 @@ std::vector<RoiSearchItem> loadRoiItemsFromManifest(const fs::path &index_path)
                              count_text.c_str());
     }
 
-    std::vector<RoiSearchItem> items;
-    items.reserve(roi_count);
+    std::vector<int64_t> ids;
+    ids.reserve(roi_count);
     for (size_t i = 0; i < roi_count; ++i)
     {
         const auto prefix = "roi." + std::to_string(i);
-        const auto path   = irt::util::manifestValue(manifest, prefix + ".path");
-        if (path.empty())
+        const auto value  = irt::util::manifestValue(manifest, prefix + ".id");
+        if (value.empty())
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI manifest is missing %s.path",
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI manifest is missing %s.id",
                                  prefix.c_str());
         }
-
-        RoiSearchItem item;
-        item.image_path = path;
         try
         {
-            item.roi.x1 = std::stof(irt::util::manifestValue(manifest, prefix + ".x1"));
-            item.roi.y1 = std::stof(irt::util::manifestValue(manifest, prefix + ".y1"));
-            item.roi.x2 = std::stof(irt::util::manifestValue(manifest, prefix + ".x2"));
-            item.roi.y2 = std::stof(irt::util::manifestValue(manifest, prefix + ".y2"));
+            ids.push_back(std::stoll(value));
         }
         catch (const std::exception &)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Invalid ROI coordinates in manifest entry %s",
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Invalid ROI ID in manifest entry %s",
                                  prefix.c_str());
         }
-        validateRoi(item.roi);
-        items.push_back(std::move(item));
     }
-    return items;
+    return ids;
 }
 
 /**
@@ -1036,14 +1016,14 @@ void RoiSearch::Impl::buildOrLoad(const fs::path &weights_file, const std::vecto
         && fs::exists(irt::util::manifestPathForDataFile(resolved_index_path))
         && existingRoiIndexMatchesConfig(resolved_index_path, config_))
     {
-        const auto mapped_items = loadRoiItemsFromManifest(resolved_index_path);
-        if (itemsMatch(normalized_items, mapped_items))
+        const auto mapped_ids = loadRoiIdsFromManifest(resolved_index_path);
+        if (roiIdsMatch(normalized_items, mapped_ids))
         {
             priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 0, 1);
             load(weights_file, resolved_index_path);
             priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 1, 1);
             priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Finished, 0, 0, 0,
-                                      gallery_items_.size(), gallery_items_.size());
+                                      gallery_ids_.size(), gallery_ids_.size());
             return;
         }
     }
@@ -1087,7 +1067,7 @@ void RoiSearch::Impl::load(const fs::path &weights_file, const fs::path &index_f
                              irt::util::manifestPathForDataFile(index_file).string().c_str());
     }
 
-    auto items = loadRoiItemsFromManifest(index_file);
+    auto ids   = loadRoiIdsFromManifest(index_file);
     auto faiss = priv::loadConfiguredFaissIndex(index_file, config_);
     if (config_.use_pca)
     {
@@ -1097,11 +1077,11 @@ void RoiSearch::Impl::load(const fs::path &weights_file, const fs::path &index_f
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI local PCA dim does not match Faiss index dim");
         }
     }
-    if (static_cast<faiss::idx_t>(items.size()) != faiss.index->ntotal)
+    if (static_cast<faiss::idx_t>(ids.size()) != faiss.index->ntotal)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "ROI index size (%lld) does not match mapping size (%zu)",
-                             static_cast<long long>(faiss.index->ntotal), items.size());
+                             "ROI index size (%lld) does not match ID mapping size (%zu)",
+                             static_cast<long long>(faiss.index->ntotal), ids.size());
     }
 
     index_.reset();
@@ -1110,7 +1090,7 @@ void RoiSearch::Impl::load(const fs::path &weights_file, const fs::path &index_f
     index_path_          = index_file;
     faiss_gpu_resources_ = std::move(faiss.gpu_resources);
     index_               = std::move(faiss.index);
-    gallery_items_       = std::move(items);
+    gallery_ids_         = std::move(ids);
     extractor_.reset();
     feature_dim_ = static_cast<int>(index_->d);
 }
@@ -1140,15 +1120,15 @@ void RoiSearch::Impl::buildWithItems(const fs::path &weights_file, std::vector<R
     index_path_          = index_file;
     faiss_gpu_resources_ = std::move(faiss.gpu_resources);
     index_               = std::move(faiss.index);
-    gallery_items_       = std::move(gallery_items);
+    gallery_ids_         = roiItemIds(gallery_items);
     feature_dim_         = final_feature_dim;
     extractor_           = std::move(extractor);
 
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::SavingMetadata, 0, 0, 0, 0, 1);
-    saveRoiManifest(index_path_, config_, gallery_items_);
+    saveRoiManifest(index_path_, config_, gallery_ids_);
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::SavingMetadata, 0, 0, 0, 1, 1);
-    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Finished, 0, 0, 0, gallery_items_.size(),
-                              gallery_items_.size());
+    priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Finished, 0, 0, 0, gallery_ids_.size(),
+                              gallery_ids_.size());
 }
 
 std::vector<RoiSearchResult> RoiSearch::Impl::search(const fs::path &query_image, const RoiSearchBox &roi, int top_k)
@@ -1166,7 +1146,7 @@ std::vector<RoiSearchResult> RoiSearch::Impl::search(const fs::path &query_image
         throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "RoiSearch index is empty");
     }
 
-    const auto query_item = normalizeItem(RoiSearchItem{query_image, roi});
+    const auto query_item = normalizeItem(RoiSearchItem{0, query_image, roi});
     ensureExtractor();
     const auto query_feature = extractor_->extract(query_item);
     if (query_feature.size() != static_cast<size_t>(index_->d))
@@ -1183,13 +1163,11 @@ std::vector<RoiSearchResult> RoiSearch::Impl::search(const fs::path &query_image
     results.reserve(static_cast<size_t>(result_count));
     for (int i = 0; i < result_count; ++i)
     {
-        if (indices[i] < 0 || static_cast<size_t>(indices[i]) >= gallery_items_.size())
+        if (indices[i] < 0 || static_cast<size_t>(indices[i]) >= gallery_ids_.size())
         {
             continue;
         }
-        const auto item_index = static_cast<size_t>(indices[i]);
-        results.push_back(
-            {distances[i], gallery_items_[item_index].image_path, gallery_items_[item_index].roi, item_index});
+        results.push_back({distances[i], gallery_ids_[static_cast<size_t>(indices[i])]});
     }
     return results;
 }
@@ -1209,9 +1187,9 @@ const fs::path &RoiSearch::Impl::indexPath() const noexcept
     return index_path_;
 }
 
-std::vector<RoiSearchItem> RoiSearch::Impl::galleryItems() const
+std::vector<int64_t> RoiSearch::Impl::galleryIds() const
 {
-    return gallery_items_;
+    return gallery_ids_;
 }
 
 int RoiSearch::Impl::featureDim() const noexcept

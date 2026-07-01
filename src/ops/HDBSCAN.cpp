@@ -146,9 +146,9 @@ void validateInputs(const float *samples, int64_t num_samples, int64_t num_featu
         throw Exception(Status::ERROR_INVALID_ARGUMENT, "HDBSCAN requires more than one sample, got %lld",
                         static_cast<long long>(num_samples));
     }
-    if (config.min_cluster_size < 2)
+    if (config.min_cluster_size < 1)
     {
-        throw Exception(Status::ERROR_INVALID_ARGUMENT, "min_cluster_size must be at least 2, got %lld",
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "min_cluster_size must be at least 1, got %lld",
                         static_cast<long long>(config.min_cluster_size));
     }
     if (config.min_samples < 0)

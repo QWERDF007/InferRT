@@ -30,7 +30,7 @@ class ImageFeatureExtractor;
 /**
  * @brief ``ImageSearch`` 的 PIMPL 实现。
  *
- * 持有 Faiss 内积索引、图库路径映射及可选的特征提取器；负责索引的构建、
+ * 持有 Faiss 内积索引、图库 ID 映射及可选的特征提取器；负责索引的构建、
  * 加载与 Top-K 检索。具体逻辑见 ``ImageSearchImpl.cpp``。
  *
  * 该类型只服务于 ``ImageSearch`` 的 PIMPL 边界，不作为稳定公共 ABI 暴露给调用方。
@@ -79,26 +79,28 @@ public:
                const std::filesystem::path &index_file, ImageSearchBuildProgressCallback progress_callback);
 
     /**
-     * @brief 从显式图片路径列表构建图像检索索引。
+     * @brief 从显式图片条目列表构建图像检索索引。
      *
-     * 向量顺序决定 Faiss id 与图片路径的映射关系；当 ``index_file`` 为空时生成时间戳路径。
+     * 向量顺序决定 Faiss id 与图像 ID 的映射关系；当 ``index_file`` 为空时生成时间戳路径。
      *
      * @param weights_file 模型 ``.wts`` 权重文件路径。
-     * @param gallery_images 待加入索引的图片路径列表。
+     * @param gallery_items 待加入索引的图片路径和外部图像 ID 列表。
      * @param index_file Faiss 索引文件路径；为空时使用时间戳默认路径。
      */
-    void build(const std::filesystem::path &weights_file, const std::vector<std::filesystem::path> &gallery_images,
+    void build(const std::filesystem::path &weights_file, const std::vector<ImageSearchItem> &gallery_items,
                const std::filesystem::path &index_file, ImageSearchBuildProgressCallback progress_callback);
+
+    void buildOrLoad(const std::filesystem::path &weights_file, const std::vector<ImageSearchItem> &gallery_items,
+                     const std::filesystem::path &index_file, bool rebuild_index,
+                     ImageSearchBuildProgressCallback progress_callback);
 
     /**
      * @brief 为图库目录加载已有图像检索索引。
      *
      * @param weights_file 模型 ``.wts`` 权重文件路径。
-     * @param gallery_dir 用于校验元数据的图库目录。
-     * @param index_file Faiss 索引文件路径；为空时使用 ``ImageSearch::defaultIndexPath``。
+     * @param index_file Faiss 索引文件路径。
      */
-    void load(const std::filesystem::path &weights_file, const std::filesystem::path &gallery_dir,
-              const std::filesystem::path &index_file);
+    void load(const std::filesystem::path &weights_file, const std::filesystem::path &index_file);
 
     /**
      * @brief 对查询图片执行 Top-K 相似检索。
@@ -127,10 +129,10 @@ public:
     const std::filesystem::path &indexPath() const noexcept;
 
     /**
-     * @brief 获取当前图库图片路径列表。
-     * @return 与 Faiss 索引向量一一对应的图库图片路径。
+     * @brief 获取当前图库图像 ID 列表。
+     * @return 与 Faiss 索引向量一一对应的图像 ID。
      */
-    std::vector<std::filesystem::path> galleryImages() const;
+    std::vector<int64_t> galleryIds() const;
 
     /**
      * @brief 获取特征向量维度。
@@ -143,16 +145,16 @@ private:
      * @brief 从已确定的图库图片列表构建索引并更新内部状态。
      *
      * ``build`` 两个重载的公共实现：提取特征、构建 Faiss 索引、保存 ``.manifest.yaml``，
-     * 并将索引实例与路径映射写入成员变量。
+     * 并将索引实例与 ID 映射写入成员变量。
      *
      * @param weights_file 模型 ``.wts`` 权重文件路径。
      * @param gallery_dir 图库根目录；显式路径列表构建时为空。
-     * @param gallery_images 与 Faiss id 一一对应的图库图片路径（调用方负责扫描或规范化）。
+     * @param gallery_items 与 Faiss id 一一对应的图库条目（调用方负责扫描或规范化）。
      * @param index_path 已解析的 Faiss 索引文件路径。
      * @param metadata_gallery_value 写入 ``gallery_dir`` manifest 字段的值（目录 canonical 路径或占位哨兵）。
      */
     void buildWithImages(const std::filesystem::path &weights_file, const std::filesystem::path &gallery_dir,
-                         std::vector<std::filesystem::path> gallery_images, const std::filesystem::path &index_path,
+                         std::vector<ImageSearchItem> gallery_items, const std::filesystem::path &index_path,
                          const std::string &metadata_gallery_value, ImageSearchBuildProgressCallback progress_callback);
 
     /**
@@ -174,8 +176,8 @@ private:
     ///< Faiss 索引文件路径。
     std::filesystem::path index_path_;
 
-    ///< 图库图片路径，与索引向量顺序一致。
-    std::vector<std::filesystem::path> gallery_images_;
+    ///< 图库图像 ID，与索引向量顺序一致。
+    std::vector<int64_t> gallery_ids_;
 
     ///< GPU Faiss 资源；必须比 GPU 索引生命周期更长。
     std::unique_ptr<faiss::gpu::StandardGpuResources> faiss_gpu_resources_;

@@ -59,15 +59,22 @@ void ImageSearch::build(const fs::path &weights_file, const fs::path &gallery_di
     impl_->build(weights_file, gallery_dir, index_file, std::move(progress_callback));
 }
 
-void ImageSearch::build(const fs::path &weights_file, const std::vector<fs::path> &gallery_images,
+void ImageSearch::build(const fs::path &weights_file, const std::vector<ImageSearchItem> &gallery_items,
                         const fs::path &index_file, ImageSearchBuildProgressCallback progress_callback)
 {
-    impl_->build(weights_file, gallery_images, index_file, std::move(progress_callback));
+    impl_->build(weights_file, gallery_items, index_file, std::move(progress_callback));
 }
 
-void ImageSearch::load(const fs::path &weights_file, const fs::path &gallery_dir, const fs::path &index_file)
+void ImageSearch::buildOrLoad(const fs::path &weights_file, const std::vector<ImageSearchItem> &gallery_items,
+                              const fs::path &index_file, bool rebuild_index,
+                              ImageSearchBuildProgressCallback progress_callback)
 {
-    impl_->load(weights_file, gallery_dir, index_file);
+    impl_->buildOrLoad(weights_file, gallery_items, index_file, rebuild_index, std::move(progress_callback));
+}
+
+void ImageSearch::load(const fs::path &weights_file, const fs::path &index_file)
+{
+    impl_->load(weights_file, index_file);
 }
 
 std::vector<ImageSearchResult> ImageSearch::search(const fs::path &query_image, int top_k)
@@ -90,9 +97,9 @@ const fs::path &ImageSearch::indexPath() const noexcept
     return impl_->indexPath();
 }
 
-std::vector<fs::path> ImageSearch::galleryImages() const
+std::vector<int64_t> ImageSearch::galleryIds() const
 {
-    return impl_->galleryImages();
+    return impl_->galleryIds();
 }
 
 int ImageSearch::featureDim() const noexcept
@@ -119,7 +126,7 @@ std::vector<fs::path> ImageSearch::collectGalleryImages(const fs::path &gallery_
                              gallery_dir.string().c_str());
     }
 
-    // 递归扫描后统一转为绝对路径，保证同一图库在不同工作目录下生成稳定的路径映射。
+    // 递归扫描后统一转为绝对路径，保证同一图库在不同工作目录下生成稳定的建库顺序。
     std::vector<fs::path> images;
     for (const auto &entry : fs::recursive_directory_iterator(gallery_dir))
     {
