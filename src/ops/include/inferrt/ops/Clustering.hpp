@@ -14,4 +14,12 @@ enum class ClusteringAlgorithm
     BallTree,
 };
 
+enum class ClusteringMetric
+{
+    Euclidean,
+    Cosine,
+    Manhattan,
+    Minkowski,
+};
+
 } // namespace irt::ops

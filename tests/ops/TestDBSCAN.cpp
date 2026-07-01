@@ -7,6 +7,12 @@
 #include <algorithm>
 #include <vector>
 
+TEST(DBSCANTest, DefaultsToCosineMetric)
+{
+    const irt::ops::DBSCANConfig config;
+    EXPECT_EQ(config.metric, irt::ops::ClusteringMetric::Cosine);
+}
+
 TEST(DBSCANTest, MatchesSklearnDocumentedExample)
 {
     const std::vector<float> samples{
@@ -16,6 +22,7 @@ TEST(DBSCANTest, MatchesSklearnDocumentedExample)
     irt::ops::DBSCANConfig config;
     config.eps         = 3.0f;
     config.min_samples = 2;
+    config.metric      = irt::ops::ClusteringMetric::Euclidean;
 
     const auto result = irt::ops::dbscan(samples.data(), 6, 2, config);
 
@@ -30,6 +37,7 @@ TEST(DBSCANTest, RecoversSevenClustersFromAssetData)
     irt::ops::DBSCANConfig config;
     config.eps         = 0.8f;
     config.min_samples = 4;
+    config.metric      = irt::ops::ClusteringMetric::Euclidean;
 
     const auto result = irt::ops::dbscan(data.samples.data(), data.num_samples, data.num_features, config);
 
@@ -51,6 +59,7 @@ TEST(DBSCANTest, SupportsNeighborSearchAlgorithms)
         config.min_samples = 4;
         config.algorithm   = algorithm;
         config.leaf_size   = 8;
+        config.metric      = irt::ops::ClusteringMetric::Euclidean;
 
         const auto result = irt::ops::dbscan(data.samples.data(), data.num_samples, data.num_features, config);
 

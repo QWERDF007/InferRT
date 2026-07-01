@@ -374,16 +374,22 @@ private:
 };
 
 [[nodiscard]] std::vector<std::vector<int64_t>> bruteRadiusNeighborhoods(const float *samples, int64_t num_samples,
-                                                                         int64_t num_features, double radius_sq)
+                                                                         int64_t num_features, double radius,
+                                                                         ClusteringMetric metric, double minkowski_p)
 {
     std::vector<std::vector<int64_t>> neighborhoods(static_cast<size_t>(num_samples));
+    const double                      radius_sq = radius * radius;
     for (int64_t sample = 0; sample < num_samples; ++sample)
     {
         auto &neighbors = neighborhoods[static_cast<size_t>(sample)];
         neighbors.reserve(static_cast<size_t>(num_samples));
         for (int64_t other = 0; other < num_samples; ++other)
         {
-            if (squaredEuclideanDistance(samples, sample, other, num_features) <= radius_sq)
+            const bool in_radius = metric == ClusteringMetric::Euclidean
+                                     ? squaredEuclideanDistance(samples, sample, other, num_features) <= radius_sq
+                                     : clusteringDistance(samples, sample, other, num_features, metric, minkowski_p)
+                                           <= radius;
+            if (in_radius)
             {
                 neighbors.push_back(other);
             }
@@ -393,7 +399,8 @@ private:
 }
 
 [[nodiscard]] std::vector<double> bruteKthNeighborDistances(const float *samples, int64_t num_samples,
-                                                            int64_t num_features, int64_t kth)
+                                                            int64_t num_features, int64_t kth, ClusteringMetric metric,
+                                                            double minkowski_p)
 {
     std::vector<double> result(static_cast<size_t>(num_samples), 0.0);
     std::vector<double> row(static_cast<size_t>(num_samples), 0.0);
@@ -402,10 +409,13 @@ private:
     {
         for (int64_t other = 0; other < num_samples; ++other)
         {
-            row[static_cast<size_t>(other)] = squaredEuclideanDistance(samples, sample, other, num_features);
+            row[static_cast<size_t>(other)] = metric == ClusteringMetric::Euclidean
+                                                ? squaredEuclideanDistance(samples, sample, other, num_features)
+                                                : clusteringDistance(samples, sample, other, num_features, metric,
+                                                                     minkowski_p);
         }
         std::nth_element(row.begin(), nth, row.end());
-        result[static_cast<size_t>(sample)] = std::sqrt(*nth);
+        result[static_cast<size_t>(sample)] = metric == ClusteringMetric::Euclidean ? std::sqrt(*nth) : *nth;
     }
     return result;
 }
@@ -460,6 +470,25 @@ void validateNeighborSearchConfig(ClusteringAlgorithm algorithm, int64_t leaf_si
     }
 }
 
+void validateMetricConfig(ClusteringMetric metric, double minkowski_p)
+{
+    switch (metric)
+    {
+    case ClusteringMetric::Euclidean:
+    case ClusteringMetric::Cosine:
+    case ClusteringMetric::Manhattan:
+    case ClusteringMetric::Minkowski:
+        break;
+    default:
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "unsupported clustering metric");
+    }
+
+    if (metric == ClusteringMetric::Minkowski && (!std::isfinite(minkowski_p) || minkowski_p <= 0.0))
+    {
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "minkowski_p must be positive and finite");
+    }
+}
+
 double squaredEuclideanDistance(const float *samples, int64_t lhs, int64_t rhs, int64_t num_features)
 {
     double       sum     = 0.0;
@@ -484,8 +513,79 @@ double euclideanDistance(const float *samples, int64_t lhs, int64_t rhs, int64_t
     return std::sqrt(squaredEuclideanDistance(samples, lhs, rhs, num_features));
 }
 
-ClusteringAlgorithm selectNeighborSearchAlgorithm(ClusteringAlgorithm requested, int64_t num_features)
+double clusteringDistance(const float *samples, int64_t lhs, int64_t rhs, int64_t num_features, ClusteringMetric metric,
+                          double minkowski_p)
 {
+    const float *lhs_ptr = samples + lhs * num_features;
+    const float *rhs_ptr = samples + rhs * num_features;
+
+    switch (metric)
+    {
+    case ClusteringMetric::Euclidean:
+        return euclideanDistance(samples, lhs, rhs, num_features);
+    case ClusteringMetric::Manhattan:
+    {
+        double sum = 0.0;
+        for (int64_t feature = 0; feature < num_features; ++feature)
+        {
+            sum += std::abs(static_cast<double>(lhs_ptr[feature]) - static_cast<double>(rhs_ptr[feature]));
+        }
+        return sum;
+    }
+    case ClusteringMetric::Minkowski:
+    {
+        if (!std::isfinite(minkowski_p) || minkowski_p <= 0.0)
+        {
+            throw Exception(Status::ERROR_INVALID_ARGUMENT, "minkowski_p must be positive and finite");
+        }
+
+        double sum = 0.0;
+        for (int64_t feature = 0; feature < num_features; ++feature)
+        {
+            const double diff = std::abs(static_cast<double>(lhs_ptr[feature]) - static_cast<double>(rhs_ptr[feature]));
+            sum += std::pow(diff, minkowski_p);
+        }
+        return std::pow(sum, 1.0 / minkowski_p);
+    }
+    case ClusteringMetric::Cosine:
+    {
+        double dot      = 0.0;
+        double lhs_norm = 0.0;
+        double rhs_norm = 0.0;
+        for (int64_t feature = 0; feature < num_features; ++feature)
+        {
+            const double lhs_value = static_cast<double>(lhs_ptr[feature]);
+            const double rhs_value = static_cast<double>(rhs_ptr[feature]);
+            dot += lhs_value * rhs_value;
+            lhs_norm += lhs_value * lhs_value;
+            rhs_norm += rhs_value * rhs_value;
+        }
+
+        if (lhs_norm == 0.0 && rhs_norm == 0.0)
+        {
+            return 0.0;
+        }
+        if (lhs_norm == 0.0 || rhs_norm == 0.0)
+        {
+            return 1.0;
+        }
+
+        const double similarity = std::clamp(dot / (std::sqrt(lhs_norm) * std::sqrt(rhs_norm)), -1.0, 1.0);
+        return 1.0 - similarity;
+    }
+    default:
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "unsupported clustering metric");
+    }
+}
+
+ClusteringAlgorithm selectNeighborSearchAlgorithm(ClusteringAlgorithm requested, int64_t num_features,
+                                                  ClusteringMetric metric)
+{
+    // KDTree/BallTree pruning in this implementation is Euclidean-only.
+    if (metric != ClusteringMetric::Euclidean)
+    {
+        return ClusteringAlgorithm::Brute;
+    }
     if (requested != ClusteringAlgorithm::Auto)
     {
         return requested;
@@ -494,7 +594,8 @@ ClusteringAlgorithm selectNeighborSearchAlgorithm(ClusteringAlgorithm requested,
 }
 
 std::vector<std::vector<int64_t>> radiusNeighborhoods(const float *samples, int64_t num_samples, int64_t num_features,
-                                                      double radius, ClusteringAlgorithm algorithm, int64_t leaf_size)
+                                                      double radius, ClusteringAlgorithm algorithm, int64_t leaf_size,
+                                                      ClusteringMetric metric, double minkowski_p)
 {
     if (num_samples == 0)
     {
@@ -505,11 +606,12 @@ std::vector<std::vector<int64_t>> radiusNeighborhoods(const float *samples, int6
         throw Exception(Status::ERROR_INVALID_ARGUMENT, "radius must be finite and non-negative");
     }
 
+    validateMetricConfig(metric, minkowski_p);
     const double radius_sq = radius * radius;
-    switch (selectNeighborSearchAlgorithm(algorithm, num_features))
+    switch (selectNeighborSearchAlgorithm(algorithm, num_features, metric))
     {
     case ClusteringAlgorithm::Brute:
-        return bruteRadiusNeighborhoods(samples, num_samples, num_features, radius_sq);
+        return bruteRadiusNeighborhoods(samples, num_samples, num_features, radius, metric, minkowski_p);
     case ClusteringAlgorithm::KDTree:
     {
         KDTreeIndex                       index(samples, num_samples, num_features, leaf_size);
@@ -538,7 +640,8 @@ std::vector<std::vector<int64_t>> radiusNeighborhoods(const float *samples, int6
 }
 
 std::vector<double> kthNeighborDistances(const float *samples, int64_t num_samples, int64_t num_features, int64_t kth,
-                                         ClusteringAlgorithm algorithm, int64_t leaf_size)
+                                         ClusteringAlgorithm algorithm, int64_t leaf_size, ClusteringMetric metric,
+                                         double minkowski_p)
 {
     if (num_samples == 0)
     {
@@ -550,10 +653,11 @@ std::vector<double> kthNeighborDistances(const float *samples, int64_t num_sampl
                         static_cast<long long>(kth));
     }
 
-    switch (selectNeighborSearchAlgorithm(algorithm, num_features))
+    validateMetricConfig(metric, minkowski_p);
+    switch (selectNeighborSearchAlgorithm(algorithm, num_features, metric))
     {
     case ClusteringAlgorithm::Brute:
-        return bruteKthNeighborDistances(samples, num_samples, num_features, kth);
+        return bruteKthNeighborDistances(samples, num_samples, num_features, kth, metric, minkowski_p);
     case ClusteringAlgorithm::KDTree:
     {
         KDTreeIndex         index(samples, num_samples, num_features, leaf_size);

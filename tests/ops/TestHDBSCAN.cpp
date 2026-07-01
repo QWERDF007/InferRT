@@ -7,6 +7,12 @@
 #include <algorithm>
 #include <vector>
 
+TEST(HDBSCANTest, DefaultsToCosineMetric)
+{
+    const irt::ops::HDBSCANConfig config;
+    EXPECT_EQ(config.metric, irt::ops::ClusteringMetric::Cosine);
+}
+
 TEST(HDBSCANTest, MatchesSklearnDocumentedExample)
 {
     const std::vector<float> samples{
@@ -15,6 +21,7 @@ TEST(HDBSCANTest, MatchesSklearnDocumentedExample)
     irt::ops::HDBSCANConfig config;
     config.min_cluster_size = 2;
     config.min_samples      = 2;
+    config.metric           = irt::ops::ClusteringMetric::Euclidean;
 
     const auto result = irt::ops::hdbscan(samples.data(), 6, 2, config);
 
@@ -30,6 +37,7 @@ TEST(HDBSCANTest, RecoversSevenClustersFromAssetData)
     irt::ops::HDBSCANConfig config;
     config.min_cluster_size = 5;
     config.min_samples      = 5;
+    config.metric           = irt::ops::ClusteringMetric::Euclidean;
 
     const auto result = irt::ops::hdbscan(data.samples.data(), data.num_samples, data.num_features, config);
 
@@ -57,6 +65,7 @@ TEST(HDBSCANTest, SupportsNeighborSearchAlgorithms)
         config.min_samples      = 5;
         config.algorithm        = algorithm;
         config.leaf_size        = 8;
+        config.metric           = irt::ops::ClusteringMetric::Euclidean;
 
         const auto result = irt::ops::hdbscan(data.samples.data(), data.num_samples, data.num_features, config);
 
@@ -76,6 +85,7 @@ TEST(HDBSCANTest, RejectsInvalidArguments)
 {
     const std::vector<float> samples{0.0f, 0.0f, 1.0f, 1.0f};
     irt::ops::HDBSCANConfig  config;
+    config.metric = irt::ops::ClusteringMetric::Euclidean;
 
     EXPECT_THROW((void)irt::ops::hdbscan(nullptr, 2, 2, config), irt::Exception);
     EXPECT_THROW((void)irt::ops::hdbscan(samples.data(), 1, 2, config), irt::Exception);

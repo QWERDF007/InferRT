@@ -141,6 +141,7 @@ void validateInputs(const float *samples, int64_t num_samples, int64_t num_featu
 {
     detail::validateSampleMatrix(samples, num_samples, num_features);
     detail::validateNeighborSearchConfig(config.algorithm, config.leaf_size);
+    detail::validateMetricConfig(config.metric, config.minkowski_p);
     if (num_samples <= 1)
     {
         throw Exception(Status::ERROR_INVALID_ARGUMENT, "HDBSCAN requires more than one sample, got %lld",
@@ -178,14 +179,16 @@ void validateInputs(const float *samples, int64_t num_samples, int64_t num_featu
     }
 }
 
-std::vector<double> pairwiseDistances(const float *samples, int64_t num_samples, int64_t num_features, double alpha)
+std::vector<double> pairwiseDistances(const float *samples, int64_t num_samples, int64_t num_features, double alpha,
+                                      ClusteringMetric metric, double minkowski_p)
 {
     std::vector<double> distances(static_cast<size_t>(num_samples * num_samples), 0.0);
     for (int64_t lhs = 0; lhs < num_samples; ++lhs)
     {
         for (int64_t rhs = lhs + 1; rhs < num_samples; ++rhs)
         {
-            const double distance = detail::euclideanDistance(samples, lhs, rhs, num_features) / alpha;
+            const double distance
+                = detail::clusteringDistance(samples, lhs, rhs, num_features, metric, minkowski_p) / alpha;
             distances[static_cast<size_t>(lhs * num_samples + rhs)] = distance;
             distances[static_cast<size_t>(rhs * num_samples + lhs)] = distance;
         }
@@ -194,9 +197,11 @@ std::vector<double> pairwiseDistances(const float *samples, int64_t num_samples,
 }
 
 std::vector<double> coreDistances(const float *samples, int64_t num_samples, int64_t num_features, int64_t min_samples,
-                                  double alpha, ClusteringAlgorithm algorithm, int64_t leaf_size)
+                                  double alpha, ClusteringAlgorithm algorithm, int64_t leaf_size,
+                                  ClusteringMetric metric, double minkowski_p)
 {
-    auto result = detail::kthNeighborDistances(samples, num_samples, num_features, min_samples, algorithm, leaf_size);
+    auto result = detail::kthNeighborDistances(samples, num_samples, num_features, min_samples, algorithm, leaf_size,
+                                               metric, minkowski_p);
     for (double &distance : result)
     {
         distance /= alpha;
@@ -918,13 +923,14 @@ HDBSCANResult hdbscan(const float *samples, int64_t num_samples, int64_t num_fea
 {
     validateInputs(samples, num_samples, num_features, config);
 
-    const int64_t min_samples    = config.min_samples == 0 ? config.min_cluster_size : config.min_samples;
-    const auto    distances      = pairwiseDistances(samples, num_samples, num_features, config.alpha);
-    const auto    core_distances = coreDistances(samples, num_samples, num_features, min_samples, config.alpha,
-                                                 config.algorithm, config.leaf_size);
-    const auto    mst            = minimumSpanningTree(distances, core_distances, num_samples);
-    const auto    linkage        = makeSingleLinkage(mst, num_samples);
-    const auto    condensed_tree = condenseTree(linkage, config.min_cluster_size);
+    const int64_t min_samples = config.min_samples == 0 ? config.min_cluster_size : config.min_samples;
+    const auto    distances
+        = pairwiseDistances(samples, num_samples, num_features, config.alpha, config.metric, config.minkowski_p);
+    const auto core_distances = coreDistances(samples, num_samples, num_features, min_samples, config.alpha,
+                                              config.algorithm, config.leaf_size, config.metric, config.minkowski_p);
+    const auto mst            = minimumSpanningTree(distances, core_distances, num_samples);
+    const auto linkage        = makeSingleLinkage(mst, num_samples);
+    const auto condensed_tree = condenseTree(linkage, config.min_cluster_size);
     return getClusters(condensed_tree, config);
 }
 

@@ -47,6 +47,21 @@ def _cluster_selection_method(ops_module, name: str):
     }[name]
 
 
+def _metric_case(ops_module, name: str):
+    if name == "default":
+        return None, "cosine"
+    return {
+        "euclidean": (ops_module.ClusteringMetric.Euclidean, "euclidean"),
+        "cosine": (ops_module.ClusteringMetric.Cosine, "cosine"),
+        "manhattan": (ops_module.ClusteringMetric.Manhattan, "manhattan"),
+        "minkowski": (ops_module.ClusteringMetric.Minkowski, "minkowski"),
+    }[name]
+
+
+def _sklearn_algorithm_for_metric(sklearn_algorithm: str, sklearn_metric: str) -> str:
+    return "brute" if sklearn_metric != "euclidean" else sklearn_algorithm
+
+
 DBSCAN_PARAMETER_CASES = [
     pytest.param(
         {
@@ -143,6 +158,46 @@ DBSCAN_PARAMETER_CASES = [
             "target": False,
         },
         id="auto_eps0.45_min4_leaf8",
+    ),
+    pytest.param(
+        {
+            "eps": 0.01,
+            "min_samples": 4,
+            "algorithm": "auto",
+            "leaf_size": 8,
+            "metric": "default",
+            "clusters": 7,
+            "noise": 32,
+            "target": False,
+        },
+        id="default_cosine_eps0.01_min4_leaf8",
+    ),
+    pytest.param(
+        {
+            "eps": 1.0,
+            "min_samples": 4,
+            "algorithm": "brute",
+            "leaf_size": 8,
+            "metric": "manhattan",
+            "clusters": 7,
+            "noise": 1,
+            "target": False,
+        },
+        id="manhattan_eps1.0_min4_leaf8",
+    ),
+    pytest.param(
+        {
+            "eps": 1.0,
+            "min_samples": 4,
+            "algorithm": "auto",
+            "leaf_size": 8,
+            "metric": "minkowski",
+            "minkowski_p": 3.0,
+            "clusters": 7,
+            "noise": 0,
+            "target": False,
+        },
+        id="minkowski_p3_eps1.0_min4_leaf8",
     ),
 ]
 
@@ -284,6 +339,61 @@ HDBSCAN_PARAMETER_CASES = [
         },
         id="auto_mcs5_default_ms_eom",
     ),
+    pytest.param(
+        {
+            "min_cluster_size": 5,
+            "min_samples": 5,
+            "cluster_selection_epsilon": 0.0,
+            "max_cluster_size": 0,
+            "alpha": 1.0,
+            "algorithm": "kd_tree",
+            "leaf_size": 8,
+            "metric": "default",
+            "cluster_selection_method": "eom",
+            "allow_single_cluster": False,
+            "clusters": 6,
+            "noise": 11,
+            "target": False,
+        },
+        id="default_cosine_mcs5_ms5_eom",
+    ),
+    pytest.param(
+        {
+            "min_cluster_size": 5,
+            "min_samples": 5,
+            "cluster_selection_epsilon": 0.0,
+            "max_cluster_size": 0,
+            "alpha": 1.0,
+            "algorithm": "brute",
+            "leaf_size": 8,
+            "metric": "manhattan",
+            "cluster_selection_method": "eom",
+            "allow_single_cluster": False,
+            "clusters": 7,
+            "noise": 0,
+            "target": False,
+        },
+        id="manhattan_mcs5_ms5_eom",
+    ),
+    pytest.param(
+        {
+            "min_cluster_size": 5,
+            "min_samples": 5,
+            "cluster_selection_epsilon": 0.0,
+            "max_cluster_size": 0,
+            "alpha": 1.0,
+            "algorithm": "auto",
+            "leaf_size": 8,
+            "metric": "minkowski",
+            "minkowski_p": 3.0,
+            "cluster_selection_method": "eom",
+            "allow_single_cluster": False,
+            "clusters": 7,
+            "noise": 0,
+            "target": False,
+        },
+        id="minkowski_p3_mcs5_ms5_eom",
+    ),
 ]
 
 
@@ -292,19 +402,28 @@ def test_dbscan_matches_sklearn_on_asset_data(ops_module, repo_root: Path, case)
     sklearn_cluster = pytest.importorskip("sklearn.cluster")
     samples, target_labels = _load_cluster_data(repo_root)
     algorithm, sklearn_algorithm = _algorithm_case(ops_module, case["algorithm"])
+    metric, sklearn_metric = _metric_case(ops_module, case.get("metric", "euclidean"))
     config = ops_module.DBSCANConfig()
     config.eps = case["eps"]
     config.min_samples = case["min_samples"]
     config.algorithm = algorithm
     config.leaf_size = case["leaf_size"]
+    if metric is not None:
+        config.metric = metric
+    if "minkowski_p" in case:
+        config.minkowski_p = case["minkowski_p"]
 
+    sklearn_kwargs = {
+        "eps": config.eps,
+        "min_samples": config.min_samples,
+        "metric": sklearn_metric,
+        "algorithm": _sklearn_algorithm_for_metric(sklearn_algorithm, sklearn_metric),
+        "leaf_size": config.leaf_size,
+    }
+    if sklearn_metric == "minkowski":
+        sklearn_kwargs["p"] = config.minkowski_p
     result = ops_module.dbscan(samples, config)
-    expected = sklearn_cluster.DBSCAN(
-        eps=config.eps,
-        min_samples=config.min_samples,
-        algorithm=sklearn_algorithm,
-        leaf_size=config.leaf_size,
-    ).fit_predict(samples)
+    expected = sklearn_cluster.DBSCAN(**sklearn_kwargs).fit_predict(samples)
 
     labels = np.asarray(result.labels, dtype=np.int64)
     np.testing.assert_array_equal(labels, expected)
@@ -322,6 +441,7 @@ def test_hdbscan_matches_sklearn_on_asset_data(ops_module, repo_root: Path, case
 
     samples, target_labels = _load_cluster_data(repo_root)
     algorithm, sklearn_algorithm = _algorithm_case(ops_module, case["algorithm"])
+    metric, sklearn_metric = _metric_case(ops_module, case.get("metric", "euclidean"))
     cluster_selection_method, sklearn_cluster_selection_method = _cluster_selection_method(
         ops_module,
         case["cluster_selection_method"],
@@ -334,17 +454,24 @@ def test_hdbscan_matches_sklearn_on_asset_data(ops_module, repo_root: Path, case
     config.alpha = case["alpha"]
     config.algorithm = algorithm
     config.leaf_size = case["leaf_size"]
+    if metric is not None:
+        config.metric = metric
+    if "minkowski_p" in case:
+        config.minkowski_p = case["minkowski_p"]
     config.cluster_selection_method = cluster_selection_method
     config.allow_single_cluster = case["allow_single_cluster"]
 
+    metric_params = {"p": config.minkowski_p} if sklearn_metric == "minkowski" else None
     result = ops_module.hdbscan(samples, config)
     reference = sklearn_cluster.HDBSCAN(
         min_cluster_size=config.min_cluster_size,
         min_samples=None if config.min_samples == 0 else config.min_samples,
         cluster_selection_epsilon=config.cluster_selection_epsilon,
         max_cluster_size=None if config.max_cluster_size == 0 else config.max_cluster_size,
+        metric=sklearn_metric,
+        metric_params=metric_params,
         alpha=config.alpha,
-        algorithm=sklearn_algorithm,
+        algorithm=_sklearn_algorithm_for_metric(sklearn_algorithm, sklearn_metric),
         leaf_size=config.leaf_size,
         cluster_selection_method=sklearn_cluster_selection_method,
         allow_single_cluster=config.allow_single_cluster,
@@ -361,6 +488,11 @@ def test_hdbscan_matches_sklearn_on_asset_data(ops_module, repo_root: Path, case
     assert all(0.0 <= probability <= 1.0 for probability in result.probabilities)
     if case["target"]:
         _assert_same_partition(labels, target_labels)
+
+
+def test_clustering_default_metric_is_cosine(ops_module) -> None:
+    assert ops_module.DBSCANConfig().metric == ops_module.ClusteringMetric.Cosine
+    assert ops_module.HDBSCANConfig().metric == ops_module.ClusteringMetric.Cosine
 
 
 def test_clustering_rejects_invalid_sample_shape(ops_module) -> None:

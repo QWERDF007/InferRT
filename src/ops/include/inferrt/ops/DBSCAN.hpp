@@ -10,6 +10,8 @@ namespace irt::ops {
 
 inline constexpr float   kDefaultDBSCANEps        = 0.5f;
 inline constexpr int64_t kDefaultDBSCANMinSamples = 5;
+inline constexpr double  kDefaultDBSCANMinkowskiP = 2.0;
+inline constexpr auto    kDefaultDBSCANMetric     = ClusteringMetric::Cosine;
 
 struct DBSCANConfig final
 {
@@ -17,6 +19,8 @@ struct DBSCANConfig final
     int64_t             min_samples{kDefaultDBSCANMinSamples};
     ClusteringAlgorithm algorithm{ClusteringAlgorithm::Auto};
     int64_t             leaf_size{kDefaultClusteringLeafSize};
+    ClusteringMetric    metric{kDefaultDBSCANMetric};
+    double              minkowski_p{kDefaultDBSCANMinkowskiP};
 };
 
 struct DBSCANResult final

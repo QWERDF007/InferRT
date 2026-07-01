@@ -596,12 +596,20 @@ PYBIND11_MODULE(inferrt_ops_py, m)
         .value("KDTree", irt::ops::ClusteringAlgorithm::KDTree)
         .value("BallTree", irt::ops::ClusteringAlgorithm::BallTree);
 
+    py::enum_<irt::ops::ClusteringMetric>(m, "ClusteringMetric")
+        .value("Euclidean", irt::ops::ClusteringMetric::Euclidean)
+        .value("Cosine", irt::ops::ClusteringMetric::Cosine)
+        .value("Manhattan", irt::ops::ClusteringMetric::Manhattan)
+        .value("Minkowski", irt::ops::ClusteringMetric::Minkowski);
+
     py::class_<irt::ops::DBSCANConfig>(m, "DBSCANConfig")
         .def(py::init<>())
         .def_readwrite("eps", &irt::ops::DBSCANConfig::eps)
         .def_readwrite("min_samples", &irt::ops::DBSCANConfig::min_samples)
         .def_readwrite("algorithm", &irt::ops::DBSCANConfig::algorithm)
-        .def_readwrite("leaf_size", &irt::ops::DBSCANConfig::leaf_size);
+        .def_readwrite("leaf_size", &irt::ops::DBSCANConfig::leaf_size)
+        .def_readwrite("metric", &irt::ops::DBSCANConfig::metric)
+        .def_readwrite("minkowski_p", &irt::ops::DBSCANConfig::minkowski_p);
 
     py::class_<irt::ops::DBSCANResult>(m, "DBSCANResult")
         .def_readonly("core_sample_indices", &irt::ops::DBSCANResult::core_sample_indices)
@@ -620,6 +628,8 @@ PYBIND11_MODULE(inferrt_ops_py, m)
         .def_readwrite("alpha", &irt::ops::HDBSCANConfig::alpha)
         .def_readwrite("algorithm", &irt::ops::HDBSCANConfig::algorithm)
         .def_readwrite("leaf_size", &irt::ops::HDBSCANConfig::leaf_size)
+        .def_readwrite("metric", &irt::ops::HDBSCANConfig::metric)
+        .def_readwrite("minkowski_p", &irt::ops::HDBSCANConfig::minkowski_p)
         .def_readwrite("cluster_selection_method", &irt::ops::HDBSCANConfig::cluster_selection_method)
         .def_readwrite("allow_single_cluster", &irt::ops::HDBSCANConfig::allow_single_cluster);
 

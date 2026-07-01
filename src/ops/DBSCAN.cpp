@@ -13,6 +13,7 @@ void validateInputs(const float *samples, int64_t num_samples, int64_t num_featu
 {
     detail::validateSampleMatrix(samples, num_samples, num_features);
     detail::validateNeighborSearchConfig(config.algorithm, config.leaf_size);
+    detail::validateMetricConfig(config.metric, config.minkowski_p);
     if (!std::isfinite(config.eps) || config.eps <= 0.0f)
     {
         throw Exception(Status::ERROR_INVALID_ARGUMENT, "eps must be positive and finite");
@@ -35,7 +36,8 @@ DBSCANResult dbscan(const float *samples, int64_t num_samples, int64_t num_featu
     }
 
     const auto neighborhoods = detail::radiusNeighborhoods(samples, num_samples, num_features, config.eps,
-                                                           config.algorithm, config.leaf_size);
+                                                           config.algorithm, config.leaf_size, config.metric,
+                                                           config.minkowski_p);
 
     std::vector<uint8_t> is_core(static_cast<size_t>(num_samples), uint8_t{0});
     DBSCANResult         result;

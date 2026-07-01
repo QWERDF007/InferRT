@@ -13,6 +13,8 @@ inline constexpr int64_t kDefaultHDBSCANMinSamples              = 0;
 inline constexpr double  kDefaultHDBSCANClusterSelectionEpsilon = 0.0;
 inline constexpr int64_t kDefaultHDBSCANMaxClusterSize          = 0;
 inline constexpr double  kDefaultHDBSCANAlpha                   = 1.0;
+inline constexpr double  kDefaultHDBSCANMinkowskiP              = 2.0;
+inline constexpr auto    kDefaultHDBSCANMetric                  = ClusteringMetric::Cosine;
 
 enum class HDBSCANClusterSelectionMethod
 {
@@ -29,6 +31,8 @@ struct HDBSCANConfig final
     double                        alpha{1.0};
     ClusteringAlgorithm           algorithm{ClusteringAlgorithm::KDTree};
     int64_t                       leaf_size{40};
+    ClusteringMetric              metric{kDefaultHDBSCANMetric};
+    double                        minkowski_p{kDefaultHDBSCANMinkowskiP};
     HDBSCANClusterSelectionMethod cluster_selection_method{HDBSCANClusterSelectionMethod::Eom};
     bool                          allow_single_cluster{false};
 };
