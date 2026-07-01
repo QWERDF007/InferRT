@@ -19,6 +19,7 @@
 #pragma warning(pop)
 
 #include <opencv2/core.hpp>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -32,6 +33,7 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+
 
 namespace fs = std::filesystem;
 
@@ -251,25 +253,25 @@ irt::util::ManifestEntries roiSearchManifestEntries(const fs::path &index_path, 
                                                     const std::vector<int64_t> &roi_ids)
 {
     irt::util::ManifestEntries entries{
-        {"version", "1"},
-        {"kind", "roi_search"},
-        {"index_file", absolutePathManifestValue(index_path)},
-        {"model", config.model_name},
-        {"feature", config.feature_name},
-        {"model_backend", irt::model::modelBackendName(config.model_backend)},
-        {"model_device", irt::model::modelDeviceName(config.model_device)},
+        {           "version",                                                    "1"},
+        {              "kind",                                           "roi_search"},
+        {        "index_file",                  absolutePathManifestValue(index_path)},
+        {             "model",                                      config.model_name},
+        {           "feature",                                    config.feature_name},
+        {     "model_backend",     irt::model::modelBackendName(config.model_backend)},
+        {      "model_device",       irt::model::modelDeviceName(config.model_device)},
         {"preprocess_backend", priv::preprocessBackendName(config.preprocess_backend)},
-        {"norm", priv::featureNormName(config.norm)},
-        {"faiss_backend", priv::faissBackendName(config.faiss_backend)},
-        {"index_storage", priv::indexStorageName(config.index_storage)},
-        {"model_batch_size", std::to_string(config.model_batch_size)},
-        {"index_kind", priv::indexKindName(config)},
-        {"roi_pooled_height", std::to_string(config.pooled_height)},
-        {"roi_pooled_width", std::to_string(config.pooled_width)},
-        {"roi_sampling_ratio", std::to_string(config.sampling_ratio)},
-        {"roi_use_pca", boolName(config.use_pca)},
-        {"roi_pca_mode", roiPcaModeName(config)},
-        {"roi_pca_dim", std::to_string(effectivePcaDim(config))},
+        {              "norm",                     priv::featureNormName(config.norm)},
+        {     "faiss_backend",           priv::faissBackendName(config.faiss_backend)},
+        {     "index_storage",           priv::indexStorageName(config.index_storage)},
+        {  "model_batch_size",                std::to_string(config.model_batch_size)},
+        {        "index_kind",                            priv::indexKindName(config)},
+        { "roi_pooled_height",                   std::to_string(config.pooled_height)},
+        {  "roi_pooled_width",                    std::to_string(config.pooled_width)},
+        {"roi_sampling_ratio",                  std::to_string(config.sampling_ratio)},
+        {       "roi_use_pca",                               boolName(config.use_pca)},
+        {      "roi_pca_mode",                                 roiPcaModeName(config)},
+        {       "roi_pca_dim",                std::to_string(effectivePcaDim(config))},
     };
     if (priv::useCpuDiskIndex(config))
     {
@@ -288,8 +290,7 @@ irt::util::ManifestEntries roiSearchManifestEntries(const fs::path &index_path, 
 /**
  * @brief 写入 ROI 搜索 manifest。
  */
-void saveRoiManifest(const fs::path &index_path, const RoiSearchConfig &config,
-                     const std::vector<int64_t> &roi_ids)
+void saveRoiManifest(const fs::path &index_path, const RoiSearchConfig &config, const std::vector<int64_t> &roi_ids)
 {
     irt::util::writeYamlManifest(irt::util::manifestPathForDataFile(index_path),
                                  roiSearchManifestEntries(index_path, config, roi_ids));
@@ -333,8 +334,7 @@ std::vector<int64_t> loadRoiIdsFromManifest(const fs::path &index_path)
         const auto value  = irt::util::manifestValue(manifest, prefix + ".id");
         if (value.empty())
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI manifest is missing %s.id",
-                                 prefix.c_str());
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI manifest is missing %s.id", prefix.c_str());
         }
         try
         {
@@ -853,10 +853,10 @@ private:
     PreparedFeatureMap applyLocalPcaToFeatureMap(PreparedFeatureMap feature_map) const
     {
         validatePreparedFeatureMap(feature_map);
-        const int batch    = static_cast<int>(feature_map.dims.d[0]);
-        const int channels = static_cast<int>(feature_map.dims.d[1]);
-        const int height   = static_cast<int>(feature_map.dims.d[2]);
-        const int width    = static_cast<int>(feature_map.dims.d[3]);
+        const int  batch     = static_cast<int>(feature_map.dims.d[0]);
+        const int  channels  = static_cast<int>(feature_map.dims.d[1]);
+        const int  height    = static_cast<int>(feature_map.dims.d[2]);
+        const int  width     = static_cast<int>(feature_map.dims.d[3]);
         const auto row_count = static_cast<size_t>(batch) * static_cast<size_t>(height) * static_cast<size_t>(width);
         if (config_.pca_dim <= 0 || config_.pca_dim > channels || static_cast<size_t>(config_.pca_dim) > row_count)
         {
@@ -1022,8 +1022,8 @@ void RoiSearch::Impl::buildOrLoad(const fs::path &weights_file, const std::vecto
             priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 0, 1);
             load(weights_file, resolved_index_path);
             priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 1, 1);
-            priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Finished, 0, 0, 0,
-                                      gallery_ids_.size(), gallery_ids_.size());
+            priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Finished, 0, 0, 0, gallery_ids_.size(),
+                                      gallery_ids_.size());
             return;
         }
     }
@@ -1071,10 +1071,12 @@ void RoiSearch::Impl::load(const fs::path &weights_file, const fs::path &index_f
     auto faiss = priv::loadConfiguredFaissIndex(index_file, config_);
     if (config_.use_pca)
     {
-        const auto expected_dim = static_cast<faiss::idx_t>(config_.pca_dim * config_.pooled_height * config_.pooled_width);
+        const auto expected_dim
+            = static_cast<faiss::idx_t>(config_.pca_dim * config_.pooled_height * config_.pooled_width);
         if (!faiss.index || faiss.index->d != expected_dim)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI local PCA dim does not match Faiss index dim");
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "ROI local PCA dim does not match Faiss index dim");
         }
     }
     if (static_cast<faiss::idx_t>(ids.size()) != faiss.index->ntotal)
@@ -1201,7 +1203,7 @@ void RoiSearch::Impl::ensureExtractor()
 {
     if (!extractor_)
     {
-        auto extractor = std::make_unique<priv::RoiFeatureExtractor>(config_, weights_file_);
+        auto       extractor     = std::make_unique<priv::RoiFeatureExtractor>(config_, weights_file_);
         const auto roi_align_dim = extractor->featureDim();
         if (index_ && index_->d != static_cast<faiss::idx_t>(roi_align_dim))
         {

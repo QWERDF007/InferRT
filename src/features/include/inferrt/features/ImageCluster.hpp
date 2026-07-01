@@ -39,8 +39,8 @@ struct ImageClusterItem
  */
 struct ImageClusterAssignment
 {
-    int64_t image_id{0};     ///< 调用方提供的图像 ID。
-    int64_t cluster_id{-1};  ///< HDBSCAN 聚类标签；-1 表示噪声。
+    int64_t image_id{0};      ///< 调用方提供的图像 ID。
+    int64_t cluster_id{-1};   ///< HDBSCAN 聚类标签；-1 表示噪声。
     double  probability{0.0}; ///< HDBSCAN 分配置信度。
 };
 
@@ -49,12 +49,12 @@ struct ImageClusterAssignment
  */
 enum class ImageClusterStage
 {
-    Unknown,           ///< 未知或未初始化阶段。
-    Started,           ///< 聚类流程已开始。
-    LoadingModel,      ///< 正在加载特征提取模型。
+    Unknown,            ///< 未知或未初始化阶段。
+    Started,            ///< 聚类流程已开始。
+    LoadingModel,       ///< 正在加载特征提取模型。
     ExtractingFeatures, ///< 正在抽取图像特征。
-    Clustering,        ///< 正在执行 HDBSCAN 聚类。
-    Finished,          ///< 聚类流程完成。
+    Clustering,         ///< 正在执行 HDBSCAN 聚类。
+    Finished,           ///< 聚类流程完成。
 };
 
 /**
@@ -120,10 +120,10 @@ struct ImageClusterConfig : public ImageSearchConfig
  */
 struct ImageClusterResult
 {
-    std::vector<ImageClusterAssignment> assignments; ///< 与输入顺序一致的图像聚类结果。
-    int                                 feature_dim{0};    ///< 实际送入 HDBSCAN 的特征维度。
-    int64_t                             cluster_count{0};  ///< 非噪声簇数量。
-    int64_t                             noise_count{0};    ///< 噪声图像数量。
+    std::vector<ImageClusterAssignment> assignments;      ///< 与输入顺序一致的图像聚类结果。
+    int                                 feature_dim{0};   ///< 实际送入 HDBSCAN 的特征维度。
+    int64_t                             cluster_count{0}; ///< 非噪声簇数量。
+    int64_t                             noise_count{0};   ///< 噪声图像数量。
 };
 
 /**

@@ -287,16 +287,15 @@ FaissIndexBundle buildConfiguredFaissIndex(size_t vector_count, int feature_dim,
     if (useCpuDiskIndex(config))
     {
         FaissIndexBundle bundle;
-        bundle.index = buildCpuOnDiskIvfFlatIndex(vector_count, feature_dim, index_path, config.model_batch_size,
-                                                  load_feature, load_feature_batch, load_feature_index_batch,
-                                                  progress_callback);
+        bundle.index
+            = buildCpuOnDiskIvfFlatIndex(vector_count, feature_dim, index_path, config.model_batch_size, load_feature,
+                                         load_feature_batch, load_feature_index_batch, progress_callback);
         return bundle;
     }
 
-    auto cpu_index
-        = buildRamIvfPqIndex(vector_count, feature_dim, config.model_batch_size, load_feature, load_feature_batch,
-                             load_feature_index_batch, progress_callback,
-                             config.faiss_backend == ImageSearchFaissBackend::GPU);
+    auto cpu_index = buildRamIvfPqIndex(vector_count, feature_dim, config.model_batch_size, load_feature,
+                                        load_feature_batch, load_feature_index_batch, progress_callback,
+                                        config.faiss_backend == ImageSearchFaissBackend::GPU);
 
     reportBuildProgress(progress_callback, ImageSearchBuildStage::WritingIndex, 0, 0, 0, 0, 1);
     faiss::write_index(cpu_index.get(), index_path.string().c_str());

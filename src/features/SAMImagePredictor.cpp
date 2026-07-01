@@ -21,7 +21,6 @@
 #include <limits>
 #include <utility>
 
-
 namespace fs = std::filesystem;
 
 namespace irt::features {
@@ -257,8 +256,8 @@ PreprocessedSAMImage preprocessImage(const cv::Mat &image, int input_height, int
             {
                 for (int c = 0; c < 3; ++c)
                 {
-                    const size_t offset = static_cast<size_t>(c) * input_height * input_width
-                                        + static_cast<size_t>(y) * input_width + static_cast<size_t>(x);
+                    const size_t offset   = static_cast<size_t>(c) * input_height * input_width
+                                          + static_cast<size_t>(y) * input_width + static_cast<size_t>(x);
                     output.tensor[offset] = (static_cast<float>(row[x][c]) / 255.0F - kMean[c]) / kStd[c];
                 }
             }
@@ -289,8 +288,8 @@ PreprocessedSAMImage preprocessImage(const cv::Mat &image, int input_height, int
         {
             for (int c = 0; c < 3; ++c)
             {
-                const size_t offset = static_cast<size_t>(c) * input_height * input_width
-                                    + static_cast<size_t>(y) * input_width + static_cast<size_t>(x);
+                const size_t offset   = static_cast<size_t>(c) * input_height * input_width
+                                      + static_cast<size_t>(y) * input_width + static_cast<size_t>(x);
                 output.tensor[offset] = (static_cast<float>(row[x][c]) - kMean[c]) / kStd[c];
             }
         }

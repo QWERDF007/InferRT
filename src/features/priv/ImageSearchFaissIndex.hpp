@@ -1095,7 +1095,7 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
     size_t vector_count, int feature_dim, const std::filesystem::path &index_path, size_t batch_size,
     const LoadFeatureCallback &load_feature, const LoadFeatureBatchCallback &load_feature_batch,
     const LoadFeatureIndexedBatchCallback &load_feature_index_batch,
-    const BuildProgressCallback &progress_callback = {});
+    const BuildProgressCallback           &progress_callback = {});
 
 inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(size_t vector_count, int feature_dim,
                                                                 const std::filesystem::path &index_path,
@@ -1121,8 +1121,7 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(size_t vector_co
 inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
     size_t vector_count, int feature_dim, const std::filesystem::path &index_path, size_t batch_size,
     const LoadFeatureCallback &load_feature, const LoadFeatureBatchCallback &load_feature_batch,
-    const LoadFeatureIndexedBatchCallback &load_feature_index_batch,
-    const BuildProgressCallback &progress_callback)
+    const LoadFeatureIndexedBatchCallback &load_feature_index_batch, const BuildProgressCallback &progress_callback)
 {
     if (vector_count == 0 || feature_dim <= 0)
     {
@@ -1134,9 +1133,9 @@ inline std::unique_ptr<faiss::Index> buildCpuOnDiskIvfFlatIndex(
     const size_t training_count = chooseCpuOnDiskIvfTrainingCount(vector_count, feature_dim, nlist);
     const size_t stride         = std::max<size_t>(1, vector_count / training_count);
 
-    const auto training = loadTrainingFeatures(vector_count, feature_dim, training_count, stride, batch_size,
-                                               load_feature, load_feature_batch, load_feature_index_batch,
-                                               progress_callback);
+    const auto training
+        = loadTrainingFeatures(vector_count, feature_dim, training_count, stride, batch_size, load_feature,
+                               load_feature_batch, load_feature_index_batch, progress_callback);
     const size_t actual_training_count = training.count;
     if (actual_training_count < nlist)
     {
@@ -1229,8 +1228,8 @@ inline std::unique_ptr<faiss::Index> buildRamIvfPqIndex(size_t vector_count, int
     const size_t training_count = chooseRamIvfPqTrainingCount(vector_count, feature_dim, nlist);
     const size_t stride         = std::max<size_t>(1, vector_count / training_count);
 
-    auto training = loadTrainingFeatures(vector_count, feature_dim, training_count, stride, batch_size,
-                                         load_feature, load_feature_batch, load_feature_index_batch, progress_callback);
+    auto training = loadTrainingFeatures(vector_count, feature_dim, training_count, stride, batch_size, load_feature,
+                                         load_feature_batch, load_feature_index_batch, progress_callback);
     const size_t actual_training_count = training.count;
     if (actual_training_count < nlist)
     {

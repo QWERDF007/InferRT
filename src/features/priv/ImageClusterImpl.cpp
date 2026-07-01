@@ -10,7 +10,6 @@
 
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/IModel.h>
-
 #include <opencv2/core.hpp>
 
 #include <algorithm>
@@ -24,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+
 namespace fs = std::filesystem;
 
 namespace irt::features {
@@ -36,8 +36,7 @@ ImageSearchConfig featureSearchConfig(const ImageClusterConfig &config)
 }
 
 void reportProgress(const ImageClusterProgressCallback &callback, ImageClusterStage stage, size_t batch_index = 0,
-                    size_t batch_begin = 0, size_t batch_count = 0, size_t processed_count = 0,
-                    size_t total_count = 0)
+                    size_t batch_begin = 0, size_t batch_count = 0, size_t processed_count = 0, size_t total_count = 0)
 {
     if (!callback)
     {
@@ -319,19 +318,19 @@ private:
                                  "ImageCluster BxSamplesxChannels feature shape mismatch");
         }
 
-        const auto sample_count = static_cast<size_t>(rows);
-        const auto sample_size  = sample_count * static_cast<size_t>(channels);
-        const auto base         = tensor.data.data() + batch_index * sample_size;
+        const auto         sample_count = static_cast<size_t>(rows);
+        const auto         sample_size  = sample_count * static_cast<size_t>(channels);
+        const auto         base         = tensor.data.data() + batch_index * sample_size;
         std::vector<float> local_rows(base, base + sample_size);
         return projectLocalPca(local_rows, sample_count, channels, config_.pca_dim);
     }
 
-    ImageClusterConfig      config_{};
+    ImageClusterConfig          config_{};
     priv::ImageFeatureExtractor image_extractor_;
-    Layout                  layout_{Layout::Nchw};
-    int                     local_samples_{0};
-    int                     feature_channels_{0};
-    int                     feature_dim_{0};
+    Layout                      layout_{Layout::Nchw};
+    int                         local_samples_{0};
+    int                         feature_channels_{0};
+    int                         feature_dim_{0};
 };
 
 } // namespace
@@ -365,9 +364,9 @@ ImageClusterResult ImageCluster::Impl::cluster(const fs::path &weights_file, con
                                                ImageClusterProgressCallback progress_callback)
 {
     reportProgress(progress_callback, ImageClusterStage::Started);
-    auto normalized_items = normalizeItems(items);
-    const auto image_paths = itemPaths(normalized_items);
-    const auto image_ids   = itemIds(normalized_items);
+    auto       normalized_items = normalizeItems(items);
+    const auto image_paths      = itemPaths(normalized_items);
+    const auto image_ids        = itemIds(normalized_items);
 
     reportProgress(progress_callback, ImageClusterStage::LoadingModel, 0, 0, 0, 0, 1);
     ClusterFeatureExtractor extractor(config_, weights_file);

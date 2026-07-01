@@ -21,9 +21,8 @@ public:
     Impl(const Impl &)            = delete;
     Impl &operator=(const Impl &) = delete;
 
-    ImageClusterResult cluster(const std::filesystem::path &weights_file,
-                               const std::vector<ImageClusterItem> &items,
-                               ImageClusterProgressCallback         progress_callback);
+    ImageClusterResult cluster(const std::filesystem::path &weights_file, const std::vector<ImageClusterItem> &items,
+                               ImageClusterProgressCallback progress_callback);
 
     const ImageClusterConfig &config() const noexcept;
     int                       featureDim() const noexcept;

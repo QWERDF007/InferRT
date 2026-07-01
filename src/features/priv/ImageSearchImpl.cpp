@@ -499,24 +499,24 @@ bool imageIdsMatch(const std::vector<ImageSearchItem> &items, const std::vector<
  * @brief 构造图像检索 manifest 条目。
  */
 irt::util::ManifestEntries imageSearchManifestEntries(const fs::path &index_path, const std::string &gallery_value,
-                                                      const ImageSearchConfig     &config,
-                                                      const std::vector<int64_t>  &image_ids)
+                                                      const ImageSearchConfig    &config,
+                                                      const std::vector<int64_t> &image_ids)
 {
     irt::util::ManifestEntries entries{
-        {"version", "1"},
-        {"kind", "image_search"},
-        {"index_file", absolutePathManifestValue(index_path)},
-        {"model", config.model_name},
-        {"feature", config.feature_name},
-        {"gallery_dir", gallery_value},
-        {"model_backend", modelBackendName(config.model_backend)},
-        {"model_device", modelDeviceName(config.model_device)},
+        {           "version",                                              "1"},
+        {              "kind",                                   "image_search"},
+        {        "index_file",            absolutePathManifestValue(index_path)},
+        {             "model",                                config.model_name},
+        {           "feature",                              config.feature_name},
+        {       "gallery_dir",                                    gallery_value},
+        {     "model_backend",           modelBackendName(config.model_backend)},
+        {      "model_device",             modelDeviceName(config.model_device)},
         {"preprocess_backend", preprocessBackendName(config.preprocess_backend)},
-        {"norm", featureNormName(config.norm)},
-        {"faiss_backend", faissBackendName(config.faiss_backend)},
-        {"index_storage", indexStorageName(config.index_storage)},
-        {"model_batch_size", std::to_string(config.model_batch_size)},
-        {"index_kind", indexKindName(config)},
+        {              "norm",                     featureNormName(config.norm)},
+        {     "faiss_backend",           faissBackendName(config.faiss_backend)},
+        {     "index_storage",           indexStorageName(config.index_storage)},
+        {  "model_batch_size",          std::to_string(config.model_batch_size)},
+        {        "index_kind",                            indexKindName(config)},
     };
     if (useCpuDiskIndex(config))
     {
@@ -620,8 +620,7 @@ bool existingIndexMatchesConfig(const fs::path &index_path, const fs::path &gall
     return irt::util::manifestValueEquals(manifest, "kind", "image_search")
         && irt::util::manifestValueEquals(manifest, "index_file", absolutePathManifestValue(index_path))
         && irt::util::manifestValueEquals(manifest, "model", config.model_name)
-        && irt::util::manifestValueEquals(manifest, "feature", config.feature_name)
-        && gallery_matches
+        && irt::util::manifestValueEquals(manifest, "feature", config.feature_name) && gallery_matches
         && irt::util::manifestValueEquals(manifest, "norm", featureNormName(config.norm))
         && irt::util::manifestValueEquals(manifest, "index_storage", indexStorageName(config.index_storage))
         && irt::util::manifestValueEquals(manifest, "index_kind", indexKindName(config));
@@ -1028,10 +1027,9 @@ FaissIndexBundle buildCpuOnDiskIndex(const std::vector<fs::path> &gallery_images
     FaissIndexBundle bundle;
     bundle.index = priv::buildCpuOnDiskIvfFlatIndex(
         gallery_images.size(), extractor.featureDim(), index_path, config.model_batch_size,
-        [&](size_t index) { return extractor.extract(gallery_images[index]); },
-        [&](size_t begin, size_t count) { return extractor.extractBatch(gallery_images, begin, count); },
-        [&](const std::vector<size_t> &indices) { return extractor.extractBatch(gallery_images, indices); },
-        progress_callback);
+        [&](size_t index) { return extractor.extract(gallery_images[index]); }, [&](size_t begin, size_t count)
+        { return extractor.extractBatch(gallery_images, begin, count); }, [&](const std::vector<size_t> &indices)
+        { return extractor.extractBatch(gallery_images, indices); }, progress_callback);
     return bundle;
 }
 
@@ -1175,8 +1173,9 @@ void ImageSearch::Impl::build(const fs::path &weights_file, const fs::path &gall
     auto images = ImageSearch::collectGalleryImages(gallery_dir);
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::CollectingImages, 0, 0, 0, images.size(),
                               images.size());
-    buildWithImages(weights_file, gallery_dir, makeImageItemsFromPaths(images), resolveIndexPath(gallery_dir, index_file),
-                    galleryDirectoryMetadataValue(gallery_dir), std::move(progress_callback));
+    buildWithImages(weights_file, gallery_dir, makeImageItemsFromPaths(images),
+                    resolveIndexPath(gallery_dir, index_file), galleryDirectoryMetadataValue(gallery_dir),
+                    std::move(progress_callback));
 }
 
 void ImageSearch::Impl::buildOrLoad(const fs::path &weights_file, const std::vector<ImageSearchItem> &gallery_items,
@@ -1201,8 +1200,8 @@ void ImageSearch::Impl::buildOrLoad(const fs::path &weights_file, const std::vec
             priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 0, 1);
             load(weights_file, resolved_index_path);
             priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 1, 1);
-            priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Finished, 0, 0, 0,
-                                      gallery_ids_.size(), gallery_ids_.size());
+            priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::Finished, 0, 0, 0, gallery_ids_.size(),
+                                      gallery_ids_.size());
             return;
         }
     }
@@ -1227,7 +1226,8 @@ void ImageSearch::Impl::load(const fs::path &weights_file, const fs::path &index
 {
     if (index_file.empty())
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageSearch index_file must not be empty when loading");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "ImageSearch index_file must not be empty when loading");
     }
     const fs::path resolved_index_path = index_file;
     if (!fs::exists(resolved_index_path))
@@ -1250,7 +1250,7 @@ void ImageSearch::Impl::load(const fs::path &weights_file, const fs::path &index
     auto loaded = loadIndex(resolved_index_path, config_);
     index_.reset();
     faiss_gpu_resources_.reset();
-    weights_file_        = weights_file;
+    weights_file_ = weights_file;
     gallery_dir_.clear();
     index_path_          = resolved_index_path;
     faiss_gpu_resources_ = std::move(loaded.gpu_resources);

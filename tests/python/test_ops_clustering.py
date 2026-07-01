@@ -18,7 +18,7 @@ def _load_cluster_data(repo_root: Path) -> tuple[np.ndarray, np.ndarray]:
     return samples, labels
 
 
-def _assert_same_partition(actual: list[int], expected: np.ndarray) -> None:
+def _assert_same_partition(actual: list[int] | np.ndarray, expected: np.ndarray) -> None:
     actual_array = np.asarray(actual, dtype=np.int64)
     assert actual_array.shape == expected.shape
     np.testing.assert_array_equal(
@@ -27,25 +27,276 @@ def _assert_same_partition(actual: list[int], expected: np.ndarray) -> None:
     )
 
 
-def _algorithm_cases(ops_module):
-    return [
-        (ops_module.ClusteringAlgorithm.Auto, "auto"),
-        (ops_module.ClusteringAlgorithm.Brute, "brute"),
-        (ops_module.ClusteringAlgorithm.KDTree, "kd_tree"),
-        (ops_module.ClusteringAlgorithm.BallTree, "ball_tree"),
-    ]
+def _count_clusters(labels: list[int] | np.ndarray) -> int:
+    return len({int(label) for label in labels if int(label) != -1})
 
 
-@pytest.mark.parametrize("algorithm_index", range(4))
-def test_dbscan_matches_sklearn_on_asset_data(ops_module, repo_root: Path, algorithm_index: int) -> None:
+def _algorithm_case(ops_module, name: str):
+    return {
+        "auto": (ops_module.ClusteringAlgorithm.Auto, "auto"),
+        "brute": (ops_module.ClusteringAlgorithm.Brute, "brute"),
+        "kd_tree": (ops_module.ClusteringAlgorithm.KDTree, "kd_tree"),
+        "ball_tree": (ops_module.ClusteringAlgorithm.BallTree, "ball_tree"),
+    }[name]
+
+
+def _cluster_selection_method(ops_module, name: str):
+    return {
+        "eom": (ops_module.HDBSCANClusterSelectionMethod.Eom, "eom"),
+        "leaf": (ops_module.HDBSCANClusterSelectionMethod.Leaf, "leaf"),
+    }[name]
+
+
+DBSCAN_PARAMETER_CASES = [
+    pytest.param(
+        {
+            "eps": 0.8,
+            "min_samples": 4,
+            "algorithm": "auto",
+            "leaf_size": 8,
+            "clusters": 7,
+            "noise": 0,
+            "target": True,
+        },
+        id="auto_eps0.8_min4_leaf8",
+    ),
+    pytest.param(
+        {
+            "eps": 0.8,
+            "min_samples": 4,
+            "algorithm": "brute",
+            "leaf_size": 8,
+            "clusters": 7,
+            "noise": 0,
+            "target": True,
+        },
+        id="brute_eps0.8_min4_leaf8",
+    ),
+    pytest.param(
+        {
+            "eps": 0.8,
+            "min_samples": 4,
+            "algorithm": "kd_tree",
+            "leaf_size": 8,
+            "clusters": 7,
+            "noise": 0,
+            "target": True,
+        },
+        id="kd_tree_eps0.8_min4_leaf8",
+    ),
+    pytest.param(
+        {
+            "eps": 0.8,
+            "min_samples": 4,
+            "algorithm": "ball_tree",
+            "leaf_size": 8,
+            "clusters": 7,
+            "noise": 0,
+            "target": True,
+        },
+        id="ball_tree_eps0.8_min4_leaf8",
+    ),
+    pytest.param(
+        {
+            "eps": 0.55,
+            "min_samples": 2,
+            "algorithm": "brute",
+            "leaf_size": 4,
+            "clusters": 13,
+            "noise": 10,
+            "target": False,
+        },
+        id="brute_eps0.55_min2_leaf4",
+    ),
+    pytest.param(
+        {
+            "eps": 0.65,
+            "min_samples": 4,
+            "algorithm": "kd_tree",
+            "leaf_size": 16,
+            "clusters": 7,
+            "noise": 5,
+            "target": False,
+        },
+        id="kd_tree_eps0.65_min4_leaf16",
+    ),
+    pytest.param(
+        {
+            "eps": 1.05,
+            "min_samples": 6,
+            "algorithm": "ball_tree",
+            "leaf_size": 12,
+            "clusters": 7,
+            "noise": 0,
+            "target": True,
+        },
+        id="ball_tree_eps1.05_min6_leaf12",
+    ),
+    pytest.param(
+        {
+            "eps": 0.45,
+            "min_samples": 4,
+            "algorithm": "auto",
+            "leaf_size": 8,
+            "clusters": 14,
+            "noise": 81,
+            "target": False,
+        },
+        id="auto_eps0.45_min4_leaf8",
+    ),
+]
+
+
+HDBSCAN_PARAMETER_CASES = [
+    pytest.param(
+        {
+            "min_cluster_size": 5,
+            "min_samples": 5,
+            "cluster_selection_epsilon": 0.0,
+            "max_cluster_size": 0,
+            "alpha": 1.0,
+            "algorithm": "auto",
+            "leaf_size": 8,
+            "cluster_selection_method": "eom",
+            "allow_single_cluster": False,
+            "clusters": 7,
+            "noise": 0,
+            "target": True,
+        },
+        id="auto_mcs5_ms5_eom",
+    ),
+    pytest.param(
+        {
+            "min_cluster_size": 5,
+            "min_samples": 5,
+            "cluster_selection_epsilon": 0.0,
+            "max_cluster_size": 0,
+            "alpha": 1.0,
+            "algorithm": "brute",
+            "leaf_size": 8,
+            "cluster_selection_method": "eom",
+            "allow_single_cluster": False,
+            "clusters": 7,
+            "noise": 0,
+            "target": True,
+        },
+        id="brute_mcs5_ms5_eom",
+    ),
+    pytest.param(
+        {
+            "min_cluster_size": 5,
+            "min_samples": 5,
+            "cluster_selection_epsilon": 0.0,
+            "max_cluster_size": 0,
+            "alpha": 1.0,
+            "algorithm": "kd_tree",
+            "leaf_size": 8,
+            "cluster_selection_method": "eom",
+            "allow_single_cluster": False,
+            "clusters": 7,
+            "noise": 0,
+            "target": True,
+        },
+        id="kd_tree_mcs5_ms5_eom",
+    ),
+    pytest.param(
+        {
+            "min_cluster_size": 5,
+            "min_samples": 5,
+            "cluster_selection_epsilon": 0.0,
+            "max_cluster_size": 0,
+            "alpha": 1.0,
+            "algorithm": "ball_tree",
+            "leaf_size": 8,
+            "cluster_selection_method": "eom",
+            "allow_single_cluster": False,
+            "clusters": 7,
+            "noise": 0,
+            "target": True,
+        },
+        id="ball_tree_mcs5_ms5_eom",
+    ),
+    pytest.param(
+        {
+            "min_cluster_size": 4,
+            "min_samples": 4,
+            "cluster_selection_epsilon": 0.0,
+            "max_cluster_size": 0,
+            "alpha": 1.0,
+            "algorithm": "brute",
+            "leaf_size": 8,
+            "cluster_selection_method": "eom",
+            "allow_single_cluster": False,
+            "clusters": 7,
+            "noise": 0,
+            "target": True,
+        },
+        id="brute_mcs4_ms4_eom",
+    ),
+    pytest.param(
+        {
+            "min_cluster_size": 5,
+            "min_samples": 5,
+            "cluster_selection_epsilon": 0.2,
+            "max_cluster_size": 1000,
+            "alpha": 1.0,
+            "algorithm": "ball_tree",
+            "leaf_size": 12,
+            "cluster_selection_method": "eom",
+            "allow_single_cluster": True,
+            "clusters": 7,
+            "noise": 0,
+            "target": True,
+        },
+        id="ball_tree_mcs5_ms5_eps0.2_max1000_single",
+    ),
+    pytest.param(
+        {
+            "min_cluster_size": 5,
+            "min_samples": 5,
+            "cluster_selection_epsilon": 0.0,
+            "max_cluster_size": 30,
+            "alpha": 1.0,
+            "algorithm": "brute",
+            "leaf_size": 8,
+            "cluster_selection_method": "eom",
+            "allow_single_cluster": False,
+            "clusters": 8,
+            "noise": 9,
+            "target": False,
+        },
+        id="brute_mcs5_ms5_max30_eom",
+    ),
+    pytest.param(
+        {
+            "min_cluster_size": 5,
+            "min_samples": 0,
+            "cluster_selection_epsilon": 0.0,
+            "max_cluster_size": 0,
+            "alpha": 1.0,
+            "algorithm": "auto",
+            "leaf_size": 8,
+            "cluster_selection_method": "eom",
+            "allow_single_cluster": False,
+            "clusters": 7,
+            "noise": 0,
+            "target": True,
+        },
+        id="auto_mcs5_default_ms_eom",
+    ),
+]
+
+
+@pytest.mark.parametrize("case", DBSCAN_PARAMETER_CASES)
+def test_dbscan_matches_sklearn_on_asset_data(ops_module, repo_root: Path, case) -> None:
     sklearn_cluster = pytest.importorskip("sklearn.cluster")
     samples, target_labels = _load_cluster_data(repo_root)
-    algorithm, sklearn_algorithm = _algorithm_cases(ops_module)[algorithm_index]
+    algorithm, sklearn_algorithm = _algorithm_case(ops_module, case["algorithm"])
     config = ops_module.DBSCANConfig()
-    config.eps = 0.8
-    config.min_samples = 4
+    config.eps = case["eps"]
+    config.min_samples = case["min_samples"]
     config.algorithm = algorithm
-    config.leaf_size = 8
+    config.leaf_size = case["leaf_size"]
 
     result = ops_module.dbscan(samples, config)
     expected = sklearn_cluster.DBSCAN(
@@ -55,47 +306,61 @@ def test_dbscan_matches_sklearn_on_asset_data(ops_module, repo_root: Path, algor
         leaf_size=config.leaf_size,
     ).fit_predict(samples)
 
-    np.testing.assert_array_equal(np.asarray(result.labels, dtype=np.int64), expected)
-    assert len(set(result.labels)) == 7
-    assert -1 not in result.labels
-    _assert_same_partition(result.labels, target_labels)
+    labels = np.asarray(result.labels, dtype=np.int64)
+    np.testing.assert_array_equal(labels, expected)
+    assert _count_clusters(labels) == case["clusters"]
+    assert int(np.count_nonzero(labels == -1)) == case["noise"]
+    if case["target"]:
+        _assert_same_partition(labels, target_labels)
 
 
-@pytest.mark.parametrize("algorithm_index", range(4))
-def test_hdbscan_matches_sklearn_on_asset_data(ops_module, repo_root: Path, algorithm_index: int) -> None:
+@pytest.mark.parametrize("case", HDBSCAN_PARAMETER_CASES)
+def test_hdbscan_matches_sklearn_on_asset_data(ops_module, repo_root: Path, case) -> None:
     sklearn_cluster = pytest.importorskip("sklearn.cluster")
     if not hasattr(sklearn_cluster, "HDBSCAN"):
         pytest.skip("sklearn.cluster.HDBSCAN is not available")
 
     samples, target_labels = _load_cluster_data(repo_root)
-    algorithm, sklearn_algorithm = _algorithm_cases(ops_module)[algorithm_index]
+    algorithm, sklearn_algorithm = _algorithm_case(ops_module, case["algorithm"])
+    cluster_selection_method, sklearn_cluster_selection_method = _cluster_selection_method(
+        ops_module,
+        case["cluster_selection_method"],
+    )
     config = ops_module.HDBSCANConfig()
-    config.min_cluster_size = 5
-    config.min_samples = 5
+    config.min_cluster_size = case["min_cluster_size"]
+    config.min_samples = case["min_samples"]
+    config.cluster_selection_epsilon = case["cluster_selection_epsilon"]
+    config.max_cluster_size = case["max_cluster_size"]
+    config.alpha = case["alpha"]
     config.algorithm = algorithm
-    config.leaf_size = 8
+    config.leaf_size = case["leaf_size"]
+    config.cluster_selection_method = cluster_selection_method
+    config.allow_single_cluster = case["allow_single_cluster"]
 
     result = ops_module.hdbscan(samples, config)
     reference = sklearn_cluster.HDBSCAN(
         min_cluster_size=config.min_cluster_size,
-        min_samples=config.min_samples,
+        min_samples=None if config.min_samples == 0 else config.min_samples,
         cluster_selection_epsilon=config.cluster_selection_epsilon,
         max_cluster_size=None if config.max_cluster_size == 0 else config.max_cluster_size,
         alpha=config.alpha,
         algorithm=sklearn_algorithm,
         leaf_size=config.leaf_size,
-        cluster_selection_method="eom",
+        cluster_selection_method=sklearn_cluster_selection_method,
         allow_single_cluster=config.allow_single_cluster,
         copy=True,
     ).fit(samples)
 
-    np.testing.assert_array_equal(np.asarray(result.labels, dtype=np.int64), reference.labels_)
-    np.testing.assert_allclose(np.asarray(result.probabilities, dtype=np.float64), reference.probabilities_)
-    assert len(set(result.labels)) == 7
-    assert -1 not in result.labels
+    labels = np.asarray(result.labels, dtype=np.int64)
+    probabilities = np.asarray(result.probabilities, dtype=np.float64)
+    np.testing.assert_array_equal(labels, reference.labels_)
+    np.testing.assert_allclose(probabilities, reference.probabilities_)
+    assert _count_clusters(labels) == case["clusters"]
+    assert int(np.count_nonzero(labels == -1)) == case["noise"]
     assert len(result.probabilities) == len(result.labels)
     assert all(0.0 <= probability <= 1.0 for probability in result.probabilities)
-    _assert_same_partition(result.labels, target_labels)
+    if case["target"]:
+        _assert_same_partition(labels, target_labels)
 
 
 def test_clustering_rejects_invalid_sample_shape(ops_module) -> None:

@@ -20,9 +20,9 @@ ImageCluster::ImageCluster(ImageCluster &&other) noexcept = default;
 
 ImageCluster &ImageCluster::operator=(ImageCluster &&other) noexcept = default;
 
-ImageClusterResult ImageCluster::cluster(const std::filesystem::path &weights_file,
+ImageClusterResult ImageCluster::cluster(const std::filesystem::path         &weights_file,
                                          const std::vector<ImageClusterItem> &items,
-                                         ImageClusterProgressCallback progress_callback)
+                                         ImageClusterProgressCallback         progress_callback)
 {
     return impl_->cluster(weights_file, items, std::move(progress_callback));
 }
