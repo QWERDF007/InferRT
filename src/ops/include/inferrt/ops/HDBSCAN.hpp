@@ -14,7 +14,7 @@ inline constexpr double  kDefaultHDBSCANClusterSelectionEpsilon = 0.0;
 inline constexpr int64_t kDefaultHDBSCANMaxClusterSize          = 0;
 inline constexpr double  kDefaultHDBSCANAlpha                   = 1.0;
 inline constexpr double  kDefaultHDBSCANMinkowskiP              = 2.0;
-inline constexpr auto    kDefaultHDBSCANMetric                  = ClusteringMetric::Cosine;
+inline constexpr auto    kDefaultHDBSCANMetric                  = ClusteringMetric::Euclidean;
 
 enum class HDBSCANClusterSelectionMethod
 {

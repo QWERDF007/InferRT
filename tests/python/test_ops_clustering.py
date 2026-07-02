@@ -33,7 +33,6 @@ def _count_clusters(labels: list[int] | np.ndarray) -> int:
 
 def _algorithm_case(ops_module, name: str):
     return {
-        "auto": (ops_module.ClusteringAlgorithm.Auto, "auto"),
         "brute": (ops_module.ClusteringAlgorithm.Brute, "brute"),
         "kd_tree": (ops_module.ClusteringAlgorithm.KDTree, "kd_tree"),
         "ball_tree": (ops_module.ClusteringAlgorithm.BallTree, "ball_tree"),
@@ -49,32 +48,17 @@ def _cluster_selection_method(ops_module, name: str):
 
 def _metric_case(ops_module, name: str):
     if name == "default":
-        return None, "cosine"
+        return None, "euclidean"
     return {
         "euclidean": (ops_module.ClusteringMetric.Euclidean, "euclidean"),
         "cosine": (ops_module.ClusteringMetric.Cosine, "cosine"),
         "manhattan": (ops_module.ClusteringMetric.Manhattan, "manhattan"),
+        "chebyshev": (ops_module.ClusteringMetric.Chebyshev, "chebyshev"),
         "minkowski": (ops_module.ClusteringMetric.Minkowski, "minkowski"),
     }[name]
 
 
-def _sklearn_algorithm_for_metric(sklearn_algorithm: str, sklearn_metric: str) -> str:
-    return "brute" if sklearn_metric != "euclidean" else sklearn_algorithm
-
-
 DBSCAN_PARAMETER_CASES = [
-    pytest.param(
-        {
-            "eps": 0.8,
-            "min_samples": 4,
-            "algorithm": "auto",
-            "leaf_size": 8,
-            "clusters": 7,
-            "noise": 0,
-            "target": True,
-        },
-        id="auto_eps0.8_min4_leaf8",
-    ),
     pytest.param(
         {
             "eps": 0.8,
@@ -151,45 +135,58 @@ DBSCAN_PARAMETER_CASES = [
         {
             "eps": 0.45,
             "min_samples": 4,
-            "algorithm": "auto",
+            "algorithm": "kd_tree",
             "leaf_size": 8,
             "clusters": 14,
             "noise": 81,
             "target": False,
         },
-        id="auto_eps0.45_min4_leaf8",
+        id="kd_tree_eps0.45_min4_leaf8",
     ),
     pytest.param(
         {
             "eps": 0.01,
             "min_samples": 4,
-            "algorithm": "auto",
+            "algorithm": "brute",
             "leaf_size": 8,
-            "metric": "default",
+            "metric": "cosine",
             "clusters": 7,
             "noise": 32,
             "target": False,
         },
-        id="default_cosine_eps0.01_min4_leaf8",
+        id="brute_cosine_eps0.01_min4_leaf8",
     ),
     pytest.param(
         {
             "eps": 1.0,
             "min_samples": 4,
-            "algorithm": "brute",
+            "algorithm": "kd_tree",
             "leaf_size": 8,
             "metric": "manhattan",
             "clusters": 7,
             "noise": 1,
             "target": False,
         },
-        id="manhattan_eps1.0_min4_leaf8",
+        id="kd_tree_manhattan_eps1.0_min4_leaf8",
+    ),
+    pytest.param(
+        {
+            "eps": 0.8,
+            "min_samples": 4,
+            "algorithm": "ball_tree",
+            "leaf_size": 8,
+            "metric": "chebyshev",
+            "clusters": 7,
+            "noise": 0,
+            "target": True,
+        },
+        id="ball_tree_chebyshev_eps0.8_min4_leaf8",
     ),
     pytest.param(
         {
             "eps": 1.0,
             "min_samples": 4,
-            "algorithm": "auto",
+            "algorithm": "ball_tree",
             "leaf_size": 8,
             "metric": "minkowski",
             "minkowski_p": 3.0,
@@ -197,29 +194,12 @@ DBSCAN_PARAMETER_CASES = [
             "noise": 0,
             "target": False,
         },
-        id="minkowski_p3_eps1.0_min4_leaf8",
+        id="ball_tree_minkowski_p3_eps1.0_min4_leaf8",
     ),
 ]
 
 
 HDBSCAN_PARAMETER_CASES = [
-    pytest.param(
-        {
-            "min_cluster_size": 5,
-            "min_samples": 5,
-            "cluster_selection_epsilon": 0.0,
-            "max_cluster_size": 0,
-            "alpha": 1.0,
-            "algorithm": "auto",
-            "leaf_size": 8,
-            "cluster_selection_method": "eom",
-            "allow_single_cluster": False,
-            "clusters": 7,
-            "noise": 0,
-            "target": True,
-        },
-        id="auto_mcs5_ms5_eom",
-    ),
     pytest.param(
         {
             "min_cluster_size": 5,
@@ -329,7 +309,7 @@ HDBSCAN_PARAMETER_CASES = [
             "cluster_selection_epsilon": 0.0,
             "max_cluster_size": 0,
             "alpha": 1.0,
-            "algorithm": "auto",
+            "algorithm": "kd_tree",
             "leaf_size": 8,
             "cluster_selection_method": "eom",
             "allow_single_cluster": False,
@@ -337,25 +317,7 @@ HDBSCAN_PARAMETER_CASES = [
             "noise": 0,
             "target": True,
         },
-        id="auto_mcs5_default_ms_eom",
-    ),
-    pytest.param(
-        {
-            "min_cluster_size": 5,
-            "min_samples": 5,
-            "cluster_selection_epsilon": 0.0,
-            "max_cluster_size": 0,
-            "alpha": 1.0,
-            "algorithm": "kd_tree",
-            "leaf_size": 8,
-            "metric": "default",
-            "cluster_selection_method": "eom",
-            "allow_single_cluster": False,
-            "clusters": 6,
-            "noise": 11,
-            "target": False,
-        },
-        id="default_cosine_mcs5_ms5_eom",
+        id="kd_tree_mcs5_default_ms_eom",
     ),
     pytest.param(
         {
@@ -366,14 +328,14 @@ HDBSCAN_PARAMETER_CASES = [
             "alpha": 1.0,
             "algorithm": "brute",
             "leaf_size": 8,
-            "metric": "manhattan",
+            "metric": "cosine",
             "cluster_selection_method": "eom",
             "allow_single_cluster": False,
-            "clusters": 7,
-            "noise": 0,
+            "clusters": 6,
+            "noise": 11,
             "target": False,
         },
-        id="manhattan_mcs5_ms5_eom",
+        id="brute_cosine_mcs5_ms5_eom",
     ),
     pytest.param(
         {
@@ -382,7 +344,43 @@ HDBSCAN_PARAMETER_CASES = [
             "cluster_selection_epsilon": 0.0,
             "max_cluster_size": 0,
             "alpha": 1.0,
-            "algorithm": "auto",
+            "algorithm": "kd_tree",
+            "leaf_size": 8,
+            "metric": "manhattan",
+            "cluster_selection_method": "eom",
+            "allow_single_cluster": False,
+            "clusters": 7,
+            "noise": 0,
+            "target": False,
+        },
+        id="kd_tree_manhattan_mcs5_ms5_eom",
+    ),
+    pytest.param(
+        {
+            "min_cluster_size": 5,
+            "min_samples": 5,
+            "cluster_selection_epsilon": 0.0,
+            "max_cluster_size": 0,
+            "alpha": 1.0,
+            "algorithm": "ball_tree",
+            "leaf_size": 8,
+            "metric": "chebyshev",
+            "cluster_selection_method": "eom",
+            "allow_single_cluster": False,
+            "clusters": 7,
+            "noise": 0,
+            "target": True,
+        },
+        id="ball_tree_chebyshev_mcs5_ms5_eom",
+    ),
+    pytest.param(
+        {
+            "min_cluster_size": 5,
+            "min_samples": 5,
+            "cluster_selection_epsilon": 0.0,
+            "max_cluster_size": 0,
+            "alpha": 1.0,
+            "algorithm": "ball_tree",
             "leaf_size": 8,
             "metric": "minkowski",
             "minkowski_p": 3.0,
@@ -392,7 +390,7 @@ HDBSCAN_PARAMETER_CASES = [
             "noise": 0,
             "target": False,
         },
-        id="minkowski_p3_mcs5_ms5_eom",
+        id="ball_tree_minkowski_p3_mcs5_ms5_eom",
     ),
 ]
 
@@ -417,7 +415,7 @@ def test_dbscan_matches_sklearn_on_asset_data(ops_module, repo_root: Path, case)
         "eps": config.eps,
         "min_samples": config.min_samples,
         "metric": sklearn_metric,
-        "algorithm": _sklearn_algorithm_for_metric(sklearn_algorithm, sklearn_metric),
+        "algorithm": sklearn_algorithm,
         "leaf_size": config.leaf_size,
     }
     if sklearn_metric == "minkowski":
@@ -471,7 +469,7 @@ def test_hdbscan_matches_sklearn_on_asset_data(ops_module, repo_root: Path, case
         metric=sklearn_metric,
         metric_params=metric_params,
         alpha=config.alpha,
-        algorithm=_sklearn_algorithm_for_metric(sklearn_algorithm, sklearn_metric),
+        algorithm=sklearn_algorithm,
         leaf_size=config.leaf_size,
         cluster_selection_method=sklearn_cluster_selection_method,
         allow_single_cluster=config.allow_single_cluster,
@@ -490,9 +488,44 @@ def test_hdbscan_matches_sklearn_on_asset_data(ops_module, repo_root: Path, case
         _assert_same_partition(labels, target_labels)
 
 
-def test_clustering_default_metric_is_cosine(ops_module) -> None:
-    assert ops_module.DBSCANConfig().metric == ops_module.ClusteringMetric.Cosine
-    assert ops_module.HDBSCANConfig().metric == ops_module.ClusteringMetric.Cosine
+def test_clustering_defaults_use_kd_tree_euclidean(ops_module) -> None:
+    assert ops_module.DBSCANConfig().algorithm == ops_module.ClusteringAlgorithm.KDTree
+    assert ops_module.DBSCANConfig().metric == ops_module.ClusteringMetric.Euclidean
+    assert ops_module.HDBSCANConfig().algorithm == ops_module.ClusteringAlgorithm.KDTree
+    assert ops_module.HDBSCANConfig().metric == ops_module.ClusteringMetric.Euclidean
+
+
+@pytest.mark.parametrize(
+    "algorithm_name",
+    ["kd_tree", "ball_tree"],
+)
+def test_clustering_rejects_cosine_for_tree_algorithms(ops_module, algorithm_name: str) -> None:
+    samples = np.asarray(
+        [
+            [1.0, 0.0],
+            [0.9, 0.1],
+            [0.0, 1.0],
+            [0.1, 0.9],
+        ],
+        dtype=np.float32,
+    )
+    algorithm, _ = _algorithm_case(ops_module, algorithm_name)
+
+    dbscan_config = ops_module.DBSCANConfig()
+    dbscan_config.eps = 0.2
+    dbscan_config.min_samples = 2
+    dbscan_config.algorithm = algorithm
+    dbscan_config.metric = ops_module.ClusteringMetric.Cosine
+    with pytest.raises(ops_module.InferRTOpsError):
+        ops_module.dbscan(samples, dbscan_config)
+
+    hdbscan_config = ops_module.HDBSCANConfig()
+    hdbscan_config.min_cluster_size = 2
+    hdbscan_config.min_samples = 2
+    hdbscan_config.algorithm = algorithm
+    hdbscan_config.metric = ops_module.ClusteringMetric.Cosine
+    with pytest.raises(ops_module.InferRTOpsError):
+        ops_module.hdbscan(samples, hdbscan_config)
 
 
 def test_clustering_rejects_invalid_sample_shape(ops_module) -> None:

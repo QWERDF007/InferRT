@@ -20,9 +20,6 @@ void validateMetricConfig(ClusteringMetric metric, double minkowski_p);
 [[nodiscard]] double clusteringDistance(const float *samples, int64_t lhs, int64_t rhs, int64_t num_features,
                                         ClusteringMetric metric, double minkowski_p);
 
-[[nodiscard]] ClusteringAlgorithm selectNeighborSearchAlgorithm(ClusteringAlgorithm requested, int64_t num_features,
-                                                                ClusteringMetric metric);
-
 [[nodiscard]] std::vector<std::vector<int64_t>> radiusNeighborhoods(const float *samples, int64_t num_samples,
                                                                     int64_t num_features, double radius,
                                                                     ClusteringAlgorithm algorithm, int64_t leaf_size,

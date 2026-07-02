@@ -692,7 +692,7 @@ def test_sam_v1_pybind_matches_official_pytorch_forward(
     if not runtime_device_pairs:
         pytest.skip("No compatible runtime/device pairs selected; TensorRT requires --inferrt-compare-devices=gpu")
 
-    checkpoint = model_root / "sam" / "sam_vit_b_01ec64.pth"
+    checkpoint = model_root / "sam1" / "sam_vit_b_01ec64.pth"
     if not checkpoint.exists():
         pytest.skip(f"SAM ViT-B checkpoint not found: {checkpoint}")
     inputs, torch_outputs = _run_torch_sam_v1_reference(
@@ -768,7 +768,7 @@ def test_sam_v1_dynamic_batch_pybind_matches_official_pytorch_forward(
     if "TENSORRT" not in compare_runtimes or "gpu" not in compare_devices:
         pytest.skip("SAM v1 dynamic batch parity requires --inferrt-compare-runtime=tensorrt and GPU device")
 
-    checkpoint = model_root / "sam" / "sam_vit_b_01ec64.pth"
+    checkpoint = model_root / "sam1" / "sam_vit_b_01ec64.pth"
     if not checkpoint.exists():
         pytest.skip(f"SAM ViT-B checkpoint not found: {checkpoint}")
     inputs, torch_outputs = _run_torch_sam_v1_reference(
@@ -910,7 +910,7 @@ def test_sam2_pybind_matches_official_pytorch_forward(
     if not runtime_device_pairs:
         pytest.skip("No compatible runtime/device pairs selected; TensorRT requires --inferrt-compare-devices=gpu")
 
-    checkpoint = model_root / "sam" / "sam2.1_hiera_tiny.pt"
+    checkpoint = model_root / "sam2" / "sam2.1_hiera_tiny.pt"
     if not checkpoint.exists():
         pytest.skip(f"SAM2.1 Hiera-Tiny checkpoint not found: {checkpoint}")
     inputs, torch_outputs = _run_torch_sam2_reference(
@@ -986,7 +986,7 @@ def test_sam2_dynamic_batch_pybind_matches_official_pytorch_forward(
     if "TENSORRT" not in compare_runtimes or "gpu" not in compare_devices:
         pytest.skip("SAM2 dynamic batch parity requires --inferrt-compare-runtime=tensorrt and GPU device")
 
-    checkpoint = model_root / "sam" / "sam2.1_hiera_tiny.pt"
+    checkpoint = model_root / "sam2" / "sam2.1_hiera_tiny.pt"
     if not checkpoint.exists():
         pytest.skip(f"SAM2.1 Hiera-Tiny checkpoint not found: {checkpoint}")
     inputs, torch_outputs = _run_torch_sam2_reference(

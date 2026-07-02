@@ -591,7 +591,6 @@ PYBIND11_MODULE(inferrt_ops_py, m)
     py::register_exception<irt::Exception>(m, "InferRTOpsError");
 
     py::enum_<irt::ops::ClusteringAlgorithm>(m, "ClusteringAlgorithm")
-        .value("Auto", irt::ops::ClusteringAlgorithm::Auto)
         .value("Brute", irt::ops::ClusteringAlgorithm::Brute)
         .value("KDTree", irt::ops::ClusteringAlgorithm::KDTree)
         .value("BallTree", irt::ops::ClusteringAlgorithm::BallTree);
@@ -600,6 +599,7 @@ PYBIND11_MODULE(inferrt_ops_py, m)
         .value("Euclidean", irt::ops::ClusteringMetric::Euclidean)
         .value("Cosine", irt::ops::ClusteringMetric::Cosine)
         .value("Manhattan", irt::ops::ClusteringMetric::Manhattan)
+        .value("Chebyshev", irt::ops::ClusteringMetric::Chebyshev)
         .value("Minkowski", irt::ops::ClusteringMetric::Minkowski);
 
     py::class_<irt::ops::DBSCANConfig>(m, "DBSCANConfig")
