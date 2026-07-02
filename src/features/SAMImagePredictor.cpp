@@ -15,7 +15,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -51,29 +50,6 @@ struct PreprocessedSAMImage
 };
 
 /**
- * @brief 将字符串转换为小写。
- * @param value 原始字符串。
- * @return 小写字符串。
- */
-std::string toLower(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    return value;
-}
-
-/**
- * @brief 判断模型名是否属于 SAM2/SAM2.1 系列。
- * @param model_name 模型名称。
- * @return 属于 SAM2/SAM2.1 系列时返回 true。
- */
-bool isSAM2Model(const std::string &model_name)
-{
-    const auto lower = toLower(model_name);
-    return lower.rfind("sam2", 0) == 0;
-}
-
-/**
  * @brief 判断模型后端是否为 TensorRT。
  * @param backend 模型后端。
  * @return 使用 TensorRT 时返回 true。
@@ -81,20 +57,6 @@ bool isSAM2Model(const std::string &model_name)
 bool usesTensorRt(irt::model::ModelBackend backend) noexcept
 {
     return backend == irt::model::ModelBackend::TensorRT;
-}
-
-/**
- * @brief 根据配置解析实际使用的图像缩放模式。
- * @param config 预测器配置。
- * @return 已解析的图像缩放模式。
- */
-SAMImageResizeMode resolveResizeMode(const SAMImagePredictorConfig &config)
-{
-    if (config.resize_mode != SAMImageResizeMode::Auto)
-    {
-        return config.resize_mode;
-    }
-    return isSAM2Model(config.model_name) ? SAMImageResizeMode::StretchSquare : SAMImageResizeMode::ResizeLongestSide;
 }
 
 /**
@@ -135,7 +97,6 @@ void validateConfig(const SAMImagePredictorConfig &config)
 
     switch (config.resize_mode)
     {
-    case SAMImageResizeMode::Auto:
     case SAMImageResizeMode::ResizeLongestSide:
     case SAMImageResizeMode::StretchSquare:
         break;
@@ -160,7 +121,6 @@ void validateOptions(const SAMImagePredictOptions &options)
     }
     switch (options.mask_output_mode)
     {
-    case SAMMaskOutputMode::Auto:
     case SAMMaskOutputMode::Single:
     case SAMMaskOutputMode::Multimask:
     case SAMMaskOutputMode::All:
@@ -268,7 +228,7 @@ PreprocessedSAMImage preprocessImage(const cv::Mat &image, int input_height, int
     if (mode != SAMImageResizeMode::ResizeLongestSide)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "SAMImagePredictor cannot preprocess Auto resize mode");
+                             "Unsupported SAMImagePredictor resize mode");
     }
 
     static constexpr std::array<float, 3> kMean{123.675F, 116.28F, 103.53F};
@@ -389,31 +349,6 @@ std::vector<float> makePointLabels(const SAMImagePrompt &prompt, int max_points)
 }
 
 /**
- * @brief 判断 prompt 是否属于官方建议使用 multimask 的单点歧义输入。
- * @param prompt 用户 prompt。
- * @return 只有单个点且无 box/mask 输入时返回 true。
- */
-bool isAmbiguousSinglePointPrompt(const SAMImagePrompt &prompt)
-{
-    return !prompt.box && prompt.mask_input.empty() && prompt.points.size() <= 1;
-}
-
-/**
- * @brief 将 Auto 输出模式解析成明确的 single/multimask。
- * @param mode 用户指定模式。
- * @param prompt 用户 prompt。
- * @return 明确的输出模式。
- */
-SAMMaskOutputMode resolveMaskOutputMode(SAMMaskOutputMode mode, const SAMImagePrompt &prompt)
-{
-    if (mode != SAMMaskOutputMode::Auto)
-    {
-        return mode;
-    }
-    return isAmbiguousSinglePointPrompt(prompt) ? SAMMaskOutputMode::Multimask : SAMMaskOutputMode::Single;
-}
-
-/**
  * @brief mask 输出模式对应的通道切片。
  */
 struct MaskChannelSlice
@@ -456,7 +391,6 @@ MaskChannelSlice resolveMaskChannelSlice(int mask_count, SAMMaskOutputMode mode)
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "SAM multimask output requires at least 3 masks, got %d", mask_count);
     case SAMMaskOutputMode::All:
-    case SAMMaskOutputMode::Auto:
         return {0, mask_count};
     default:
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported SAM mask output mode");
@@ -713,7 +647,7 @@ public:
         : config_(std::move(config))
     {
         validateConfig(config_);
-        resolved_resize_mode_ = resolveResizeMode(config_);
+        resize_mode_ = config_.resize_mode;
     }
 
     /**
@@ -821,7 +755,7 @@ public:
 
         const int input_height = static_cast<int>(image_dims_.d[2]);
         const int input_width  = static_cast<int>(image_dims_.d[3]);
-        auto      preprocessed = preprocessImage(image, input_height, input_width, resolved_resize_mode_);
+        auto      preprocessed = preprocessImage(image, input_height, input_width, resize_mode_);
 
         const int max_points   = static_cast<int>(prompt_coords_dims_.d[1]);
         auto      point_coords = makePointCoords(prompt, preprocessed, max_points);
@@ -871,15 +805,12 @@ public:
         geometry.model_height    = input_height;
         geometry.resized_width   = preprocessed.resized_width;
         geometry.resized_height  = preprocessed.resized_height;
-        geometry.resize_mode     = resolved_resize_mode_;
-
-        SAMImagePredictOptions resolved_options = options;
-        resolved_options.mask_output_mode       = resolveMaskOutputMode(options.mask_output_mode, prompt);
+        geometry.resize_mode     = resize_mode_;
 
         (void)mask_output_index;
         return SAMImagePredictor::postprocessMasks(output_vectors[low_res_output_index], mask_count, low_res_height,
                                                    low_res_width, output_vectors[iou_output_index], geometry,
-                                                   resolved_options);
+                                                   options);
     }
 
     /**
@@ -965,9 +896,9 @@ private:
         checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(SAM predictor)");
     }
 
-    SAMImagePredictorConfig config_{};                                           ///< 预测器配置。
-    SAMImageResizeMode resolved_resize_mode_{SAMImageResizeMode::StretchSquare}; ///< 已解析的预处理和后处理几何模式。
-    bool               ready_{false};                                            ///< 模型是否已经加载完成。
+    SAMImagePredictorConfig config_{};                                       ///< 预测器配置。
+    SAMImageResizeMode      resize_mode_{SAMImageResizeMode::StretchSquare}; ///< 预处理和后处理几何模式。
+    bool                    ready_{false};                                   ///< 模型是否已经加载完成。
 
     std::unique_ptr<irt::model::IModel> model_;        ///< SAM 推理模型。
     std::vector<std::string>            input_names_;  ///< 模型输入张量名称列表。

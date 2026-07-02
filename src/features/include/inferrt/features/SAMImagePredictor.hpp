@@ -26,7 +26,6 @@ inline constexpr float       kDefaultSAMMaskThreshold           = 0.0F;         
  */
 enum class SAMImageResizeMode
 {
-    Auto,              ///< 根据模型名自动选择预处理模式。
     ResizeLongestSide, ///< SAM v1/EdgeSAM 模式：最长边缩放、补齐正方形。
     StretchSquare,     ///< SAM2ImagePredictor 模式：输入直接拉伸为正方形。
 };
@@ -45,7 +44,6 @@ enum class SAMPromptCoordinateMode
  */
 enum class SAMMaskOutputMode
 {
-    Auto,      ///< 单点提示返回 multimask，多点/box/mask 输入返回 single-mask。
     Single,    ///< 返回官方 `multimask_output=false` 的 single-mask token。
     Multimask, ///< 返回官方 `multimask_output=true` 的 3 个候选 token。
     All,       ///< 返回模型的全部 raw mask token。
@@ -92,7 +90,7 @@ struct SAMImagePredictOptions
     float             mask_threshold{kDefaultSAMMaskThreshold};  ///< logits 二值化阈值，默认 0。
     int               max_hole_area{0};                          ///< 填充面积不超过该值的低分辨率背景洞；0 表示关闭。
     int               max_sprinkle_area{0};                      ///< 移除面积不超过该值的低分辨率前景噪点；0 表示关闭。
-    SAMMaskOutputMode mask_output_mode{SAMMaskOutputMode::Auto}; ///< single/multimask 输出选择策略。
+    SAMMaskOutputMode mask_output_mode{SAMMaskOutputMode::Single}; ///< 默认 single-mask；多候选需显式设置。
 };
 
 /**
@@ -103,7 +101,7 @@ struct SAMImagePredictorConfig
     std::string              model_name{kDefaultSAMImagePredictorModelName};    ///< 内置 SAM/SAM2 模型名称。
     irt::model::ModelBackend model_backend{irt::model::ModelBackend::TensorRT}; ///< 模型运行时后端。
     irt::model::ModelDevice  model_device{irt::model::ModelDevice::GPU};        ///< 模型运行设备。
-    SAMImageResizeMode       resize_mode{SAMImageResizeMode::Auto};             ///< 图像预处理和 mask 还原几何模式。
+    SAMImageResizeMode       resize_mode{SAMImageResizeMode::StretchSquare};    ///< 默认 SAM2 几何；SAM v1 需显式设置。
 };
 
 /**

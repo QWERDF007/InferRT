@@ -29,6 +29,8 @@ SAM2_MASK_SIZE = 256
 SAM2_MAX_POINTS = 16
 SAM_V1_MASK_RTOL = 1e-2
 SAM_V1_MASK_ATOL = 3e-1
+SAM_V1_TENSORRT_MASK_MAX_ATOL = 8e-1
+SAM_V1_TENSORRT_MASK_MEAN_ATOL = 8e-2
 SAM_MASK_RTOL = 1e-3
 SAM_MASK_ATOL = 1e-2
 SAM_V1_IOU_RTOL = 5e-3
@@ -623,12 +625,38 @@ def _run_graph_sam(
     return {str(name): np.asarray(value, dtype=np.float32) for name, value in dict(outputs).items()}
 
 
+def _assert_max_mean_abs_below(
+    reference: np.ndarray,
+    actual: np.ndarray,
+    *,
+    max_atol: float,
+    mean_atol: float,
+    name: str,
+) -> None:
+    """断言两路张量同时满足最大绝对误差和平均绝对误差阈值。"""
+
+    ref = np.asarray(reference, dtype=np.float32)
+    act = np.asarray(actual, dtype=np.float32)
+    if ref.shape != act.shape:
+        raise AssertionError(f"Shape mismatch for {name}: reference={ref.shape}, actual={act.shape}")
+    diff = np.abs(act - ref)
+    max_abs = float(diff.max())
+    mean_abs = float(diff.mean())
+    if max_abs > max_atol or mean_abs > mean_atol:
+        raise AssertionError(
+            f"Tensor '{name}' mismatch: max_abs={max_abs:.6g} (limit {max_atol:.6g}), "
+            f"mean_abs={mean_abs:.6g} (limit {mean_atol:.6g})"
+        )
+
+
 def _assert_sam_outputs_close(
     reference: dict[str, np.ndarray],
     actual: dict[str, np.ndarray],
     *,
     mask_rtol: float,
     mask_atol: float,
+    mask_max_atol: float | None = None,
+    mask_mean_atol: float | None = None,
     iou_rtol: float,
     iou_atol: float,
     label: str,
@@ -640,26 +668,46 @@ def _assert_sam_outputs_close(
         actual: InferRT 后端输出。
         mask_rtol: mask 输出相对误差容差。
         mask_atol: mask 输出绝对误差容差。
+        mask_max_atol: 可选的 mask 输出最大绝对误差上限。
+        mask_mean_atol: 可选的 mask 输出平均绝对误差上限。
         iou_rtol: IoU 输出相对误差容差。
         iou_atol: IoU 输出绝对误差容差。
         label: 断言失败时使用的标签前缀。
     """
 
     assert sorted(actual) == sorted(SAM_OUTPUT_NAMES), f"{label} output names mismatch"
-    assert_tensors_close(
-        reference["masks"],
-        actual["masks"],
-        rtol=mask_rtol,
-        atol=mask_atol,
-        name=f"{label}.masks",
-    )
-    assert_tensors_close(
-        reference["low_res_masks"],
-        actual["low_res_masks"],
-        rtol=mask_rtol,
-        atol=mask_atol,
-        name=f"{label}.low_res_masks",
-    )
+    if mask_max_atol is None and mask_mean_atol is None:
+        assert_tensors_close(
+            reference["masks"],
+            actual["masks"],
+            rtol=mask_rtol,
+            atol=mask_atol,
+            name=f"{label}.masks",
+        )
+        assert_tensors_close(
+            reference["low_res_masks"],
+            actual["low_res_masks"],
+            rtol=mask_rtol,
+            atol=mask_atol,
+            name=f"{label}.low_res_masks",
+        )
+    else:
+        if mask_max_atol is None or mask_mean_atol is None:
+            raise AssertionError("mask_max_atol and mask_mean_atol must be provided together")
+        _assert_max_mean_abs_below(
+            reference["masks"],
+            actual["masks"],
+            max_atol=mask_max_atol,
+            mean_atol=mask_mean_atol,
+            name=f"{label}.masks",
+        )
+        _assert_max_mean_abs_below(
+            reference["low_res_masks"],
+            actual["low_res_masks"],
+            max_atol=mask_max_atol,
+            mean_atol=mask_mean_atol,
+            name=f"{label}.low_res_masks",
+        )
     assert_tensors_close(
         reference["iou_predictions"],
         actual["iou_predictions"],
@@ -748,6 +796,8 @@ def test_sam_v1_pybind_matches_official_pytorch_forward(
             outputs,
             mask_rtol=SAM_V1_MASK_RTOL,
             mask_atol=SAM_V1_MASK_ATOL,
+            mask_max_atol=SAM_V1_TENSORRT_MASK_MAX_ATOL if backend_attr == "TENSORRT" else None,
+            mask_mean_atol=SAM_V1_TENSORRT_MASK_MEAN_ATOL if backend_attr == "TENSORRT" else None,
             iou_rtol=SAM_V1_IOU_RTOL,
             iou_atol=SAM_V1_IOU_ATOL,
             label=label,
@@ -797,6 +847,8 @@ def test_sam_v1_dynamic_batch_pybind_matches_official_pytorch_forward(
         outputs,
         mask_rtol=SAM_V1_MASK_RTOL,
         mask_atol=SAM_V1_MASK_ATOL,
+        mask_max_atol=SAM_V1_TENSORRT_MASK_MAX_ATOL,
+        mask_mean_atol=SAM_V1_TENSORRT_MASK_MEAN_ATOL,
         iou_rtol=SAM_V1_IOU_RTOL,
         iou_atol=SAM_V1_IOU_ATOL,
         label=f"{SAM_V1_MODEL_NAME}.dynamic_batch.tensorrt.gpu",

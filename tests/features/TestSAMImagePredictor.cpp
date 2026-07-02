@@ -79,7 +79,7 @@ TEST(SAMImagePredictorTest, DefaultConstructsNotReadyPredictor)
     EXPECT_EQ(predictor.config().model_name, irt::features::kDefaultSAMImagePredictorModelName);
     EXPECT_EQ(predictor.config().model_backend, irt::model::ModelBackend::TensorRT);
     EXPECT_EQ(predictor.config().model_device, irt::model::ModelDevice::GPU);
-    EXPECT_EQ(predictor.config().resize_mode, irt::features::SAMImageResizeMode::Auto);
+    EXPECT_EQ(predictor.config().resize_mode, irt::features::SAMImageResizeMode::StretchSquare);
     EXPECT_FALSE(predictor.isReady());
 }
 
