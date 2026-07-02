@@ -1,6 +1,6 @@
 #include <inferrt/core/Exception.hpp>
-#include <inferrt/ops/BezierFit.hpp>
 #include <inferrt/ops/BSplineInterp.hpp>
+#include <inferrt/ops/BezierFit.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -70,8 +70,7 @@ void validateEvalX(const float *x_eval, int64_t num_eval)
     {
         if (!std::isfinite(x_eval[i]))
         {
-            throw Exception(Status::ERROR_INVALID_ARGUMENT, "x_eval[%lld] must be finite",
-                            static_cast<long long>(i));
+            throw Exception(Status::ERROR_INVALID_ARGUMENT, "x_eval[%lld] must be finite", static_cast<long long>(i));
         }
     }
 }
@@ -166,9 +165,8 @@ double bsplineBasis(int basis_index, int degree, double x_value, const std::vect
         return 0.0;
     }
 
-    double value = 0.0;
-    const double left_den
-        = knots[static_cast<size_t>(basis_index + degree)] - knots[static_cast<size_t>(basis_index)];
+    double       value    = 0.0;
+    const double left_den = knots[static_cast<size_t>(basis_index + degree)] - knots[static_cast<size_t>(basis_index)];
     if (left_den != 0.0)
     {
         value += (x_value - knots[static_cast<size_t>(basis_index)]) / left_den
@@ -339,9 +337,8 @@ PenalizedSplineSolution solvePenalizedSpline(const std::vector<double> &basis, c
         {
             for (int64_t sample = 0; sample < num_points; ++sample)
             {
-                rhs[static_cast<size_t>(col)]
-                    += basis[static_cast<size_t>(sample) * num_coefficients + col]
-                     * static_cast<double>(y[static_cast<size_t>(sample) * num_dims + dim]);
+                rhs[static_cast<size_t>(col)] += basis[static_cast<size_t>(sample) * num_coefficients + col]
+                                               * static_cast<double>(y[static_cast<size_t>(sample) * num_dims + dim]);
             }
         }
 
@@ -445,13 +442,14 @@ BSplineInterpResult makeInterpSpline(const float *x, const float *y, int64_t num
     }
 
     BSplineInterpResult result;
-    result.degree     = degree;
-    result.dimensions = num_dims;
-    result.knots      = notAKnotKnots(x, num_points, degree);
+    result.degree                  = degree;
+    result.dimensions              = num_dims;
+    result.knots                   = notAKnotKnots(x, num_points, degree);
     const int64_t num_coefficients = static_cast<int64_t>(result.knots.size()) - degree - 1;
     if (num_coefficients != num_points)
     {
-        throw Exception(Status::ERROR_INVALID_ARGUMENT, "internal knot construction produced unexpected coefficient count");
+        throw Exception(Status::ERROR_INVALID_ARGUMENT,
+                        "internal knot construction produced unexpected coefficient count");
     }
 
     std::vector<double> collocation(static_cast<size_t>(num_points) * num_points, 0.0);
@@ -508,24 +506,23 @@ SplPrepResult splPrep(const float *points, int64_t num_points, int64_t num_dims,
     validateX(parameters, num_points);
 
     SplPrepResult result;
-    result.degree       = degree;
-    result.dimensions   = num_dims;
-    result.smoothing    = smoothing;
+    result.degree     = degree;
+    result.dimensions = num_dims;
+    result.smoothing  = smoothing;
     result.parameters.assign(parameters, parameters + num_points);
 
     if (smoothing == 0.0F)
     {
-        const auto spline  = makeInterpSpline(parameters, points, num_points, num_dims, degree);
+        const auto spline   = makeInterpSpline(parameters, points, num_points, num_dims, degree);
         result.knots        = spline.knots;
         result.coefficients = spline.coefficients;
         return result;
     }
 
-    result.knots = notAKnotKnots(parameters, num_points, degree);
-    const auto solution
-        = fitSmoothedSpline(result.knots, parameters, points, num_points, num_dims, degree, smoothing);
-    result.coefficients          = solution.coefficients;
-    result.residual_sum_squares  = solution.residual_sum_squares;
+    result.knots        = notAKnotKnots(parameters, num_points, degree);
+    const auto solution = fitSmoothedSpline(result.knots, parameters, points, num_points, num_dims, degree, smoothing);
+    result.coefficients = solution.coefficients;
+    result.residual_sum_squares = solution.residual_sum_squares;
     return result;
 }
 
@@ -548,7 +545,8 @@ void evaluateBSpline(const float *knots, int64_t num_knots, const float *coeffic
             const int coeff_index = interval - degree + j;
             for (int64_t dim = 0; dim < num_dims; ++dim)
             {
-                work[static_cast<size_t>(j) * num_dims + dim] = coefficients[static_cast<size_t>(coeff_index) * num_dims + dim];
+                work[static_cast<size_t>(j) * num_dims + dim]
+                    = coefficients[static_cast<size_t>(coeff_index) * num_dims + dim];
             }
         }
 

@@ -91,8 +91,7 @@ std::vector<double> bernsteinBasis(int degree, double u)
     const double one_minus_u = 1.0 - u;
     for (int j = 0; j <= degree; ++j)
     {
-        basis[static_cast<size_t>(j)]
-            = binomial(degree, j) * std::pow(one_minus_u, degree - j) * std::pow(u, j);
+        basis[static_cast<size_t>(j)] = binomial(degree, j) * std::pow(one_minus_u, degree - j) * std::pow(u, j);
     }
     return basis;
 }
@@ -227,7 +226,7 @@ BezierFitResult fitBezierCurve(const float *points, int64_t num_points, int64_t 
         validateParameters(parameters, num_points);
     }
 
-    const int control_count = degree + 1;
+    const int           control_count = degree + 1;
     std::vector<double> ata(static_cast<size_t>(control_count) * control_count, 0.0);
     std::vector<double> basis_values(static_cast<size_t>(num_points) * control_count);
     for (int64_t sample = 0; sample < num_points; ++sample)
@@ -245,8 +244,8 @@ BezierFitResult fitBezierCurve(const float *points, int64_t num_points, int64_t 
     }
 
     BezierFitResult result;
-    result.degree       = degree;
-    result.dimensions   = num_dims;
+    result.degree     = degree;
+    result.dimensions = num_dims;
     result.parameters.assign(parameters, parameters + num_points);
     result.control_points.resize(static_cast<size_t>(control_count) * num_dims);
 
@@ -258,8 +257,7 @@ BezierFitResult fitBezierCurve(const float *points, int64_t num_points, int64_t 
             const double y = static_cast<double>(points[sample * num_dims + dim]);
             for (int row = 0; row < control_count; ++row)
             {
-                aty[static_cast<size_t>(row)]
-                    += basis_values[static_cast<size_t>(sample) * control_count + row] * y;
+                aty[static_cast<size_t>(row)] += basis_values[static_cast<size_t>(sample) * control_count + row] * y;
             }
         }
 
@@ -271,7 +269,8 @@ BezierFitResult fitBezierCurve(const float *points, int64_t num_points, int64_t 
         }
     }
 
-    const auto fitted = evaluateBezierCurve(result.control_points.data(), control_count, num_dims, parameters, num_points);
+    const auto fitted
+        = evaluateBezierCurve(result.control_points.data(), control_count, num_dims, parameters, num_points);
     for (int64_t i = 0; i < num_points * num_dims; ++i)
     {
         const double diff = static_cast<double>(fitted[static_cast<size_t>(i)]) - static_cast<double>(points[i]);

@@ -51,9 +51,8 @@ using NeighborHeapItem = std::pair<double, int64_t>;
         double max_diff = 0.0;
         for (int64_t feature = 0; feature < num_features; ++feature)
         {
-            max_diff = std::max(max_diff,
-                                std::abs(sampleValue(samples, sample, feature, num_features)
-                                         - center[static_cast<size_t>(feature)]));
+            max_diff = std::max(max_diff, std::abs(sampleValue(samples, sample, feature, num_features)
+                                                   - center[static_cast<size_t>(feature)]));
         }
         return max_diff;
     }

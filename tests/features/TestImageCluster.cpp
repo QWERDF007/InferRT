@@ -36,25 +36,25 @@ TEST(ImageClusterTest, DefaultConstructsWithImageFeatureDefaults)
     EXPECT_EQ(cluster.config().feature_name, irt::features::ImageCluster::kDefaultFeatureName);
     EXPECT_FALSE(cluster.config().use_pca);
     EXPECT_EQ(cluster.config().pca_dim, 0);
-    EXPECT_EQ(cluster.config().hdbscan.min_cluster_size, irt::ops::kDefaultHDBSCANMinClusterSize);
+    EXPECT_EQ(cluster.config().hdbscan.min_cluster_size, 5);
     EXPECT_EQ(cluster.featureDim(), 0);
 }
 
 TEST(ImageClusterTest, ConstructorStoresConfig)
 {
     irt::features::ImageClusterConfig config;
-    config.model_name                         = "dinov2_vits14";
-    config.feature_name                       = "x_norm_patchtokens";
-    config.model_backend                      = irt::model::ModelBackend::ONNXRuntime;
-    config.model_device                       = irt::model::ModelDevice::CPU;
-    config.norm                               = irt::features::ImageSearchFeatureNorm::L1;
-    config.model_batch_size                   = 2;
-    config.use_pca                            = true;
-    config.pca_dim                            = 8;
-    config.hdbscan.min_cluster_size           = 3;
-    config.hdbscan.min_samples                = 2;
-    config.hdbscan.cluster_selection_epsilon  = 0.1;
-    config.hdbscan.allow_single_cluster       = true;
+    config.model_name                        = "dinov2_vits14";
+    config.feature_name                      = "x_norm_patchtokens";
+    config.model_backend                     = irt::model::ModelBackend::ONNXRuntime;
+    config.model_device                      = irt::model::ModelDevice::CPU;
+    config.norm                              = irt::features::ImageSearchFeatureNorm::L1;
+    config.model_batch_size                  = 2;
+    config.use_pca                           = true;
+    config.pca_dim                           = 8;
+    config.hdbscan.min_cluster_size          = 3;
+    config.hdbscan.min_samples               = 2;
+    config.hdbscan.cluster_selection_epsilon = 0.1;
+    config.hdbscan.allow_single_cluster      = true;
 
     const irt::features::ImageCluster cluster(config);
 

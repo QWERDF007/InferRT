@@ -43,9 +43,9 @@ float intersectionOverUnion(const float *lhs, float lhs_area, const float *rhs, 
     const float xx2 = std::min(lhs[2], rhs[2]);
     const float yy2 = std::min(lhs[3], rhs[3]);
 
-    const float width  = std::max(xx2 - xx1, 0.0f);
-    const float height = std::max(yy2 - yy1, 0.0f);
-    const float inter  = width * height;
+    const float width      = std::max(xx2 - xx1, 0.0f);
+    const float height     = std::max(yy2 - yy1, 0.0f);
+    const float inter      = width * height;
     const float union_area = lhs_area + rhs_area - inter;
     if (union_area <= 0.0f)
     {
@@ -85,21 +85,20 @@ std::vector<int64_t> nms(const float *boxes, const float *scores, int64_t num_bo
 
     std::vector<int64_t> order(static_cast<size_t>(num_boxes));
     std::iota(order.begin(), order.end(), int64_t{0});
-    std::stable_sort(order.begin(), order.end(),
-                     [&](int64_t lhs, int64_t rhs) { return scores[lhs] > scores[rhs]; });
+    std::stable_sort(order.begin(), order.end(), [&](int64_t lhs, int64_t rhs) { return scores[lhs] > scores[rhs]; });
 
     std::vector<int64_t> keep;
     keep.reserve(order.size());
     for (const int64_t candidate : order)
     {
-        bool suppressed = false;
-        const float *candidate_box = boxes + candidate * 4;
-        const float candidate_area = areas[static_cast<size_t>(candidate)];
+        bool         suppressed     = false;
+        const float *candidate_box  = boxes + candidate * 4;
+        const float  candidate_area = areas[static_cast<size_t>(candidate)];
 
         for (const int64_t kept : keep)
         {
-            const float *kept_box = boxes + kept * 4;
-            const float kept_area = areas[static_cast<size_t>(kept)];
+            const float *kept_box  = boxes + kept * 4;
+            const float  kept_area = areas[static_cast<size_t>(kept)];
             if (intersectionOverUnion(candidate_box, candidate_area, kept_box, kept_area) > iou_threshold)
             {
                 suppressed = true;

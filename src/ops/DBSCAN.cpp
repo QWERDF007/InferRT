@@ -35,9 +35,9 @@ DBSCANResult dbscan(const float *samples, int64_t num_samples, int64_t num_featu
         return {};
     }
 
-    const auto neighborhoods = detail::radiusNeighborhoods(samples, num_samples, num_features, config.eps,
-                                                           config.algorithm, config.leaf_size, config.metric,
-                                                           config.minkowski_p);
+    const auto neighborhoods
+        = detail::radiusNeighborhoods(samples, num_samples, num_features, config.eps, config.algorithm,
+                                      config.leaf_size, config.metric, config.minkowski_p);
 
     std::vector<uint8_t> is_core(static_cast<size_t>(num_samples), uint8_t{0});
     DBSCANResult         result;
