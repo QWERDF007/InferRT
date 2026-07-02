@@ -3,6 +3,8 @@
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/cvcuda/OpNMS.h>
 #include <inferrt/cvcuda/OpRoIAlign.h>
+#include <inferrt/ops/BezierFit.hpp>
+#include <inferrt/ops/BSplineInterp.hpp>
 #include <inferrt/ops/DBSCAN.hpp>
 #include <inferrt/ops/HDBSCAN.hpp>
 #include <inferrt/ops/NMS.hpp>
@@ -17,6 +19,7 @@
 #include <functional>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -380,6 +383,16 @@ std::pair<int64_t, int64_t> sampleMatrixShape(
     return {samples.shape(0), samples.shape(1)};
 }
 
+std::pair<int64_t, int64_t> pointMatrixShape(
+    const py::array_t<float, py::array::c_style | py::array::forcecast> &points, const char *name)
+{
+    if (points.ndim() != 2)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "%s must have shape [N, D]", name);
+    }
+    return {points.shape(0), points.shape(1)};
+}
+
 void validateScores(const py::array_t<float, py::array::c_style | py::array::forcecast> &scores, int64_t expected)
 {
     if (scores.ndim() != 1)
@@ -451,6 +464,115 @@ irt::ops::DBSCANResult runDBSCAN(const py::handle &samples_object, const irt::op
 irt::ops::HDBSCANResult runHDBSCAN(const py::handle &samples_object, const irt::ops::HDBSCANConfig &config)
 {
     return runSampleMatrixClustering(samples_object, config, &irt::ops::hdbscan);
+}
+
+irt::ops::BezierFitResult runFitBezierCurve(const py::handle &points_object, int degree,
+                                            const py::object &parameters_object)
+{
+    auto       points                 = asFloat32CArray(points_object, "points");
+    const auto [num_points, num_dims] = pointMatrixShape(points, "points");
+
+    std::optional<py::array_t<float, py::array::c_style | py::array::forcecast>> parameters;
+    const float                                                              *parameter_data = nullptr;
+    if (!parameters_object.is_none())
+    {
+        parameters.emplace(asFloat32CArray(parameters_object, "parameters"));
+        if (parameters->ndim() != 1 || parameters->shape(0) != num_points)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "parameters must have shape [N] matching points");
+        }
+        parameter_data = parameters->data();
+    }
+
+    py::gil_scoped_release release;
+    return irt::ops::fitBezierCurve(points.data(), num_points, num_dims, degree, parameter_data);
+}
+
+py::array_t<float> runEvaluateBezierCurve(const py::handle &control_points_object, const py::handle &parameters_object)
+{
+    auto       control_points                   = asFloat32CArray(control_points_object, "control_points");
+    auto       parameters                       = asFloat32CArray(parameters_object, "parameters");
+    const auto [num_control_points, num_dims]   = pointMatrixShape(control_points, "control_points");
+    if (parameters.ndim() != 1)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "parameters must have shape [M]");
+    }
+    const auto num_parameters = parameters.shape(0);
+
+    py::array_t<float> output({num_parameters, num_dims});
+    {
+        py::gil_scoped_release release;
+        irt::ops::evaluateBezierCurve(control_points.data(), num_control_points, num_dims, parameters.data(),
+                                      num_parameters, output.mutable_data());
+    }
+    return output;
+}
+
+irt::ops::BSplineInterpResult runMakeInterpSpline(const py::handle &x_object, const py::handle &y_object, int degree)
+{
+    auto x = asFloat32CArray(x_object, "x");
+    auto y = asFloat32CArray(y_object, "y");
+    if (x.ndim() != 1)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "x must have shape [N]");
+    }
+    const auto [num_points, num_dims] = pointMatrixShape(y, "y");
+    if (x.shape(0) != num_points)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "x and y must contain the same number of points");
+    }
+
+    py::gil_scoped_release release;
+    return irt::ops::makeInterpSpline(x.data(), y.data(), num_points, num_dims, degree);
+}
+
+irt::ops::SplPrepResult runSplPrep(const py::handle &points_object, float smoothing, int degree,
+                                   const py::object &parameters_object)
+{
+    auto       points                 = asFloat32CArray(points_object, "points");
+    const auto [num_points, num_dims] = pointMatrixShape(points, "points");
+
+    std::optional<py::array_t<float, py::array::c_style | py::array::forcecast>> parameters;
+    const float                                                              *parameter_data = nullptr;
+    if (!parameters_object.is_none())
+    {
+        parameters.emplace(asFloat32CArray(parameters_object, "parameters"));
+        if (parameters->ndim() != 1 || parameters->shape(0) != num_points)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "parameters must have shape [N] matching points");
+        }
+        parameter_data = parameters->data();
+    }
+
+    py::gil_scoped_release release;
+    return irt::ops::splPrep(points.data(), num_points, num_dims, smoothing, degree, parameter_data);
+}
+
+py::array_t<float> runEvaluateBSpline(const py::handle &knots_object, const py::handle &coefficients_object,
+                                      int degree, const py::handle &x_eval_object)
+{
+    auto knots        = asFloat32CArray(knots_object, "knots");
+    auto coefficients = asFloat32CArray(coefficients_object, "coefficients");
+    auto x_eval       = asFloat32CArray(x_eval_object, "x_eval");
+    if (knots.ndim() != 1)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "knots must have shape [T]");
+    }
+    const auto [num_coefficients, num_dims] = pointMatrixShape(coefficients, "coefficients");
+    if (x_eval.ndim() != 1)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "x_eval must have shape [M]");
+    }
+
+    py::array_t<float> output({x_eval.shape(0), num_dims});
+    {
+        py::gil_scoped_release release;
+        irt::ops::evaluateBSpline(knots.data(), knots.shape(0), coefficients.data(), num_coefficients, num_dims,
+                                  degree, x_eval.data(), x_eval.shape(0), output.mutable_data());
+    }
+    return output;
 }
 
 py::object runNMSV2(const py::handle &boxes_object, const py::handle &scores_object, float iou_threshold,
@@ -637,6 +759,28 @@ PYBIND11_MODULE(inferrt_ops_py, m)
         .def_readonly("labels", &irt::ops::HDBSCANResult::labels)
         .def_readonly("probabilities", &irt::ops::HDBSCANResult::probabilities);
 
+    py::class_<irt::ops::BezierFitResult>(m, "BezierFitResult")
+        .def_readonly("degree", &irt::ops::BezierFitResult::degree)
+        .def_readonly("dimensions", &irt::ops::BezierFitResult::dimensions)
+        .def_readonly("control_points", &irt::ops::BezierFitResult::control_points)
+        .def_readonly("parameters", &irt::ops::BezierFitResult::parameters)
+        .def_readonly("residual_sum_squares", &irt::ops::BezierFitResult::residual_sum_squares);
+
+    py::class_<irt::ops::BSplineInterpResult>(m, "BSplineInterpResult")
+        .def_readonly("degree", &irt::ops::BSplineInterpResult::degree)
+        .def_readonly("dimensions", &irt::ops::BSplineInterpResult::dimensions)
+        .def_readonly("knots", &irt::ops::BSplineInterpResult::knots)
+        .def_readonly("coefficients", &irt::ops::BSplineInterpResult::coefficients);
+
+    py::class_<irt::ops::SplPrepResult>(m, "SplPrepResult")
+        .def_readonly("degree", &irt::ops::SplPrepResult::degree)
+        .def_readonly("dimensions", &irt::ops::SplPrepResult::dimensions)
+        .def_readonly("smoothing", &irt::ops::SplPrepResult::smoothing)
+        .def_readonly("residual_sum_squares", &irt::ops::SplPrepResult::residual_sum_squares)
+        .def_readonly("knots", &irt::ops::SplPrepResult::knots)
+        .def_readonly("coefficients", &irt::ops::SplPrepResult::coefficients)
+        .def_readonly("parameters", &irt::ops::SplPrepResult::parameters);
+
     py::class_<irt::ops::RoIAlign>(m, "RoIAlign")
         .def(py::init<int, int, float, int, bool>(), py::arg("pooled_height"), py::arg("pooled_width"),
              py::arg("spatial_scale") = 1.0f, py::arg("sampling_ratio") = -1, py::arg("aligned") = false)
@@ -673,6 +817,23 @@ PYBIND11_MODULE(inferrt_ops_py, m)
 
     m.def("hdbscan", &runHDBSCAN, py::arg("samples"), py::arg("config"),
           "Performs HDBSCAN clustering on a float32 sample matrix using HDBSCANConfig.");
+
+    m.def("fit_bezier_curve", &runFitBezierCurve, py::arg("points"), py::arg("degree"),
+          py::arg("parameters") = py::none(),
+          "Fits a single Bezier curve to [N, D] points using chord-length parameters by default.");
+
+    m.def("evaluate_bezier_curve", &runEvaluateBezierCurve, py::arg("control_points"), py::arg("parameters"),
+          "Evaluates Bezier control points at 1D parameters in [0, 1].");
+
+    m.def("make_interp_spline", &runMakeInterpSpline, py::arg("x"), py::arg("y"), py::arg("degree") = 3,
+          "Creates an interpolating B-spline for y[N, D], matching SciPy make_interp_spline for degree 1 and 3.");
+
+    m.def("splprep", &runSplPrep, py::arg("points"), py::arg("smoothing") = 0.0F, py::arg("degree") = 3,
+          py::arg("parameters") = py::none(),
+          "Creates a parametric B-spline, matching SciPy splprep s=0 exactly and supporting residual-budget smoothing.");
+
+    m.def("evaluate_b_spline", &runEvaluateBSpline, py::arg("knots"), py::arg("coefficients"), py::arg("degree"),
+          py::arg("x_eval"), "Evaluates a B-spline returned by make_interp_spline.");
 
     m.def("nms_v2", &runNMSV2, py::arg("boxes"), py::arg("scores"), py::arg("iou_threshold"),
           py::arg("stream_ptr") = uintptr_t{0},
