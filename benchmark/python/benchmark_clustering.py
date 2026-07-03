@@ -27,7 +27,7 @@ from sklearn import cluster as sklearn_cluster
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BUILD_DIR = Path(os.environ.get("INFERRT_BUILD_DIR", REPO_ROOT / "build")).resolve()
-CLUSTER_SIZES = (64, 128, 256, 512)
+CLUSTER_SIZES = (64, 256, 1024, 2048, 4096)
 
 _DLL_DIRECTORY_HANDLES: list[object] = []
 _SINK: Any = None
@@ -203,6 +203,7 @@ def _register_dbscan_benchmarks() -> None:
                         min_samples=config.min_samples,
                         algorithm=sklearn_algorithm,
                         leaf_size=config.leaf_size,
+                        n_jobs=1,
                         metric="euclidean",
                     ).fit_predict(samples)
                 )
@@ -241,6 +242,7 @@ def _register_hdbscan_benchmarks() -> None:
                         leaf_size=config.leaf_size,
                         metric="euclidean",
                         cluster_selection_method="eom",
+                        n_jobs=1,
                         copy=False,
                     ).fit_predict(samples)
                 )

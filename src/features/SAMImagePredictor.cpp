@@ -216,8 +216,8 @@ PreprocessedSAMImage preprocessImage(const cv::Mat &image, int input_height, int
             {
                 for (int c = 0; c < 3; ++c)
                 {
-                    const size_t offset   = static_cast<size_t>(c) * input_height * input_width
-                                          + static_cast<size_t>(y) * input_width + static_cast<size_t>(x);
+                    const size_t offset = static_cast<size_t>(c) * input_height * input_width
+                                        + static_cast<size_t>(y) * input_width + static_cast<size_t>(x);
                     output.tensor[offset] = (static_cast<float>(row[x][c]) / 255.0F - kMean[c]) / kStd[c];
                 }
             }
@@ -227,8 +227,7 @@ PreprocessedSAMImage preprocessImage(const cv::Mat &image, int input_height, int
 
     if (mode != SAMImageResizeMode::ResizeLongestSide)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "Unsupported SAMImagePredictor resize mode");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported SAMImagePredictor resize mode");
     }
 
     static constexpr std::array<float, 3> kMean{123.675F, 116.28F, 103.53F};
@@ -248,8 +247,8 @@ PreprocessedSAMImage preprocessImage(const cv::Mat &image, int input_height, int
         {
             for (int c = 0; c < 3; ++c)
             {
-                const size_t offset   = static_cast<size_t>(c) * input_height * input_width
-                                      + static_cast<size_t>(y) * input_width + static_cast<size_t>(x);
+                const size_t offset = static_cast<size_t>(c) * input_height * input_width
+                                    + static_cast<size_t>(y) * input_width + static_cast<size_t>(x);
                 output.tensor[offset] = (static_cast<float>(row[x][c]) - kMean[c]) / kStd[c];
             }
         }
@@ -359,6 +358,8 @@ struct MaskChannelSlice
 
 /**
  * @brief 根据输出模式解析 mask 通道切片。
+ *        Single: 取第 0 个通道; Multimask: 取第 1-3 个通道; All: 取所有通道
+ *
  * @param mask_count 模型实际输出的 mask 通道数。
  * @param mode 已解析的输出模式。
  * @return 需要保留的通道切片。
@@ -399,6 +400,7 @@ MaskChannelSlice resolveMaskChannelSlice(int mask_count, SAMMaskOutputMode mode)
 
 /**
  * @brief 复制指定 mask 通道范围。
+ *        Single: 取第 0 个通道; Multimask: 取第 1-3 个通道; All: 取所有通道
  */
 std::vector<float> selectMaskChannels(const std::vector<float> &values, int source_count, int height, int width,
                                       MaskChannelSlice slice)
@@ -809,8 +811,7 @@ public:
 
         (void)mask_output_index;
         return SAMImagePredictor::postprocessMasks(output_vectors[low_res_output_index], mask_count, low_res_height,
-                                                   low_res_width, output_vectors[iou_output_index], geometry,
-                                                   options);
+                                                   low_res_width, output_vectors[iou_output_index], geometry, options);
     }
 
     /**
