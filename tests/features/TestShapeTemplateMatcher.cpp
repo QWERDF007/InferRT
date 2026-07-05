@@ -1,0 +1,430 @@
+/**
+ * @file TestShapeTemplateMatcher.cpp
+ * @brief ``ShapeTemplateMatcher`` API、匹配、NMS、模板变体和持久化测试。
+ */
+
+#include <gtest/gtest.h>
+#include <inferrt/core/Exception.hpp>
+#include <inferrt/core/Status.h>
+#include <inferrt/features/ShapeTemplateMatcher.hpp>
+
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
+
+#include <algorithm>
+#include <atomic>
+#include <filesystem>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace fs = std::filesystem;
+
+namespace {
+
+/**
+ * @brief 自动清理的临时目录。
+ */
+class TempDir
+{
+public:
+    /** @brief 创建唯一临时目录。 */
+    TempDir()
+    {
+        static std::atomic<int> counter{0};
+        path_ = fs::temp_directory_path()
+              / fs::path("inferrt_shape_template_test_"
+                         + std::to_string(counter.fetch_add(1, std::memory_order_relaxed)));
+        fs::create_directories(path_);
+    }
+
+    /** @brief 析构时递归删除临时目录。 */
+    ~TempDir()
+    {
+        std::error_code ec;
+        fs::remove_all(path_, ec);
+    }
+
+    /** @brief 获取临时目录路径。 */
+    const fs::path &path() const noexcept
+    {
+        return path_;
+    }
+
+    TempDir(const TempDir &)            = delete;
+    TempDir &operator=(const TempDir &) = delete;
+
+private:
+    fs::path path_; ///< 临时目录路径。
+};
+
+/**
+ * @brief 断言调用抛出 InferRT 异常且错误码符合预期。
+ */
+template<typename Fn>
+void expectIrtExceptionCode(Fn &&fn, irt::Status expected_code)
+{
+    try
+    {
+        std::forward<Fn>(fn)();
+        FAIL() << "Expected irt::Exception";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), expected_code);
+    }
+}
+
+/**
+ * @brief 构造用于小尺寸合成图的快速测试配置。
+ */
+irt::features::ShapeTemplateMatcherConfig fastConfig()
+{
+    irt::features::ShapeTemplateMatcherConfig config;
+    config.num_features         = 48;
+    config.min_features         = 6;
+    config.weak_threshold       = 10.0f;
+    config.strong_threshold     = 20.0f;
+    config.match_threshold      = 90.0f;
+    config.nms_threshold        = 0.3f;
+    config.max_label_difference = 0;
+    return config;
+}
+
+/**
+ * @brief 生成 L 形合成模板。
+ */
+cv::Mat makeLShape(int size = 48)
+{
+    cv::Mat image(size, size, CV_8UC1, cv::Scalar(0));
+    cv::rectangle(image, cv::Rect(10, 10, 28, 7), cv::Scalar(255), cv::FILLED);
+    cv::rectangle(image, cv::Rect(10, 10, 7, 28), cv::Scalar(255), cv::FILLED);
+    return image;
+}
+
+/**
+ * @brief 生成 T 形合成模板，用于类别过滤负例。
+ */
+cv::Mat makeTShape(int size = 48)
+{
+    cv::Mat image(size, size, CV_8UC1, cv::Scalar(0));
+    cv::rectangle(image, cv::Rect(10, 10, 28, 7), cv::Scalar(255), cv::FILLED);
+    cv::rectangle(image, cv::Rect(21, 10, 7, 28), cv::Scalar(255), cv::FILLED);
+    return image;
+}
+
+/**
+ * @brief 将目标图粘贴到黑色场景中。
+ */
+cv::Mat makeSceneWith(const cv::Mat &object, cv::Point top_left, cv::Size scene_size = cv::Size(112, 104))
+{
+    cv::Mat scene(scene_size, CV_8UC1, cv::Scalar(0));
+    object.copyTo(scene(cv::Rect(top_left, object.size())));
+    return scene;
+}
+
+/**
+ * @brief 在匹配结果中查找指定左上角坐标的精确命中。
+ */
+const irt::features::ShapeTemplateMatch *findExactMatch(const std::vector<irt::features::ShapeTemplateMatch> &matches,
+                                                        int expected_x, int expected_y)
+{
+    const auto it = std::find_if(matches.begin(), matches.end(),
+                                 [&](const irt::features::ShapeTemplateMatch &match)
+                                 { return match.x == expected_x && match.y == expected_y; });
+    return it == matches.end() ? nullptr : &(*it);
+}
+
+} // namespace
+
+/**
+ * @brief 默认构造应为空模板库并保留默认配置。
+ */
+TEST(ShapeTemplateMatcherTest, DefaultConstructsEmptyMatcher)
+{
+    const irt::features::ShapeTemplateMatcher matcher;
+
+    EXPECT_TRUE(matcher.empty());
+    EXPECT_EQ(matcher.numClasses(), 0);
+    EXPECT_EQ(matcher.numTemplates(), 0);
+    EXPECT_TRUE(matcher.classIds().empty());
+    EXPECT_EQ(matcher.config().num_features, irt::features::kDefaultShapeTemplateNumFeatures);
+    EXPECT_EQ(matcher.config().min_features, irt::features::kDefaultShapeTemplateMinFeatures);
+    EXPECT_FLOAT_EQ(matcher.config().match_threshold, irt::features::kDefaultShapeTemplateMatchThreshold);
+}
+
+/**
+ * @brief 构造函数应拒绝非法配置。
+ */
+TEST(ShapeTemplateMatcherTest, ConstructorRejectsInvalidConfig)
+{
+    auto config          = fastConfig();
+    config.num_features = 0;
+    expectIrtExceptionCode([&] { irt::features::ShapeTemplateMatcher matcher(config); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
+
+    config              = fastConfig();
+    config.min_features = config.num_features + 1;
+    expectIrtExceptionCode([&] { irt::features::ShapeTemplateMatcher matcher(config); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
+
+    config                     = fastConfig();
+    config.max_label_difference = 5;
+    expectIrtExceptionCode([&] { irt::features::ShapeTemplateMatcher matcher(config); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
+
+    config                 = fastConfig();
+    config.match_threshold = 101.0f;
+    expectIrtExceptionCode([&] { irt::features::ShapeTemplateMatcher matcher(config); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
+
+    config           = fastConfig();
+    config.scan_step = 0;
+    expectIrtExceptionCode([&] { irt::features::ShapeTemplateMatcher matcher(config); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+/**
+ * @brief 训练阶段应拒绝空图、空类别、错误掩膜尺寸和无梯度模板。
+ */
+TEST(ShapeTemplateMatcherTest, AddTemplateRejectsBadInputs)
+{
+    irt::features::ShapeTemplateMatcher matcher(fastConfig());
+    const auto                          object = makeLShape();
+
+    expectIrtExceptionCode([&] { matcher.addTemplate(cv::Mat(), "part"); }, irt::Status::ERROR_INVALID_ARGUMENT);
+    expectIrtExceptionCode([&] { matcher.addTemplate(object, ""); }, irt::Status::ERROR_INVALID_ARGUMENT);
+    expectIrtExceptionCode([&] { matcher.addTemplate(object, "part", cv::Mat(8, 8, CV_8UC1)); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
+    expectIrtExceptionCode([&] { matcher.addTemplate(cv::Mat(48, 48, CV_8UC1, cv::Scalar(0)), "flat"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+/**
+ * @brief 训练单模板后应能读取类别、模板数量和特征元数据。
+ */
+TEST(ShapeTemplateMatcherTest, AddTemplateExtractsMetadataAndClassIds)
+{
+    irt::features::ShapeTemplateMatcher matcher(fastConfig());
+
+    const int id = matcher.addTemplate(makeLShape(), "bracket");
+
+    ASSERT_EQ(id, 0);
+    EXPECT_FALSE(matcher.empty());
+    EXPECT_EQ(matcher.numClasses(), 1);
+    EXPECT_EQ(matcher.numTemplates(), 1);
+    EXPECT_EQ(matcher.numTemplates("bracket"), 1);
+    EXPECT_EQ(matcher.classIds(), (std::vector<std::string>{"bracket"}));
+
+    const auto &templ = matcher.getTemplate("bracket", id);
+    EXPECT_EQ(templ.class_id, "bracket");
+    EXPECT_EQ(templ.template_id, 0);
+    EXPECT_GT(templ.width, 0);
+    EXPECT_GT(templ.height, 0);
+    EXPECT_GE(static_cast<int>(templ.features.size()), matcher.config().min_features);
+}
+
+/**
+ * @brief 未训练模板时调用匹配应返回非法状态。
+ */
+TEST(ShapeTemplateMatcherTest, MatchBeforeTrainingThrowsInvalidOperation)
+{
+    irt::features::ShapeTemplateMatcher matcher(fastConfig());
+
+    expectIrtExceptionCode([&] { matcher.match(makeLShape()); }, irt::Status::ERROR_INVALID_OPERATION);
+}
+
+/**
+ * @brief 匹配器应找到发生平移的同一形状。
+ */
+TEST(ShapeTemplateMatcherTest, MatchFindsTranslatedShape)
+{
+    irt::features::ShapeTemplateMatcher matcher(fastConfig());
+    const auto                          object = makeLShape();
+    const int                           id     = matcher.addTemplate(object, "bracket");
+    const auto                         &templ  = matcher.getTemplate("bracket", id);
+    const cv::Point                     paste_at(34, 42);
+    const auto                          scene = makeSceneWith(object, paste_at);
+
+    const auto matches = matcher.match(scene, 95.0f, {"bracket"});
+
+    ASSERT_FALSE(matches.empty());
+    const int expected_x = paste_at.x + templ.tl_x;
+    const int expected_y = paste_at.y + templ.tl_y;
+    const auto *exact    = findExactMatch(matches, expected_x, expected_y);
+    ASSERT_NE(exact, nullptr);
+    EXPECT_EQ(exact->class_id, "bracket");
+    EXPECT_EQ(exact->template_id, id);
+    EXPECT_NEAR(exact->similarity, 100.0f, 1.0e-4f);
+}
+
+/**
+ * @brief 非 SIMD 对齐尺寸也应命中，用于覆盖训练和匹配路径的尾部处理。
+ */
+TEST(ShapeTemplateMatcherTest, MatchesNonAlignedImageSizes)
+{
+    irt::features::ShapeTemplateMatcher matcher(fastConfig());
+    const auto                          object = makeLShape(50);
+    const int                           id     = matcher.addTemplate(object, "bracket");
+    const auto                         &templ  = matcher.getTemplate("bracket", id);
+    const cv::Point                     paste_at(31, 27);
+    const auto                          scene = makeSceneWith(object, paste_at, cv::Size(119, 107));
+
+    const auto matches = matcher.match(scene, 95.0f, {"bracket"});
+
+    ASSERT_FALSE(matches.empty());
+    const auto *exact = findExactMatch(matches, paste_at.x + templ.tl_x, paste_at.y + templ.tl_y);
+    ASSERT_NE(exact, nullptr);
+    EXPECT_NEAR(exact->similarity, 100.0f, 1.0e-4f);
+}
+
+/**
+ * @brief 类别过滤应只返回指定类别的模板命中。
+ */
+TEST(ShapeTemplateMatcherTest, ClassFilterLimitsMatches)
+{
+    irt::features::ShapeTemplateMatcher matcher(fastConfig());
+    const auto                          object = makeLShape();
+    matcher.addTemplate(object, "bracket");
+    matcher.addTemplate(makeTShape(), "tee");
+    const auto scene = makeSceneWith(object, cv::Point(20, 30));
+
+    const auto bracket_matches = matcher.match(scene, 95.0f, {"bracket"});
+    const auto tee_matches     = matcher.match(scene, 95.0f, {"tee"});
+
+    EXPECT_FALSE(bracket_matches.empty());
+    EXPECT_TRUE(tee_matches.empty());
+}
+
+/**
+ * @brief 同类别重复模板命中应被 NMS 压制。
+ */
+TEST(ShapeTemplateMatcherTest, NmsSuppressesDuplicateTemplatesForSameClass)
+{
+    irt::features::ShapeTemplateMatcher matcher(fastConfig());
+    const auto                          object = makeLShape();
+    matcher.addTemplate(object, "bracket");
+    matcher.addTemplate(object, "bracket");
+
+    const auto matches = matcher.match(makeSceneWith(object, cv::Point(28, 26)), 99.0f, {"bracket"});
+
+    ASSERT_EQ(matches.size(), 1U);
+    EXPECT_EQ(matches[0].template_id, 0);
+    EXPECT_NEAR(matches[0].similarity, 100.0f, 1.0e-4f);
+}
+
+/**
+ * @brief 关闭 NMS 时仍应按 ``max_results`` 限制返回数量。
+ */
+TEST(ShapeTemplateMatcherTest, MaxResultsLimitsSortedOutputWhenNmsDisabled)
+{
+    auto config          = fastConfig();
+    config.nms_threshold = -1.0f;
+    config.max_results   = 1;
+
+    irt::features::ShapeTemplateMatcher matcher(config);
+    const auto                          object = makeLShape();
+    matcher.addTemplate(object, "bracket");
+    matcher.addTemplate(object, "bracket");
+
+    const auto matches = matcher.match(makeSceneWith(object, cv::Point(28, 26)), 99.0f, {"bracket"});
+
+    ASSERT_EQ(matches.size(), 1U);
+    EXPECT_EQ(matches[0].template_id, 0);
+}
+
+/**
+ * @brief 旋转模板变体应能匹配旋转后的目标。
+ */
+TEST(ShapeTemplateMatcherTest, VariantsDetectRotatedShape)
+{
+    auto config                   = fastConfig();
+    config.match_threshold        = 80.0f;
+    config.max_label_difference   = 1;
+    irt::features::ShapeTemplateMatcher matcher(config);
+
+    const auto object   = makeLShape();
+    const auto variants = irt::features::ShapeTemplateMatcher::makeAngleScaleVariants(0.0f, 90.0f, 90.0f);
+    const auto ids      = matcher.addTemplateVariants(object, "bracket", cv::Mat(), variants);
+    ASSERT_EQ(ids.size(), 2U);
+
+    const auto rotated = irt::features::ShapeTemplateMatcher::transform(
+        object, irt::features::ShapeTemplateVariant{90.0f, 1.0f});
+    const auto matches = matcher.match(makeSceneWith(rotated, cv::Point(26, 24)), 85.0f, {"bracket"});
+
+    ASSERT_FALSE(matches.empty());
+    EXPECT_NEAR(matches.front().angle_degrees, 90.0f, 1.0e-4f);
+    EXPECT_NEAR(matches.front().similarity, 100.0f, 1.0e-4f);
+}
+
+/**
+ * @brief 保存再加载模板后应保留模板元数据并产生一致匹配。
+ */
+TEST(ShapeTemplateMatcherTest, SaveLoadRoundTripPreservesMatches)
+{
+    TempDir temp;
+    const auto template_file = temp.path() / "shape_templates.yaml";
+    const auto object        = makeLShape();
+    const auto scene         = makeSceneWith(object, cv::Point(30, 34));
+
+    irt::features::ShapeTemplateMatcher writer(fastConfig());
+    writer.addTemplate(object, "bracket", cv::Mat(), irt::features::ShapeTemplateVariant{15.0f, 1.25f});
+    writer.save(template_file);
+
+    irt::features::ShapeTemplateMatcher reader;
+    reader.load(template_file);
+    const auto matches = reader.match(scene, 95.0f, {"bracket"});
+
+    ASSERT_FALSE(matches.empty());
+    EXPECT_EQ(reader.numTemplates("bracket"), 1);
+    EXPECT_EQ(reader.getTemplate("bracket", 0).features.size(), writer.getTemplate("bracket", 0).features.size());
+    EXPECT_NEAR(reader.getTemplate("bracket", 0).angle_degrees, 15.0f, 1.0e-4f);
+    EXPECT_NEAR(reader.getTemplate("bracket", 0).scale, 1.25f, 1.0e-4f);
+    EXPECT_NEAR(matches.front().similarity, 100.0f, 1.0e-4f);
+}
+
+/**
+ * @brief 文件 API 应支持从图片训练和从图片匹配。
+ */
+TEST(ShapeTemplateMatcherTest, FileApisTrainAndMatchImages)
+{
+    TempDir temp;
+    const auto object_file = temp.path() / "object.png";
+    const auto scene_file  = temp.path() / "scene.png";
+    const auto object      = makeLShape();
+    const auto scene       = makeSceneWith(object, cv::Point(36, 22));
+    ASSERT_TRUE(cv::imwrite(object_file.string(), object));
+    ASSERT_TRUE(cv::imwrite(scene_file.string(), scene));
+
+    irt::features::ShapeTemplateMatcher matcher(fastConfig());
+    const int id = matcher.addTemplateFile(object_file, "bracket");
+    const auto matches = matcher.matchFile(scene_file, 95.0f, {"bracket"});
+
+    ASSERT_FALSE(matches.empty());
+    EXPECT_EQ(matches.front().template_id, id);
+    EXPECT_NEAR(matches.front().similarity, 100.0f, 1.0e-4f);
+}
+
+/**
+ * @brief 角度/尺度变体生成应覆盖闭区间并校验非法范围。
+ */
+TEST(ShapeTemplateMatcherTest, MakeAngleScaleVariantsValidatesRanges)
+{
+    const auto variants = irt::features::ShapeTemplateMatcher::makeAngleScaleVariants(0.0f, 90.0f, 45.0f, 1.0f,
+                                                                                     1.5f, 0.5f);
+    ASSERT_EQ(variants.size(), 6U);
+    EXPECT_FLOAT_EQ(variants[0].angle_degrees, 0.0f);
+    EXPECT_FLOAT_EQ(variants[1].angle_degrees, 45.0f);
+    EXPECT_FLOAT_EQ(variants[2].angle_degrees, 90.0f);
+    EXPECT_FLOAT_EQ(variants[3].scale, 1.5f);
+
+    expectIrtExceptionCode(
+        [&] { irt::features::ShapeTemplateMatcher::makeAngleScaleVariants(90.0f, 0.0f, 1.0f); },
+        irt::Status::ERROR_INVALID_ARGUMENT);
+    expectIrtExceptionCode(
+        [&] { irt::features::ShapeTemplateMatcher::makeAngleScaleVariants(0.0f, 90.0f, 0.0f); },
+        irt::Status::ERROR_INVALID_ARGUMENT);
+    expectIrtExceptionCode(
+        [&] { irt::features::ShapeTemplateMatcher::makeAngleScaleVariants(0.0f, 90.0f, 1.0f, 0.0f, 1.0f); },
+        irt::Status::ERROR_INVALID_ARGUMENT);
+}
