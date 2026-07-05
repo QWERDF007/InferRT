@@ -151,40 +151,31 @@ std::vector<float> notAKnotKnots(const float *x, int64_t num_points, int degree)
     throw Exception(Status::ERROR_NOT_IMPLEMENTED, "makeInterpSpline currently supports degree 1 and 3");
 }
 
-double bsplineBasis(int basis_index, int degree, double x_value, const std::vector<float> &knots)
+void bsplineBasisValues(int span, int degree, double x_value, const float *knots, double *basis, double *left,
+                        double *right)
 {
-    if (degree == 0)
+    basis[0] = 1.0;
+    for (int j = 1; j <= degree; ++j)
     {
-        const double left  = knots[static_cast<size_t>(basis_index)];
-        const double right = knots[static_cast<size_t>(basis_index + 1)];
-        const double last  = knots.back();
-        if ((left <= x_value && x_value < right) || (x_value == last && left <= x_value && x_value <= right))
+        left[j]       = x_value - static_cast<double>(knots[span + 1 - j]);
+        right[j]      = static_cast<double>(knots[span + j]) - x_value;
+        double saved  = 0.0;
+        for (int r = 0; r < j; ++r)
         {
-            return 1.0;
+            const double denominator = right[r + 1] + left[j - r];
+            const double temp        = denominator == 0.0 ? 0.0 : basis[r] / denominator;
+            basis[r]                 = saved + right[r + 1] * temp;
+            saved                    = left[j - r] * temp;
         }
-        return 0.0;
+        basis[j] = saved;
     }
-
-    double       value    = 0.0;
-    const double left_den = knots[static_cast<size_t>(basis_index + degree)] - knots[static_cast<size_t>(basis_index)];
-    if (left_den != 0.0)
-    {
-        value += (x_value - knots[static_cast<size_t>(basis_index)]) / left_den
-               * bsplineBasis(basis_index, degree - 1, x_value, knots);
-    }
-
-    const double right_den
-        = knots[static_cast<size_t>(basis_index + degree + 1)] - knots[static_cast<size_t>(basis_index + 1)];
-    if (right_den != 0.0)
-    {
-        value += (knots[static_cast<size_t>(basis_index + degree + 1)] - x_value) / right_den
-               * bsplineBasis(basis_index + 1, degree - 1, x_value, knots);
-    }
-    return value;
 }
 
-std::vector<double> solveLinearSystem(std::vector<double> matrix, std::vector<double> rhs, int size)
+int findKnotInterval(const float *knots, int64_t num_coefficients, int degree, double x_value);
+
+std::vector<int> factorLinearSystem(std::vector<double> &matrix, int size, const char *singular_message)
 {
+    std::vector<int> pivots(static_cast<size_t>(size));
     for (int pivot = 0; pivot < size; ++pivot)
     {
         int    best_row = pivot;
@@ -200,16 +191,16 @@ std::vector<double> solveLinearSystem(std::vector<double> matrix, std::vector<do
         }
         if (best_abs <= std::numeric_limits<double>::epsilon())
         {
-            throw Exception(Status::ERROR_INVALID_ARGUMENT, "B-spline collocation matrix is singular");
+            throw Exception(Status::ERROR_INVALID_ARGUMENT, singular_message);
         }
+        pivots[static_cast<size_t>(pivot)] = best_row;
         if (best_row != pivot)
         {
-            for (int col = pivot; col < size; ++col)
+            for (int col = 0; col < size; ++col)
             {
                 std::swap(matrix[static_cast<size_t>(pivot) * size + col],
                           matrix[static_cast<size_t>(best_row) * size + col]);
             }
-            std::swap(rhs[static_cast<size_t>(pivot)], rhs[static_cast<size_t>(best_row)]);
         }
 
         const double pivot_value = matrix[static_cast<size_t>(pivot) * size + pivot];
@@ -220,27 +211,263 @@ std::vector<double> solveLinearSystem(std::vector<double> matrix, std::vector<do
             {
                 continue;
             }
-            matrix[static_cast<size_t>(row) * size + pivot] = 0.0;
+            matrix[static_cast<size_t>(row) * size + pivot] = factor;
             for (int col = pivot + 1; col < size; ++col)
             {
                 matrix[static_cast<size_t>(row) * size + col]
                     -= factor * matrix[static_cast<size_t>(pivot) * size + col];
             }
-            rhs[static_cast<size_t>(row)] -= factor * rhs[static_cast<size_t>(pivot)];
+        }
+    }
+    return pivots;
+}
+
+void solveFactoredLinearSystem(const std::vector<double> &matrix, const std::vector<int> &pivots, double *rhs,
+                               int size)
+{
+    for (int pivot = 0; pivot < size; ++pivot)
+    {
+        const int best_row = pivots[static_cast<size_t>(pivot)];
+        if (best_row != pivot)
+        {
+            std::swap(rhs[pivot], rhs[best_row]);
         }
     }
 
-    std::vector<double> solution(static_cast<size_t>(size));
+    for (int row = 0; row < size; ++row)
+    {
+        double value = rhs[row];
+        for (int col = 0; col < row; ++col)
+        {
+            value -= matrix[static_cast<size_t>(row) * size + col] * rhs[col];
+        }
+        rhs[row] = value;
+    }
+
     for (int row = size - 1; row >= 0; --row)
     {
-        double value = rhs[static_cast<size_t>(row)];
+        double value = rhs[row];
         for (int col = row + 1; col < size; ++col)
         {
-            value -= matrix[static_cast<size_t>(row) * size + col] * solution[static_cast<size_t>(col)];
+            value -= matrix[static_cast<size_t>(row) * size + col] * rhs[col];
         }
-        solution[static_cast<size_t>(row)] = value / matrix[static_cast<size_t>(row) * size + row];
+        rhs[row] = value / matrix[static_cast<size_t>(row) * size + row];
     }
-    return solution;
+}
+
+std::vector<double> solveLinearSystem(std::vector<double> matrix, std::vector<double> rhs, int size)
+{
+    const auto pivots = factorLinearSystem(matrix, size, "B-spline collocation matrix is singular");
+    solveFactoredLinearSystem(matrix, pivots, rhs.data(), size);
+    return rhs;
+}
+
+std::vector<double> buildNormalMatrix(const std::vector<double> &basis, int64_t num_points, int64_t num_coefficients)
+{
+    std::vector<double> normal(static_cast<size_t>(num_coefficients) * num_coefficients, 0.0);
+    for (int64_t sample = 0; sample < num_points; ++sample)
+    {
+        const double *basis_row = basis.data() + static_cast<size_t>(sample) * num_coefficients;
+        for (int64_t row = 0; row < num_coefficients; ++row)
+        {
+            const double row_value = basis_row[row];
+            if (row_value == 0.0)
+            {
+                continue;
+            }
+            for (int64_t col = row; col < num_coefficients; ++col)
+            {
+                const double col_value = basis_row[col];
+                if (col_value != 0.0)
+                {
+                    normal[static_cast<size_t>(row) * num_coefficients + col] += row_value * col_value;
+                }
+            }
+        }
+    }
+    for (int64_t row = 1; row < num_coefficients; ++row)
+    {
+        for (int64_t col = 0; col < row; ++col)
+        {
+            normal[static_cast<size_t>(row) * num_coefficients + col]
+                = normal[static_cast<size_t>(col) * num_coefficients + row];
+        }
+    }
+    return normal;
+}
+
+std::vector<double> buildRhsMatrix(const std::vector<double> &basis, const float *y, int64_t num_points,
+                                   int64_t num_dims, int64_t num_coefficients)
+{
+    std::vector<double> rhs(static_cast<size_t>(num_dims) * num_coefficients, 0.0);
+    for (int64_t sample = 0; sample < num_points; ++sample)
+    {
+        const double *basis_row = basis.data() + static_cast<size_t>(sample) * num_coefficients;
+        for (int64_t col = 0; col < num_coefficients; ++col)
+        {
+            const double basis_value = basis_row[col];
+            if (basis_value == 0.0)
+            {
+                continue;
+            }
+            for (int64_t dim = 0; dim < num_dims; ++dim)
+            {
+                rhs[static_cast<size_t>(dim) * num_coefficients + col]
+                    += basis_value * static_cast<double>(y[static_cast<size_t>(sample) * num_dims + dim]);
+            }
+        }
+    }
+    return rhs;
+}
+
+class BandedMatrix
+{
+public:
+    BandedMatrix(int64_t size, int lower_bandwidth, int upper_bandwidth)
+        : size_(size),
+          lower_bandwidth_(lower_bandwidth),
+          upper_bandwidth_(upper_bandwidth),
+          stride_(lower_bandwidth + upper_bandwidth + 1),
+          values_(static_cast<size_t>(size) * stride_, 0.0)
+    {}
+
+    [[nodiscard]] int64_t size() const
+    {
+        return size_;
+    }
+
+    [[nodiscard]] int lowerBandwidth() const
+    {
+        return lower_bandwidth_;
+    }
+
+    [[nodiscard]] int upperBandwidth() const
+    {
+        return upper_bandwidth_;
+    }
+
+    [[nodiscard]] int stride() const
+    {
+        return stride_;
+    }
+
+    [[nodiscard]] const double *rowData(int64_t row) const
+    {
+        return values_.data() + static_cast<size_t>(row) * stride_;
+    }
+
+    [[nodiscard]] double *rowData(int64_t row)
+    {
+        return values_.data() + static_cast<size_t>(row) * stride_;
+    }
+
+    [[nodiscard]] bool contains(int64_t row, int64_t col) const
+    {
+        const int64_t offset = col - row + lower_bandwidth_;
+        return offset >= 0 && offset < stride_;
+    }
+
+    [[nodiscard]] double get(int64_t row, int64_t col) const
+    {
+        if (!contains(row, col))
+        {
+            return 0.0;
+        }
+        return values_[static_cast<size_t>(row) * stride_ + static_cast<size_t>(col - row + lower_bandwidth_)];
+    }
+
+    void set(int64_t row, int64_t col, double value)
+    {
+        if (!contains(row, col))
+        {
+            if (value != 0.0)
+            {
+                throw Exception(Status::ERROR_INVALID_ARGUMENT, "B-spline collocation exceeded banded storage");
+            }
+            return;
+        }
+        values_[static_cast<size_t>(row) * stride_ + static_cast<size_t>(col - row + lower_bandwidth_)] = value;
+    }
+
+    void add(int64_t row, int64_t col, double value)
+    {
+        if (value == 0.0)
+        {
+            return;
+        }
+        set(row, col, get(row, col) + value);
+    }
+
+private:
+    int64_t             size_{0};
+    int                 lower_bandwidth_{0};
+    int                 upper_bandwidth_{0};
+    int                 stride_{0};
+    std::vector<double> values_;
+};
+
+void factorBandedSystem(BandedMatrix &matrix, const char *singular_message)
+{
+    const int64_t size  = matrix.size();
+    const int     lower = matrix.lowerBandwidth();
+    const int     upper = matrix.upperBandwidth();
+    for (int64_t pivot = 0; pivot < size; ++pivot)
+    {
+        double      *pivot_row   = matrix.rowData(pivot);
+        const double pivot_value = pivot_row[lower];
+        if (std::abs(pivot_value) <= std::numeric_limits<double>::epsilon())
+        {
+            throw Exception(Status::ERROR_INVALID_ARGUMENT, singular_message);
+        }
+
+        const int64_t last_row = std::min<int64_t>(size - 1, pivot + lower);
+        const int64_t last_col = std::min<int64_t>(size - 1, pivot + upper);
+        for (int64_t row = pivot + 1; row <= last_row; ++row)
+        {
+            double      *target_row    = matrix.rowData(row);
+            const int    target_pivot  = lower - static_cast<int>(row - pivot);
+            const double factor        = target_row[target_pivot] / pivot_value;
+            if (factor == 0.0)
+            {
+                continue;
+            }
+            target_row[target_pivot] = factor;
+            for (int64_t col = pivot + 1; col <= last_col; ++col)
+            {
+                target_row[lower + static_cast<int>(col - row)]
+                    -= factor * pivot_row[lower + static_cast<int>(col - pivot)];
+            }
+        }
+    }
+}
+
+void solveFactoredBandedSystem(const BandedMatrix &matrix, double *rhs)
+{
+    const int64_t size  = matrix.size();
+    const int     lower = matrix.lowerBandwidth();
+    const int     upper = matrix.upperBandwidth();
+
+    for (int64_t pivot = 0; pivot < size; ++pivot)
+    {
+        const int64_t last_row = std::min<int64_t>(size - 1, pivot + lower);
+        const double  rhs_pivot = rhs[pivot];
+        for (int64_t row = pivot + 1; row <= last_row; ++row)
+        {
+            rhs[row] -= matrix.rowData(row)[lower - static_cast<int>(row - pivot)] * rhs_pivot;
+        }
+    }
+
+    for (int64_t row = size - 1; row >= 0; --row)
+    {
+        const double *matrix_row = matrix.rowData(row);
+        double        value    = rhs[row];
+        const int64_t last_col = std::min<int64_t>(size - 1, row + upper);
+        for (int64_t col = row + 1; col <= last_col; ++col)
+        {
+            value -= matrix_row[lower + static_cast<int>(col - row)] * rhs[col];
+        }
+        rhs[row] = value / matrix_row[lower];
+    }
 }
 
 struct PenalizedSplineSolution
@@ -249,16 +476,268 @@ struct PenalizedSplineSolution
     double             residual_sum_squares{0.0};
 };
 
+struct LocalBasisRows
+{
+    int                 degree{0};
+    std::vector<int>    first_columns;
+    std::vector<double> values;
+};
+
+LocalBasisRows buildLocalBasisRows(const std::vector<float> &knots, const float *x, int64_t num_points,
+                                   int64_t num_coefficients, int degree)
+{
+    LocalBasisRows rows;
+    rows.degree = degree;
+    rows.first_columns.resize(static_cast<size_t>(num_points));
+    rows.values.resize(static_cast<size_t>(num_points) * static_cast<size_t>(degree + 1));
+
+    std::vector<double> left(static_cast<size_t>(degree + 1));
+    std::vector<double> right(static_cast<size_t>(degree + 1));
+    int                 span = degree;
+    for (int64_t sample = 0; sample < num_points; ++sample)
+    {
+        const double x_value = static_cast<double>(x[sample]);
+        if (x_value <= knots[static_cast<size_t>(degree)])
+        {
+            span = degree;
+        }
+        else if (x_value >= knots[static_cast<size_t>(num_coefficients)])
+        {
+            span = static_cast<int>(num_coefficients - 1);
+        }
+        else
+        {
+            while (span + 1 <= num_coefficients && x_value >= knots[static_cast<size_t>(span + 1)])
+            {
+                ++span;
+            }
+            span = std::max(span, degree);
+        }
+
+        rows.first_columns[static_cast<size_t>(sample)] = span - degree;
+        bsplineBasisValues(span, degree, x_value, knots.data(),
+                           rows.values.data() + static_cast<size_t>(sample) * static_cast<size_t>(degree + 1),
+                           left.data(), right.data());
+    }
+    return rows;
+}
+
+struct BandedSplineSystem
+{
+    BandedMatrix       normal;
+    std::vector<double> rhs;
+};
+
+BandedSplineSystem buildBandedNormalSystem(const LocalBasisRows &basis_rows, const float *y, int64_t num_points,
+                                           int64_t num_dims, int64_t num_coefficients)
+{
+    const int degree = basis_rows.degree;
+    const int bandwidth = std::max(degree, 2);
+    BandedSplineSystem system{BandedMatrix(num_coefficients, bandwidth, bandwidth),
+                              std::vector<double>(static_cast<size_t>(num_dims) * num_coefficients, 0.0)};
+
+    for (int64_t sample = 0; sample < num_points; ++sample)
+    {
+        const int     first_col   = basis_rows.first_columns[static_cast<size_t>(sample)];
+        const double *local_basis = basis_rows.values.data()
+                                  + static_cast<size_t>(sample) * static_cast<size_t>(degree + 1);
+        for (int lhs = 0; lhs <= degree; ++lhs)
+        {
+            const int64_t lhs_col = static_cast<int64_t>(first_col + lhs);
+            if (lhs_col < 0 || lhs_col >= num_coefficients)
+            {
+                continue;
+            }
+            const double lhs_value = local_basis[lhs];
+            for (int64_t dim = 0; dim < num_dims; ++dim)
+            {
+                system.rhs[static_cast<size_t>(dim) * num_coefficients + lhs_col]
+                    += lhs_value * static_cast<double>(y[static_cast<size_t>(sample) * num_dims + dim]);
+            }
+            for (int rhs = lhs; rhs <= degree; ++rhs)
+            {
+                const int64_t rhs_col = static_cast<int64_t>(first_col + rhs);
+                if (rhs_col < 0 || rhs_col >= num_coefficients)
+                {
+                    continue;
+                }
+                const double value = lhs_value * local_basis[rhs];
+                system.normal.add(lhs_col, rhs_col, value);
+                if (rhs_col != lhs_col)
+                {
+                    system.normal.add(rhs_col, lhs_col, value);
+                }
+            }
+        }
+    }
+    return system;
+}
+
+void addSecondDifferencePenalty(BandedMatrix &matrix, int64_t num_coefficients, double lambda)
+{
+    if (lambda == 0.0 || num_coefficients < 3)
+    {
+        return;
+    }
+    for (int64_t row = 0; row < num_coefficients - 2; ++row)
+    {
+        const int64_t indices[3] = {row, row + 1, row + 2};
+        const double  values[3]  = {1.0, -2.0, 1.0};
+        for (int lhs = 0; lhs < 3; ++lhs)
+        {
+            double *matrix_row = matrix.rowData(indices[lhs]);
+            for (int rhs = 0; rhs < 3; ++rhs)
+            {
+                matrix_row[matrix.lowerBandwidth() + static_cast<int>(indices[rhs] - indices[lhs])]
+                    += lambda * values[lhs] * values[rhs];
+            }
+        }
+    }
+}
+
+double computeSplineResidualLocal(const LocalBasisRows &basis_rows, const float *y, int64_t num_points,
+                                  int64_t num_dims, int64_t num_coefficients,
+                                  const std::vector<float> &coefficients)
+{
+    const int degree   = basis_rows.degree;
+    double    residual = 0.0;
+    for (int64_t sample = 0; sample < num_points; ++sample)
+    {
+        const int     first_col   = basis_rows.first_columns[static_cast<size_t>(sample)];
+        const double *local_basis = basis_rows.values.data()
+                                  + static_cast<size_t>(sample) * static_cast<size_t>(degree + 1);
+        for (int64_t dim = 0; dim < num_dims; ++dim)
+        {
+            double predicted = 0.0;
+            for (int j = 0; j <= degree; ++j)
+            {
+                const int64_t col = static_cast<int64_t>(first_col + j);
+                if (col >= 0 && col < num_coefficients)
+                {
+                    predicted += local_basis[j] * coefficients[static_cast<size_t>(col) * num_dims + dim];
+                }
+            }
+            const double diff = static_cast<double>(y[static_cast<size_t>(sample) * num_dims + dim]) - predicted;
+            residual += diff * diff;
+        }
+    }
+    return residual;
+}
+
+PenalizedSplineSolution solveAffineCoefficientSpline(const LocalBasisRows &basis_rows, const float *y,
+                                                     int64_t num_points, int64_t num_dims,
+                                                     int64_t num_coefficients)
+{
+    const int           degree = basis_rows.degree;
+    std::vector<double> normal(4, 0.0);
+    std::vector<double> rhs(static_cast<size_t>(num_dims) * 2U, 0.0);
+
+    for (int64_t sample = 0; sample < num_points; ++sample)
+    {
+        const int     first_col   = basis_rows.first_columns[static_cast<size_t>(sample)];
+        const double *local_basis = basis_rows.values.data()
+                                  + static_cast<size_t>(sample) * static_cast<size_t>(degree + 1);
+
+        double basis_sum               = 0.0;
+        double weighted_coordinate_sum = 0.0;
+        for (int j = 0; j <= degree; ++j)
+        {
+            const int64_t col = static_cast<int64_t>(first_col + j);
+            if (col >= 0 && col < num_coefficients)
+            {
+                const double basis_value = local_basis[j];
+                const double coordinate
+                    = num_coefficients <= 1 ? 0.0 : 2.0 * static_cast<double>(col) / static_cast<double>(num_coefficients - 1) - 1.0;
+                basis_sum += basis_value;
+                weighted_coordinate_sum += basis_value * coordinate;
+            }
+        }
+
+        normal[0] += basis_sum * basis_sum;
+        normal[1] += basis_sum * weighted_coordinate_sum;
+        normal[2] += weighted_coordinate_sum * basis_sum;
+        normal[3] += weighted_coordinate_sum * weighted_coordinate_sum;
+        for (int64_t dim = 0; dim < num_dims; ++dim)
+        {
+            const double y_value = static_cast<double>(y[static_cast<size_t>(sample) * num_dims + dim]);
+            rhs[static_cast<size_t>(dim) * 2U] += basis_sum * y_value;
+            rhs[static_cast<size_t>(dim) * 2U + 1U] += weighted_coordinate_sum * y_value;
+        }
+    }
+
+    const auto pivots = factorLinearSystem(normal, 2, "B-spline smoothing affine limit is singular");
+
+    PenalizedSplineSolution solution;
+    solution.coefficients.resize(static_cast<size_t>(num_coefficients) * num_dims);
+    double affine[2] = {0.0, 0.0};
+    for (int64_t dim = 0; dim < num_dims; ++dim)
+    {
+        affine[0] = rhs[static_cast<size_t>(dim) * 2U];
+        affine[1] = rhs[static_cast<size_t>(dim) * 2U + 1U];
+        solveFactoredLinearSystem(normal, pivots, affine, 2);
+        for (int64_t col = 0; col < num_coefficients; ++col)
+        {
+            const double coordinate
+                = num_coefficients <= 1 ? 0.0 : 2.0 * static_cast<double>(col) / static_cast<double>(num_coefficients - 1) - 1.0;
+            solution.coefficients[static_cast<size_t>(col) * num_dims + dim]
+                = static_cast<float>(affine[0] + affine[1] * coordinate);
+        }
+    }
+
+    solution.residual_sum_squares
+        = computeSplineResidualLocal(basis_rows, y, num_points, num_dims, num_coefficients, solution.coefficients);
+    return solution;
+}
+
+PenalizedSplineSolution solvePenalizedSplineBanded(const BandedSplineSystem &system,
+                                                   const LocalBasisRows &basis_rows, const float *y,
+                                                   int64_t num_points, int64_t num_dims,
+                                                   int64_t num_coefficients, double lambda)
+{
+    auto normal = system.normal;
+    addSecondDifferencePenalty(normal, num_coefficients, lambda);
+    factorBandedSystem(normal, "B-spline smoothing normal matrix is singular");
+
+    PenalizedSplineSolution solution;
+    solution.coefficients.resize(static_cast<size_t>(num_coefficients) * num_dims);
+    std::vector<double> rhs(static_cast<size_t>(num_coefficients));
+    for (int64_t dim = 0; dim < num_dims; ++dim)
+    {
+        std::copy_n(system.rhs.data() + static_cast<size_t>(dim) * num_coefficients,
+                    static_cast<size_t>(num_coefficients), rhs.data());
+        solveFactoredBandedSystem(normal, rhs.data());
+        for (int64_t col = 0; col < num_coefficients; ++col)
+        {
+            solution.coefficients[static_cast<size_t>(col) * num_dims + dim]
+                = static_cast<float>(rhs[static_cast<size_t>(col)]);
+        }
+    }
+
+    solution.residual_sum_squares
+        = computeSplineResidualLocal(basis_rows, y, num_points, num_dims, num_coefficients, solution.coefficients);
+    return solution;
+}
+
 std::vector<double> buildBasisMatrix(const std::vector<float> &knots, const float *x, int64_t num_points,
                                      int64_t num_coefficients, int degree)
 {
     std::vector<double> basis(static_cast<size_t>(num_points) * num_coefficients, 0.0);
+    std::vector<double> local_basis(static_cast<size_t>(degree + 1));
+    std::vector<double> left(static_cast<size_t>(degree + 1));
+    std::vector<double> right(static_cast<size_t>(degree + 1));
     for (int64_t row = 0; row < num_points; ++row)
     {
-        for (int64_t col = 0; col < num_coefficients; ++col)
+        const int span = findKnotInterval(knots.data(), num_coefficients, degree, static_cast<double>(x[row]));
+        bsplineBasisValues(span, degree, static_cast<double>(x[row]), knots.data(), local_basis.data(), left.data(),
+                           right.data());
+        const int first_col = span - degree;
+        for (int j = 0; j <= degree; ++j)
         {
-            basis[static_cast<size_t>(row) * num_coefficients + col]
-                = bsplineBasis(static_cast<int>(col), degree, static_cast<double>(x[row]), knots);
+            const int64_t col = static_cast<int64_t>(first_col + j);
+            if (col >= 0 && col < num_coefficients)
+            {
+                basis[static_cast<size_t>(row) * num_coefficients + col] = local_basis[static_cast<size_t>(j)];
+            }
         }
     }
     return basis;
@@ -309,44 +788,31 @@ double computeSplineResidual(const std::vector<double> &basis, const float *y, i
     return residual;
 }
 
-PenalizedSplineSolution solvePenalizedSpline(const std::vector<double> &basis, const std::vector<double> &penalty,
+PenalizedSplineSolution solvePenalizedSpline(const std::vector<double> &basis, const std::vector<double> &normal_base,
+                                             const std::vector<double> &penalty, const std::vector<double> &rhs_base,
                                              const float *y, int64_t num_points, int64_t num_dims,
                                              int64_t num_coefficients, double lambda)
 {
-    std::vector<double> normal(static_cast<size_t>(num_coefficients) * num_coefficients, 0.0);
-    for (int64_t row = 0; row < num_coefficients; ++row)
+    auto normal = normal_base;
+    for (size_t i = 0; i < normal.size(); ++i)
     {
-        for (int64_t col = 0; col < num_coefficients; ++col)
-        {
-            double value = lambda * penalty[static_cast<size_t>(row) * num_coefficients + col];
-            for (int64_t sample = 0; sample < num_points; ++sample)
-            {
-                value += basis[static_cast<size_t>(sample) * num_coefficients + row]
-                       * basis[static_cast<size_t>(sample) * num_coefficients + col];
-            }
-            normal[static_cast<size_t>(row) * num_coefficients + col] = value;
-        }
+        normal[i] += lambda * penalty[i];
     }
+    const auto pivots = factorLinearSystem(normal, static_cast<int>(num_coefficients),
+                                           "B-spline smoothing normal matrix is singular");
 
     PenalizedSplineSolution solution;
     solution.coefficients.resize(static_cast<size_t>(num_coefficients) * num_dims);
+    std::vector<double> rhs(static_cast<size_t>(num_coefficients));
     for (int64_t dim = 0; dim < num_dims; ++dim)
     {
-        std::vector<double> rhs(static_cast<size_t>(num_coefficients), 0.0);
-        for (int64_t col = 0; col < num_coefficients; ++col)
-        {
-            for (int64_t sample = 0; sample < num_points; ++sample)
-            {
-                rhs[static_cast<size_t>(col)] += basis[static_cast<size_t>(sample) * num_coefficients + col]
-                                               * static_cast<double>(y[static_cast<size_t>(sample) * num_dims + dim]);
-            }
-        }
-
-        const auto coeff = solveLinearSystem(normal, rhs, static_cast<int>(num_coefficients));
+        std::copy_n(rhs_base.data() + static_cast<size_t>(dim) * num_coefficients,
+                    static_cast<size_t>(num_coefficients), rhs.data());
+        solveFactoredLinearSystem(normal, pivots, rhs.data(), static_cast<int>(num_coefficients));
         for (int64_t col = 0; col < num_coefficients; ++col)
         {
             solution.coefficients[static_cast<size_t>(col) * num_dims + dim]
-                = static_cast<float>(coeff[static_cast<size_t>(col)]);
+                = static_cast<float>(rhs[static_cast<size_t>(col)]);
         }
     }
 
@@ -358,52 +824,113 @@ PenalizedSplineSolution solvePenalizedSpline(const std::vector<double> &basis, c
 PenalizedSplineSolution fitSmoothedSpline(const std::vector<float> &knots, const float *x, const float *y,
                                           int64_t num_points, int64_t num_dims, int degree, double smoothing)
 {
-    const int64_t num_coefficients = static_cast<int64_t>(knots.size()) - degree - 1;
-    const auto    basis            = buildBasisMatrix(knots, x, num_points, num_coefficients, degree);
-    const auto    penalty          = secondDifferencePenalty(num_coefficients);
+    constexpr int    kMaxSearchIterations  = 48;
+    constexpr int    kMaxRefineIterations  = 12;
+    constexpr double kLambdaGrowth         = 3.1622776601683793319988935444327;
+    constexpr double kRelativeTolerance    = 2.0e-3;
 
-    auto best = solvePenalizedSpline(basis, penalty, y, num_points, num_dims, num_coefficients, 0.0);
-    if (best.residual_sum_squares >= smoothing)
+    const int64_t num_coefficients = static_cast<int64_t>(knots.size()) - degree - 1;
+    const auto    basis_rows       = buildLocalBasisRows(knots, x, num_points, num_coefficients, degree);
+
+    if (num_coefficients < 3)
     {
-        return best;
+        const auto system = buildBandedNormalSystem(basis_rows, y, num_points, num_dims, num_coefficients);
+        return solvePenalizedSplineBanded(system, basis_rows, y, num_points, num_dims, num_coefficients, 0.0);
     }
 
-    double lambda_low  = 0.0;
-    double lambda_high = 1.0e-12;
-    bool   bracketed   = false;
-    for (int iter = 0; iter < 80; ++iter)
+    const auto affine_limit = solveAffineCoefficientSpline(basis_rows, y, num_points, num_dims, num_coefficients);
+    if (affine_limit.residual_sum_squares <= smoothing)
     {
-        const auto candidate
-            = solvePenalizedSpline(basis, penalty, y, num_points, num_dims, num_coefficients, lambda_high);
+        return affine_limit;
+    }
+
+    const auto              system = buildBandedNormalSystem(basis_rows, y, num_points, num_dims, num_coefficients);
+    PenalizedSplineSolution best;
+    bool                    has_best         = false;
+    double                  best_lambda      = 0.0;
+    double                  upper_after_best = 0.0;
+    bool                    has_upper_after_best = false;
+    const double            coefficient_count = std::max(1.0, static_cast<double>(num_coefficients));
+    double                  lambda = std::max(1.0e-12, coefficient_count * coefficient_count * coefficient_count
+                                                            * coefficient_count * 1.0e-10);
+    const double            residual_tolerance = std::max(1.0e-8, smoothing * kRelativeTolerance);
+    int                     over_budget_after_best = 0;
+    for (int iter = 0; iter < kMaxSearchIterations; ++iter)
+    {
+        const auto candidate = solvePenalizedSplineBanded(system, basis_rows, y, num_points, num_dims,
+                                                          num_coefficients, lambda);
         if (candidate.residual_sum_squares <= smoothing)
         {
-            best       = candidate;
-            lambda_low = lambda_high;
-            lambda_high *= 10.0;
+            if (!has_best || candidate.residual_sum_squares > best.residual_sum_squares)
+            {
+                best                   = candidate;
+                has_best               = true;
+                best_lambda            = lambda;
+                has_upper_after_best   = false;
+                over_budget_after_best = 0;
+                if (smoothing - candidate.residual_sum_squares <= residual_tolerance)
+                {
+                    break;
+                }
+            }
+            else if (lambda > best_lambda)
+            {
+                over_budget_after_best = 0;
+            }
+        }
+        else if (!has_best)
+        {
+            lambda *= 0.1;
             continue;
         }
-        bracketed = true;
-        break;
-    }
-
-    if (!bracketed)
-    {
-        return best;
-    }
-
-    for (int iter = 0; iter < 80; ++iter)
-    {
-        const double lambda_mid = lambda_low == 0.0 ? lambda_high * 0.5 : std::sqrt(lambda_low * lambda_high);
-        const auto   candidate
-            = solvePenalizedSpline(basis, penalty, y, num_points, num_dims, num_coefficients, lambda_mid);
-        if (candidate.residual_sum_squares <= smoothing)
+        else if (lambda > best_lambda)
         {
-            best       = candidate;
-            lambda_low = lambda_mid;
+            if (!has_upper_after_best)
+            {
+                upper_after_best     = lambda;
+                has_upper_after_best = true;
+            }
+            ++over_budget_after_best;
+            if (over_budget_after_best >= 2)
+            {
+                break;
+            }
         }
-        else
+
+        lambda *= kLambdaGrowth;
+    }
+
+    if (!has_best)
+    {
+        return solvePenalizedSplineBanded(system, basis_rows, y, num_points, num_dims, num_coefficients, 0.0);
+    }
+
+    if (has_upper_after_best && best.residual_sum_squares < smoothing * 0.8)
+    {
+        double lambda_low  = best_lambda;
+        double lambda_high = upper_after_best;
+        for (int iter = 0; iter < kMaxRefineIterations; ++iter)
         {
-            lambda_high = lambda_mid;
+            const double lambda_mid = std::sqrt(lambda_low * lambda_high);
+            const auto   candidate = solvePenalizedSplineBanded(system, basis_rows, y, num_points, num_dims,
+                                                                num_coefficients, lambda_mid);
+            if (candidate.residual_sum_squares <= smoothing)
+            {
+                lambda_low = lambda_mid;
+                if (candidate.residual_sum_squares > best.residual_sum_squares)
+                {
+                    best        = candidate;
+                    best_lambda = lambda_mid;
+                    if (smoothing - candidate.residual_sum_squares <= residual_tolerance)
+                    {
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                lambda_high = lambda_mid;
+            }
         }
     }
     return best;
@@ -452,29 +979,46 @@ BSplineInterpResult makeInterpSpline(const float *x, const float *y, int64_t num
                         "internal knot construction produced unexpected coefficient count");
     }
 
-    std::vector<double> collocation(static_cast<size_t>(num_points) * num_points, 0.0);
-    for (int64_t row = 0; row < num_points; ++row)
+    result.coefficients.resize(static_cast<size_t>(num_coefficients) * num_dims);
+    if (degree == 1)
     {
-        for (int64_t col = 0; col < num_points; ++col)
-        {
-            collocation[static_cast<size_t>(row) * num_points + col]
-                = bsplineBasis(static_cast<int>(col), degree, static_cast<double>(x[row]), result.knots);
-        }
+        std::copy(y, y + static_cast<size_t>(num_points) * num_dims, result.coefficients.begin());
+        return result;
     }
 
-    result.coefficients.resize(static_cast<size_t>(num_coefficients) * num_dims);
+    BandedMatrix       collocation(num_points, degree, degree);
+    std::vector<double> basis(static_cast<size_t>(degree + 1));
+    std::vector<double> left(static_cast<size_t>(degree + 1));
+    std::vector<double> right(static_cast<size_t>(degree + 1));
+    for (int64_t row = 0; row < num_points; ++row)
+    {
+        const int span = findKnotInterval(result.knots.data(), num_coefficients, degree, static_cast<double>(x[row]));
+        bsplineBasisValues(span, degree, static_cast<double>(x[row]), result.knots.data(), basis.data(), left.data(),
+                           right.data());
+        const int first_col = span - degree;
+        for (int j = 0; j <= degree; ++j)
+        {
+            const int64_t col = static_cast<int64_t>(first_col + j);
+            if (col >= 0 && col < num_coefficients)
+            {
+                collocation.set(row, col, basis[static_cast<size_t>(j)]);
+            }
+        }
+    }
+    factorBandedSystem(collocation, "B-spline collocation matrix is singular");
+
+    std::vector<double> rhs(static_cast<size_t>(num_points));
     for (int64_t dim = 0; dim < num_dims; ++dim)
     {
-        std::vector<double> rhs(static_cast<size_t>(num_points));
         for (int64_t row = 0; row < num_points; ++row)
         {
             rhs[static_cast<size_t>(row)] = y[row * num_dims + dim];
         }
-        const auto solution = solveLinearSystem(collocation, rhs, static_cast<int>(num_points));
+        solveFactoredBandedSystem(collocation, rhs.data());
         for (int64_t row = 0; row < num_coefficients; ++row)
         {
             result.coefficients[static_cast<size_t>(row) * num_dims + dim]
-                = static_cast<float>(solution[static_cast<size_t>(row)]);
+                = static_cast<float>(rhs[static_cast<size_t>(row)]);
         }
     }
     return result;
