@@ -27,7 +27,8 @@ from sklearn import cluster as sklearn_cluster
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BUILD_DIR = Path(os.environ.get("INFERRT_BUILD_DIR", REPO_ROOT / "build")).resolve()
-CLUSTER_SIZES = (64, 256, 1024, 2048, 4096, 8192, 10000, 16384, 32768)
+CLUSTER_SIZES = (10, 100, 1000, 10000)
+CLUSTER_DIMS = (2, 4, 8, 32, 256)
 
 _DLL_DIRECTORY_HANDLES: list[object] = []
 _SINK: Any = None
@@ -119,9 +120,9 @@ def _store(value: Any) -> None:
     _SINK = value
 
 
-def _cluster_samples(num_samples: int) -> np.ndarray:
-    rng = np.random.default_rng(12345 + num_samples)
-    centers = np.asarray(
+def _cluster_samples(num_samples: int, num_features: int) -> np.ndarray:
+    rng = np.random.default_rng(12345 + num_samples * 31 + num_features)
+    base_centers = np.asarray(
         [
             [-1.5, -1.5, 0.0],
             [1.5, -1.5, 0.5],
@@ -130,8 +131,12 @@ def _cluster_samples(num_samples: int) -> np.ndarray:
         ],
         dtype=np.float32,
     )
+    centers = np.zeros((base_centers.shape[0], num_features), dtype=np.float32)
+    center_dims = min(num_features, base_centers.shape[1])
+    centers[:, :center_dims] = base_centers[:, :center_dims]
     labels = np.arange(num_samples, dtype=np.int64) % len(centers)
-    samples = centers[labels] + rng.normal(0.0, 0.16, size=(num_samples, centers.shape[1])).astype(np.float32)
+    noise_scale = 0.16 / np.sqrt(max(1.0, num_features / 3.0))
+    samples = centers[labels] + rng.normal(0.0, noise_scale, size=(num_samples, num_features)).astype(np.float32)
     rng.shuffle(samples, axis=0)
     return np.ascontiguousarray(samples, dtype=np.float32)
 
@@ -171,7 +176,7 @@ METRIC_CASES = (
     ("minkowski_p3", ops.ClusteringMetric.Minkowski, "minkowski", 3.0, 1.0),
     ("cosine", ops.ClusteringMetric.Cosine, "cosine", 2.0, 0.01),
 )
-CLUSTER_DATA = {size: _cluster_samples(size) for size in CLUSTER_SIZES}
+CLUSTER_DATA = {(size, dim): _cluster_samples(size, dim) for size in CLUSTER_SIZES for dim in CLUSTER_DIMS}
 
 
 def _supported_algorithm_cases(metric_name: str):
@@ -195,8 +200,9 @@ def _sklearn_hdbscan_metric_params(metric_name: str, minkowski_p: float) -> dict
 def _register_cluster_benchmark(name: str, func: Any) -> None:
     options = func
     for size in reversed(CLUSTER_SIZES):
-        options = benchmark.option.arg(size)(options)
-    options = benchmark.option.arg_name("N")(options)
+        for dim in reversed(CLUSTER_DIMS):
+            options = benchmark.option.args((size, dim))(options)
+    options = benchmark.option.arg_names(("N", "D"))(options)
     options = benchmark.option.unit(benchmark.kMillisecond)(options)
     options = benchmark.option.use_real_time()(options)
     benchmark.register(options, name=name)
@@ -209,7 +215,8 @@ def _register_dbscan_benchmarks() -> None:
 
             def bench_inferrt_dbscan(state: benchmark.State, *, config: Any = config) -> None:
                 num_samples = state.range(0)
-                samples = CLUSTER_DATA[num_samples]
+                num_features = state.range(1)
+                samples = CLUSTER_DATA[(num_samples, num_features)]
                 while state:
                     _store(ops.dbscan(samples, config))
                 state.items_processed = state.iterations * num_samples
@@ -227,7 +234,8 @@ def _register_dbscan_benchmarks() -> None:
                 sklearn_metric_kwargs: dict[str, Any] = _sklearn_dbscan_metric_kwargs(metric_name, minkowski_p),
             ) -> None:
                 num_samples = state.range(0)
-                samples = CLUSTER_DATA[num_samples]
+                num_features = state.range(1)
+                samples = CLUSTER_DATA[(num_samples, num_features)]
                 while state:
                     _store(
                         sklearn_cluster.DBSCAN(
@@ -254,7 +262,8 @@ def _register_hdbscan_benchmarks() -> None:
 
             def bench_inferrt_hdbscan(state: benchmark.State, *, config: Any = config) -> None:
                 num_samples = state.range(0)
-                samples = CLUSTER_DATA[num_samples]
+                num_features = state.range(1)
+                samples = CLUSTER_DATA[(num_samples, num_features)]
                 while state:
                     _store(ops.hdbscan(samples, config))
                 state.items_processed = state.iterations * num_samples
@@ -272,7 +281,8 @@ def _register_hdbscan_benchmarks() -> None:
                 metric_params: dict[str, Any] | None = _sklearn_hdbscan_metric_params(metric_name, minkowski_p),
             ) -> None:
                 num_samples = state.range(0)
-                samples = CLUSTER_DATA[num_samples]
+                num_features = state.range(1)
+                samples = CLUSTER_DATA[(num_samples, num_features)]
                 while state:
                     _store(
                         sklearn_cluster.HDBSCAN(

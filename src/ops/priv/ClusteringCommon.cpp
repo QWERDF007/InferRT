@@ -11,10 +11,21 @@
 #include <utility>
 #include <vector>
 
+#if defined(__AVX2__) || (defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86)))
+#include <immintrin.h>
+#define IRT_CLUSTERING_COMMON_HAS_AVX2 1
+#else
+#define IRT_CLUSTERING_COMMON_HAS_AVX2 0
+#endif
+
 namespace irt::ops::detail {
 namespace {
 
 using NeighborHeapItem = std::pair<double, int64_t>;
+
+#if IRT_CLUSTERING_COMMON_HAS_AVX2
+[[nodiscard]] double squaredEuclideanDistanceAvx2(const float *lhs_ptr, const float *rhs_ptr, int64_t num_features);
+#endif
 
 [[nodiscard]] double sampleValue(const float *samples, int64_t sample, int64_t feature, int64_t num_features)
 {
@@ -24,9 +35,16 @@ using NeighborHeapItem = std::pair<double, int64_t>;
 [[nodiscard]] double squaredEuclideanDistanceUnchecked(const float *samples, int64_t lhs, int64_t rhs,
                                                        int64_t num_features)
 {
-    double       sum     = 0.0;
     const float *lhs_ptr = samples + lhs * num_features;
     const float *rhs_ptr = samples + rhs * num_features;
+#if IRT_CLUSTERING_COMMON_HAS_AVX2
+    if (num_features >= 4)
+    {
+        return squaredEuclideanDistanceAvx2(lhs_ptr, rhs_ptr, num_features);
+    }
+#endif
+
+    double sum = 0.0;
     for (int64_t feature = 0; feature < num_features; ++feature)
     {
         const double diff = static_cast<double>(lhs_ptr[feature]) - static_cast<double>(rhs_ptr[feature]);
@@ -74,10 +92,229 @@ using NeighborHeapItem = std::pair<double, int64_t>;
     return std::pow(value, 1.0 / minkowski_p);
 }
 
+#if IRT_CLUSTERING_COMMON_HAS_AVX2
+
+[[nodiscard]] __m256d absPd256(__m256d value)
+{
+    return _mm256_andnot_pd(_mm256_set1_pd(-0.0), value);
+}
+
+[[nodiscard]] __m256d loadFloat4AsDouble(const float *values)
+{
+    return _mm256_cvtps_pd(_mm_loadu_ps(values));
+}
+
+[[nodiscard]] double sumPd256(__m256d values)
+{
+    double lanes[4];
+    _mm256_storeu_pd(lanes, values);
+    return lanes[0] + lanes[1] + lanes[2] + lanes[3];
+}
+
+[[nodiscard]] double maxPd256(__m256d values)
+{
+    double lanes[4];
+    _mm256_storeu_pd(lanes, values);
+    return std::max(std::max(lanes[0], lanes[1]), std::max(lanes[2], lanes[3]));
+}
+
+[[nodiscard]] bool canUseAvx2FeatureDistance(int64_t num_features, ClusteringMetric metric, double minkowski_p)
+{
+    if (num_features < 4)
+    {
+        return false;
+    }
+    return metric == ClusteringMetric::Euclidean || metric == ClusteringMetric::Manhattan
+           || metric == ClusteringMetric::Chebyshev || metric == ClusteringMetric::Cosine
+           || (metric == ClusteringMetric::Minkowski
+               && (isMinkowskiP3(minkowski_p) || minkowski_p == 1.0 || minkowski_p == 2.0));
+}
+
+[[nodiscard]] double squaredEuclideanDistanceAvx2(const float *lhs_ptr, const float *rhs_ptr, int64_t num_features)
+{
+    __m256d sum     = _mm256_setzero_pd();
+    int64_t feature = 0;
+    for (; feature + 3 < num_features; feature += 4)
+    {
+        const __m256d lhs  = loadFloat4AsDouble(lhs_ptr + feature);
+        const __m256d rhs  = loadFloat4AsDouble(rhs_ptr + feature);
+        const __m256d diff = _mm256_sub_pd(lhs, rhs);
+        sum                = _mm256_add_pd(sum, _mm256_mul_pd(diff, diff));
+    }
+    double result = sumPd256(sum);
+    for (; feature < num_features; ++feature)
+    {
+        const double diff = static_cast<double>(lhs_ptr[feature]) - static_cast<double>(rhs_ptr[feature]);
+        result += diff * diff;
+    }
+    return result;
+}
+
+[[nodiscard]] double manhattanDistanceAvx2(const float *lhs_ptr, const float *rhs_ptr, int64_t num_features)
+{
+    __m256d sum     = _mm256_setzero_pd();
+    int64_t feature = 0;
+    for (; feature + 3 < num_features; feature += 4)
+    {
+        const __m256d lhs  = loadFloat4AsDouble(lhs_ptr + feature);
+        const __m256d rhs  = loadFloat4AsDouble(rhs_ptr + feature);
+        const __m256d diff = absPd256(_mm256_sub_pd(lhs, rhs));
+        sum                = _mm256_add_pd(sum, diff);
+    }
+    double result = sumPd256(sum);
+    for (; feature < num_features; ++feature)
+    {
+        result += std::abs(static_cast<double>(lhs_ptr[feature]) - static_cast<double>(rhs_ptr[feature]));
+    }
+    return result;
+}
+
+[[nodiscard]] double chebyshevDistanceAvx2(const float *lhs_ptr, const float *rhs_ptr, int64_t num_features)
+{
+    __m256d max_diff = _mm256_setzero_pd();
+    int64_t feature  = 0;
+    for (; feature + 3 < num_features; feature += 4)
+    {
+        const __m256d lhs  = loadFloat4AsDouble(lhs_ptr + feature);
+        const __m256d rhs  = loadFloat4AsDouble(rhs_ptr + feature);
+        const __m256d diff = absPd256(_mm256_sub_pd(lhs, rhs));
+        max_diff           = _mm256_max_pd(max_diff, diff);
+    }
+    double result = maxPd256(max_diff);
+    for (; feature < num_features; ++feature)
+    {
+        result = std::max(result,
+                          std::abs(static_cast<double>(lhs_ptr[feature]) - static_cast<double>(rhs_ptr[feature])));
+    }
+    return result;
+}
+
+[[nodiscard]] double minkowskiP3DistanceAvx2(const float *lhs_ptr, const float *rhs_ptr, int64_t num_features)
+{
+    __m256d sum     = _mm256_setzero_pd();
+    int64_t feature = 0;
+    for (; feature + 3 < num_features; feature += 4)
+    {
+        const __m256d lhs    = loadFloat4AsDouble(lhs_ptr + feature);
+        const __m256d rhs    = loadFloat4AsDouble(rhs_ptr + feature);
+        const __m256d diff   = absPd256(_mm256_sub_pd(lhs, rhs));
+        const __m256d diff_2 = _mm256_mul_pd(diff, diff);
+        sum                  = _mm256_add_pd(sum, _mm256_mul_pd(diff_2, diff));
+    }
+    double result = sumPd256(sum);
+    for (; feature < num_features; ++feature)
+    {
+        const double diff = std::abs(static_cast<double>(lhs_ptr[feature]) - static_cast<double>(rhs_ptr[feature]));
+        result += diff * diff * diff;
+    }
+    return result;
+}
+
+[[nodiscard]] double dotProductAvx2(const float *lhs_ptr, const float *rhs_ptr, int64_t num_features)
+{
+    __m256d sum     = _mm256_setzero_pd();
+    int64_t feature = 0;
+    for (; feature + 3 < num_features; feature += 4)
+    {
+        const __m256d lhs = loadFloat4AsDouble(lhs_ptr + feature);
+        const __m256d rhs = loadFloat4AsDouble(rhs_ptr + feature);
+        sum               = _mm256_add_pd(sum, _mm256_mul_pd(lhs, rhs));
+    }
+    double result = sumPd256(sum);
+    for (; feature < num_features; ++feature)
+    {
+        result += static_cast<double>(lhs_ptr[feature]) * static_cast<double>(rhs_ptr[feature]);
+    }
+    return result;
+}
+
+[[nodiscard]] __m256d loadContiguousFeature4(const float *samples, int64_t num_features, int64_t first_sample,
+                                             int64_t feature)
+{
+    return _mm256_set_pd(static_cast<double>(samples[(first_sample + 3) * num_features + feature]),
+                         static_cast<double>(samples[(first_sample + 2) * num_features + feature]),
+                         static_cast<double>(samples[(first_sample + 1) * num_features + feature]),
+                         static_cast<double>(samples[first_sample * num_features + feature]));
+}
+
+[[nodiscard]] __m256d loadIndexedFeature4(const float *samples, int64_t num_features, const int64_t *indices,
+                                          int64_t feature)
+{
+    return _mm256_set_pd(static_cast<double>(samples[indices[3] * num_features + feature]),
+                         static_cast<double>(samples[indices[2] * num_features + feature]),
+                         static_cast<double>(samples[indices[1] * num_features + feature]),
+                         static_cast<double>(samples[indices[0] * num_features + feature]));
+}
+
+[[nodiscard]] DistanceBlock4 storeDistanceBlock4(__m256d values)
+{
+    double lanes[4];
+    _mm256_storeu_pd(lanes, values);
+    return {lanes[0], lanes[1], lanes[2], lanes[3]};
+}
+
+template <typename LoadRhsFeature>
+[[nodiscard]] __m256d lowDimSearchDistance4(const float *samples, int64_t num_features, int64_t lhs,
+                                            LoadRhsFeature load_rhs_feature, ClusteringMetric metric,
+                                            double minkowski_p)
+{
+    __m256d result = metric == ClusteringMetric::Chebyshev ? _mm256_setzero_pd() : _mm256_setzero_pd();
+    for (int64_t feature = 0; feature < num_features; ++feature)
+    {
+        const __m256d lhs_value = _mm256_set1_pd(sampleValue(samples, lhs, feature, num_features));
+        const __m256d rhs_value = load_rhs_feature(feature);
+        const __m256d diff      = absPd256(_mm256_sub_pd(lhs_value, rhs_value));
+
+        if (metric == ClusteringMetric::Chebyshev)
+        {
+            result = _mm256_max_pd(result, diff);
+        }
+        else if (metric == ClusteringMetric::Minkowski && isMinkowskiP3(minkowski_p))
+        {
+            const __m256d diff_2 = _mm256_mul_pd(diff, diff);
+            result               = _mm256_add_pd(result, _mm256_mul_pd(diff_2, diff));
+        }
+        else if (metric == ClusteringMetric::Euclidean
+                 || (metric == ClusteringMetric::Minkowski && minkowski_p == 2.0))
+        {
+            result = _mm256_add_pd(result, _mm256_mul_pd(diff, diff));
+        }
+        else
+        {
+            result = _mm256_add_pd(result, diff);
+        }
+    }
+    return result;
+}
+
+template <typename LoadRhsFeature>
+[[nodiscard]] __m256d lowDimCosineDistance4(const float *samples, int64_t num_features, int64_t lhs,
+                                            LoadRhsFeature load_rhs_feature, double lhs_inv_norm,
+                                            __m256d rhs_inv_norms)
+{
+    __m256d dot = _mm256_setzero_pd();
+    for (int64_t feature = 0; feature < num_features; ++feature)
+    {
+        const __m256d lhs_value = _mm256_set1_pd(sampleValue(samples, lhs, feature, num_features));
+        dot                     = _mm256_add_pd(dot, _mm256_mul_pd(lhs_value, load_rhs_feature(feature)));
+    }
+    __m256d similarity = _mm256_mul_pd(_mm256_mul_pd(dot, _mm256_set1_pd(lhs_inv_norm)), rhs_inv_norms);
+    similarity         = _mm256_min_pd(_mm256_max_pd(similarity, _mm256_set1_pd(-1.0)), _mm256_set1_pd(1.0));
+    return _mm256_sub_pd(_mm256_set1_pd(1.0), similarity);
+}
+
+#endif
+
 [[nodiscard]] double manhattanDistanceUnchecked(const float *samples, int64_t lhs, int64_t rhs, int64_t num_features)
 {
     const float *lhs_ptr = samples + lhs * num_features;
     const float *rhs_ptr = samples + rhs * num_features;
+#if IRT_CLUSTERING_COMMON_HAS_AVX2
+    if (num_features >= 4)
+    {
+        return manhattanDistanceAvx2(lhs_ptr, rhs_ptr, num_features);
+    }
+#endif
     if (num_features == 3)
     {
         return std::abs(static_cast<double>(lhs_ptr[0]) - static_cast<double>(rhs_ptr[0]))
@@ -97,6 +334,12 @@ using NeighborHeapItem = std::pair<double, int64_t>;
 {
     const float *lhs_ptr = samples + lhs * num_features;
     const float *rhs_ptr = samples + rhs * num_features;
+#if IRT_CLUSTERING_COMMON_HAS_AVX2
+    if (num_features >= 4)
+    {
+        return chebyshevDistanceAvx2(lhs_ptr, rhs_ptr, num_features);
+    }
+#endif
     if (num_features == 3)
     {
         const double diff0 = std::abs(static_cast<double>(lhs_ptr[0]) - static_cast<double>(rhs_ptr[0]));
@@ -119,6 +362,12 @@ using NeighborHeapItem = std::pair<double, int64_t>;
 {
     const float *lhs_ptr = samples + lhs * num_features;
     const float *rhs_ptr = samples + rhs * num_features;
+#if IRT_CLUSTERING_COMMON_HAS_AVX2
+    if (num_features >= 4 && isMinkowskiP3(minkowski_p))
+    {
+        return minkowskiP3DistanceAvx2(lhs_ptr, rhs_ptr, num_features);
+    }
+#endif
     if (isMinkowskiP3(minkowski_p) && num_features == 3)
     {
         const double diff0 = std::abs(static_cast<double>(lhs_ptr[0]) - static_cast<double>(rhs_ptr[0]));
@@ -152,6 +401,15 @@ using NeighborHeapItem = std::pair<double, int64_t>;
     double dot      = 0.0;
     double lhs_norm = 0.0;
     double rhs_norm = 0.0;
+#if IRT_CLUSTERING_COMMON_HAS_AVX2
+    if (num_features >= 4)
+    {
+        dot      = dotProductAvx2(lhs_ptr, rhs_ptr, num_features);
+        lhs_norm = dotProductAvx2(lhs_ptr, lhs_ptr, num_features);
+        rhs_norm = dotProductAvx2(rhs_ptr, rhs_ptr, num_features);
+    }
+    else
+#endif
     if (num_features == 3)
     {
         const double lhs0 = static_cast<double>(lhs_ptr[0]);
@@ -188,6 +446,231 @@ using NeighborHeapItem = std::pair<double, int64_t>;
     const double similarity = std::clamp(dot / (std::sqrt(lhs_norm) * std::sqrt(rhs_norm)), -1.0, 1.0);
     return 1.0 - similarity;
 }
+
+} // namespace
+
+std::vector<double> cosineInverseNorms(const float *samples, int64_t num_samples, int64_t num_features)
+{
+    std::vector<double> result(static_cast<size_t>(num_samples), 0.0);
+    for (int64_t sample = 0; sample < num_samples; ++sample)
+    {
+        const float *sample_ptr = samples + sample * num_features;
+#if IRT_CLUSTERING_COMMON_HAS_AVX2
+        const double norm = num_features >= 4 ? dotProductAvx2(sample_ptr, sample_ptr, num_features) : [&]()
+        {
+            double value = 0.0;
+            for (int64_t feature = 0; feature < num_features; ++feature)
+            {
+                const double sample_value = static_cast<double>(sample_ptr[feature]);
+                value += sample_value * sample_value;
+            }
+            return value;
+        }();
+#else
+        double norm = 0.0;
+        for (int64_t feature = 0; feature < num_features; ++feature)
+        {
+            const double sample_value = static_cast<double>(sample_ptr[feature]);
+            norm += sample_value * sample_value;
+        }
+#endif
+        if (norm > 0.0)
+        {
+            result[static_cast<size_t>(sample)] = 1.0 / std::sqrt(norm);
+        }
+    }
+    return result;
+}
+
+SearchDistanceCalculator::SearchDistanceCalculator(const float *samples, int64_t num_features, ClusteringMetric metric,
+                                                   double minkowski_p,
+                                                   const std::vector<double> *inverse_norms)
+    : samples_(samples)
+    , num_features_(num_features)
+    , metric_(metric)
+    , minkowski_p_(minkowski_p)
+    , inverse_norms_(inverse_norms)
+{
+}
+
+double SearchDistanceCalculator::operator()(int64_t lhs, int64_t rhs) const
+{
+    if (metric_ == ClusteringMetric::Cosine && inverse_norms_ != nullptr)
+    {
+        const double lhs_inv_norm = (*inverse_norms_)[static_cast<size_t>(lhs)];
+        const double rhs_inv_norm = (*inverse_norms_)[static_cast<size_t>(rhs)];
+        if (lhs_inv_norm == 0.0 && rhs_inv_norm == 0.0)
+        {
+            return 0.0;
+        }
+        if (lhs_inv_norm == 0.0 || rhs_inv_norm == 0.0)
+        {
+            return 1.0;
+        }
+
+        const float *lhs_ptr = samples_ + lhs * num_features_;
+        const float *rhs_ptr = samples_ + rhs * num_features_;
+#if IRT_CLUSTERING_COMMON_HAS_AVX2
+        const double dot = num_features_ >= 4 ? dotProductAvx2(lhs_ptr, rhs_ptr, num_features_)
+                                              : [&]()
+        {
+            double result = 0.0;
+            for (int64_t feature = 0; feature < num_features_; ++feature)
+            {
+                result += static_cast<double>(lhs_ptr[feature]) * static_cast<double>(rhs_ptr[feature]);
+            }
+            return result;
+        }();
+#else
+        double dot = 0.0;
+        for (int64_t feature = 0; feature < num_features_; ++feature)
+        {
+            dot += static_cast<double>(lhs_ptr[feature]) * static_cast<double>(rhs_ptr[feature]);
+        }
+#endif
+        const double similarity = std::clamp(dot * lhs_inv_norm * rhs_inv_norm, -1.0, 1.0);
+        return 1.0 - similarity;
+    }
+
+    return clusteringSearchDistance(samples_, lhs, rhs, num_features_, metric_, minkowski_p_);
+}
+
+bool SearchDistanceCalculator::canUseBlock4() const
+{
+#if IRT_CLUSTERING_COMMON_HAS_AVX2
+    if (num_features_ >= 4)
+    {
+        return canUseAvx2FeatureDistance(num_features_, metric_, minkowski_p_);
+    }
+    if (num_features_ < 1)
+    {
+        return false;
+    }
+    if (metric_ == ClusteringMetric::Cosine)
+    {
+        return inverse_norms_ != nullptr;
+    }
+    return metric_ == ClusteringMetric::Euclidean || metric_ == ClusteringMetric::Manhattan
+           || metric_ == ClusteringMetric::Chebyshev
+           || (metric_ == ClusteringMetric::Minkowski
+               && (isMinkowskiP3(minkowski_p_) || minkowski_p_ == 1.0 || minkowski_p_ == 2.0));
+#else
+    return false;
+#endif
+}
+
+DistanceBlock4 SearchDistanceCalculator::block4(int64_t lhs, int64_t first_rhs) const
+{
+#if IRT_CLUSTERING_COMMON_HAS_AVX2
+    if (num_features_ < 4 && canUseBlock4())
+    {
+        const auto load_rhs_feature = [&](int64_t feature)
+        { return loadContiguousFeature4(samples_, num_features_, first_rhs, feature); };
+        if (metric_ == ClusteringMetric::Cosine)
+        {
+            const double lhs_inv_norm = (*inverse_norms_)[static_cast<size_t>(lhs)];
+            const double rhs_inv0     = (*inverse_norms_)[static_cast<size_t>(first_rhs)];
+            const double rhs_inv1     = (*inverse_norms_)[static_cast<size_t>(first_rhs + 1)];
+            const double rhs_inv2     = (*inverse_norms_)[static_cast<size_t>(first_rhs + 2)];
+            const double rhs_inv3     = (*inverse_norms_)[static_cast<size_t>(first_rhs + 3)];
+            if (lhs_inv_norm != 0.0 && rhs_inv0 != 0.0 && rhs_inv1 != 0.0 && rhs_inv2 != 0.0 && rhs_inv3 != 0.0)
+            {
+                return storeDistanceBlock4(
+                    lowDimCosineDistance4(samples_, num_features_, lhs, load_rhs_feature, lhs_inv_norm,
+                                          _mm256_set_pd(rhs_inv3, rhs_inv2, rhs_inv1, rhs_inv0)));
+            }
+        }
+        else
+        {
+            return storeDistanceBlock4(
+                lowDimSearchDistance4(samples_, num_features_, lhs, load_rhs_feature, metric_, minkowski_p_));
+        }
+    }
+#endif
+    return {(*this)(lhs, first_rhs), (*this)(lhs, first_rhs + 1), (*this)(lhs, first_rhs + 2),
+            (*this)(lhs, first_rhs + 3)};
+}
+
+DistanceBlock4 SearchDistanceCalculator::indexedBlock4(int64_t lhs, const int64_t *rhs_indices) const
+{
+#if IRT_CLUSTERING_COMMON_HAS_AVX2
+    if (num_features_ < 4 && canUseBlock4())
+    {
+        const auto load_rhs_feature = [&](int64_t feature)
+        { return loadIndexedFeature4(samples_, num_features_, rhs_indices, feature); };
+        if (metric_ == ClusteringMetric::Cosine)
+        {
+            const double lhs_inv_norm = (*inverse_norms_)[static_cast<size_t>(lhs)];
+            const double rhs_inv0     = (*inverse_norms_)[static_cast<size_t>(rhs_indices[0])];
+            const double rhs_inv1     = (*inverse_norms_)[static_cast<size_t>(rhs_indices[1])];
+            const double rhs_inv2     = (*inverse_norms_)[static_cast<size_t>(rhs_indices[2])];
+            const double rhs_inv3     = (*inverse_norms_)[static_cast<size_t>(rhs_indices[3])];
+            if (lhs_inv_norm != 0.0 && rhs_inv0 != 0.0 && rhs_inv1 != 0.0 && rhs_inv2 != 0.0 && rhs_inv3 != 0.0)
+            {
+                return storeDistanceBlock4(
+                    lowDimCosineDistance4(samples_, num_features_, lhs, load_rhs_feature, lhs_inv_norm,
+                                          _mm256_set_pd(rhs_inv3, rhs_inv2, rhs_inv1, rhs_inv0)));
+            }
+        }
+        else
+        {
+            return storeDistanceBlock4(
+                lowDimSearchDistance4(samples_, num_features_, lhs, load_rhs_feature, metric_, minkowski_p_));
+        }
+    }
+#endif
+    return {(*this)(lhs, rhs_indices[0]), (*this)(lhs, rhs_indices[1]), (*this)(lhs, rhs_indices[2]),
+            (*this)(lhs, rhs_indices[3])};
+}
+
+int SearchDistanceCalculator::withinRadiusMask4(int64_t lhs, int64_t first_rhs, double search_radius) const
+{
+    const DistanceBlock4 distances = block4(lhs, first_rhs);
+    int                  mask      = 0;
+    if (distances.first <= search_radius)
+    {
+        mask |= 1;
+    }
+    if (distances.second <= search_radius)
+    {
+        mask |= 2;
+    }
+    if (distances.third <= search_radius)
+    {
+        mask |= 4;
+    }
+    if (distances.fourth <= search_radius)
+    {
+        mask |= 8;
+    }
+    return mask;
+}
+
+int SearchDistanceCalculator::indexedWithinRadiusMask4(int64_t lhs, const int64_t *rhs_indices,
+                                                       double search_radius) const
+{
+    const DistanceBlock4 distances = indexedBlock4(lhs, rhs_indices);
+    int                  mask      = 0;
+    if (distances.first <= search_radius)
+    {
+        mask |= 1;
+    }
+    if (distances.second <= search_radius)
+    {
+        mask |= 2;
+    }
+    if (distances.third <= search_radius)
+    {
+        mask |= 4;
+    }
+    if (distances.fourth <= search_radius)
+    {
+        mask |= 8;
+    }
+    return mask;
+}
+
+namespace {
 
 [[nodiscard]] double squaredDistanceToCenterEuclidean(const float *samples, int64_t sample, int64_t num_features,
                                                       const std::vector<double> &center)
@@ -620,6 +1103,7 @@ public:
         , num_features_(num_features)
         , metric_(metric)
         , minkowski_p_(minkowski_p)
+        , distance_(samples, num_features, metric, minkowski_p)
     {
     }
 
@@ -630,9 +1114,33 @@ public:
         result.reserve(static_cast<size_t>(num_samples_));
 
         const double search_radius = searchRadiusForMetric(radius, metric_, minkowski_p_);
-        for (int64_t other = 0; other < num_samples_; ++other)
+        int64_t other = 0;
+        if (distance_.canUseBlock4())
         {
-            if (clusteringSearchDistance(samples_, query, other, num_features_, metric_, minkowski_p_) <= search_radius)
+            for (; other + 3 < num_samples_; other += 4)
+            {
+                const int mask = distance_.withinRadiusMask4(query, other, search_radius);
+                if ((mask & 1) != 0)
+                {
+                    result.push_back(other);
+                }
+                if ((mask & 2) != 0)
+                {
+                    result.push_back(other + 1);
+                }
+                if ((mask & 4) != 0)
+                {
+                    result.push_back(other + 2);
+                }
+                if ((mask & 8) != 0)
+                {
+                    result.push_back(other + 3);
+                }
+            }
+        }
+        for (; other < num_samples_; ++other)
+        {
+            if (distance_(query, other) <= search_radius)
             {
                 result.push_back(other);
             }
@@ -650,10 +1158,39 @@ public:
         const double  search_radius = searchRadiusForMetric(radius, metric_, minkowski_p_);
 
         int64_t count = 0;
-        for (int64_t other = 0; other < num_samples_; ++other)
+        int64_t other = 0;
+        if (distance_.canUseBlock4())
         {
-            if (clusteringSearchDistance(samples_, query, other, num_features_, metric_, minkowski_p_) <= search_radius
-                && ++count >= limit)
+            for (; other + 3 < num_samples_; other += 4)
+            {
+                const int mask = distance_.withinRadiusMask4(query, other, search_radius);
+                const int matches = ((mask & 1) != 0) + ((mask & 2) != 0) + ((mask & 4) != 0) + ((mask & 8) != 0);
+                if (count + matches < limit)
+                {
+                    count += matches;
+                    continue;
+                }
+                if ((mask & 1) != 0 && ++count >= limit)
+                {
+                    return count;
+                }
+                if ((mask & 2) != 0 && ++count >= limit)
+                {
+                    return count;
+                }
+                if ((mask & 4) != 0 && ++count >= limit)
+                {
+                    return count;
+                }
+                if ((mask & 8) != 0 && ++count >= limit)
+                {
+                    return count;
+                }
+            }
+        }
+        for (; other < num_samples_; ++other)
+        {
+            if (distance_(query, other) <= search_radius && ++count >= limit)
             {
                 return count;
             }
@@ -667,6 +1204,7 @@ private:
     int64_t          num_features_{0};
     ClusteringMetric metric_{ClusteringMetric::Euclidean};
     double           minkowski_p_{2.0};
+    SearchDistanceCalculator distance_;
 };
 
 class KDTreeIndex final : public RadiusNeighborhoodIndex
@@ -679,6 +1217,8 @@ public:
         , leaf_size_(leaf_size)
         , metric_(metric)
         , minkowski_p_(minkowski_p)
+        , distance_(samples, num_features, metric, minkowski_p)
+        , use_search_distance4_(distance_.canUseBlock4())
     {
         std::vector<int64_t> indices(static_cast<size_t>(num_samples));
         std::iota(indices.begin(), indices.end(), int64_t{0});
@@ -737,7 +1277,27 @@ private:
 
     [[nodiscard]] double searchDistance(int64_t lhs, int64_t rhs) const
     {
-        return clusteringSearchDistance(samples_, lhs, rhs, num_features_, metric_, minkowski_p_);
+        return distance_(lhs, rhs);
+    }
+
+    [[nodiscard]] bool useSearchDistance4() const
+    {
+        return use_search_distance4_;
+    }
+
+    [[nodiscard]] bool useKnnSearchDistance4() const
+    {
+        return use_search_distance4_ && !(metric_ == ClusteringMetric::Chebyshev && num_features_ <= 3);
+    }
+
+    [[nodiscard]] int withinRadiusMask4(int64_t query, const int64_t *indices, double search_radius) const
+    {
+        return distance_.indexedWithinRadiusMask4(query, indices, search_radius);
+    }
+
+    [[nodiscard]] DistanceBlock4 searchDistanceBlock4(int64_t query, const int64_t *indices) const
+    {
+        return distance_.indexedBlock4(query, indices);
     }
 
     [[nodiscard]] double outputDistance(double distance) const
@@ -768,6 +1328,112 @@ private:
         }
         appendSubtree(node.left, result);
         appendSubtree(node.right, result);
+    }
+
+    void radiusLeafSearch(const Node &node, int64_t query, double search_radius, std::vector<int64_t> &result) const
+    {
+        size_t offset = 0;
+        if (useSearchDistance4())
+        {
+            const size_t size = node.indices.size();
+            for (; offset + 3 < size; offset += 4)
+            {
+                const int64_t *indices = node.indices.data() + offset;
+                const int      mask    = withinRadiusMask4(query, indices, search_radius);
+                if ((mask & 1) != 0)
+                {
+                    result.push_back(indices[0]);
+                }
+                if ((mask & 2) != 0)
+                {
+                    result.push_back(indices[1]);
+                }
+                if ((mask & 4) != 0)
+                {
+                    result.push_back(indices[2]);
+                }
+                if ((mask & 8) != 0)
+                {
+                    result.push_back(indices[3]);
+                }
+            }
+        }
+        for (; offset < node.indices.size(); ++offset)
+        {
+            const int64_t index = node.indices[offset];
+            if (searchDistance(query, index) <= search_radius)
+            {
+                result.push_back(index);
+            }
+        }
+    }
+
+    void radiusLeafCountSearch(const Node &node, int64_t query, double search_radius, int64_t stop_count,
+                               int64_t &count) const
+    {
+        size_t offset = 0;
+        if (useSearchDistance4())
+        {
+            const size_t size = node.indices.size();
+            for (; offset + 3 < size; offset += 4)
+            {
+                const int64_t *indices = node.indices.data() + offset;
+                const int      mask    = withinRadiusMask4(query, indices, search_radius);
+                const int      matches = ((mask & 1) != 0) + ((mask & 2) != 0) + ((mask & 4) != 0)
+                                     + ((mask & 8) != 0);
+                if (count + matches < stop_count)
+                {
+                    count += matches;
+                    continue;
+                }
+                if ((mask & 1) != 0 && ++count >= stop_count)
+                {
+                    return;
+                }
+                if ((mask & 2) != 0 && ++count >= stop_count)
+                {
+                    return;
+                }
+                if ((mask & 4) != 0 && ++count >= stop_count)
+                {
+                    return;
+                }
+                if ((mask & 8) != 0 && ++count >= stop_count)
+                {
+                    return;
+                }
+            }
+        }
+        for (; offset < node.indices.size(); ++offset)
+        {
+            if (searchDistance(query, node.indices[offset]) <= search_radius && ++count >= stop_count)
+            {
+                return;
+            }
+        }
+    }
+
+    void knnLeafSearch(const Node &node, int64_t query, NeighborHeap &heap) const
+    {
+        size_t offset = 0;
+        if (useKnnSearchDistance4())
+        {
+            const size_t size = node.indices.size();
+            for (; offset + 3 < size; offset += 4)
+            {
+                const int64_t       *indices   = node.indices.data() + offset;
+                const DistanceBlock4 distances = searchDistanceBlock4(query, indices);
+                heap.push(distances.first, indices[0]);
+                heap.push(distances.second, indices[1]);
+                heap.push(distances.third, indices[2]);
+                heap.push(distances.fourth, indices[3]);
+            }
+        }
+        for (; offset < node.indices.size(); ++offset)
+        {
+            const int64_t index = node.indices[offset];
+            heap.push(searchDistance(query, index), index);
+        }
     }
 
     [[nodiscard]] size_t build(std::vector<int64_t> &indices)
@@ -823,13 +1489,7 @@ private:
 
         if (node.leaf)
         {
-            for (const int64_t index : node.indices)
-            {
-                if (searchDistance(query, index) <= search_radius)
-                {
-                    result.push_back(index);
-                }
-            }
+            radiusLeafSearch(node, query, search_radius, result);
             return;
         }
 
@@ -863,13 +1523,7 @@ private:
 
         if (node.leaf)
         {
-            for (const int64_t index : node.indices)
-            {
-                if (searchDistance(query, index) <= search_radius && ++count >= stop_count)
-                {
-                    return;
-                }
-            }
+            radiusLeafCountSearch(node, query, search_radius, stop_count, count);
             return;
         }
 
@@ -896,10 +1550,7 @@ private:
 
         if (node.leaf)
         {
-            for (const int64_t index : node.indices)
-            {
-                heap.push(searchDistance(query, index), index);
-            }
+            knnLeafSearch(node, query, heap);
             return;
         }
 
@@ -917,6 +1568,8 @@ private:
     int64_t           leaf_size_{0};
     ClusteringMetric  metric_{ClusteringMetric::Euclidean};
     double            minkowski_p_{2.0};
+    SearchDistanceCalculator distance_;
+    bool                     use_search_distance4_{false};
     std::vector<Node> nodes_;
     size_t            root_{kInvalidNode};
 };
@@ -931,6 +1584,8 @@ public:
         , leaf_size_(leaf_size)
         , metric_(metric)
         , minkowski_p_(minkowski_p)
+        , distance_(samples, num_features, metric, minkowski_p)
+        , use_search_distance4_(distance_.canUseBlock4())
         , use_ball_lower_bound_(canUseBallLowerBound(metric, minkowski_p))
     {
         std::vector<int64_t> indices(static_cast<size_t>(num_samples));
@@ -1000,7 +1655,27 @@ private:
 
     [[nodiscard]] double searchDistance(int64_t lhs, int64_t rhs) const
     {
-        return clusteringSearchDistance(samples_, lhs, rhs, num_features_, metric_, minkowski_p_);
+        return distance_(lhs, rhs);
+    }
+
+    [[nodiscard]] bool useSearchDistance4() const
+    {
+        return use_search_distance4_;
+    }
+
+    [[nodiscard]] bool useKnnSearchDistance4() const
+    {
+        return use_search_distance4_ && !(metric_ == ClusteringMetric::Chebyshev && num_features_ <= 3);
+    }
+
+    [[nodiscard]] int withinRadiusMask4(int64_t query, const int64_t *indices, double search_radius) const
+    {
+        return distance_.indexedWithinRadiusMask4(query, indices, search_radius);
+    }
+
+    [[nodiscard]] DistanceBlock4 searchDistanceBlock4(int64_t query, const int64_t *indices) const
+    {
+        return distance_.indexedBlock4(query, indices);
     }
 
     [[nodiscard]] double outputDistance(double distance) const
@@ -1126,6 +1801,112 @@ private:
         appendSubtree(node.right, result);
     }
 
+    void radiusLeafSearch(const Node &node, int64_t query, double search_radius, std::vector<int64_t> &result) const
+    {
+        size_t offset = 0;
+        if (useSearchDistance4())
+        {
+            const size_t size = node.indices.size();
+            for (; offset + 3 < size; offset += 4)
+            {
+                const int64_t *indices = node.indices.data() + offset;
+                const int      mask    = withinRadiusMask4(query, indices, search_radius);
+                if ((mask & 1) != 0)
+                {
+                    result.push_back(indices[0]);
+                }
+                if ((mask & 2) != 0)
+                {
+                    result.push_back(indices[1]);
+                }
+                if ((mask & 4) != 0)
+                {
+                    result.push_back(indices[2]);
+                }
+                if ((mask & 8) != 0)
+                {
+                    result.push_back(indices[3]);
+                }
+            }
+        }
+        for (; offset < node.indices.size(); ++offset)
+        {
+            const int64_t index = node.indices[offset];
+            if (searchDistance(query, index) <= search_radius)
+            {
+                result.push_back(index);
+            }
+        }
+    }
+
+    void radiusLeafCountSearch(const Node &node, int64_t query, double search_radius, int64_t stop_count,
+                               int64_t &count) const
+    {
+        size_t offset = 0;
+        if (useSearchDistance4())
+        {
+            const size_t size = node.indices.size();
+            for (; offset + 3 < size; offset += 4)
+            {
+                const int64_t *indices = node.indices.data() + offset;
+                const int      mask    = withinRadiusMask4(query, indices, search_radius);
+                const int      matches = ((mask & 1) != 0) + ((mask & 2) != 0) + ((mask & 4) != 0)
+                                     + ((mask & 8) != 0);
+                if (count + matches < stop_count)
+                {
+                    count += matches;
+                    continue;
+                }
+                if ((mask & 1) != 0 && ++count >= stop_count)
+                {
+                    return;
+                }
+                if ((mask & 2) != 0 && ++count >= stop_count)
+                {
+                    return;
+                }
+                if ((mask & 4) != 0 && ++count >= stop_count)
+                {
+                    return;
+                }
+                if ((mask & 8) != 0 && ++count >= stop_count)
+                {
+                    return;
+                }
+            }
+        }
+        for (; offset < node.indices.size(); ++offset)
+        {
+            if (searchDistance(query, node.indices[offset]) <= search_radius && ++count >= stop_count)
+            {
+                return;
+            }
+        }
+    }
+
+    void knnLeafSearch(const Node &node, int64_t query, NeighborHeap &heap) const
+    {
+        size_t offset = 0;
+        if (useKnnSearchDistance4())
+        {
+            const size_t size = node.indices.size();
+            for (; offset + 3 < size; offset += 4)
+            {
+                const int64_t       *indices   = node.indices.data() + offset;
+                const DistanceBlock4 distances = searchDistanceBlock4(query, indices);
+                heap.push(distances.first, indices[0]);
+                heap.push(distances.second, indices[1]);
+                heap.push(distances.third, indices[2]);
+                heap.push(distances.fourth, indices[3]);
+            }
+        }
+        for (; offset < node.indices.size(); ++offset)
+        {
+            const int64_t index = node.indices[offset];
+            heap.push(searchDistance(query, index), index);
+        }
+    }
+
     void radiusSearch(size_t node_index, int64_t query, double search_radius, std::vector<int64_t> &result) const
     {
         const auto &node = nodes_[node_index];
@@ -1141,13 +1922,7 @@ private:
 
         if (node.leaf)
         {
-            for (const int64_t index : node.indices)
-            {
-                if (searchDistance(query, index) <= search_radius)
-                {
-                    result.push_back(index);
-                }
-            }
+            radiusLeafSearch(node, query, search_radius, result);
             return;
         }
 
@@ -1176,13 +1951,7 @@ private:
 
         if (node.leaf)
         {
-            for (const int64_t index : node.indices)
-            {
-                if (searchDistance(query, index) <= search_radius && ++count >= stop_count)
-                {
-                    return;
-                }
-            }
+            radiusLeafCountSearch(node, query, search_radius, stop_count, count);
             return;
         }
 
@@ -1210,10 +1979,7 @@ private:
 
         if (node.leaf)
         {
-            for (const int64_t index : node.indices)
-            {
-                heap.push(searchDistance(query, index), index);
-            }
+            knnLeafSearch(node, query, heap);
             return;
         }
 
@@ -1232,6 +1998,8 @@ private:
     int64_t           leaf_size_{0};
     ClusteringMetric  metric_{ClusteringMetric::Euclidean};
     double            minkowski_p_{2.0};
+    SearchDistanceCalculator distance_;
+    bool                     use_search_distance4_{false};
     bool              use_ball_lower_bound_{true};
     std::vector<Node> nodes_;
     size_t            root_{kInvalidNode};
@@ -1242,43 +2010,10 @@ private:
                                                                          ClusteringMetric metric, double minkowski_p)
 {
     std::vector<std::vector<int64_t>> neighborhoods(static_cast<size_t>(num_samples));
-    const double                      radius_sq = radius * radius;
-    if (metric == ClusteringMetric::Euclidean)
-    {
-        for (int64_t sample = 0; sample < num_samples; ++sample)
-        {
-            neighborhoods[static_cast<size_t>(sample)].push_back(sample);
-        }
-
-        for (int64_t sample = 0; sample < num_samples; ++sample)
-        {
-            for (int64_t other = sample + 1; other < num_samples; ++other)
-            {
-                if (squaredEuclideanDistanceUnchecked(samples, sample, other, num_features) <= radius_sq)
-                {
-                    neighborhoods[static_cast<size_t>(sample)].push_back(other);
-                    neighborhoods[static_cast<size_t>(other)].push_back(sample);
-                }
-            }
-        }
-        for (auto &neighbors : neighborhoods)
-        {
-            std::sort(neighbors.begin(), neighbors.end());
-        }
-        return neighborhoods;
-    }
-
+    BruteRadiusIndex                     index(samples, num_samples, num_features, metric, minkowski_p);
     for (int64_t sample = 0; sample < num_samples; ++sample)
     {
-        auto &neighbors = neighborhoods[static_cast<size_t>(sample)];
-        neighbors.reserve(static_cast<size_t>(num_samples));
-        for (int64_t other = 0; other < num_samples; ++other)
-        {
-            if (clusteringDistance(samples, sample, other, num_features, metric, minkowski_p) <= radius)
-            {
-                neighbors.push_back(other);
-            }
-        }
+        index.radiusNeighbors(sample, radius, neighborhoods[static_cast<size_t>(sample)], true);
     }
     return neighborhoods;
 }
@@ -1304,15 +2039,35 @@ private:
                                                                   int64_t num_features, int64_t kth,
                                                                   ClusteringMetric metric, double minkowski_p)
 {
-    std::vector<double> result(static_cast<size_t>(num_samples), 0.0);
-    std::vector<double> row(static_cast<size_t>(num_samples), 0.0);
-    const auto          nth = row.begin() + (kth - 1);
+    std::vector<double> inverse_norms;
+    const std::vector<double> *inverse_norms_ptr = nullptr;
+    if (metric == ClusteringMetric::Cosine)
+    {
+        inverse_norms     = cosineInverseNorms(samples, num_samples, num_features);
+        inverse_norms_ptr = &inverse_norms;
+    }
+
+    SearchDistanceCalculator distance(samples, num_features, metric, minkowski_p, inverse_norms_ptr);
+    std::vector<double>      result(static_cast<size_t>(num_samples), 0.0);
+    std::vector<double>      row(static_cast<size_t>(num_samples), 0.0);
+    const auto               nth = row.begin() + (kth - 1);
     for (int64_t sample = 0; sample < num_samples; ++sample)
     {
-        for (int64_t other = 0; other < num_samples; ++other)
+        int64_t other = 0;
+        if (distance.canUseBlock4())
         {
-            row[static_cast<size_t>(other)]
-                = clusteringSearchDistance(samples, sample, other, num_features, metric, minkowski_p);
+            for (; other + 3 < num_samples; other += 4)
+            {
+                const DistanceBlock4 distances = distance.block4(sample, other);
+                row[static_cast<size_t>(other)]     = distances.first;
+                row[static_cast<size_t>(other + 1)] = distances.second;
+                row[static_cast<size_t>(other + 2)] = distances.third;
+                row[static_cast<size_t>(other + 3)] = distances.fourth;
+            }
+        }
+        for (; other < num_samples; ++other)
+        {
+            row[static_cast<size_t>(other)] = distance(sample, other);
         }
         std::nth_element(row.begin(), nth, row.end());
         result[static_cast<size_t>(sample)] = *nth;

@@ -237,54 +237,6 @@ void validateInputs(const float *samples, int64_t num_samples, int64_t num_featu
     }
 }
 
-double squaredEuclideanDistanceUnchecked(const float *samples, int64_t lhs, int64_t rhs, int64_t num_features)
-{
-    const float *lhs_ptr = samples + lhs * num_features;
-    const float *rhs_ptr = samples + rhs * num_features;
-
-    switch (num_features)
-    {
-    case 1:
-    {
-        const double diff0 = static_cast<double>(lhs_ptr[0]) - static_cast<double>(rhs_ptr[0]);
-        return diff0 * diff0;
-    }
-    case 2:
-    {
-        const double diff0 = static_cast<double>(lhs_ptr[0]) - static_cast<double>(rhs_ptr[0]);
-        const double diff1 = static_cast<double>(lhs_ptr[1]) - static_cast<double>(rhs_ptr[1]);
-        return diff0 * diff0 + diff1 * diff1;
-    }
-    case 3:
-    {
-        const double diff0 = static_cast<double>(lhs_ptr[0]) - static_cast<double>(rhs_ptr[0]);
-        const double diff1 = static_cast<double>(lhs_ptr[1]) - static_cast<double>(rhs_ptr[1]);
-        const double diff2 = static_cast<double>(lhs_ptr[2]) - static_cast<double>(rhs_ptr[2]);
-        return diff0 * diff0 + diff1 * diff1 + diff2 * diff2;
-    }
-    default:
-        break;
-    }
-
-    double sum = 0.0;
-    for (int64_t feature = 0; feature < num_features; ++feature)
-    {
-        const double diff = static_cast<double>(lhs_ptr[feature]) - static_cast<double>(rhs_ptr[feature]);
-        sum += diff * diff;
-    }
-    return sum;
-}
-
-double squaredEuclideanDistance3(const float *samples, int64_t lhs, int64_t rhs)
-{
-    const float *lhs_ptr = samples + lhs * 3;
-    const float *rhs_ptr = samples + rhs * 3;
-    const double diff0   = static_cast<double>(lhs_ptr[0]) - static_cast<double>(rhs_ptr[0]);
-    const double diff1   = static_cast<double>(lhs_ptr[1]) - static_cast<double>(rhs_ptr[1]);
-    const double diff2   = static_cast<double>(lhs_ptr[2]) - static_cast<double>(rhs_ptr[2]);
-    return diff0 * diff0 + diff1 * diff1 + diff2 * diff2;
-}
-
 [[nodiscard]] double max3(double first, double second, double third)
 {
     return std::max(std::max(first, second), third);
@@ -293,131 +245,6 @@ double squaredEuclideanDistance3(const float *samples, int64_t lhs, int64_t rhs)
 [[nodiscard]] bool isMinkowskiP3(double minkowski_p)
 {
     return std::abs(minkowski_p - 3.0) <= 1e-12;
-}
-
-[[nodiscard]] double manhattanDistanceUnchecked(const float *samples, int64_t lhs, int64_t rhs, int64_t num_features)
-{
-    const float *lhs_ptr = samples + lhs * num_features;
-    const float *rhs_ptr = samples + rhs * num_features;
-    if (num_features == 3)
-    {
-        return std::abs(static_cast<double>(lhs_ptr[0]) - static_cast<double>(rhs_ptr[0]))
-               + std::abs(static_cast<double>(lhs_ptr[1]) - static_cast<double>(rhs_ptr[1]))
-               + std::abs(static_cast<double>(lhs_ptr[2]) - static_cast<double>(rhs_ptr[2]));
-    }
-
-    double sum = 0.0;
-    for (int64_t feature = 0; feature < num_features; ++feature)
-    {
-        sum += std::abs(static_cast<double>(lhs_ptr[feature]) - static_cast<double>(rhs_ptr[feature]));
-    }
-    return sum;
-}
-
-[[nodiscard]] double chebyshevDistanceUnchecked(const float *samples, int64_t lhs, int64_t rhs, int64_t num_features)
-{
-    const float *lhs_ptr = samples + lhs * num_features;
-    const float *rhs_ptr = samples + rhs * num_features;
-    if (num_features == 3)
-    {
-        const double diff0 = std::abs(static_cast<double>(lhs_ptr[0]) - static_cast<double>(rhs_ptr[0]));
-        const double diff1 = std::abs(static_cast<double>(lhs_ptr[1]) - static_cast<double>(rhs_ptr[1]));
-        const double diff2 = std::abs(static_cast<double>(lhs_ptr[2]) - static_cast<double>(rhs_ptr[2]));
-        return std::max(diff0, std::max(diff1, diff2));
-    }
-
-    double max_diff = 0.0;
-    for (int64_t feature = 0; feature < num_features; ++feature)
-    {
-        max_diff = std::max(
-            max_diff, std::abs(static_cast<double>(lhs_ptr[feature]) - static_cast<double>(rhs_ptr[feature])));
-    }
-    return max_diff;
-}
-
-[[nodiscard]] double minkowskiPoweredDistanceUnchecked(const float *samples, int64_t lhs, int64_t rhs,
-                                                       int64_t num_features, double minkowski_p)
-{
-    const float *lhs_ptr = samples + lhs * num_features;
-    const float *rhs_ptr = samples + rhs * num_features;
-    if (isMinkowskiP3(minkowski_p) && num_features == 3)
-    {
-        const double diff0 = std::abs(static_cast<double>(lhs_ptr[0]) - static_cast<double>(rhs_ptr[0]));
-        const double diff1 = std::abs(static_cast<double>(lhs_ptr[1]) - static_cast<double>(rhs_ptr[1]));
-        const double diff2 = std::abs(static_cast<double>(lhs_ptr[2]) - static_cast<double>(rhs_ptr[2]));
-        return diff0 * diff0 * diff0 + diff1 * diff1 * diff1 + diff2 * diff2 * diff2;
-    }
-    if (minkowski_p == 2.0)
-    {
-        return squaredEuclideanDistanceUnchecked(samples, lhs, rhs, num_features);
-    }
-    if (minkowski_p == 1.0)
-    {
-        return manhattanDistanceUnchecked(samples, lhs, rhs, num_features);
-    }
-
-    double sum = 0.0;
-    for (int64_t feature = 0; feature < num_features; ++feature)
-    {
-        const double diff = std::abs(static_cast<double>(lhs_ptr[feature]) - static_cast<double>(rhs_ptr[feature]));
-        sum += std::pow(diff, minkowski_p);
-    }
-    return sum;
-}
-
-[[nodiscard]] std::vector<double> cosineInverseNorms(const float *samples, int64_t num_samples, int64_t num_features)
-{
-    std::vector<double> result(static_cast<size_t>(num_samples), 0.0);
-    for (int64_t sample = 0; sample < num_samples; ++sample)
-    {
-        const float *sample_ptr = samples + sample * num_features;
-        double       norm       = 0.0;
-        for (int64_t feature = 0; feature < num_features; ++feature)
-        {
-            const double value = static_cast<double>(sample_ptr[feature]);
-            norm += value * value;
-        }
-        if (norm > 0.0)
-        {
-            result[static_cast<size_t>(sample)] = 1.0 / std::sqrt(norm);
-        }
-    }
-    return result;
-}
-
-[[nodiscard]] double cosineDistanceUnchecked(const float *samples, int64_t lhs, int64_t rhs, int64_t num_features,
-                                             const std::vector<double> &inverse_norms)
-{
-    const double lhs_inv_norm = inverse_norms[static_cast<size_t>(lhs)];
-    const double rhs_inv_norm = inverse_norms[static_cast<size_t>(rhs)];
-    if (lhs_inv_norm == 0.0 && rhs_inv_norm == 0.0)
-    {
-        return 0.0;
-    }
-    if (lhs_inv_norm == 0.0 || rhs_inv_norm == 0.0)
-    {
-        return 1.0;
-    }
-
-    const float *lhs_ptr = samples + lhs * num_features;
-    const float *rhs_ptr = samples + rhs * num_features;
-    double       dot     = 0.0;
-    if (num_features == 3)
-    {
-        dot = static_cast<double>(lhs_ptr[0]) * static_cast<double>(rhs_ptr[0])
-              + static_cast<double>(lhs_ptr[1]) * static_cast<double>(rhs_ptr[1])
-              + static_cast<double>(lhs_ptr[2]) * static_cast<double>(rhs_ptr[2]);
-    }
-    else
-    {
-        for (int64_t feature = 0; feature < num_features; ++feature)
-        {
-            dot += static_cast<double>(lhs_ptr[feature]) * static_cast<double>(rhs_ptr[feature]);
-        }
-    }
-
-    const double similarity = std::clamp(dot * lhs_inv_norm * rhs_inv_norm, -1.0, 1.0);
-    return 1.0 - similarity;
 }
 
 class SmallestKDistances final
@@ -490,7 +317,42 @@ PairwiseDistanceData pairwiseDistancesAndCoreDistancesWithDistance(int64_t num_s
 
     for (int64_t lhs = 0; lhs < num_samples; ++lhs)
     {
-        for (int64_t rhs = lhs + 1; rhs < num_samples; ++rhs)
+        int64_t rhs = lhs + 1;
+        if constexpr (requires(const Distance &kernel, int64_t left, int64_t right) {
+                          kernel.canUseBlock4();
+                          kernel.block4(left, right);
+                      })
+        {
+            if (distance.canUseBlock4())
+            {
+                const double inv_alpha_search_scale = 1.0 / alpha_search_scale;
+                for (; rhs + 3 < num_samples; rhs += 4)
+                {
+                    const auto   distances = distance.block4(lhs, rhs);
+                    const double d0        = distances.first * inv_alpha_search_scale;
+                    const double d1        = distances.second * inv_alpha_search_scale;
+                    const double d2        = distances.third * inv_alpha_search_scale;
+                    const double d3        = distances.fourth * inv_alpha_search_scale;
+                    result.distances[static_cast<size_t>(lhs * num_samples + rhs)]       = d0;
+                    result.distances[static_cast<size_t>(rhs * num_samples + lhs)]       = d0;
+                    result.distances[static_cast<size_t>(lhs * num_samples + rhs + 1)]   = d1;
+                    result.distances[static_cast<size_t>((rhs + 1) * num_samples + lhs)] = d1;
+                    result.distances[static_cast<size_t>(lhs * num_samples + rhs + 2)]   = d2;
+                    result.distances[static_cast<size_t>((rhs + 2) * num_samples + lhs)] = d2;
+                    result.distances[static_cast<size_t>(lhs * num_samples + rhs + 3)]   = d3;
+                    result.distances[static_cast<size_t>((rhs + 3) * num_samples + lhs)] = d3;
+                    smallest.update(lhs, d0);
+                    smallest.update(rhs, d0);
+                    smallest.update(lhs, d1);
+                    smallest.update(rhs + 1, d1);
+                    smallest.update(lhs, d2);
+                    smallest.update(rhs + 2, d2);
+                    smallest.update(lhs, d3);
+                    smallest.update(rhs + 3, d3);
+                }
+            }
+        }
+        for (; rhs < num_samples; ++rhs)
         {
             const double search_distance = distance(lhs, rhs) / alpha_search_scale;
             result.distances[static_cast<size_t>(lhs * num_samples + rhs)] = search_distance;
@@ -512,39 +374,17 @@ PairwiseDistanceData pairwiseDistancesAndCoreDistances(const float *samples, int
                                                        double minkowski_p)
 {
     const double alpha_search_scale = detail::clusteringSearchRadius(alpha, metric, minkowski_p);
-    switch (metric)
+    if (metric == ClusteringMetric::Cosine)
     {
-    case ClusteringMetric::Manhattan:
+        const auto inverse_norms = detail::cosineInverseNorms(samples, num_samples, num_features);
         return pairwiseDistancesAndCoreDistancesWithDistance(
             num_samples, min_samples, alpha_search_scale,
-            [samples, num_features](int64_t lhs, int64_t rhs)
-            { return manhattanDistanceUnchecked(samples, lhs, rhs, num_features); });
-    case ClusteringMetric::Chebyshev:
-        return pairwiseDistancesAndCoreDistancesWithDistance(
-            num_samples, min_samples, alpha_search_scale,
-            [samples, num_features](int64_t lhs, int64_t rhs)
-            { return chebyshevDistanceUnchecked(samples, lhs, rhs, num_features); });
-    case ClusteringMetric::Minkowski:
-        return pairwiseDistancesAndCoreDistancesWithDistance(
-            num_samples, min_samples, alpha_search_scale,
-            [samples, num_features, minkowski_p](int64_t lhs, int64_t rhs)
-            { return minkowskiPoweredDistanceUnchecked(samples, lhs, rhs, num_features, minkowski_p); });
-    case ClusteringMetric::Cosine:
-    {
-        const auto inverse_norms = cosineInverseNorms(samples, num_samples, num_features);
-        return pairwiseDistancesAndCoreDistancesWithDistance(
-            num_samples, min_samples, alpha_search_scale,
-            [samples, num_features, &inverse_norms](int64_t lhs, int64_t rhs)
-            { return cosineDistanceUnchecked(samples, lhs, rhs, num_features, inverse_norms); });
-    }
-    case ClusteringMetric::Euclidean:
-        break;
+            detail::SearchDistanceCalculator(samples, num_features, metric, minkowski_p, &inverse_norms));
     }
 
     return pairwiseDistancesAndCoreDistancesWithDistance(
         num_samples, min_samples, alpha_search_scale,
-        [samples, num_features, metric, minkowski_p](int64_t lhs, int64_t rhs)
-        { return detail::clusteringSearchDistance(samples, lhs, rhs, num_features, metric, minkowski_p); });
+        detail::SearchDistanceCalculator(samples, num_features, metric, minkowski_p));
 }
 
 template <typename Distance>
@@ -554,7 +394,34 @@ std::vector<double> bruteCoreSearchDistancesWithDistance(int64_t num_samples, in
     SmallestKDistances smallest(num_samples, min_samples);
     for (int64_t lhs = 0; lhs < num_samples; ++lhs)
     {
-        for (int64_t rhs = lhs + 1; rhs < num_samples; ++rhs)
+        int64_t rhs = lhs + 1;
+        if constexpr (requires(const Distance &kernel, int64_t left, int64_t right) {
+                          kernel.canUseBlock4();
+                          kernel.block4(left, right);
+                      })
+        {
+            if (distance.canUseBlock4())
+            {
+                const double inv_alpha_search_scale = 1.0 / alpha_search_scale;
+                for (; rhs + 3 < num_samples; rhs += 4)
+                {
+                    const auto   distances = distance.block4(lhs, rhs);
+                    const double d0        = distances.first * inv_alpha_search_scale;
+                    const double d1        = distances.second * inv_alpha_search_scale;
+                    const double d2        = distances.third * inv_alpha_search_scale;
+                    const double d3        = distances.fourth * inv_alpha_search_scale;
+                    smallest.update(lhs, d0);
+                    smallest.update(rhs, d0);
+                    smallest.update(lhs, d1);
+                    smallest.update(rhs + 1, d1);
+                    smallest.update(lhs, d2);
+                    smallest.update(rhs + 2, d2);
+                    smallest.update(lhs, d3);
+                    smallest.update(rhs + 3, d3);
+                }
+            }
+        }
+        for (; rhs < num_samples; ++rhs)
         {
             const double search_distance = distance(lhs, rhs) / alpha_search_scale;
             smallest.update(lhs, search_distance);
@@ -575,39 +442,17 @@ std::vector<double> bruteCoreSearchDistances(const float *samples, int64_t num_s
                                              double minkowski_p)
 {
     const double alpha_search_scale = detail::clusteringSearchRadius(alpha, metric, minkowski_p);
-    switch (metric)
+    if (metric == ClusteringMetric::Cosine)
     {
-    case ClusteringMetric::Manhattan:
+        const auto inverse_norms = detail::cosineInverseNorms(samples, num_samples, num_features);
         return bruteCoreSearchDistancesWithDistance(
             num_samples, min_samples, alpha_search_scale,
-            [samples, num_features](int64_t lhs, int64_t rhs)
-            { return manhattanDistanceUnchecked(samples, lhs, rhs, num_features); });
-    case ClusteringMetric::Chebyshev:
-        return bruteCoreSearchDistancesWithDistance(
-            num_samples, min_samples, alpha_search_scale,
-            [samples, num_features](int64_t lhs, int64_t rhs)
-            { return chebyshevDistanceUnchecked(samples, lhs, rhs, num_features); });
-    case ClusteringMetric::Minkowski:
-        return bruteCoreSearchDistancesWithDistance(
-            num_samples, min_samples, alpha_search_scale,
-            [samples, num_features, minkowski_p](int64_t lhs, int64_t rhs)
-            { return minkowskiPoweredDistanceUnchecked(samples, lhs, rhs, num_features, minkowski_p); });
-    case ClusteringMetric::Cosine:
-    {
-        const auto inverse_norms = cosineInverseNorms(samples, num_samples, num_features);
-        return bruteCoreSearchDistancesWithDistance(
-            num_samples, min_samples, alpha_search_scale,
-            [samples, num_features, &inverse_norms](int64_t lhs, int64_t rhs)
-            { return cosineDistanceUnchecked(samples, lhs, rhs, num_features, inverse_norms); });
-    }
-    case ClusteringMetric::Euclidean:
-        break;
+            detail::SearchDistanceCalculator(samples, num_features, metric, minkowski_p, &inverse_norms));
     }
 
     return bruteCoreSearchDistancesWithDistance(
         num_samples, min_samples, alpha_search_scale,
-        [samples, num_features, metric, minkowski_p](int64_t lhs, int64_t rhs)
-        { return detail::clusteringSearchDistance(samples, lhs, rhs, num_features, metric, minkowski_p); });
+        detail::SearchDistanceCalculator(samples, num_features, metric, minkowski_p));
 }
 
 [[nodiscard]] bool useMatrixFreeBrute(ClusteringMetric metric, double minkowski_p)
@@ -620,29 +465,9 @@ std::vector<double> bruteCoreSearchDistances(const float *samples, int64_t num_s
 std::vector<double> squaredCoreDistancesEuclidean(const float *samples, int64_t num_samples, int64_t num_features,
                                                   int64_t min_samples, double alpha)
 {
-    const double alpha_sq_inv = 1.0 / (alpha * alpha);
-
-    SmallestKDistances smallest(num_samples, min_samples);
-
-    for (int64_t lhs = 0; lhs < num_samples; ++lhs)
-    {
-        for (int64_t rhs = lhs + 1; rhs < num_samples; ++rhs)
-        {
-            const double distance
-                = (num_features == 3 ? squaredEuclideanDistance3(samples, lhs, rhs)
-                                     : squaredEuclideanDistanceUnchecked(samples, lhs, rhs, num_features))
-                  * alpha_sq_inv;
-            smallest.update(lhs, distance);
-            smallest.update(rhs, distance);
-        }
-    }
-
-    std::vector<double> result(static_cast<size_t>(num_samples), 0.0);
-    for (int64_t sample = 0; sample < num_samples; ++sample)
-    {
-        result[static_cast<size_t>(sample)] = smallest.coreDistance(sample);
-    }
-    return result;
+    return bruteCoreSearchDistancesWithDistance(
+        num_samples, min_samples, alpha * alpha,
+        detail::SearchDistanceCalculator(samples, num_features, ClusteringMetric::Euclidean, 2.0));
 }
 
 std::vector<double> coreDistances(const float *samples, int64_t num_samples, int64_t num_features, int64_t min_samples,
@@ -772,11 +597,10 @@ std::vector<MSTEdge> minimumSpanningTreeWithDistance(int64_t num_samples, double
         int64_t      new_node         = 0;
         const double current_core     = core_search_distances[static_cast<size_t>(current_node)];
 
-        for (int64_t next_node = unvisited.first(); next_node >= 0; next_node = unvisited.next(next_node))
+        const auto update_reachability = [&](int64_t next_node, double pair_search_distance)
         {
-            const double pair_distance = distance(current_node, next_node) * inv_alpha_search_scale;
             const double reachability
-                = max3(current_core, core_search_distances[static_cast<size_t>(next_node)], pair_distance);
+                = max3(current_core, core_search_distances[static_cast<size_t>(next_node)], pair_search_distance);
 
             const double  next_node_min_reach = min_reachability[static_cast<size_t>(next_node)];
             const int64_t next_node_source    = current_sources[static_cast<size_t>(next_node)];
@@ -797,6 +621,48 @@ std::vector<MSTEdge> minimumSpanningTreeWithDistance(int64_t num_samples, double
                 source_node      = next_node_source;
                 new_node         = next_node;
             }
+        };
+
+        int64_t next_node = unvisited.first();
+        if constexpr (requires(const Distance &kernel, int64_t left, const int64_t *right) {
+                          kernel.canUseBlock4();
+                          kernel.indexedBlock4(left, right);
+                      })
+        {
+            if (distance.canUseBlock4())
+            {
+                while (next_node >= 0)
+                {
+                    int64_t indices[4]{};
+                    int     count = 0;
+                    for (; next_node >= 0 && count < 4; next_node = unvisited.next(next_node))
+                    {
+                        indices[count++] = next_node;
+                    }
+
+                    if (count == 4)
+                    {
+                        const auto distances = distance.indexedBlock4(current_node, indices);
+                        update_reachability(indices[0], distances.first * inv_alpha_search_scale);
+                        update_reachability(indices[1], distances.second * inv_alpha_search_scale);
+                        update_reachability(indices[2], distances.third * inv_alpha_search_scale);
+                        update_reachability(indices[3], distances.fourth * inv_alpha_search_scale);
+                        continue;
+                    }
+
+                    for (int index = 0; index < count; ++index)
+                    {
+                        update_reachability(indices[index],
+                                            distance(current_node, indices[index]) * inv_alpha_search_scale);
+                    }
+                    break;
+                }
+            }
+        }
+
+        for (; next_node >= 0; next_node = unvisited.next(next_node))
+        {
+            update_reachability(next_node, distance(current_node, next_node) * inv_alpha_search_scale);
         }
 
         mst.push_back({source_node, new_node, outputReachability(new_reachability, metric, minkowski_p)});
@@ -813,96 +679,23 @@ std::vector<MSTEdge> minimumSpanningTree(const float *samples, int64_t num_sampl
                                          const std::vector<double> &core_search_distances)
 {
     const double alpha_search_scale = detail::clusteringSearchRadius(alpha, metric, minkowski_p);
-    switch (metric)
+    if (metric == ClusteringMetric::Cosine)
     {
-    case ClusteringMetric::Manhattan:
+        const auto inverse_norms = detail::cosineInverseNorms(samples, num_samples, num_features);
         return minimumSpanningTreeWithDistance(
             num_samples, alpha_search_scale, metric, minkowski_p, core_search_distances,
-            [samples, num_features](int64_t lhs, int64_t rhs)
-            { return manhattanDistanceUnchecked(samples, lhs, rhs, num_features); });
-    case ClusteringMetric::Chebyshev:
-        return minimumSpanningTreeWithDistance(
-            num_samples, alpha_search_scale, metric, minkowski_p, core_search_distances,
-            [samples, num_features](int64_t lhs, int64_t rhs)
-            { return chebyshevDistanceUnchecked(samples, lhs, rhs, num_features); });
-    case ClusteringMetric::Minkowski:
-        return minimumSpanningTreeWithDistance(
-            num_samples, alpha_search_scale, metric, minkowski_p, core_search_distances,
-            [samples, num_features, minkowski_p](int64_t lhs, int64_t rhs)
-            { return minkowskiPoweredDistanceUnchecked(samples, lhs, rhs, num_features, minkowski_p); });
-    case ClusteringMetric::Cosine:
-    {
-        const auto inverse_norms = cosineInverseNorms(samples, num_samples, num_features);
-        return minimumSpanningTreeWithDistance(
-            num_samples, alpha_search_scale, metric, minkowski_p, core_search_distances,
-            [samples, num_features, &inverse_norms](int64_t lhs, int64_t rhs)
-            { return cosineDistanceUnchecked(samples, lhs, rhs, num_features, inverse_norms); });
-    }
-    case ClusteringMetric::Euclidean:
-        break;
+            detail::SearchDistanceCalculator(samples, num_features, metric, minkowski_p, &inverse_norms));
     }
 
-    std::vector<MSTEdge> mst;
-    mst.reserve(static_cast<size_t>(num_samples - 1));
-
-    OrderedUnvisitedNodes unvisited(num_samples);
-    std::vector<double>   min_reachability(static_cast<size_t>(num_samples), std::numeric_limits<double>::infinity());
-    std::vector<int64_t>  current_sources(static_cast<size_t>(num_samples), int64_t{1});
-
-    int64_t current_node = 0;
-    for (int64_t edge_index = 0; edge_index < num_samples - 1; ++edge_index)
-    {
-        unvisited.remove(current_node);
-
-        double  new_reachability = std::numeric_limits<double>::max();
-        int64_t source_node      = 0;
-        int64_t new_node         = 0;
-
-        for (int64_t next_node = unvisited.first(); next_node >= 0; next_node = unvisited.next(next_node))
-        {
-            const double  next_node_min_reach = min_reachability[static_cast<size_t>(next_node)];
-            const int64_t next_node_source    = current_sources[static_cast<size_t>(next_node)];
-            const double  reachability
-                = mutualReachabilitySearch(samples, core_search_distances, current_node, next_node, num_features,
-                                           alpha_search_scale, metric, minkowski_p);
-
-            if (reachability < next_node_min_reach)
-            {
-                min_reachability[static_cast<size_t>(next_node)] = reachability;
-                current_sources[static_cast<size_t>(next_node)]  = current_node;
-                if (reachability < new_reachability)
-                {
-                    new_reachability = reachability;
-                    source_node      = current_node;
-                    new_node         = next_node;
-                }
-            }
-            else if (next_node_min_reach < new_reachability)
-            {
-                new_reachability = next_node_min_reach;
-                source_node      = next_node_source;
-                new_node         = next_node;
-            }
-        }
-
-        mst.push_back({source_node, new_node, outputReachability(new_reachability, metric, minkowski_p)});
-        current_node = new_node;
-    }
-
-    std::stable_sort(mst.begin(), mst.end(),
-                     [](const MSTEdge &lhs, const MSTEdge &rhs) { return lhs.distance < rhs.distance; });
-    return mst;
+    return minimumSpanningTreeWithDistance(
+        num_samples, alpha_search_scale, metric, minkowski_p, core_search_distances,
+        detail::SearchDistanceCalculator(samples, num_features, metric, minkowski_p));
 }
 
 std::vector<MSTEdge> minimumSpanningTreeEuclidean(const float *samples, int64_t num_samples, int64_t num_features,
                                                   double alpha, const std::vector<double> &core_distances,
                                                   bool core_distances_are_squared)
 {
-    std::vector<MSTEdge> mst;
-    mst.reserve(static_cast<size_t>(num_samples - 1));
-
-    const double alpha_sq_inv = 1.0 / (alpha * alpha);
-
     std::vector<double> core_search_distances = core_distances;
     if (!core_distances_are_squared)
     {
@@ -911,58 +704,9 @@ std::vector<MSTEdge> minimumSpanningTreeEuclidean(const float *samples, int64_t 
             distance *= distance;
         }
     }
-
-    OrderedUnvisitedNodes unvisited(num_samples);
-    std::vector<double>   min_reachability(static_cast<size_t>(num_samples), std::numeric_limits<double>::infinity());
-    std::vector<int64_t>  current_sources(static_cast<size_t>(num_samples), int64_t{1});
-
-    int64_t current_node = 0;
-    for (int64_t edge_index = 0; edge_index < num_samples - 1; ++edge_index)
-    {
-        unvisited.remove(current_node);
-
-        double  new_reachability = std::numeric_limits<double>::max();
-        int64_t source_node      = 0;
-        int64_t new_node         = 0;
-        const double current_core = core_search_distances[static_cast<size_t>(current_node)];
-
-        for (int64_t next_node = unvisited.first(); next_node >= 0; next_node = unvisited.next(next_node))
-        {
-            const double pair_distance
-                = (num_features == 3 ? squaredEuclideanDistance3(samples, current_node, next_node)
-                                     : squaredEuclideanDistanceUnchecked(samples, current_node, next_node, num_features))
-                  * alpha_sq_inv;
-            const double reachability
-                = max3(current_core, core_search_distances[static_cast<size_t>(next_node)], pair_distance);
-
-            const double  next_node_min_reach = min_reachability[static_cast<size_t>(next_node)];
-            const int64_t next_node_source    = current_sources[static_cast<size_t>(next_node)];
-            if (reachability < next_node_min_reach)
-            {
-                min_reachability[static_cast<size_t>(next_node)] = reachability;
-                current_sources[static_cast<size_t>(next_node)]  = current_node;
-                if (reachability < new_reachability)
-                {
-                    new_reachability = reachability;
-                    source_node      = current_node;
-                    new_node         = next_node;
-                }
-            }
-            else if (next_node_min_reach < new_reachability)
-            {
-                new_reachability = next_node_min_reach;
-                source_node      = next_node_source;
-                new_node         = next_node;
-            }
-        }
-
-        mst.push_back({source_node, new_node, std::sqrt(new_reachability)});
-        current_node = new_node;
-    }
-
-    std::stable_sort(mst.begin(), mst.end(),
-                     [](const MSTEdge &lhs, const MSTEdge &rhs) { return lhs.distance < rhs.distance; });
-    return mst;
+    return minimumSpanningTreeWithDistance(
+        num_samples, alpha * alpha, ClusteringMetric::Euclidean, 2.0, core_search_distances,
+        detail::SearchDistanceCalculator(samples, num_features, ClusteringMetric::Euclidean, 2.0));
 }
 
 std::vector<LinkageNode> makeSingleLinkage(const std::vector<MSTEdge> &mst, int64_t num_samples)

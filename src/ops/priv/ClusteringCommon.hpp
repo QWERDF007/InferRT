@@ -82,6 +82,37 @@ void validateMetricConfig(ClusteringMetric metric, double minkowski_p);
 [[nodiscard]] double clusteringSearchDistance(const float *samples, int64_t lhs, int64_t rhs, int64_t num_features,
                                               ClusteringMetric metric, double minkowski_p);
 
+[[nodiscard]] std::vector<double> cosineInverseNorms(const float *samples, int64_t num_samples, int64_t num_features);
+
+struct DistanceBlock4
+{
+    double first{0.0};
+    double second{0.0};
+    double third{0.0};
+    double fourth{0.0};
+};
+
+class SearchDistanceCalculator final
+{
+public:
+    SearchDistanceCalculator(const float *samples, int64_t num_features, ClusteringMetric metric, double minkowski_p,
+                             const std::vector<double> *inverse_norms = nullptr);
+
+    [[nodiscard]] double operator()(int64_t lhs, int64_t rhs) const;
+    [[nodiscard]] bool canUseBlock4() const;
+    [[nodiscard]] DistanceBlock4 block4(int64_t lhs, int64_t first_rhs) const;
+    [[nodiscard]] DistanceBlock4 indexedBlock4(int64_t lhs, const int64_t *rhs_indices) const;
+    [[nodiscard]] int withinRadiusMask4(int64_t lhs, int64_t first_rhs, double search_radius) const;
+    [[nodiscard]] int indexedWithinRadiusMask4(int64_t lhs, const int64_t *rhs_indices, double search_radius) const;
+
+private:
+    const float               *samples_{nullptr};
+    int64_t                    num_features_{0};
+    ClusteringMetric           metric_{ClusteringMetric::Euclidean};
+    double                     minkowski_p_{2.0};
+    const std::vector<double> *inverse_norms_{nullptr};
+};
+
 /**
  * @brief 将真实距离半径转换为搜索距离半径。
  * @param radius 真实距离半径。

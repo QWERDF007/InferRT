@@ -34,6 +34,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.ticker import ScalarFormatter  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -48,6 +49,7 @@ TIME_UNIT_TO_MS = {
 }
 AGGREGATE_SUFFIX_RE = re.compile(r"_(mean|median|stddev|cv)$")
 SIZE_RE = re.compile(r"(?:^|/)N:(\d+)(?:/|$)")
+DIM_RE = re.compile(r"(?:^|/)D:(\d+)(?:/|$)")
 CURVE_SUITE_BY_REFERENCE = {
     "numpy_fit_bezier_curve": "fit_bezier_curve",
     "scipy.BPoly_evaluate": "evaluate_bezier_curve",
@@ -63,6 +65,7 @@ class ParsedName:
     suite: str
     label: str
     size: int
+    dimension: int | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +73,7 @@ class BenchmarkRecord:
     suite: str
     label: str
     size: int
+    dimension: int | None
     time_ms: float
     run_type: str
     aggregate_name: str
@@ -102,6 +106,7 @@ def _parse_args() -> argparse.Namespace:
         help="Saved figure format.",
     )
     parser.add_argument("--dpi", type=int, default=160, help="DPI used for raster images.")
+    parser.add_argument("--linear-x", action="store_true", help="Use a linear X axis instead of the default log scale.")
     parser.add_argument("--log-y", action="store_true", help="Use a logarithmic Y axis.")
     return parser.parse_args()
 
@@ -136,6 +141,8 @@ def _parse_benchmark_name(name: str) -> ParsedName | None:
         return None
 
     size = int(size_match.group(1))
+    dim_match = DIM_RE.search(clean_name)
+    dimension = int(dim_match.group(1)) if dim_match else None
     prefix = clean_name[: size_match.start()].rstrip("/")
     parts = prefix.split("/")
     if len(parts) < 2:
@@ -146,11 +153,17 @@ def _parse_benchmark_name(name: str) -> ParsedName | None:
     impl = _implementation_label(raw_impl, raw_op)
 
     if raw_op in {"DBSCAN", "HDBSCAN"} and len(parts) >= 3:
-        return ParsedName(suite=raw_op, label=f"{impl}/{parts[2]}", size=size)
+        label = f"{impl}/{parts[2]}"
+        if len(parts) >= 4:
+            label = f"{label}/{parts[3]}"
+        return ParsedName(suite=raw_op, label=label, size=size, dimension=dimension)
 
     if raw_op in {"sklearn.DBSCAN", "sklearn.HDBSCAN"} and len(parts) >= 3:
         suite = raw_op.split(".", 1)[1]
-        return ParsedName(suite=suite, label=f"{impl}/{parts[2]}", size=size)
+        label = f"{impl}/{parts[2]}"
+        if len(parts) >= 4:
+            label = f"{label}/{parts[3]}"
+        return ParsedName(suite=suite, label=label, size=size, dimension=dimension)
 
     suite = CURVE_SUITE_BY_REFERENCE.get(raw_op, raw_op.removeprefix("scipy."))
     return ParsedName(suite=suite, label=impl, size=size)
@@ -185,6 +198,7 @@ def _read_records(json_files: list[Path], time_field: str) -> list[BenchmarkReco
                     suite=parsed.suite,
                     label=parsed.label,
                     size=parsed.size,
+                    dimension=parsed.dimension,
                     time_ms=time_ms,
                     run_type=str(item.get("run_type", "iteration")),
                     aggregate_name=str(item.get("aggregate_name", "")),
@@ -194,17 +208,17 @@ def _read_records(json_files: list[Path], time_field: str) -> list[BenchmarkReco
     return records
 
 
-def _summarize_records(records: list[BenchmarkRecord]) -> dict[str, dict[str, dict[int, float]]]:
-    grouped: dict[tuple[str, str, int], list[BenchmarkRecord]] = defaultdict(list)
+def _summarize_records(records: list[BenchmarkRecord]) -> dict[tuple[str, int | None], dict[str, dict[int, float]]]:
+    grouped: dict[tuple[str, int | None, str, int], list[BenchmarkRecord]] = defaultdict(list)
     for record in records:
-        grouped[(record.suite, record.label, record.size)].append(record)
+        grouped[(record.suite, record.dimension, record.label, record.size)].append(record)
 
-    summary: dict[str, dict[str, dict[int, float]]] = defaultdict(lambda: defaultdict(dict))
-    for (suite, label, size), values in grouped.items():
+    summary: dict[tuple[str, int | None], dict[str, dict[int, float]]] = defaultdict(lambda: defaultdict(dict))
+    for (suite, dimension, label, size), values in grouped.items():
         mean_aggregates = [record.time_ms for record in values if record.aggregate_name == "mean"]
         iteration_values = [record.time_ms for record in values if record.run_type == "iteration"]
         selected = mean_aggregates or iteration_values or [record.time_ms for record in values]
-        summary[suite][label][size] = mean(selected)
+        summary[(suite, dimension)][label][size] = mean(selected)
 
     return summary
 
@@ -222,10 +236,12 @@ def _slugify(name: str) -> str:
 
 def _plot_suite(
     suite: str,
+    dimension: int | None,
     series_by_label: dict[str, dict[int, float]],
     output_dir: Path,
     image_format: str,
     dpi: int,
+    log_x: bool,
     log_y: bool,
 ) -> Path:
     fig, ax = plt.subplots(figsize=(9.0, 5.2), constrained_layout=True)
@@ -237,19 +253,24 @@ def _plot_suite(
         values = [series[size] for size in sizes]
         ax.plot(sizes, values, marker="o", linewidth=2.0, markersize=5.5, label=label)
 
-    ax.set_title(suite)
+    title = suite if dimension is None else f"{suite} D={dimension}"
+    ax.set_title(title)
     ax.set_xlabel("N")
     ax.set_ylabel("Time (ms)")
     ax.grid(True, axis="y", linestyle="--", linewidth=0.7, alpha=0.45)
     ax.grid(True, axis="x", linestyle=":", linewidth=0.5, alpha=0.25)
     ax.legend(loc="best", frameon=True)
+    if log_x:
+        ax.set_xscale("log")
+        ax.xaxis.set_major_formatter(ScalarFormatter())
     if log_y:
         ax.set_yscale("log")
     if all_sizes:
         ax.set_xticks(all_sizes)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{_slugify(suite)}.{image_format}"
+    suffix = "" if dimension is None else f"_D{dimension}"
+    output_path = output_dir / f"{_slugify(suite + suffix)}.{image_format}"
     fig.savefig(output_path, dpi=dpi if image_format == "png" else None)
     plt.close(fig)
     return output_path
@@ -268,17 +289,20 @@ def main() -> int:
         raise RuntimeError("No plottable benchmark records were found.")
 
     summary = _summarize_records(records)
-    output_paths = [
-        _plot_suite(
-            suite=suite,
-            series_by_label=summary[suite],
-            output_dir=args.output_dir,
-            image_format=args.image_format,
-            dpi=args.dpi,
-            log_y=args.log_y,
+    output_paths = []
+    for suite, dimension in sorted(summary, key=lambda key: (key[0], -1 if key[1] is None else key[1])):
+        output_paths.append(
+            _plot_suite(
+                suite=suite,
+                dimension=dimension,
+                series_by_label=summary[(suite, dimension)],
+                output_dir=args.output_dir,
+                image_format=args.image_format,
+                dpi=args.dpi,
+                log_x=not args.linear_x,
+                log_y=args.log_y,
+            )
         )
-        for suite in sorted(summary)
-    ]
 
     for output_path in output_paths:
         print(output_path)
