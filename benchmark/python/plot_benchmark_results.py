@@ -52,6 +52,7 @@ CURVE_SUITE_BY_REFERENCE = {
     "numpy_fit_bezier_curve": "fit_bezier_curve",
     "scipy.BPoly_evaluate": "evaluate_bezier_curve",
     "scipy.make_interp_spline": "make_interp_spline",
+    "scipy.BSpline_evaluate": "evaluate_b_spline",
     "scipy.splprep_s0": "splprep_s0",
     "scipy.splprep_smooth": "splprep_smooth",
 }

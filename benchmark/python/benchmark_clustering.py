@@ -1,6 +1,6 @@
 """DBSCAN/HDBSCAN pybind11 与 scikit-learn 的 google-benchmark 基准测试。
 
-每个聚类算子都会分别测试 brute、kd_tree、ball_tree 三种邻域搜索算法。
+每个聚类算子都会分别测试支持的距离度量和 brute、kd_tree、ball_tree 邻域搜索算法。
 
 运行示例：
     D:\\Software\\anaconda3\\envs\\py312\\python.exe benchmark\\python\\benchmark_clustering.py --benchmark_min_time=0.05s
@@ -27,7 +27,7 @@ from sklearn import cluster as sklearn_cluster
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BUILD_DIR = Path(os.environ.get("INFERRT_BUILD_DIR", REPO_ROOT / "build")).resolve()
-CLUSTER_SIZES = (64, 256, 1024, 2048, 4096)
+CLUSTER_SIZES = (64, 256, 1024, 2048, 4096, 8192, 10000, 16384, 32768)
 
 _DLL_DIRECTORY_HANDLES: list[object] = []
 _SINK: Any = None
@@ -136,23 +136,25 @@ def _cluster_samples(num_samples: int) -> np.ndarray:
     return np.ascontiguousarray(samples, dtype=np.float32)
 
 
-def _dbscan_config(algorithm: Any) -> Any:
+def _dbscan_config(algorithm: Any, metric: Any, minkowski_p: float, eps: float) -> Any:
     config = ops.DBSCANConfig()
-    config.eps = 0.45
+    config.eps = eps
     config.min_samples = 5
     config.algorithm = algorithm
     config.leaf_size = 30
-    config.metric = ops.ClusteringMetric.Euclidean
+    config.metric = metric
+    config.minkowski_p = minkowski_p
     return config
 
 
-def _hdbscan_config(algorithm: Any) -> Any:
+def _hdbscan_config(algorithm: Any, metric: Any, minkowski_p: float) -> Any:
     config = ops.HDBSCANConfig()
     config.min_cluster_size = 10
     config.min_samples = 5
     config.algorithm = algorithm
     config.leaf_size = 30
-    config.metric = ops.ClusteringMetric.Euclidean
+    config.metric = metric
+    config.minkowski_p = minkowski_p
     config.cluster_selection_method = ops.HDBSCANClusterSelectionMethod.Eom
     return config
 
@@ -162,7 +164,32 @@ ALGORITHM_CASES = (
     ("kd_tree", ops.ClusteringAlgorithm.KDTree, "kd_tree"),
     ("ball_tree", ops.ClusteringAlgorithm.BallTree, "ball_tree"),
 )
+METRIC_CASES = (
+    ("euclidean", ops.ClusteringMetric.Euclidean, "euclidean", 2.0, 0.45),
+    ("manhattan", ops.ClusteringMetric.Manhattan, "manhattan", 2.0, 1.0),
+    ("chebyshev", ops.ClusteringMetric.Chebyshev, "chebyshev", 2.0, 0.8),
+    ("minkowski_p3", ops.ClusteringMetric.Minkowski, "minkowski", 3.0, 1.0),
+    ("cosine", ops.ClusteringMetric.Cosine, "cosine", 2.0, 0.01),
+)
 CLUSTER_DATA = {size: _cluster_samples(size) for size in CLUSTER_SIZES}
+
+
+def _supported_algorithm_cases(metric_name: str):
+    if metric_name == "cosine":
+        return (ALGORITHM_CASES[0],)
+    return ALGORITHM_CASES
+
+
+def _sklearn_dbscan_metric_kwargs(metric_name: str, minkowski_p: float) -> dict[str, Any]:
+    if metric_name == "minkowski_p3":
+        return {"p": minkowski_p}
+    return {}
+
+
+def _sklearn_hdbscan_metric_params(metric_name: str, minkowski_p: float) -> dict[str, Any] | None:
+    if metric_name == "minkowski_p3":
+        return {"p": minkowski_p}
+    return None
 
 
 def _register_cluster_benchmark(name: str, func: Any) -> None:
@@ -176,79 +203,95 @@ def _register_cluster_benchmark(name: str, func: Any) -> None:
 
 
 def _register_dbscan_benchmarks() -> None:
-    for algorithm_name, irt_algorithm, sklearn_algorithm in ALGORITHM_CASES:
-        config = _dbscan_config(irt_algorithm)
+    for metric_name, irt_metric, sklearn_metric, minkowski_p, eps in METRIC_CASES:
+        for algorithm_name, irt_algorithm, sklearn_algorithm in _supported_algorithm_cases(metric_name):
+            config = _dbscan_config(irt_algorithm, irt_metric, minkowski_p, eps)
 
-        def bench_inferrt_dbscan(state: benchmark.State, *, config: Any = config) -> None:
-            num_samples = state.range(0)
-            samples = CLUSTER_DATA[num_samples]
-            while state:
-                _store(ops.dbscan(samples, config))
-            state.items_processed = state.iterations * num_samples
+            def bench_inferrt_dbscan(state: benchmark.State, *, config: Any = config) -> None:
+                num_samples = state.range(0)
+                samples = CLUSTER_DATA[num_samples]
+                while state:
+                    _store(ops.dbscan(samples, config))
+                state.items_processed = state.iterations * num_samples
 
-        _register_cluster_benchmark(f"InferRTPybind11/DBSCAN/{algorithm_name}", bench_inferrt_dbscan)
+            _register_cluster_benchmark(
+                f"InferRTPybind11/DBSCAN/{metric_name}/{algorithm_name}", bench_inferrt_dbscan
+            )
 
-        def bench_sklearn_dbscan(
-            state: benchmark.State,
-            *,
-            config: Any = config,
-            sklearn_algorithm: str = sklearn_algorithm,
-        ) -> None:
-            num_samples = state.range(0)
-            samples = CLUSTER_DATA[num_samples]
-            while state:
-                _store(
-                    sklearn_cluster.DBSCAN(
-                        eps=config.eps,
-                        min_samples=config.min_samples,
-                        algorithm=sklearn_algorithm,
-                        leaf_size=config.leaf_size,
-                        n_jobs=1,
-                        metric="euclidean",
-                    ).fit_predict(samples)
-                )
-            state.items_processed = state.iterations * num_samples
+            def bench_sklearn_dbscan(
+                state: benchmark.State,
+                *,
+                config: Any = config,
+                sklearn_algorithm: str = sklearn_algorithm,
+                sklearn_metric: str = sklearn_metric,
+                sklearn_metric_kwargs: dict[str, Any] = _sklearn_dbscan_metric_kwargs(metric_name, minkowski_p),
+            ) -> None:
+                num_samples = state.range(0)
+                samples = CLUSTER_DATA[num_samples]
+                while state:
+                    _store(
+                        sklearn_cluster.DBSCAN(
+                            eps=config.eps,
+                            min_samples=config.min_samples,
+                            algorithm=sklearn_algorithm,
+                            leaf_size=config.leaf_size,
+                            n_jobs=1,
+                            metric=sklearn_metric,
+                            **sklearn_metric_kwargs,
+                        ).fit_predict(samples)
+                    )
+                state.items_processed = state.iterations * num_samples
 
-        _register_cluster_benchmark(f"Python/sklearn.DBSCAN/{algorithm_name}", bench_sklearn_dbscan)
+            _register_cluster_benchmark(
+                f"Python/sklearn.DBSCAN/{metric_name}/{algorithm_name}", bench_sklearn_dbscan
+            )
 
 
 def _register_hdbscan_benchmarks() -> None:
-    for algorithm_name, irt_algorithm, sklearn_algorithm in ALGORITHM_CASES:
-        config = _hdbscan_config(irt_algorithm)
+    for metric_name, irt_metric, sklearn_metric, minkowski_p, _ in METRIC_CASES:
+        for algorithm_name, irt_algorithm, sklearn_algorithm in _supported_algorithm_cases(metric_name):
+            config = _hdbscan_config(irt_algorithm, irt_metric, minkowski_p)
 
-        def bench_inferrt_hdbscan(state: benchmark.State, *, config: Any = config) -> None:
-            num_samples = state.range(0)
-            samples = CLUSTER_DATA[num_samples]
-            while state:
-                _store(ops.hdbscan(samples, config))
-            state.items_processed = state.iterations * num_samples
+            def bench_inferrt_hdbscan(state: benchmark.State, *, config: Any = config) -> None:
+                num_samples = state.range(0)
+                samples = CLUSTER_DATA[num_samples]
+                while state:
+                    _store(ops.hdbscan(samples, config))
+                state.items_processed = state.iterations * num_samples
 
-        _register_cluster_benchmark(f"InferRTPybind11/HDBSCAN/{algorithm_name}", bench_inferrt_hdbscan)
+            _register_cluster_benchmark(
+                f"InferRTPybind11/HDBSCAN/{metric_name}/{algorithm_name}", bench_inferrt_hdbscan
+            )
 
-        def bench_sklearn_hdbscan(
-            state: benchmark.State,
-            *,
-            config: Any = config,
-            sklearn_algorithm: str = sklearn_algorithm,
-        ) -> None:
-            num_samples = state.range(0)
-            samples = CLUSTER_DATA[num_samples]
-            while state:
-                _store(
-                    sklearn_cluster.HDBSCAN(
-                        min_cluster_size=config.min_cluster_size,
-                        min_samples=config.min_samples,
-                        algorithm=sklearn_algorithm,
-                        leaf_size=config.leaf_size,
-                        metric="euclidean",
-                        cluster_selection_method="eom",
-                        n_jobs=1,
-                        copy=False,
-                    ).fit_predict(samples)
-                )
-            state.items_processed = state.iterations * num_samples
+            def bench_sklearn_hdbscan(
+                state: benchmark.State,
+                *,
+                config: Any = config,
+                sklearn_algorithm: str = sklearn_algorithm,
+                sklearn_metric: str = sklearn_metric,
+                metric_params: dict[str, Any] | None = _sklearn_hdbscan_metric_params(metric_name, minkowski_p),
+            ) -> None:
+                num_samples = state.range(0)
+                samples = CLUSTER_DATA[num_samples]
+                while state:
+                    _store(
+                        sklearn_cluster.HDBSCAN(
+                            min_cluster_size=config.min_cluster_size,
+                            min_samples=config.min_samples,
+                            algorithm=sklearn_algorithm,
+                            leaf_size=config.leaf_size,
+                            metric=sklearn_metric,
+                            metric_params=metric_params,
+                            cluster_selection_method="eom",
+                            n_jobs=1,
+                            copy=False,
+                        ).fit_predict(samples)
+                    )
+                state.items_processed = state.iterations * num_samples
 
-        _register_cluster_benchmark(f"Python/sklearn.HDBSCAN/{algorithm_name}", bench_sklearn_hdbscan)
+            _register_cluster_benchmark(
+                f"Python/sklearn.HDBSCAN/{metric_name}/{algorithm_name}", bench_sklearn_hdbscan
+            )
 
 
 _register_dbscan_benchmarks()

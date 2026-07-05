@@ -27,6 +27,10 @@ from scipy import interpolate
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BUILD_DIR = Path(os.environ.get("INFERRT_BUILD_DIR", REPO_ROOT / "build")).resolve()
 CURVE_SIZES = (16, 32, 64)
+LARGE_CURVE_SIZES = (10_000, 100_000)
+BEZIER_SIZES = CURVE_SIZES + LARGE_CURVE_SIZES
+INTERP_SPLINE_SIZES = CURVE_SIZES + LARGE_CURVE_SIZES
+SPLPREP_SIZES = CURVE_SIZES + LARGE_CURVE_SIZES
 BEZIER_DEGREE = 3
 
 _DLL_DIRECTORY_HANDLES: list[object] = []
@@ -175,8 +179,24 @@ def _bezier_samples(num_points: int) -> tuple[np.ndarray, np.ndarray, np.ndarray
 
 
 SPLINE_DATA = {size: _spline_data(size) for size in CURVE_SIZES}
-CURVE_DATA = {size: _curve_points(size) for size in CURVE_SIZES}
-BEZIER_DATA = {size: _bezier_samples(size) for size in CURVE_SIZES}
+CURVE_DATA = {size: _curve_points(size) for size in SPLPREP_SIZES}
+LARGE_SPLINE_DATA = {size: _spline_data(size) for size in LARGE_CURVE_SIZES}
+SPLINE_DATA.update(LARGE_SPLINE_DATA)
+BEZIER_DATA = {size: _bezier_samples(size) for size in BEZIER_SIZES}
+
+
+def _spline_eval_data(
+    num_points: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, interpolate.BSpline]:
+    x, y, x64, y64 = SPLINE_DATA[num_points]
+    spline = ops.make_interp_spline(x, y, degree=3)
+    knots = np.asarray(spline.knots, dtype=np.float32)
+    coefficients = np.asarray(spline.coefficients, dtype=np.float32).reshape(num_points, y.shape[1])
+    scipy_spline = interpolate.make_interp_spline(x64, y64, k=3)
+    return knots, coefficients, x, x64, scipy_spline
+
+
+SPLINE_EVAL_DATA = {size: _spline_eval_data(size) for size in INTERP_SPLINE_SIZES}
 
 
 @benchmark.register(name="InferRTPybind11/fit_bezier_curve")
@@ -185,6 +205,8 @@ BEZIER_DATA = {size: _bezier_samples(size) for size in CURVE_SIZES}
 @benchmark.option.arg(CURVE_SIZES[0])
 @benchmark.option.arg(CURVE_SIZES[1])
 @benchmark.option.arg(CURVE_SIZES[2])
+@benchmark.option.arg(LARGE_CURVE_SIZES[0])
+@benchmark.option.arg(LARGE_CURVE_SIZES[1])
 @benchmark.option.unit(benchmark.kMillisecond)
 def bench_inferrt_fit_bezier_curve(state: benchmark.State) -> None:
     num_points = state.range(0)
@@ -200,6 +222,8 @@ def bench_inferrt_fit_bezier_curve(state: benchmark.State) -> None:
 @benchmark.option.arg(CURVE_SIZES[0])
 @benchmark.option.arg(CURVE_SIZES[1])
 @benchmark.option.arg(CURVE_SIZES[2])
+@benchmark.option.arg(LARGE_CURVE_SIZES[0])
+@benchmark.option.arg(LARGE_CURVE_SIZES[1])
 @benchmark.option.unit(benchmark.kMillisecond)
 def bench_python_fit_bezier_curve(state: benchmark.State) -> None:
     num_points = state.range(0)
@@ -215,6 +239,8 @@ def bench_python_fit_bezier_curve(state: benchmark.State) -> None:
 @benchmark.option.arg(CURVE_SIZES[0])
 @benchmark.option.arg(CURVE_SIZES[1])
 @benchmark.option.arg(CURVE_SIZES[2])
+@benchmark.option.arg(LARGE_CURVE_SIZES[0])
+@benchmark.option.arg(LARGE_CURVE_SIZES[1])
 @benchmark.option.unit(benchmark.kMillisecond)
 def bench_inferrt_evaluate_bezier_curve(state: benchmark.State) -> None:
     num_points = state.range(0)
@@ -230,6 +256,8 @@ def bench_inferrt_evaluate_bezier_curve(state: benchmark.State) -> None:
 @benchmark.option.arg(CURVE_SIZES[0])
 @benchmark.option.arg(CURVE_SIZES[1])
 @benchmark.option.arg(CURVE_SIZES[2])
+@benchmark.option.arg(LARGE_CURVE_SIZES[0])
+@benchmark.option.arg(LARGE_CURVE_SIZES[1])
 @benchmark.option.unit(benchmark.kMillisecond)
 def bench_scipy_bpoly_evaluate(state: benchmark.State) -> None:
     num_points = state.range(0)
@@ -246,6 +274,8 @@ def bench_scipy_bpoly_evaluate(state: benchmark.State) -> None:
 @benchmark.option.arg(CURVE_SIZES[0])
 @benchmark.option.arg(CURVE_SIZES[1])
 @benchmark.option.arg(CURVE_SIZES[2])
+@benchmark.option.arg(LARGE_CURVE_SIZES[0])
+@benchmark.option.arg(LARGE_CURVE_SIZES[1])
 @benchmark.option.unit(benchmark.kMillisecond)
 def bench_inferrt_make_interp_spline(state: benchmark.State) -> None:
     num_points = state.range(0)
@@ -261,6 +291,8 @@ def bench_inferrt_make_interp_spline(state: benchmark.State) -> None:
 @benchmark.option.arg(CURVE_SIZES[0])
 @benchmark.option.arg(CURVE_SIZES[1])
 @benchmark.option.arg(CURVE_SIZES[2])
+@benchmark.option.arg(LARGE_CURVE_SIZES[0])
+@benchmark.option.arg(LARGE_CURVE_SIZES[1])
 @benchmark.option.unit(benchmark.kMillisecond)
 def bench_scipy_make_interp_spline(state: benchmark.State) -> None:
     num_points = state.range(0)
@@ -270,12 +302,48 @@ def bench_scipy_make_interp_spline(state: benchmark.State) -> None:
     state.items_processed = state.iterations * num_points
 
 
+@benchmark.register(name="InferRTPybind11/evaluate_b_spline")
+@benchmark.option.use_real_time()
+@benchmark.option.arg_name("N")
+@benchmark.option.arg(CURVE_SIZES[0])
+@benchmark.option.arg(CURVE_SIZES[1])
+@benchmark.option.arg(CURVE_SIZES[2])
+@benchmark.option.arg(LARGE_CURVE_SIZES[0])
+@benchmark.option.arg(LARGE_CURVE_SIZES[1])
+@benchmark.option.unit(benchmark.kMillisecond)
+def bench_inferrt_evaluate_b_spline(state: benchmark.State) -> None:
+    num_points = state.range(0)
+    knots, coefficients, x_eval, _, _ = SPLINE_EVAL_DATA[num_points]
+    while state:
+        _store(ops.evaluate_b_spline(knots, coefficients, 3, x_eval))
+    state.items_processed = state.iterations * num_points
+
+
+@benchmark.register(name="Python/scipy.BSpline_evaluate")
+@benchmark.option.use_real_time()
+@benchmark.option.arg_name("N")
+@benchmark.option.arg(CURVE_SIZES[0])
+@benchmark.option.arg(CURVE_SIZES[1])
+@benchmark.option.arg(CURVE_SIZES[2])
+@benchmark.option.arg(LARGE_CURVE_SIZES[0])
+@benchmark.option.arg(LARGE_CURVE_SIZES[1])
+@benchmark.option.unit(benchmark.kMillisecond)
+def bench_scipy_bspline_evaluate(state: benchmark.State) -> None:
+    num_points = state.range(0)
+    _, _, _, x_eval64, scipy_spline = SPLINE_EVAL_DATA[num_points]
+    while state:
+        _store(scipy_spline(x_eval64))
+    state.items_processed = state.iterations * num_points
+
+
 @benchmark.register(name="InferRTPybind11/splprep_s0")
 @benchmark.option.use_real_time()
 @benchmark.option.arg_name("N")
 @benchmark.option.arg(CURVE_SIZES[0])
 @benchmark.option.arg(CURVE_SIZES[1])
 @benchmark.option.arg(CURVE_SIZES[2])
+@benchmark.option.arg(LARGE_CURVE_SIZES[0])
+@benchmark.option.arg(LARGE_CURVE_SIZES[1])
 @benchmark.option.unit(benchmark.kMillisecond)
 def bench_inferrt_splprep_s0(state: benchmark.State) -> None:
     num_points = state.range(0)
@@ -291,6 +359,8 @@ def bench_inferrt_splprep_s0(state: benchmark.State) -> None:
 @benchmark.option.arg(CURVE_SIZES[0])
 @benchmark.option.arg(CURVE_SIZES[1])
 @benchmark.option.arg(CURVE_SIZES[2])
+@benchmark.option.arg(LARGE_CURVE_SIZES[0])
+@benchmark.option.arg(LARGE_CURVE_SIZES[1])
 @benchmark.option.unit(benchmark.kMillisecond)
 def bench_scipy_splprep_s0(state: benchmark.State) -> None:
     num_points = state.range(0)
@@ -306,6 +376,8 @@ def bench_scipy_splprep_s0(state: benchmark.State) -> None:
 @benchmark.option.arg(CURVE_SIZES[0])
 @benchmark.option.arg(CURVE_SIZES[1])
 @benchmark.option.arg(CURVE_SIZES[2])
+@benchmark.option.arg(LARGE_CURVE_SIZES[0])
+@benchmark.option.arg(LARGE_CURVE_SIZES[1])
 @benchmark.option.unit(benchmark.kMillisecond)
 def bench_inferrt_splprep_smooth(state: benchmark.State) -> None:
     num_points = state.range(0)
@@ -322,6 +394,8 @@ def bench_inferrt_splprep_smooth(state: benchmark.State) -> None:
 @benchmark.option.arg(CURVE_SIZES[0])
 @benchmark.option.arg(CURVE_SIZES[1])
 @benchmark.option.arg(CURVE_SIZES[2])
+@benchmark.option.arg(LARGE_CURVE_SIZES[0])
+@benchmark.option.arg(LARGE_CURVE_SIZES[1])
 @benchmark.option.unit(benchmark.kMillisecond)
 def bench_scipy_splprep_smooth(state: benchmark.State) -> None:
     num_points = state.range(0)
