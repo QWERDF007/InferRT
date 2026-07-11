@@ -218,14 +218,14 @@ similarity = 100 * sum(response(feature_i)) / (denominator_per_feature * feature
 
 ## 8. 指令集加速路径
 
-实现中使用 `IRT_SHAPE_TEMPLATE_HAS_SSE2` 编译期宏选择 SSE2 加速路径。x64 或支持 SSE2 的 x86 编译目标会启用该路径；
-其他平台自动使用标量实现，行为保持一致。
+当前实现要求使用 AVX2 编译模板匹配模块。MSVC 目标使用 `/arch:AVX2`，GCC/Clang 目标使用 `-mavx2`；
+非 AVX2 编译环境不再保留旧的 SSE2/标量 fallback。
 
-当前自定义 SSE2 覆盖三段热点：
+当前自定义 AVX2 覆盖三段热点：
 
-- 训练和匹配共用的方向量化：`fillQuantizedLabelsSse2()` 每次处理 4 个 `float` 幅值/角度，合并幅值阈值和掩膜条件。
-- 训练候选点收集：`collectCandidatesSse2()` 每次先过滤 16 个像素，完全无候选的块直接跳过，只对有效 lane 创建候选点。
-- 匹配响应图构建：`fillResponseMapSse2()` 每次处理 16 个方向标签，为 8 个模板方向分别生成响应图。
+- 训练和匹配共用的方向量化：`fillQuantizedLabelsAvx2()` 每次处理 8 个 `float` 幅值/角度，合并幅值阈值和掩膜条件。
+- 训练候选点收集：`collectCandidatesAvx2()` 每次先过滤 32 个像素，完全无候选的块直接跳过，只对有效 lane 创建候选点。
+- 匹配响应图构建：`fillResponseMapAvx2()` 每次处理 32 个方向标签，使用 AVX2 字节 shuffle 直接完成方向响应查表。
 
 OpenCV 的 `Sobel`、`cartToPolar`、`warpAffine` 自身也会按 OpenCV 构建配置使用可用优化。模块层面的自定义指令集加速主要减少：
 

@@ -28,10 +28,12 @@ if (MSVC)
     # /EHa: 启用 C++ 异常处理和 SEH 异常（跨 DLL 异常传播所需）
     # /utf-8: 将源文件和执行字符集设置为 UTF-8
     # /wd4251: 关闭 STL 成员经 DLL 导出时的接口警告
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHa /utf-8 /bigobj")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHa /utf-8 /bigobj /arch:AVX2")
     set(C_WARNING_FLAGS "-W4 /wd4251")
     # set(CXX_WARNING_FLAGS "/permissive-")
 else ()
+    # -mavx2: 启用 AVX2 指令集，供模板匹配等 SIMD 实现使用。
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2")
     set(C_WARNING_FLAGS "-Wall -Wno-unknown-pragmas -Wpointer-arith -Wmissing-declarations -Wredundant-decls -Wmultichar -Wno-unused-local-typedefs -Wunused")
     # 派生类中的虚函数声明中建议使用 override 关键字
     set(CXX_WARNING_FLAGS "-Wsuggest-override")

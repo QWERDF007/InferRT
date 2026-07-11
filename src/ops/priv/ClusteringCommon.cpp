@@ -253,6 +253,241 @@ using NeighborHeapItem = std::pair<double, int64_t>;
     return {lanes[0], lanes[1], lanes[2], lanes[3]};
 }
 
+[[nodiscard]] DistanceBlock4 highDimSquaredEuclideanBlock4(const float *lhs_ptr, const float *rhs0_ptr,
+                                                           const float *rhs1_ptr, const float *rhs2_ptr,
+                                                           const float *rhs3_ptr, int64_t num_features)
+{
+    __m256d sum0    = _mm256_setzero_pd();
+    __m256d sum1    = _mm256_setzero_pd();
+    __m256d sum2    = _mm256_setzero_pd();
+    __m256d sum3    = _mm256_setzero_pd();
+    int64_t feature = 0;
+    for (; feature + 3 < num_features; feature += 4)
+    {
+        const __m256d lhs = loadFloat4AsDouble(lhs_ptr + feature);
+        const auto accumulate = [&](const float *rhs_ptr, __m256d &sum)
+        {
+            const __m256d diff = _mm256_sub_pd(lhs, loadFloat4AsDouble(rhs_ptr + feature));
+            sum                = _mm256_add_pd(sum, _mm256_mul_pd(diff, diff));
+        };
+        accumulate(rhs0_ptr, sum0);
+        accumulate(rhs1_ptr, sum1);
+        accumulate(rhs2_ptr, sum2);
+        accumulate(rhs3_ptr, sum3);
+    }
+
+    DistanceBlock4 result{sumPd256(sum0), sumPd256(sum1), sumPd256(sum2), sumPd256(sum3)};
+    for (; feature < num_features; ++feature)
+    {
+        const double lhs = static_cast<double>(lhs_ptr[feature]);
+        const auto add = [&](const float *rhs_ptr, double &sum)
+        {
+            const double diff = lhs - static_cast<double>(rhs_ptr[feature]);
+            sum += diff * diff;
+        };
+        add(rhs0_ptr, result.first);
+        add(rhs1_ptr, result.second);
+        add(rhs2_ptr, result.third);
+        add(rhs3_ptr, result.fourth);
+    }
+    return result;
+}
+
+[[nodiscard]] DistanceBlock4 highDimManhattanBlock4(const float *lhs_ptr, const float *rhs0_ptr,
+                                                    const float *rhs1_ptr, const float *rhs2_ptr,
+                                                    const float *rhs3_ptr, int64_t num_features)
+{
+    __m256d sum0    = _mm256_setzero_pd();
+    __m256d sum1    = _mm256_setzero_pd();
+    __m256d sum2    = _mm256_setzero_pd();
+    __m256d sum3    = _mm256_setzero_pd();
+    int64_t feature = 0;
+    for (; feature + 3 < num_features; feature += 4)
+    {
+        const __m256d lhs = loadFloat4AsDouble(lhs_ptr + feature);
+        const auto accumulate = [&](const float *rhs_ptr, __m256d &sum)
+        {
+            const __m256d diff = absPd256(_mm256_sub_pd(lhs, loadFloat4AsDouble(rhs_ptr + feature)));
+            sum                = _mm256_add_pd(sum, diff);
+        };
+        accumulate(rhs0_ptr, sum0);
+        accumulate(rhs1_ptr, sum1);
+        accumulate(rhs2_ptr, sum2);
+        accumulate(rhs3_ptr, sum3);
+    }
+
+    DistanceBlock4 result{sumPd256(sum0), sumPd256(sum1), sumPd256(sum2), sumPd256(sum3)};
+    for (; feature < num_features; ++feature)
+    {
+        const double lhs = static_cast<double>(lhs_ptr[feature]);
+        const auto add = [&](const float *rhs_ptr, double &sum)
+        { sum += std::abs(lhs - static_cast<double>(rhs_ptr[feature])); };
+        add(rhs0_ptr, result.first);
+        add(rhs1_ptr, result.second);
+        add(rhs2_ptr, result.third);
+        add(rhs3_ptr, result.fourth);
+    }
+    return result;
+}
+
+[[nodiscard]] DistanceBlock4 highDimChebyshevBlock4(const float *lhs_ptr, const float *rhs0_ptr,
+                                                    const float *rhs1_ptr, const float *rhs2_ptr,
+                                                    const float *rhs3_ptr, int64_t num_features)
+{
+    __m256d max0    = _mm256_setzero_pd();
+    __m256d max1    = _mm256_setzero_pd();
+    __m256d max2    = _mm256_setzero_pd();
+    __m256d max3    = _mm256_setzero_pd();
+    int64_t feature = 0;
+    for (; feature + 3 < num_features; feature += 4)
+    {
+        const __m256d lhs = loadFloat4AsDouble(lhs_ptr + feature);
+        const auto accumulate = [&](const float *rhs_ptr, __m256d &max_value)
+        {
+            const __m256d diff = absPd256(_mm256_sub_pd(lhs, loadFloat4AsDouble(rhs_ptr + feature)));
+            max_value          = _mm256_max_pd(max_value, diff);
+        };
+        accumulate(rhs0_ptr, max0);
+        accumulate(rhs1_ptr, max1);
+        accumulate(rhs2_ptr, max2);
+        accumulate(rhs3_ptr, max3);
+    }
+
+    DistanceBlock4 result{maxPd256(max0), maxPd256(max1), maxPd256(max2), maxPd256(max3)};
+    for (; feature < num_features; ++feature)
+    {
+        const double lhs = static_cast<double>(lhs_ptr[feature]);
+        const auto update = [&](const float *rhs_ptr, double &max_value)
+        { max_value = std::max(max_value, std::abs(lhs - static_cast<double>(rhs_ptr[feature]))); };
+        update(rhs0_ptr, result.first);
+        update(rhs1_ptr, result.second);
+        update(rhs2_ptr, result.third);
+        update(rhs3_ptr, result.fourth);
+    }
+    return result;
+}
+
+[[nodiscard]] DistanceBlock4 highDimMinkowskiP3Block4(const float *lhs_ptr, const float *rhs0_ptr,
+                                                      const float *rhs1_ptr, const float *rhs2_ptr,
+                                                      const float *rhs3_ptr, int64_t num_features)
+{
+    __m256d sum0    = _mm256_setzero_pd();
+    __m256d sum1    = _mm256_setzero_pd();
+    __m256d sum2    = _mm256_setzero_pd();
+    __m256d sum3    = _mm256_setzero_pd();
+    int64_t feature = 0;
+    for (; feature + 3 < num_features; feature += 4)
+    {
+        const __m256d lhs = loadFloat4AsDouble(lhs_ptr + feature);
+        const auto accumulate = [&](const float *rhs_ptr, __m256d &sum)
+        {
+            const __m256d diff   = absPd256(_mm256_sub_pd(lhs, loadFloat4AsDouble(rhs_ptr + feature)));
+            const __m256d diff_2 = _mm256_mul_pd(diff, diff);
+            sum                  = _mm256_add_pd(sum, _mm256_mul_pd(diff_2, diff));
+        };
+        accumulate(rhs0_ptr, sum0);
+        accumulate(rhs1_ptr, sum1);
+        accumulate(rhs2_ptr, sum2);
+        accumulate(rhs3_ptr, sum3);
+    }
+
+    DistanceBlock4 result{sumPd256(sum0), sumPd256(sum1), sumPd256(sum2), sumPd256(sum3)};
+    for (; feature < num_features; ++feature)
+    {
+        const double lhs = static_cast<double>(lhs_ptr[feature]);
+        const auto add = [&](const float *rhs_ptr, double &sum)
+        {
+            const double diff = std::abs(lhs - static_cast<double>(rhs_ptr[feature]));
+            sum += diff * diff * diff;
+        };
+        add(rhs0_ptr, result.first);
+        add(rhs1_ptr, result.second);
+        add(rhs2_ptr, result.third);
+        add(rhs3_ptr, result.fourth);
+    }
+    return result;
+}
+
+[[nodiscard]] DistanceBlock4 highDimDotBlock4(const float *lhs_ptr, const float *rhs0_ptr, const float *rhs1_ptr,
+                                              const float *rhs2_ptr, const float *rhs3_ptr, int64_t num_features)
+{
+    __m256d sum0    = _mm256_setzero_pd();
+    __m256d sum1    = _mm256_setzero_pd();
+    __m256d sum2    = _mm256_setzero_pd();
+    __m256d sum3    = _mm256_setzero_pd();
+    int64_t feature = 0;
+    for (; feature + 3 < num_features; feature += 4)
+    {
+        const __m256d lhs = loadFloat4AsDouble(lhs_ptr + feature);
+        const auto accumulate = [&](const float *rhs_ptr, __m256d &sum)
+        { sum = _mm256_add_pd(sum, _mm256_mul_pd(lhs, loadFloat4AsDouble(rhs_ptr + feature))); };
+        accumulate(rhs0_ptr, sum0);
+        accumulate(rhs1_ptr, sum1);
+        accumulate(rhs2_ptr, sum2);
+        accumulate(rhs3_ptr, sum3);
+    }
+
+    DistanceBlock4 result{sumPd256(sum0), sumPd256(sum1), sumPd256(sum2), sumPd256(sum3)};
+    for (; feature < num_features; ++feature)
+    {
+        const double lhs = static_cast<double>(lhs_ptr[feature]);
+        const auto add = [&](const float *rhs_ptr, double &sum)
+        { sum += lhs * static_cast<double>(rhs_ptr[feature]); };
+        add(rhs0_ptr, result.first);
+        add(rhs1_ptr, result.second);
+        add(rhs2_ptr, result.third);
+        add(rhs3_ptr, result.fourth);
+    }
+    return result;
+}
+
+[[nodiscard]] DistanceBlock4 highDimSearchDistanceBlock4(const float *lhs_ptr, const float *rhs0_ptr,
+                                                         const float *rhs1_ptr, const float *rhs2_ptr,
+                                                         const float *rhs3_ptr, int64_t num_features,
+                                                         ClusteringMetric metric, double minkowski_p)
+{
+    if (metric == ClusteringMetric::Euclidean || (metric == ClusteringMetric::Minkowski && minkowski_p == 2.0))
+    {
+        return highDimSquaredEuclideanBlock4(lhs_ptr, rhs0_ptr, rhs1_ptr, rhs2_ptr, rhs3_ptr, num_features);
+    }
+    if (metric == ClusteringMetric::Manhattan || (metric == ClusteringMetric::Minkowski && minkowski_p == 1.0))
+    {
+        return highDimManhattanBlock4(lhs_ptr, rhs0_ptr, rhs1_ptr, rhs2_ptr, rhs3_ptr, num_features);
+    }
+    if (metric == ClusteringMetric::Chebyshev)
+    {
+        return highDimChebyshevBlock4(lhs_ptr, rhs0_ptr, rhs1_ptr, rhs2_ptr, rhs3_ptr, num_features);
+    }
+    return highDimMinkowskiP3Block4(lhs_ptr, rhs0_ptr, rhs1_ptr, rhs2_ptr, rhs3_ptr, num_features);
+}
+
+[[nodiscard]] double cosineDistanceFromDot(double dot, double lhs_inv_norm, double rhs_inv_norm)
+{
+    if (lhs_inv_norm == 0.0 && rhs_inv_norm == 0.0)
+    {
+        return 0.0;
+    }
+    if (lhs_inv_norm == 0.0 || rhs_inv_norm == 0.0)
+    {
+        return 1.0;
+    }
+    const double similarity = std::clamp(dot * lhs_inv_norm * rhs_inv_norm, -1.0, 1.0);
+    return 1.0 - similarity;
+}
+
+[[nodiscard]] DistanceBlock4 highDimCosineDistanceBlock4(const float *lhs_ptr, const float *rhs0_ptr,
+                                                         const float *rhs1_ptr, const float *rhs2_ptr,
+                                                         const float *rhs3_ptr, int64_t num_features,
+                                                         double lhs_inv_norm, double rhs_inv0, double rhs_inv1,
+                                                         double rhs_inv2, double rhs_inv3)
+{
+    DistanceBlock4 dots = highDimDotBlock4(lhs_ptr, rhs0_ptr, rhs1_ptr, rhs2_ptr, rhs3_ptr, num_features);
+    return {cosineDistanceFromDot(dots.first, lhs_inv_norm, rhs_inv0),
+            cosineDistanceFromDot(dots.second, lhs_inv_norm, rhs_inv1),
+            cosineDistanceFromDot(dots.third, lhs_inv_norm, rhs_inv2),
+            cosineDistanceFromDot(dots.fourth, lhs_inv_norm, rhs_inv3)};
+}
+
 template <typename LoadRhsFeature>
 [[nodiscard]] __m256d lowDimSearchDistance4(const float *samples, int64_t num_features, int64_t lhs,
                                             LoadRhsFeature load_rhs_feature, ClusteringMetric metric,
@@ -304,6 +539,28 @@ template <typename LoadRhsFeature>
 }
 
 #endif
+
+[[nodiscard]] int maskFromDistanceBlock4(const DistanceBlock4 &distances, double search_radius)
+{
+    int mask = 0;
+    if (distances.first <= search_radius)
+    {
+        mask |= 1;
+    }
+    if (distances.second <= search_radius)
+    {
+        mask |= 2;
+    }
+    if (distances.third <= search_radius)
+    {
+        mask |= 4;
+    }
+    if (distances.fourth <= search_radius)
+    {
+        mask |= 8;
+    }
+    return mask;
+}
 
 [[nodiscard]] double manhattanDistanceUnchecked(const float *samples, int64_t lhs, int64_t rhs, int64_t num_features)
 {
@@ -562,10 +819,38 @@ bool SearchDistanceCalculator::canUseBlock4() const
 DistanceBlock4 SearchDistanceCalculator::block4(int64_t lhs, int64_t first_rhs) const
 {
 #if IRT_CLUSTERING_COMMON_HAS_AVX2
-    if (num_features_ < 4 && canUseBlock4())
+    if (canUseBlock4())
     {
-        const auto load_rhs_feature = [&](int64_t feature)
-        { return loadContiguousFeature4(samples_, num_features_, first_rhs, feature); };
+        if (num_features_ < 4)
+        {
+            const auto load_rhs_feature = [&](int64_t feature)
+            { return loadContiguousFeature4(samples_, num_features_, first_rhs, feature); };
+            if (metric_ == ClusteringMetric::Cosine)
+            {
+                const double lhs_inv_norm = (*inverse_norms_)[static_cast<size_t>(lhs)];
+                const double rhs_inv0     = (*inverse_norms_)[static_cast<size_t>(first_rhs)];
+                const double rhs_inv1     = (*inverse_norms_)[static_cast<size_t>(first_rhs + 1)];
+                const double rhs_inv2     = (*inverse_norms_)[static_cast<size_t>(first_rhs + 2)];
+                const double rhs_inv3     = (*inverse_norms_)[static_cast<size_t>(first_rhs + 3)];
+                if (lhs_inv_norm != 0.0 && rhs_inv0 != 0.0 && rhs_inv1 != 0.0 && rhs_inv2 != 0.0
+                    && rhs_inv3 != 0.0)
+                {
+                    return storeDistanceBlock4(
+                        lowDimCosineDistance4(samples_, num_features_, lhs, load_rhs_feature, lhs_inv_norm,
+                                              _mm256_set_pd(rhs_inv3, rhs_inv2, rhs_inv1, rhs_inv0)));
+                }
+                return {(*this)(lhs, first_rhs), (*this)(lhs, first_rhs + 1), (*this)(lhs, first_rhs + 2),
+                        (*this)(lhs, first_rhs + 3)};
+            }
+            return storeDistanceBlock4(
+                lowDimSearchDistance4(samples_, num_features_, lhs, load_rhs_feature, metric_, minkowski_p_));
+        }
+
+        const float *lhs_ptr  = samples_ + lhs * num_features_;
+        const float *rhs0_ptr = samples_ + first_rhs * num_features_;
+        const float *rhs1_ptr = rhs0_ptr + num_features_;
+        const float *rhs2_ptr = rhs1_ptr + num_features_;
+        const float *rhs3_ptr = rhs2_ptr + num_features_;
         if (metric_ == ClusteringMetric::Cosine)
         {
             const double lhs_inv_norm = (*inverse_norms_)[static_cast<size_t>(lhs)];
@@ -573,18 +858,11 @@ DistanceBlock4 SearchDistanceCalculator::block4(int64_t lhs, int64_t first_rhs) 
             const double rhs_inv1     = (*inverse_norms_)[static_cast<size_t>(first_rhs + 1)];
             const double rhs_inv2     = (*inverse_norms_)[static_cast<size_t>(first_rhs + 2)];
             const double rhs_inv3     = (*inverse_norms_)[static_cast<size_t>(first_rhs + 3)];
-            if (lhs_inv_norm != 0.0 && rhs_inv0 != 0.0 && rhs_inv1 != 0.0 && rhs_inv2 != 0.0 && rhs_inv3 != 0.0)
-            {
-                return storeDistanceBlock4(
-                    lowDimCosineDistance4(samples_, num_features_, lhs, load_rhs_feature, lhs_inv_norm,
-                                          _mm256_set_pd(rhs_inv3, rhs_inv2, rhs_inv1, rhs_inv0)));
-            }
+            return highDimCosineDistanceBlock4(lhs_ptr, rhs0_ptr, rhs1_ptr, rhs2_ptr, rhs3_ptr, num_features_,
+                                               lhs_inv_norm, rhs_inv0, rhs_inv1, rhs_inv2, rhs_inv3);
         }
-        else
-        {
-            return storeDistanceBlock4(
-                lowDimSearchDistance4(samples_, num_features_, lhs, load_rhs_feature, metric_, minkowski_p_));
-        }
+        return highDimSearchDistanceBlock4(lhs_ptr, rhs0_ptr, rhs1_ptr, rhs2_ptr, rhs3_ptr, num_features_, metric_,
+                                           minkowski_p_);
     }
 #endif
     return {(*this)(lhs, first_rhs), (*this)(lhs, first_rhs + 1), (*this)(lhs, first_rhs + 2),
@@ -594,10 +872,38 @@ DistanceBlock4 SearchDistanceCalculator::block4(int64_t lhs, int64_t first_rhs) 
 DistanceBlock4 SearchDistanceCalculator::indexedBlock4(int64_t lhs, const int64_t *rhs_indices) const
 {
 #if IRT_CLUSTERING_COMMON_HAS_AVX2
-    if (num_features_ < 4 && canUseBlock4())
+    if (canUseBlock4())
     {
-        const auto load_rhs_feature = [&](int64_t feature)
-        { return loadIndexedFeature4(samples_, num_features_, rhs_indices, feature); };
+        if (num_features_ < 4)
+        {
+            const auto load_rhs_feature = [&](int64_t feature)
+            { return loadIndexedFeature4(samples_, num_features_, rhs_indices, feature); };
+            if (metric_ == ClusteringMetric::Cosine)
+            {
+                const double lhs_inv_norm = (*inverse_norms_)[static_cast<size_t>(lhs)];
+                const double rhs_inv0     = (*inverse_norms_)[static_cast<size_t>(rhs_indices[0])];
+                const double rhs_inv1     = (*inverse_norms_)[static_cast<size_t>(rhs_indices[1])];
+                const double rhs_inv2     = (*inverse_norms_)[static_cast<size_t>(rhs_indices[2])];
+                const double rhs_inv3     = (*inverse_norms_)[static_cast<size_t>(rhs_indices[3])];
+                if (lhs_inv_norm != 0.0 && rhs_inv0 != 0.0 && rhs_inv1 != 0.0 && rhs_inv2 != 0.0
+                    && rhs_inv3 != 0.0)
+                {
+                    return storeDistanceBlock4(
+                        lowDimCosineDistance4(samples_, num_features_, lhs, load_rhs_feature, lhs_inv_norm,
+                                              _mm256_set_pd(rhs_inv3, rhs_inv2, rhs_inv1, rhs_inv0)));
+                }
+                return {(*this)(lhs, rhs_indices[0]), (*this)(lhs, rhs_indices[1]), (*this)(lhs, rhs_indices[2]),
+                        (*this)(lhs, rhs_indices[3])};
+            }
+            return storeDistanceBlock4(
+                lowDimSearchDistance4(samples_, num_features_, lhs, load_rhs_feature, metric_, minkowski_p_));
+        }
+
+        const float *lhs_ptr  = samples_ + lhs * num_features_;
+        const float *rhs0_ptr = samples_ + rhs_indices[0] * num_features_;
+        const float *rhs1_ptr = samples_ + rhs_indices[1] * num_features_;
+        const float *rhs2_ptr = samples_ + rhs_indices[2] * num_features_;
+        const float *rhs3_ptr = samples_ + rhs_indices[3] * num_features_;
         if (metric_ == ClusteringMetric::Cosine)
         {
             const double lhs_inv_norm = (*inverse_norms_)[static_cast<size_t>(lhs)];
@@ -605,18 +911,11 @@ DistanceBlock4 SearchDistanceCalculator::indexedBlock4(int64_t lhs, const int64_
             const double rhs_inv1     = (*inverse_norms_)[static_cast<size_t>(rhs_indices[1])];
             const double rhs_inv2     = (*inverse_norms_)[static_cast<size_t>(rhs_indices[2])];
             const double rhs_inv3     = (*inverse_norms_)[static_cast<size_t>(rhs_indices[3])];
-            if (lhs_inv_norm != 0.0 && rhs_inv0 != 0.0 && rhs_inv1 != 0.0 && rhs_inv2 != 0.0 && rhs_inv3 != 0.0)
-            {
-                return storeDistanceBlock4(
-                    lowDimCosineDistance4(samples_, num_features_, lhs, load_rhs_feature, lhs_inv_norm,
-                                          _mm256_set_pd(rhs_inv3, rhs_inv2, rhs_inv1, rhs_inv0)));
-            }
+            return highDimCosineDistanceBlock4(lhs_ptr, rhs0_ptr, rhs1_ptr, rhs2_ptr, rhs3_ptr, num_features_,
+                                               lhs_inv_norm, rhs_inv0, rhs_inv1, rhs_inv2, rhs_inv3);
         }
-        else
-        {
-            return storeDistanceBlock4(
-                lowDimSearchDistance4(samples_, num_features_, lhs, load_rhs_feature, metric_, minkowski_p_));
-        }
+        return highDimSearchDistanceBlock4(lhs_ptr, rhs0_ptr, rhs1_ptr, rhs2_ptr, rhs3_ptr, num_features_, metric_,
+                                           minkowski_p_);
     }
 #endif
     return {(*this)(lhs, rhs_indices[0]), (*this)(lhs, rhs_indices[1]), (*this)(lhs, rhs_indices[2]),
@@ -625,49 +924,41 @@ DistanceBlock4 SearchDistanceCalculator::indexedBlock4(int64_t lhs, const int64_
 
 int SearchDistanceCalculator::withinRadiusMask4(int64_t lhs, int64_t first_rhs, double search_radius) const
 {
+#if IRT_CLUSTERING_COMMON_HAS_AVX2
+    if (num_features_ >= 4 && canUseBlock4())
+    {
+        if (metric_ == ClusteringMetric::Euclidean
+            || (metric_ == ClusteringMetric::Minkowski && minkowski_p_ == 2.0))
+        {
+            return maskFromDistanceBlock4(block4(lhs, first_rhs), search_radius);
+        }
+        return maskFromDistanceBlock4({(*this)(lhs, first_rhs), (*this)(lhs, first_rhs + 1),
+                                       (*this)(lhs, first_rhs + 2), (*this)(lhs, first_rhs + 3)},
+                                      search_radius);
+    }
+#endif
     const DistanceBlock4 distances = block4(lhs, first_rhs);
-    int                  mask      = 0;
-    if (distances.first <= search_radius)
-    {
-        mask |= 1;
-    }
-    if (distances.second <= search_radius)
-    {
-        mask |= 2;
-    }
-    if (distances.third <= search_radius)
-    {
-        mask |= 4;
-    }
-    if (distances.fourth <= search_radius)
-    {
-        mask |= 8;
-    }
-    return mask;
+    return maskFromDistanceBlock4(distances, search_radius);
 }
 
 int SearchDistanceCalculator::indexedWithinRadiusMask4(int64_t lhs, const int64_t *rhs_indices,
                                                        double search_radius) const
 {
+#if IRT_CLUSTERING_COMMON_HAS_AVX2
+    if (num_features_ >= 4 && canUseBlock4())
+    {
+        if (metric_ == ClusteringMetric::Euclidean
+            || (metric_ == ClusteringMetric::Minkowski && minkowski_p_ == 2.0))
+        {
+            return maskFromDistanceBlock4(indexedBlock4(lhs, rhs_indices), search_radius);
+        }
+        return maskFromDistanceBlock4({(*this)(lhs, rhs_indices[0]), (*this)(lhs, rhs_indices[1]),
+                                       (*this)(lhs, rhs_indices[2]), (*this)(lhs, rhs_indices[3])},
+                                      search_radius);
+    }
+#endif
     const DistanceBlock4 distances = indexedBlock4(lhs, rhs_indices);
-    int                  mask      = 0;
-    if (distances.first <= search_radius)
-    {
-        mask |= 1;
-    }
-    if (distances.second <= search_radius)
-    {
-        mask |= 2;
-    }
-    if (distances.third <= search_radius)
-    {
-        mask |= 4;
-    }
-    if (distances.fourth <= search_radius)
-    {
-        mask |= 8;
-    }
-    return mask;
+    return maskFromDistanceBlock4(distances, search_radius);
 }
 
 namespace {

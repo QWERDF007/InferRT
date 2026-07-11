@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -20,12 +21,10 @@
 #include <string>
 #include <utility>
 
-#if defined(_M_X64) || defined(__SSE2__) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
-#define IRT_SHAPE_TEMPLATE_HAS_SSE2 1
-#include <emmintrin.h>
-#else
-#define IRT_SHAPE_TEMPLATE_HAS_SSE2 0
+#if !defined(_MSC_VER) && !defined(__AVX2__)
+#error "ShapeTemplateMatcher requires AVX2. Compile this target with -mavx2 or an equivalent option."
 #endif
+#include <immintrin.h>
 
 namespace fs = std::filesystem;
 
@@ -296,41 +295,18 @@ int quantizeAngle(float angle_degrees) noexcept
 }
 
 /**
- * @brief 使用标量路径填充方向标签图。
- */
-void fillQuantizedLabelsScalar(const cv::Mat &magnitude, const cv::Mat &angle, const cv::Mat &mask, float threshold,
-                               cv::Mat &labels)
-{
-    for (int y = 0; y < labels.rows; ++y)
-    {
-        const auto *mag_row   = magnitude.ptr<float>(y);
-        const auto *angle_row = angle.ptr<float>(y);
-        const auto *mask_row  = mask.ptr<unsigned char>(y);
-        auto       *label_row = labels.ptr<unsigned char>(y);
-        for (int x = 0; x < labels.cols; ++x)
-        {
-            if (mask_row[x] != 0 && mag_row[x] >= threshold)
-            {
-                label_row[x] = static_cast<unsigned char>(quantizeAngle(angle_row[x]));
-            }
-        }
-    }
-}
-
-#if IRT_SHAPE_TEMPLATE_HAS_SSE2
-/**
- * @brief 使用 SSE2 批量量化梯度方向标签。
+ * @brief 使用 AVX2 批量量化梯度方向标签。
  *
- * 每次读取 4 个 ``float`` 方向角，通过 8 个阈值比较得到方向 bin，避免训练阶段逐点调用
+ * 每次读取 8 个 ``float`` 方向角，通过 8 个阈值比较得到方向 bin，避免训练阶段逐点调用
  * ``floor``。掩膜和幅值阈值仍以位掩码方式合并，保证无效点写为 ``kInvalidLabel``。
  */
-void fillQuantizedLabelsSse2(const cv::Mat &magnitude, const cv::Mat &angle, const cv::Mat &mask, float threshold,
+void fillQuantizedLabelsAvx2(const cv::Mat &magnitude, const cv::Mat &angle, const cv::Mat &mask, float threshold,
                              cv::Mat &labels)
 {
-    const __m128 threshold_vec = _mm_set1_ps(threshold);
-    const std::array<__m128, kOrientationBins> angle_thresholds{
-        _mm_set1_ps(22.5f),  _mm_set1_ps(67.5f),  _mm_set1_ps(112.5f), _mm_set1_ps(157.5f),
-        _mm_set1_ps(202.5f), _mm_set1_ps(247.5f), _mm_set1_ps(292.5f), _mm_set1_ps(337.5f),
+    const __m256 threshold_vec = _mm256_set1_ps(threshold);
+    const std::array<__m256, kOrientationBins> angle_thresholds{
+        _mm256_set1_ps(22.5f),  _mm256_set1_ps(67.5f),  _mm256_set1_ps(112.5f), _mm256_set1_ps(157.5f),
+        _mm256_set1_ps(202.5f), _mm256_set1_ps(247.5f), _mm256_set1_ps(292.5f), _mm256_set1_ps(337.5f),
     };
 
     for (int y = 0; y < labels.rows; ++y)
@@ -341,28 +317,29 @@ void fillQuantizedLabelsSse2(const cv::Mat &magnitude, const cv::Mat &angle, con
         auto       *label_row = labels.ptr<unsigned char>(y);
 
         int x = 0;
-        for (; x <= labels.cols - 4; x += 4)
+        for (; x <= labels.cols - 8; x += 8)
         {
-            const __m128 mag_values   = _mm_loadu_ps(mag_row + x);
-            const int    valid_mag    = _mm_movemask_ps(_mm_cmpge_ps(mag_values, threshold_vec));
-            const __m128 angle_values = _mm_loadu_ps(angle_row + x);
+            const __m256 mag_values   = _mm256_loadu_ps(mag_row + x);
+            const int    valid_mag    = _mm256_movemask_ps(_mm256_cmp_ps(mag_values, threshold_vec, _CMP_GE_OQ));
+            const __m256 angle_values = _mm256_loadu_ps(angle_row + x);
 
-            int labels4[4]{0, 0, 0, 0};
+            int labels8[8]{0, 0, 0, 0, 0, 0, 0, 0};
             for (int threshold_index = 0; threshold_index < kOrientationBins; ++threshold_index)
             {
-                const int ge_mask = _mm_movemask_ps(_mm_cmpge_ps(angle_values, angle_thresholds[threshold_index]));
-                for (int lane = 0; lane < 4; ++lane)
+                const int ge_mask = _mm256_movemask_ps(
+                    _mm256_cmp_ps(angle_values, angle_thresholds[threshold_index], _CMP_GE_OQ));
+                for (int lane = 0; lane < 8; ++lane)
                 {
-                    labels4[lane] += (ge_mask >> lane) & 1;
+                    labels8[lane] += (ge_mask >> lane) & 1;
                 }
             }
 
-            for (int lane = 0; lane < 4; ++lane)
+            for (int lane = 0; lane < 8; ++lane)
             {
                 if (((valid_mag >> lane) & 1) != 0 && mask_row[x + lane] != 0)
                 {
                     label_row[x + lane]
-                        = static_cast<unsigned char>(labels4[lane] == kOrientationBins ? 0 : labels4[lane]);
+                        = static_cast<unsigned char>(labels8[lane] == kOrientationBins ? 0 : labels8[lane]);
                 }
             }
         }
@@ -376,7 +353,6 @@ void fillQuantizedLabelsSse2(const cv::Mat &magnitude, const cv::Mat &angle, con
         }
     }
 }
-#endif
 
 /**
  * @brief 计算图像梯度幅值、方向角和量化方向标签。
@@ -399,11 +375,7 @@ QuantizedGradient computeQuantizedGradient(const cv::Mat &image, const cv::Mat &
     cv::cartToPolar(grad_x, grad_y, gradient.magnitude, gradient.angle, true);
     gradient.labels = cv::Mat(gray.size(), CV_8UC1, cv::Scalar(kInvalidLabel));
 
-#if IRT_SHAPE_TEMPLATE_HAS_SSE2
-    fillQuantizedLabelsSse2(gradient.magnitude, gradient.angle, mask8, weak_threshold, gradient.labels);
-#else
-    fillQuantizedLabelsScalar(gradient.magnitude, gradient.angle, mask8, weak_threshold, gradient.labels);
-#endif
+    fillQuantizedLabelsAvx2(gradient.magnitude, gradient.angle, mask8, weak_threshold, gradient.labels);
     return gradient;
 }
 
@@ -428,50 +400,19 @@ void sortCandidates(std::vector<Candidate> &candidates)
 }
 
 /**
- * @brief 使用标量路径收集模板训练候选点。
- */
-std::vector<Candidate> collectCandidatesScalar(const QuantizedGradient &gradient, const cv::Mat &mask, float threshold)
-{
-    const cv::Mat mask8 = normalizeMask(mask, gradient.labels.size(), "mask");
-
-    std::vector<Candidate> candidates;
-    for (int y = 1; y < gradient.labels.rows - 1; ++y)
-    {
-        const auto *mag_row   = gradient.magnitude.ptr<float>(y);
-        const auto *angle_row = gradient.angle.ptr<float>(y);
-        const auto *mask_row  = mask8.ptr<unsigned char>(y);
-        const auto *label_row = gradient.labels.ptr<unsigned char>(y);
-        for (int x = 1; x < gradient.labels.cols - 1; ++x)
-        {
-            if (mask_row[x] == 0 || label_row[x] == kInvalidLabel || mag_row[x] < threshold)
-            {
-                continue;
-            }
-
-            candidates.push_back(
-                Candidate{x, y, static_cast<int>(label_row[x]), angle_row[x], std::max(mag_row[x], 0.0f)});
-        }
-    }
-
-    sortCandidates(candidates);
-    return candidates;
-}
-
-#if IRT_SHAPE_TEMPLATE_HAS_SSE2
-/**
- * @brief 使用 SSE2 块级过滤收集模板训练候选点。
+ * @brief 使用 AVX2 块级过滤收集模板训练候选点。
  *
- * 每 16 个像素先用 SIMD 合并 ``label != invalid``、``mask != 0`` 和 ``magnitude >= threshold`` 三个条件。
+ * 每 32 个像素先用 SIMD 合并 ``label != invalid``、``mask != 0`` 和 ``magnitude >= threshold`` 三个条件。
  * 对完全无候选的块直接跳过，只对有效 lane 读取角度和幅值并创建 ``Candidate``。
  */
-std::vector<Candidate> collectCandidatesSse2(const QuantizedGradient &gradient, const cv::Mat &mask, float threshold)
+std::vector<Candidate> collectCandidatesAvx2(const QuantizedGradient &gradient, const cv::Mat &mask, float threshold)
 {
     const cv::Mat mask8 = normalizeMask(mask, gradient.labels.size(), "mask");
 
     std::vector<Candidate> candidates;
-    const __m128  threshold_vec = _mm_set1_ps(threshold);
-    const __m128i invalid_vec   = _mm_set1_epi8(static_cast<char>(kInvalidLabel));
-    const __m128i zero_vec      = _mm_setzero_si128();
+    const __m256  threshold_vec = _mm256_set1_ps(threshold);
+    const __m256i invalid_vec   = _mm256_set1_epi8(static_cast<char>(kInvalidLabel));
+    const __m256i zero_vec      = _mm256_setzero_si256();
 
     for (int y = 1; y < gradient.labels.rows - 1; ++y)
     {
@@ -481,15 +422,16 @@ std::vector<Candidate> collectCandidatesSse2(const QuantizedGradient &gradient, 
         const auto *label_row = gradient.labels.ptr<unsigned char>(y);
 
         int x = 1;
-        for (; x <= gradient.labels.cols - 17; x += 16)
+        for (; x <= gradient.labels.cols - 33; x += 32)
         {
-            const __m128i label_values = _mm_loadu_si128(reinterpret_cast<const __m128i *>(label_row + x));
-            const __m128i mask_values  = _mm_loadu_si128(reinterpret_cast<const __m128i *>(mask_row + x));
-            const __m128i label_valid  = _mm_andnot_si128(_mm_cmpeq_epi8(label_values, invalid_vec),
-                                                         _mm_set1_epi8(static_cast<char>(0xFF)));
-            const __m128i mask_valid
-                = _mm_andnot_si128(_mm_cmpeq_epi8(mask_values, zero_vec), _mm_set1_epi8(static_cast<char>(0xFF)));
-            const int byte_valid = _mm_movemask_epi8(_mm_and_si128(label_valid, mask_valid));
+            const __m256i label_values = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(label_row + x));
+            const __m256i mask_values  = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(mask_row + x));
+            const __m256i label_valid  = _mm256_andnot_si256(_mm256_cmpeq_epi8(label_values, invalid_vec),
+                                                            _mm256_set1_epi8(static_cast<char>(0xFF)));
+            const __m256i mask_valid
+                = _mm256_andnot_si256(_mm256_cmpeq_epi8(mask_values, zero_vec),
+                                      _mm256_set1_epi8(static_cast<char>(0xFF)));
+            const int byte_valid = _mm256_movemask_epi8(_mm256_and_si256(label_valid, mask_valid));
             if (byte_valid == 0)
             {
                 continue;
@@ -498,25 +440,24 @@ std::vector<Candidate> collectCandidatesSse2(const QuantizedGradient &gradient, 
             int mag_valid = 0;
             for (int group = 0; group < 4; ++group)
             {
-                const __m128 mag_values = _mm_loadu_ps(mag_row + x + group * 4);
-                mag_valid |= _mm_movemask_ps(_mm_cmpge_ps(mag_values, threshold_vec)) << (group * 4);
+                const __m256 mag_values = _mm256_loadu_ps(mag_row + x + group * 8);
+                mag_valid |= _mm256_movemask_ps(_mm256_cmp_ps(mag_values, threshold_vec, _CMP_GE_OQ))
+                          << (group * 8);
             }
 
-            const int valid = byte_valid & mag_valid;
+            uint32_t valid = static_cast<uint32_t>(byte_valid) & static_cast<uint32_t>(mag_valid);
             if (valid == 0)
             {
                 continue;
             }
 
-            for (int lane = 0; lane < 16; ++lane)
+            while (valid != 0)
             {
-                if (((valid >> lane) & 1) == 0)
-                {
-                    continue;
-                }
+                const int lane = static_cast<int>(std::countr_zero(valid));
                 const int col = x + lane;
                 candidates.push_back(
                     Candidate{col, y, static_cast<int>(label_row[col]), angle_row[col], std::max(mag_row[col], 0.0f)});
+                valid &= valid - 1;
             }
         }
 
@@ -534,7 +475,6 @@ std::vector<Candidate> collectCandidatesSse2(const QuantizedGradient &gradient, 
     sortCandidates(candidates);
     return candidates;
 }
-#endif
 
 /**
  * @brief 从梯度量化图中收集模板训练候选点。
@@ -545,11 +485,7 @@ std::vector<Candidate> collectCandidatesSse2(const QuantizedGradient &gradient, 
  */
 std::vector<Candidate> collectCandidates(const QuantizedGradient &gradient, const cv::Mat &mask, float threshold)
 {
-#if IRT_SHAPE_TEMPLATE_HAS_SSE2
-    return collectCandidatesSse2(gradient, mask, threshold);
-#else
-    return collectCandidatesScalar(gradient, mask, threshold);
-#endif
+    return collectCandidatesAvx2(gradient, mask, threshold);
 }
 
 /**
@@ -738,54 +674,33 @@ int responseDenominatorPerFeature(int max_label_difference) noexcept
 }
 
 /**
- * @brief 使用标量路径生成单个模板方向的响应图。
- */
-void fillResponseMapScalar(const cv::Mat &labels, cv::Mat &response, int template_label,
-                           const ResponseTable &table)
-{
-    for (int y = 0; y < labels.rows; ++y)
-    {
-        const auto *src = labels.ptr<unsigned char>(y);
-        auto       *dst = response.ptr<unsigned char>(y);
-        for (int x = 0; x < labels.cols; ++x)
-        {
-            const auto label = src[x];
-            dst[x] = label < kOrientationBins ? table[template_label][label] : 0;
-        }
-    }
-}
-
-#if IRT_SHAPE_TEMPLATE_HAS_SSE2
-/**
- * @brief 使用 SSE2 指令生成单个模板方向的响应图。
+ * @brief 使用 AVX2 字节查表生成单个模板方向的响应图。
  *
- * SSE2 没有字节查表指令，这里按 8 个方向逐一比较并 OR 合并结果；每次处理 16 个像素。
+ * AVX2 的 ``vpshufb`` 以 128-bit lane 为单位做字节查表。源图有效标签只使用 ``[0, 7]``，
+ * 无效标签为 ``255`` 且最高位为 1，查表时会自然写出 0。
  */
-void fillResponseMapSse2(const cv::Mat &labels, cv::Mat &response, int template_label,
+void fillResponseMapAvx2(const cv::Mat &labels, cv::Mat &response, int template_label,
                          const ResponseTable &table)
 {
+    alignas(32) std::array<unsigned char, 32> lookup_values{};
+    for (int label = 0; label < kOrientationBins; ++label)
+    {
+        lookup_values[static_cast<size_t>(label)]      = table[template_label][label];
+        lookup_values[static_cast<size_t>(label) + 16] = table[template_label][label];
+    }
+    const __m256i lookup = _mm256_load_si256(reinterpret_cast<const __m256i *>(lookup_values.data()));
+
     for (int y = 0; y < labels.rows; ++y)
     {
         const auto *src = labels.ptr<unsigned char>(y);
         auto       *dst = response.ptr<unsigned char>(y);
 
         int x = 0;
-        for (; x <= labels.cols - 16; x += 16)
+        for (; x <= labels.cols - 32; x += 32)
         {
-            const __m128i source = _mm_loadu_si128(reinterpret_cast<const __m128i *>(src + x));
-            __m128i       out    = _mm_setzero_si128();
-            for (int label = 0; label < kOrientationBins; ++label)
-            {
-                const auto value = table[template_label][label];
-                if (value == 0)
-                {
-                    continue;
-                }
-
-                const __m128i eq = _mm_cmpeq_epi8(source, _mm_set1_epi8(static_cast<char>(label)));
-                out              = _mm_or_si128(out, _mm_and_si128(eq, _mm_set1_epi8(static_cast<char>(value))));
-            }
-            _mm_storeu_si128(reinterpret_cast<__m128i *>(dst + x), out);
+            const __m256i source = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(src + x));
+            const __m256i out    = _mm256_shuffle_epi8(lookup, source);
+            _mm256_storeu_si256(reinterpret_cast<__m256i *>(dst + x), out);
         }
 
         for (; x < labels.cols; ++x)
@@ -795,7 +710,6 @@ void fillResponseMapSse2(const cv::Mat &labels, cv::Mat &response, int template_
         }
     }
 }
-#endif
 
 /**
  * @brief 为源图方向标签预计算 8 张响应图。
@@ -812,11 +726,7 @@ ResponseMaps buildResponseMaps(const cv::Mat &labels, int max_label_difference)
     for (int label = 0; label < kOrientationBins; ++label)
     {
         response_maps.maps[label].create(labels.size(), CV_8UC1);
-#if IRT_SHAPE_TEMPLATE_HAS_SSE2
-        fillResponseMapSse2(labels, response_maps.maps[label], label, table);
-#else
-        fillResponseMapScalar(labels, response_maps.maps[label], label, table);
-#endif
+        fillResponseMapAvx2(labels, response_maps.maps[label], label, table);
     }
     return response_maps;
 }
