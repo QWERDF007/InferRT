@@ -7,6 +7,7 @@
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/core/Status.h>
 #include <inferrt/features/ShapeTemplateMatcher.hpp>
+#include <inferrt/features/scalar/ShapeTemplateMatcher.hpp>
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -427,4 +428,153 @@ TEST(ShapeTemplateMatcherTest, MakeAngleScaleVariantsValidatesRanges)
     expectIrtExceptionCode(
         [&] { irt::features::ShapeTemplateMatcher::makeAngleScaleVariants(0.0f, 90.0f, 1.0f, 0.0f, 1.0f); },
         irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+/** @brief AVX2 与标量实现应在训练、掩膜匹配及 YAML 加载后给出完全相同的结果。 */
+TEST(ShapeTemplateMatcherParityTest, Avx2AndScalarProduceIdenticalTemplatesAndMatches)
+{
+    auto config = fastConfig();
+    config.max_label_difference = 1;
+    config.match_threshold = 75.0f;
+    config.scan_step = 1;
+
+    const auto object = makeLShape(50);
+    const auto alternate = makeTShape(50);
+    cv::Mat scene(137, 151, CV_8UC1, cv::Scalar(0));
+    object.copyTo(scene(cv::Rect(37, 41, object.cols, object.rows)));
+    cv::Mat search_mask(scene.size(), CV_8UC1, cv::Scalar(255));
+    cv::rectangle(search_mask, cv::Rect(0, 0, 12, scene.rows), cv::Scalar(0), cv::FILLED);
+
+    irt::features::ShapeTemplateMatcher avx2(config);
+    irt::features::scalar::ShapeTemplateMatcher scalar(config);
+    ASSERT_EQ(avx2.addTemplate(object, "bracket"), scalar.addTemplate(object, "bracket"));
+    ASSERT_EQ(avx2.addTemplate(alternate, "tee"), scalar.addTemplate(alternate, "tee"));
+    ASSERT_EQ(avx2.numTemplates(), scalar.numTemplates());
+
+    for (const auto &class_id : avx2.classIds())
+    {
+        ASSERT_EQ(avx2.numTemplates(class_id), scalar.numTemplates(class_id));
+        for (int id = 0; id < avx2.numTemplates(class_id); ++id)
+        {
+            const auto &a = avx2.getTemplate(class_id, id);
+            const auto &b = scalar.getTemplate(class_id, id);
+            ASSERT_EQ(a.features.size(), b.features.size());
+            EXPECT_EQ(a.width, b.width);
+            EXPECT_EQ(a.height, b.height);
+            for (size_t i = 0; i < a.features.size(); ++i)
+            {
+                EXPECT_EQ(a.features[i].x, b.features[i].x);
+                EXPECT_EQ(a.features[i].y, b.features[i].y);
+                EXPECT_EQ(a.features[i].label, b.features[i].label);
+                EXPECT_FLOAT_EQ(a.features[i].angle_degrees, b.features[i].angle_degrees);
+            }
+        }
+    }
+
+    const auto avx2_matches = avx2.match(scene, 75.0f, {}, search_mask);
+    const auto scalar_matches = scalar.match(scene, 75.0f, {}, search_mask);
+    ASSERT_EQ(avx2_matches.size(), scalar_matches.size());
+    for (size_t i = 0; i < avx2_matches.size(); ++i)
+    {
+        const auto &a = avx2_matches[i];
+        const auto &b = scalar_matches[i];
+        EXPECT_EQ(a.x, b.x);
+        EXPECT_EQ(a.y, b.y);
+        EXPECT_EQ(a.width, b.width);
+        EXPECT_EQ(a.height, b.height);
+        EXPECT_FLOAT_EQ(a.similarity, b.similarity);
+        EXPECT_EQ(a.class_id, b.class_id);
+        EXPECT_EQ(a.template_id, b.template_id);
+        EXPECT_FLOAT_EQ(a.angle_degrees, b.angle_degrees);
+        EXPECT_FLOAT_EQ(a.scale, b.scale);
+    }
+
+    TempDir temp;
+    const auto template_file = temp.path() / "scalar_templates.yaml";
+    scalar.save(template_file);
+    irt::features::ShapeTemplateMatcher loaded;
+    loaded.load(template_file);
+    const auto loaded_matches = loaded.match(scene, 75.0f, {}, search_mask);
+    ASSERT_EQ(avx2_matches.size(), loaded_matches.size());
+    for (size_t i = 0; i < avx2_matches.size(); ++i)
+        EXPECT_FLOAT_EQ(avx2_matches[i].similarity, loaded_matches[i].similarity);
+}
+namespace {
+
+void expectIdenticalMatches(const std::vector<irt::features::ShapeTemplateMatch> &expected,
+                            const std::vector<irt::features::ShapeTemplateMatch> &actual)
+{
+    ASSERT_EQ(expected.size(), actual.size());
+    for (size_t i = 0; i < expected.size(); ++i)
+    {
+        EXPECT_EQ(expected[i].x, actual[i].x);
+        EXPECT_EQ(expected[i].y, actual[i].y);
+        EXPECT_EQ(expected[i].width, actual[i].width);
+        EXPECT_EQ(expected[i].height, actual[i].height);
+        EXPECT_FLOAT_EQ(expected[i].similarity, actual[i].similarity);
+        EXPECT_EQ(expected[i].class_id, actual[i].class_id);
+        EXPECT_EQ(expected[i].template_id, actual[i].template_id);
+        EXPECT_FLOAT_EQ(expected[i].angle_degrees, actual[i].angle_degrees);
+        EXPECT_FLOAT_EQ(expected[i].scale, actual[i].scale);
+    }
+}
+
+} // namespace
+
+/** @brief 不同扫描参数、输入尺寸和方向容差下，AVX2 与标量路径必须逐结果一致。 */
+TEST(ShapeTemplateMatcherParityTest, Avx2AndScalarRemainIdenticalAcrossParameters)
+{
+    const std::array<int, 2> label_differences{0, 1};
+    const std::array<int, 2> scan_steps{1, 2};
+    const std::array<cv::Size, 2> scene_sizes{cv::Size(119, 107), cv::Size(151, 137)};
+
+    for (const int label_difference : label_differences)
+    {
+        for (const int scan_step : scan_steps)
+        {
+            for (const auto scene_size : scene_sizes)
+            {
+                auto config = fastConfig();
+                config.max_label_difference = label_difference;
+                config.scan_step = scan_step;
+                config.match_threshold = 70.0f;
+                const auto object = makeLShape(50);
+                const auto alternate = makeTShape(50);
+                const auto scene = makeSceneWith(object, cv::Point(31, 27), scene_size);
+
+                irt::features::ShapeTemplateMatcher avx2(config);
+                irt::features::scalar::ShapeTemplateMatcher scalar(config);
+                avx2.addTemplate(object, "bracket");
+                avx2.addTemplate(alternate, "tee");
+                scalar.addTemplate(object, "bracket");
+                scalar.addTemplate(alternate, "tee");
+                expectIdenticalMatches(avx2.match(scene), scalar.match(scene));
+            }
+        }
+    }
+}
+
+/** @brief 多模板串行与自动并行扫描必须返回逐字段一致的稳定结果。 */
+TEST(ShapeTemplateMatcherParallelTest, SerialAndAutomaticParallelismProduceIdenticalMatches)
+{
+    auto serial_config = fastConfig();
+    serial_config.max_label_difference = 1;
+    serial_config.match_threshold = 70.0f;
+    serial_config.max_parallelism = 1;
+    auto parallel_config = serial_config;
+    parallel_config.max_parallelism = 0;
+
+    const auto object = makeLShape(50);
+    const auto alternate = makeTShape(50);
+    const auto scene = makeSceneWith(object, cv::Point(37, 29), cv::Size(151, 137));
+    irt::features::ShapeTemplateMatcher serial(serial_config);
+    irt::features::ShapeTemplateMatcher parallel(parallel_config);
+    for (const auto &item : std::array<std::pair<cv::Mat, std::string>, 4>{
+             std::pair{object, "bracket_a"}, std::pair{object, "bracket_b"},
+             std::pair{alternate, "tee_a"}, std::pair{alternate, "tee_b"}})
+    {
+        serial.addTemplate(item.first, item.second);
+        parallel.addTemplate(item.first, item.second);
+    }
+    expectIdenticalMatches(serial.match(scene), parallel.match(scene));
 }

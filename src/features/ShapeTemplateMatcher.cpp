@@ -17,7 +17,12 @@ namespace fs = std::filesystem;
 namespace irt::features {
 
 ShapeTemplateMatcher::ShapeTemplateMatcher(ShapeTemplateMatcherConfig config)
-    : impl_(std::make_unique<Impl>(std::move(config)))
+    : ShapeTemplateMatcher(std::move(config), true)
+{
+}
+
+ShapeTemplateMatcher::ShapeTemplateMatcher(ShapeTemplateMatcherConfig config, bool use_avx2)
+    : impl_(std::make_unique<Impl>(std::move(config), use_avx2))
 {
 }
 

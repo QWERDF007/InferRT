@@ -21,7 +21,7 @@ public:
      * @brief 构造私有实现并校验配置。
      * @param config 模板匹配器配置。
      */
-    explicit Impl(ShapeTemplateMatcherConfig config);
+    explicit Impl(ShapeTemplateMatcherConfig config, bool use_avx2 = true);
 
     /** @brief 析构私有实现。 */
     ~Impl() = default;
@@ -87,6 +87,7 @@ private:
 
     ShapeTemplateMatcherConfig config_{};   ///< 当前匹配器配置。
     TemplateMap                templates_; ///< 已训练模板库。
+    bool                       use_avx2_{true}; ///< 是否使用 AVX2 热点内核。
 };
 
 } // namespace irt::features

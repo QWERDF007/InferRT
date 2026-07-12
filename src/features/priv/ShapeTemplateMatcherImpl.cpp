@@ -12,13 +12,16 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <bit>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <iterator>
 #include <limits>
 #include <string>
+#include <thread>
 #include <utility>
 
 #if !defined(_MSC_VER) && !defined(__AVX2__)
@@ -129,7 +132,11 @@ void validateConfig(const ShapeTemplateMatcherConfig &config)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ShapeTemplateMatcher scan_step must be positive");
     }
-    if (!std::isfinite(config.min_feature_distance) || config.min_feature_distance < 0.0f)
+    if (config.max_parallelism < 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "ShapeTemplateMatcher max_parallelism must be non-negative");
+    }    if (!std::isfinite(config.min_feature_distance) || config.min_feature_distance < 0.0f)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "ShapeTemplateMatcher min_feature_distance must be finite and non-negative");
@@ -354,6 +361,24 @@ void fillQuantizedLabelsAvx2(const cv::Mat &magnitude, const cv::Mat &angle, con
     }
 }
 
+/** @brief 标量实现：逐像素量化梯度方向标签，不使用 SIMD intrinsic。 */
+void fillQuantizedLabelsScalar(const cv::Mat &magnitude, const cv::Mat &angle, const cv::Mat &mask, float threshold,
+                               cv::Mat &labels)
+{
+    for (int y = 0; y < labels.rows; ++y)
+    {
+        const auto *mag_row = magnitude.ptr<float>(y);
+        const auto *angle_row = angle.ptr<float>(y);
+        const auto *mask_row = mask.ptr<unsigned char>(y);
+        auto *label_row = labels.ptr<unsigned char>(y);
+        #pragma loop(no_vector)
+        for (int x = 0; x < labels.cols; ++x)
+        {
+            if (mask_row[x] != 0 && mag_row[x] >= threshold)
+                label_row[x] = static_cast<unsigned char>(quantizeAngle(angle_row[x]));
+        }
+    }
+}
 /**
  * @brief 计算图像梯度幅值、方向角和量化方向标签。
  * @param image 输入图像。
@@ -361,7 +386,7 @@ void fillQuantizedLabelsAvx2(const cv::Mat &magnitude, const cv::Mat &angle, con
  * @param weak_threshold 弱梯度阈值。
  * @return 梯度量化结果。
  */
-QuantizedGradient computeQuantizedGradient(const cv::Mat &image, const cv::Mat &mask, float weak_threshold)
+QuantizedGradient computeQuantizedGradient(const cv::Mat &image, const cv::Mat &mask, float weak_threshold, bool use_avx2)
 {
     const cv::Mat gray = toGray8(image);
     const cv::Mat mask8 = normalizeMask(mask, gray.size(), "mask");
@@ -375,7 +400,10 @@ QuantizedGradient computeQuantizedGradient(const cv::Mat &image, const cv::Mat &
     cv::cartToPolar(grad_x, grad_y, gradient.magnitude, gradient.angle, true);
     gradient.labels = cv::Mat(gray.size(), CV_8UC1, cv::Scalar(kInvalidLabel));
 
-    fillQuantizedLabelsAvx2(gradient.magnitude, gradient.angle, mask8, weak_threshold, gradient.labels);
+    if (use_avx2)
+        fillQuantizedLabelsAvx2(gradient.magnitude, gradient.angle, mask8, weak_threshold, gradient.labels);
+    else
+        fillQuantizedLabelsScalar(gradient.magnitude, gradient.angle, mask8, weak_threshold, gradient.labels);
     return gradient;
 }
 
@@ -711,48 +739,68 @@ void fillResponseMapAvx2(const cv::Mat &labels, cv::Mat &response, int template_
     }
 }
 
+/** @brief 标量实现：逐像素查询方向响应表。 */
+void fillResponseMapScalar(const cv::Mat &labels, cv::Mat &response, int template_label, const ResponseTable &table)
+{
+    for (int y = 0; y < labels.rows; ++y)
+    {
+        const auto *src = labels.ptr<unsigned char>(y);
+        auto *dst = response.ptr<unsigned char>(y);
+        #pragma loop(no_vector)
+        for (int x = 0; x < labels.cols; ++x)
+            dst[x] = src[x] < kOrientationBins ? table[template_label][src[x]] : 0;
+    }
+}
 /**
  * @brief 为源图方向标签预计算 8 张响应图。
  * @param labels 源图方向标签图。
  * @param max_label_difference 最大允许方向标签差。
  * @return 方向响应图集合。
  */
-ResponseMaps buildResponseMaps(const cv::Mat &labels, int max_label_difference)
+ResponseMaps buildResponseMaps(const cv::Mat &labels, int max_label_difference, bool use_avx2,
+                               const std::array<bool, kOrientationBins> &required_labels)
 {
     ResponseMaps response_maps;
     response_maps.denominator_per_feature = responseDenominatorPerFeature(max_label_difference);
     const auto table = makeResponseTable(max_label_difference);
-
     for (int label = 0; label < kOrientationBins; ++label)
     {
+        if (!required_labels[static_cast<size_t>(label)])
+            continue;
         response_maps.maps[label].create(labels.size(), CV_8UC1);
-        fillResponseMapAvx2(labels, response_maps.maps[label], label, table);
+        if (use_avx2)
+            fillResponseMapAvx2(labels, response_maps.maps[label], label, table);
+        else
+            fillResponseMapScalar(labels, response_maps.maps[label], label, table);
     }
     return response_maps;
 }
-
 /**
- * @brief 基于预计算响应图计算某个滑窗位置的匹配分数。
- * @param response_maps 源图方向响应图。
- * @param templ 待匹配模板。
- * @param x 滑窗左上角 x 坐标。
- * @param y 滑窗左上角 y 坐标。
- * @return 匹配分数，范围为 ``[0, 100]``。
+ * @brief 计算滑窗相似度，并以理论最高剩余贡献提前淘汰低分窗口。
+ *
+ * 已累计贡献加上未访问特征的满分仍无法达到阈值时，立即停止读取响应图。
+ * 通过过滤的窗口仍完整累加，因而返回分数与原始公式一致。
  */
-float similarityAt(const ResponseMaps &response_maps, const ShapeTemplateInfo &templ, int x, int y)
+bool similarityAtLeast(const ResponseMaps &response_maps, const ShapeTemplateInfo &templ, int x, int y,
+                       float threshold, float &score)
 {
     uint64_t sum = 0;
-    for (const auto &feature : templ.features)
+    const uint64_t maximum_per_feature = static_cast<uint64_t>(response_maps.denominator_per_feature);
+    const size_t feature_count = templ.features.size();
+    for (size_t index = 0; index < feature_count; ++index)
     {
+        const auto &feature = templ.features[index];
         const auto &map = response_maps.maps[static_cast<size_t>(feature.label)];
         sum += map.ptr<unsigned char>(y + feature.y)[x + feature.x];
+        const uint64_t remaining = static_cast<uint64_t>(feature_count - index - 1);
+        const float upper_bound = 100.0f * static_cast<float>(sum + remaining * maximum_per_feature)
+                                / static_cast<float>(maximum_per_feature * feature_count);
+        if (upper_bound < threshold)
+            return false;
     }
-
-    const auto denominator = static_cast<float>(response_maps.denominator_per_feature)
-                           * static_cast<float>(templ.features.size());
-    return 100.0f * static_cast<float>(sum) / denominator;
+    score = 100.0f * static_cast<float>(sum) / static_cast<float>(maximum_per_feature * feature_count);
+    return score >= threshold;
 }
-
 /**
  * @brief 计算两个匹配框的 IoU。
  */
@@ -906,8 +954,8 @@ void readIfPresent(const cv::FileNode &node, const char *key, T &value)
 /**
  * @brief 构造匹配器实现并完成配置校验。
  */
-ShapeTemplateMatcher::Impl::Impl(ShapeTemplateMatcherConfig config)
-    : config_(std::move(config))
+ShapeTemplateMatcher::Impl::Impl(ShapeTemplateMatcherConfig config, bool use_avx2)
+    : config_(std::move(config)), use_avx2_(use_avx2)
 {
     validateConfig(config_);
 }
@@ -929,11 +977,11 @@ int ShapeTemplateMatcher::Impl::addTemplate(const cv::Mat &image, const std::str
     }
 
     const cv::Mat mask = normalizeMask(object_mask, image.size(), "object_mask");
-    const auto    gradient = computeQuantizedGradient(image, mask, config_.weak_threshold);
-    auto          candidates = collectCandidates(gradient, mask, config_.strong_threshold);
+    const auto    gradient = computeQuantizedGradient(image, mask, config_.weak_threshold, use_avx2_);
+    auto candidates = use_avx2_ ? collectCandidatesAvx2(gradient, mask, config_.strong_threshold) : collectCandidates(gradient, mask, config_.strong_threshold);
     if (static_cast<int>(candidates.size()) < config_.min_features && config_.weak_threshold < config_.strong_threshold)
     {
-        candidates = collectCandidates(gradient, mask, config_.weak_threshold);
+        candidates = use_avx2_ ? collectCandidatesAvx2(gradient, mask, config_.weak_threshold) : collectCandidates(gradient, mask, config_.weak_threshold);
     }
 
     const float distance = config_.min_feature_distance > 0.0f
@@ -1021,49 +1069,18 @@ std::vector<ShapeTemplateMatch> ShapeTemplateMatcher::Impl::match(const cv::Mat 
     validateScoreRange(effective_threshold, "ShapeTemplateMatcher match threshold");
 
     const cv::Mat mask = normalizeMask(search_mask, image.size(), "search_mask");
-    const auto    gradient = computeQuantizedGradient(image, mask, config_.weak_threshold);
-    const auto    response_maps = buildResponseMaps(gradient.labels, config_.max_label_difference);
-
-    std::vector<ShapeTemplateMatch> matches;
-    auto match_class = [&](const std::string &class_id, const std::vector<ShapeTemplateInfo> &templates)
+    const auto    gradient = computeQuantizedGradient(image, mask, config_.weak_threshold, use_avx2_);
+    std::array<bool, kOrientationBins> required_labels{};
+    auto mark_required_labels = [&](const std::vector<ShapeTemplateInfo> &templates)
     {
         for (const auto &templ : templates)
-        {
-            if (templ.width > image.cols || templ.height > image.rows || templ.features.empty())
-            {
-                continue;
-            }
-
-            const int max_y = image.rows - templ.height;
-            const int max_x = image.cols - templ.width;
-            for (int y = 0; y <= max_y; y += config_.scan_step)
-            {
-                for (int x = 0; x <= max_x; x += config_.scan_step)
-                {
-                    const int center_x = std::min(image.cols - 1, x + templ.width / 2);
-                    const int center_y = std::min(image.rows - 1, y + templ.height / 2);
-                    if (mask.ptr<unsigned char>(center_y)[center_x] == 0)
-                    {
-                        continue;
-                    }
-
-                    const float score = similarityAt(response_maps, templ, x, y);
-                    if (score >= effective_threshold)
-                    {
-                        matches.push_back(ShapeTemplateMatch{x, y, templ.width, templ.height, score, class_id,
-                                                             templ.template_id, templ.angle_degrees, templ.scale});
-                    }
-                }
-            }
-        }
+            for (const auto &feature : templ.features)
+                required_labels[static_cast<size_t>(feature.label)] = true;
     };
-
     if (class_ids.empty())
     {
         for (const auto &item : templates_)
-        {
-            match_class(item.first, item.second);
-        }
+            mark_required_labels(item.second);
     }
     else
     {
@@ -1071,12 +1088,109 @@ std::vector<ShapeTemplateMatch> ShapeTemplateMatcher::Impl::match(const cv::Mat 
         {
             const auto it = templates_.find(class_id);
             if (it != templates_.end())
-            {
-                match_class(it->first, it->second);
-            }
+                mark_required_labels(it->second);
+        }
+    }
+    const auto response_maps = buildResponseMaps(gradient.labels, config_.max_label_difference, use_avx2_, required_labels);
+
+    struct MatchWork
+    {
+        const std::string *class_id;
+        const ShapeTemplateInfo *templ;
+    };
+    std::vector<MatchWork> work_items;
+    auto append_work = [&](const std::string &class_id, const std::vector<ShapeTemplateInfo> &templates)
+    {
+        for (const auto &templ : templates)
+            work_items.push_back(MatchWork{&class_id, &templ});
+    };
+    if (class_ids.empty())
+    {
+        for (const auto &item : templates_)
+            append_work(item.first, item.second);
+    }
+    else
+    {
+        for (const auto &class_id : class_ids)
+        {
+            const auto it = templates_.find(class_id);
+            if (it != templates_.end())
+                append_work(it->first, it->second);
         }
     }
 
+    auto scan_template = [&](const MatchWork &work)
+    {
+        std::vector<ShapeTemplateMatch> local_matches;
+        const auto &templ = *work.templ;
+        if (templ.width > image.cols || templ.height > image.rows || templ.features.empty())
+            return local_matches;
+
+        const int max_y = image.rows - templ.height;
+        const int max_x = image.cols - templ.width;
+        for (int y = 0; y <= max_y; y += config_.scan_step)
+        {
+            for (int x = 0; x <= max_x; x += config_.scan_step)
+            {
+                const int center_x = std::min(image.cols - 1, x + templ.width / 2);
+                const int center_y = std::min(image.rows - 1, y + templ.height / 2);
+                if (mask.ptr<unsigned char>(center_y)[center_x] == 0)
+                    continue;
+
+                float score = 0.0f;
+                if (similarityAtLeast(response_maps, templ, x, y, effective_threshold, score))
+                    local_matches.push_back(ShapeTemplateMatch{x, y, templ.width, templ.height, score,
+                                                               *work.class_id, templ.template_id,
+                                                               templ.angle_degrees, templ.scale});
+            }
+        }
+        return local_matches;
+    };
+
+    unsigned int worker_count = config_.max_parallelism > 0
+                                  ? static_cast<unsigned int>(config_.max_parallelism)
+                                  : std::thread::hardware_concurrency();
+    worker_count = std::max(1U, worker_count);
+    worker_count = std::min(worker_count, static_cast<unsigned int>(work_items.size()));
+
+    std::vector<ShapeTemplateMatch> matches;
+    if (worker_count <= 1)
+    {
+        for (const auto &work : work_items)
+        {
+            auto local_matches = scan_template(work);
+            matches.insert(matches.end(), std::make_move_iterator(local_matches.begin()),
+                           std::make_move_iterator(local_matches.end()));
+        }
+    }
+    else
+    {
+        std::atomic<size_t> next_work{0};
+        std::vector<std::vector<ShapeTemplateMatch>> partial_matches(worker_count);
+        std::vector<std::thread> workers;
+        workers.reserve(worker_count);
+        for (unsigned int worker = 0; worker < worker_count; ++worker)
+        {
+            workers.emplace_back([&, worker]
+            {
+                auto &local_matches = partial_matches[worker];
+                for (;;)
+                {
+                    const size_t index = next_work.fetch_add(1, std::memory_order_relaxed);
+                    if (index >= work_items.size())
+                        break;
+                    auto matches_for_template = scan_template(work_items[index]);
+                    local_matches.insert(local_matches.end(), std::make_move_iterator(matches_for_template.begin()),
+                                         std::make_move_iterator(matches_for_template.end()));
+                }
+            });
+        }
+        for (auto &worker : workers)
+            worker.join();
+        for (auto &local_matches : partial_matches)
+            matches.insert(matches.end(), std::make_move_iterator(local_matches.begin()),
+                           std::make_move_iterator(local_matches.end()));
+    }
     return applyNms(std::move(matches), config_.nms_threshold, config_.max_results);
 }
 
@@ -1193,6 +1307,7 @@ void ShapeTemplateMatcher::Impl::save(const fs::path &template_file) const
     storage << "nms_threshold" << config_.nms_threshold;
     storage << "max_results" << config_.max_results;
     storage << "scan_step" << config_.scan_step;
+    storage << "max_parallelism" << config_.max_parallelism;
     storage << "min_feature_distance" << config_.min_feature_distance;
     storage << "}";
 
@@ -1274,6 +1389,7 @@ void ShapeTemplateMatcher::Impl::load(const fs::path &template_file)
         readIfPresent(config_node, "nms_threshold", loaded_config.nms_threshold);
         readIfPresent(config_node, "max_results", loaded_config.max_results);
         readIfPresent(config_node, "scan_step", loaded_config.scan_step);
+        readIfPresent(config_node, "max_parallelism", loaded_config.max_parallelism);
         readIfPresent(config_node, "min_feature_distance", loaded_config.min_feature_distance);
     }
     validateConfig(loaded_config);

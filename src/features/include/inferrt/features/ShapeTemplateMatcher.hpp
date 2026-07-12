@@ -17,6 +17,10 @@
 
 namespace irt::features {
 
+namespace scalar {
+class ShapeTemplateMatcher;
+}
+
 inline constexpr int   kDefaultShapeTemplateNumFeatures     = 128;   ///< 默认每个模板最多保留的特征点数。
 inline constexpr int   kDefaultShapeTemplateMinFeatures     = 4;     ///< 默认每个模板至少需要的有效特征点数。
 inline constexpr float kDefaultShapeTemplateWeakThreshold   = 30.0f; ///< 默认源图梯度弱阈值。
@@ -38,6 +42,7 @@ struct ShapeTemplateMatcherConfig
     float nms_threshold{kDefaultShapeTemplateNmsThreshold};       ///< 同类别 NMS 的 IoU 阈值；小于 0 时关闭 NMS。
     int   max_results{0};                                        ///< 最多返回的匹配数量；0 表示不限制。
     int   scan_step{1};                                          ///< 滑窗扫描步长，单位为像素。
+    int   max_parallelism{0};                                    ///< 模板扫描工作线程数；0 表示自动，1 表示串行。
     float min_feature_distance{0.0f};                            ///< 贪心选点最小间距；0 表示按模板面积自动估计。
 };
 
@@ -245,6 +250,9 @@ public:
                              const cv::Scalar &border_value = cv::Scalar());
 
 private:
+    ShapeTemplateMatcher(ShapeTemplateMatcherConfig config, bool use_avx2);
+    friend class scalar::ShapeTemplateMatcher;
+
     class Impl;
     std::unique_ptr<Impl> impl_; ///< 私有实现，隐藏 OpenCV 训练、匹配和序列化细节。
 };
