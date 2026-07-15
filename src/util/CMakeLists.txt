@@ -2,6 +2,8 @@ add_plugin_library(util
     PRIVATE_LIBS
         # 在这里添加 PRIVATE 链接的库
         yaml-cpp::yaml-cpp
+        cpuinfo
+        CUDA::nvml
     PUBLIC_LIBS
         # 在这里添加 PUBLIC 链接的库
         CUDA::cudart

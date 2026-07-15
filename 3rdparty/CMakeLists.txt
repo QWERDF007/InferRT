@@ -74,3 +74,13 @@ if(${PROJECT_NAME_UPPER}_BUILD_PYTHON)
     set(BUILD_MOCK OFF CACHE BOOL "Disable dlpack mock executable" FORCE)
     add_subdirectory(dlpack)
 endif()
+
+
+# cpuinfo -----------------------------
+# 仅构建 cpuinfo 库，避免其默认测试、工具和 benchmark 触发额外依赖下载。
+set(CPUINFO_BUILD_TOOLS OFF CACHE BOOL "Disable cpuinfo tools" FORCE)
+set(CPUINFO_BUILD_UNIT_TESTS OFF CACHE BOOL "Disable cpuinfo unit tests" FORCE)
+set(CPUINFO_BUILD_MOCK_TESTS OFF CACHE BOOL "Disable cpuinfo mock tests" FORCE)
+set(CPUINFO_BUILD_BENCHMARKS OFF CACHE BOOL "Disable cpuinfo benchmarks" FORCE)
+set(CPUINFO_BUILD_PKG_CONFIG OFF CACHE BOOL "Disable cpuinfo pkg-config manifest" FORCE)
+add_subdirectory(cpuinfo EXCLUDE_FROM_ALL)

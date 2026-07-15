@@ -1,3 +1,6 @@
+#include <cstdint>
+#include <vector>
+#include <inferrt/util/Device.hpp>
 #include <gtest/gtest.h>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/util/CheckError.hpp>
@@ -303,4 +306,37 @@ TEST(CheckErrorUtilTest, CheckLogReturnsTrueOnSuccessStatus)
     EXPECT_TRUE((IRT_CHECK_LOG(cudaSuccess, "unused")));
     const std::string stderr_text = testing::internal::GetCapturedStderr();
     EXPECT_TRUE(stderr_text.empty());
+}
+
+
+/**
+ * @brief cpuinfo 应能返回非空的 CPU 设备名称。
+ */
+TEST(DeviceUtilTest, GetsCpuDeviceName)
+{
+    const std::string name = irt::util::getCPUDeviceName();
+    if (name.empty())
+    {
+        GTEST_SKIP() << "cpuinfo could not identify the CPU on this platform";
+    }
+
+    EXPECT_FALSE(name.empty());
+}
+
+/**
+ * @brief NVML 应返回每块 GPU 的名称和总显存。
+ */
+TEST(DeviceUtilTest, GetsGpuNamesAndMemory)
+{
+    const std::vector<std::string> names = irt::util::getGPUDeviceNames();
+    if (names.empty())
+    {
+        GTEST_SKIP() << "No NVIDIA GPU is available through NVML";
+    }
+
+    for (uint32_t index = 0; index < names.size(); ++index)
+    {
+        ASSERT_FALSE(names[index].empty()) << "Failed to query GPU name at index " << index;
+        EXPECT_GT(irt::util::getGPUDeviceMemory(index), 0u) << "Failed to query GPU memory at index " << index;
+    }
 }

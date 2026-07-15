@@ -26,3 +26,7 @@
 	path = 3rdparty/yaml-cpp
 	url = https://github.com/jbeder/yaml-cpp.git
 	branch = master
+[submodule "3rdparty/cpuinfo"]
+	path = 3rdparty/cpuinfo
+	url = https://github.com/pytorch/cpuinfo.git
+	branch = main

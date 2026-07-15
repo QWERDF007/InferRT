@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(INFERRT_CUDA_ROOT "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.8" CACHE PATH
+set(INFERRT_CUDA_ROOT "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8" CACHE PATH
     "CUDA Toolkit root directory used by CMake and runtime packaging scripts")
 if(INFERRT_CUDA_ROOT)
     set(CUDAToolkit_ROOT "${INFERRT_CUDA_ROOT}" CACHE PATH "CUDA Toolkit root directory" FORCE)
@@ -25,6 +25,22 @@ list(GET CUDA_VERSION_LIST 1 CUDA_VERSION_MINOR)
 list(GET CUDA_VERSION_LIST 2 CUDA_VERSION_PATCH)
 
 find_package(CUDAToolkit ${CUDA_VERSION_MAJOR}.${CUDA_VERSION_MINOR} REQUIRED)
+
+# CMake 3.20 的 FindCUDAToolkit 尚未提供 CUDA::nvml，在这里统一补齐该 target。
+if(NOT TARGET CUDA::nvml)
+    find_library(INFERRT_NVML_LIBRARY
+        NAMES nvml nvidia-ml
+        HINTS ${CUDAToolkit_LIBRARY_DIR}
+    )
+    if(NOT INFERRT_NVML_LIBRARY)
+        message(FATAL_ERROR "NVML library was not found in the CUDA toolkit")
+    endif()
+    add_library(CUDA::nvml UNKNOWN IMPORTED)
+    set_target_properties(CUDA::nvml PROPERTIES
+        IMPORTED_LOCATION "${INFERRT_NVML_LIBRARY}"
+    )
+    target_include_directories(CUDA::nvml SYSTEM INTERFACE ${CUDAToolkit_INCLUDE_DIRS})
+endif()
 
 # CUDA version requirement:
 # - to use gcc-9 (11.4)
