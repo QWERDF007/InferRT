@@ -99,6 +99,7 @@ std::unique_ptr<irt::model::IModelConfig> cloneModelConfig(const irt::model::IMo
     }
     cloned->setBackend(config.backend());
     cloned->setDevice(config.device());
+    cloned->setPrecision(config.precision());
     return cloned;
 }
 
@@ -1675,6 +1676,10 @@ PYBIND11_MODULE(inferrt_model_py, m)
         .value("CPU", irt::model::ModelDevice::CPU)
         .value("GPU", irt::model::ModelDevice::GPU);
 
+    py::enum_<irt::model::ModelPrecision>(m, "ModelPrecision")
+        .value("FP32", irt::model::ModelPrecision::FP32)
+        .value("FP16", irt::model::ModelPrecision::FP16);
+
     py::class_<irt::model::IModelConfig>(m, "ModelConfig", "InferRT 模型配置对象。")
         .def(py::init<>(), "构造默认的 ImageNet 分类配置。")
         .def_property("num_classes", &irt::model::IModelConfig::numClasses, &irt::model::IModelConfig::setNumClasses,
@@ -1746,7 +1751,9 @@ PYBIND11_MODULE(inferrt_model_py, m)
                                           static_cast<int32_t>(range[2]));
             })
         .def_property("backend", &irt::model::IModelConfig::backend, &irt::model::IModelConfig::setBackend)
-        .def_property("device", &irt::model::IModelConfig::device, &irt::model::IModelConfig::setDevice);
+        .def_property("device", &irt::model::IModelConfig::device, &irt::model::IModelConfig::setDevice)
+        .def_property("precision", &irt::model::IModelConfig::precision, &irt::model::IModelConfig::setPrecision,
+                      "TensorRT 构建精度；FP16 保持 float32 I/O。");
 
     py::class_<PyModel>(m, "Model", "InferRT Python 模型包装器。")
         .def("name", &PyModel::name, "返回模型名称。")

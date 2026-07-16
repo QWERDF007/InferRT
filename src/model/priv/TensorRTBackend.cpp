@@ -427,7 +427,11 @@ void TensorRTBackend::buildFromNetwork(const std::string &source_file, const std
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create InferBuilder");
     }
 
-    const auto flags   = 1U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kSTRONGLY_TYPED);
+    // FP32 使用 strong typing，确保现有网络的 float32 类型推导保持不变。
+    // TensorRT 10.x 已将 kFP16 标记为 deprecated，但对于非 strong-typed
+    // 网络它仍是启用 FP16 layer tactic 的兼容入口；模型 I/O 仍保持 float32。
+    const bool use_fp16 = model_config.precision() == ModelPrecision::FP16;
+    const auto flags    = use_fp16 ? 0U : 1U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kSTRONGLY_TYPED);
     auto       network = std::unique_ptr<INetworkDefinition>(builder->createNetworkV2(flags));
     if (!network)
     {
@@ -438,6 +442,11 @@ void TensorRTBackend::buildFromNetwork(const std::string &source_file, const std
     if (!builder_config)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create BuilderConfig");
+    }
+
+    if (use_fp16)
+    {
+        builder_config->setFlag(BuilderFlag::kFP16);
     }
 
     LOG_INFO(*params_.logger) << "Building TensorRT network from: " << source_file << std::endl;

@@ -23,6 +23,19 @@ enum class ModelDevice
     GPU
 };
 
+/**
+ * @brief TensorRT 构建时使用的计算精度。
+ *
+ * FP16 模式保持模型 I/O 为 float32，并允许 TensorRT 为内部 layer 选择
+ * FP16 tactic；这样既能与现有 Python/CPU 输入接口兼容，也能单独缓存
+ * FP16 与 FP32 engine。
+ */
+enum class ModelPrecision
+{
+    FP32,
+    FP16
+};
+
 INFERRT_MODEL_API inline const char *modelBackendName(irt::model::ModelBackend backend)
 {
     switch (backend)
@@ -45,6 +58,18 @@ INFERRT_MODEL_API inline const char *modelDeviceName(irt::model::ModelDevice dev
         return "cpu";
     case irt::model::ModelDevice::GPU:
         return "gpu";
+    }
+    return "unknown";
+}
+
+INFERRT_MODEL_API inline const char *modelPrecisionName(irt::model::ModelPrecision precision)
+{
+    switch (precision)
+    {
+    case irt::model::ModelPrecision::FP32:
+        return "fp32";
+    case irt::model::ModelPrecision::FP16:
+        return "fp16";
     }
     return "unknown";
 }
@@ -195,6 +220,11 @@ public:
         device_ = device;
     }
 
+    virtual void setPrecision(ModelPrecision precision) noexcept
+    {
+        precision_ = precision;
+    }
+
     /**
      * @brief 获取类别数。
      * @return 当前类别数。
@@ -302,6 +332,11 @@ public:
         return device_;
     }
 
+    virtual ModelPrecision precision() const noexcept
+    {
+        return precision_;
+    }
+
 protected:
     /**
      * @brief 在动态 batch 已启用时，用输入 N 维同步默认 profile 范围。
@@ -355,6 +390,8 @@ protected:
     ModelBackend backend_{ModelBackend::TensorRT};
 
     ModelDevice device_{ModelDevice::GPU};
+
+    ModelPrecision precision_{ModelPrecision::FP32};
 };
 
 } // namespace irt::model

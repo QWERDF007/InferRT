@@ -284,6 +284,7 @@ irt::util::ManifestEntries engineManifestEntries(const IModelImpl &impl, const s
         {         "source_file",           absolutePathValue(source_file)},
         {         "engine_file",           absolutePathValue(engine_file)},
         {         "num_classes",      std::to_string(config.numClasses())},
+        {            "precision",             modelPrecisionName(config.precision())},
         {        "input_shapes",   inputShapesValue(config.inputShapes())},
         {  "input_tensor_names",   joinStrings(config.inputTensorNames())},
         { "output_tensor_names",  joinStrings(config.outputTensorNames())},
