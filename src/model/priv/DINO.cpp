@@ -365,7 +365,7 @@ nvinfer1::ITensor *addStandardMlp(nvinfer1::INetworkDefinition *network, const W
 {
     const int hidden = static_cast<int>(std::lround(static_cast<float>(spec.embed_dim) * spec.mlp_ratio));
     auto     *fc1    = addLinear3D(network, weights_map, input, prefix + ".mlp.fc1", spec.embed_dim, hidden, true);
-    auto     *gelu   = addGeluApprox(network, *fc1);
+    auto *gelu = spec.exact_gelu ? addGeluExact(network, *fc1) : addGeluApprox(network, *fc1);
     return addLinear3D(network, weights_map, *gelu, prefix + ".mlp.fc2", hidden, spec.embed_dim, true);
 }
 

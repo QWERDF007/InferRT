@@ -8,6 +8,10 @@
     --inferrt-feature-rtol: 特征提取张量比对相对容差。默认 ``1e-4``。
     --inferrt-feature-atol: 特征提取张量比对绝对容差。默认 ``1.5e-1``。
     --inferrt-model-root: 真实模型根目录。默认 ``INFERRT_MODEL_ROOT`` 或 ``assets/models``。
+    --inferrt-lingbot-vision-root: LingBot-Vision checkpoint 目录。默认 ``INFERRT_LINGBOT_VISION_ROOT``
+        或 ``F:/models/lingbot-vision``。
+    --inferrt-lingbot-vision-repo: LingBot-Vision 源码目录。默认 ``INFERRT_LINGBOT_VISION_REPO``
+        或 ``F:/Github/lingbot-vision``。
     --inferrt-ultralytics-repo: 本地 ultralytics 仓库。默认 ``INFERRT_ULTRALYTICS_REPO`` 或
         ``D:/Github/ultralytics``。
     --inferrt-yolov5-repo: 本地 YOLOv5 仓库。默认 ``INFERRT_YOLOV5_REPO`` 或
@@ -23,6 +27,8 @@
 环境变量:
     INFERRT_BUILD_DIR: 未传 ``--inferrt-build-dir`` 时使用的构建目录路径。
     INFERRT_MODEL_ROOT: 未传 ``--inferrt-model-root`` 时使用的真实模型根目录。
+    INFERRT_LINGBOT_VISION_ROOT: 未传 ``--inferrt-lingbot-vision-root`` 时使用的 LingBot-Vision checkpoint 目录。
+    INFERRT_LINGBOT_VISION_REPO: 未传 ``--inferrt-lingbot-vision-repo`` 时使用的 LingBot-Vision 源码目录。
 """
 
 from __future__ import annotations
@@ -131,6 +137,18 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store",
         default="",
         help="真实模型根目录；默认 INFERRT_MODEL_ROOT 或 assets/models",
+    )
+    parser.addoption(
+        "--inferrt-lingbot-vision-root",
+        action="store",
+        default="",
+        help="LingBot-Vision checkpoint 目录；默认 INFERRT_LINGBOT_VISION_ROOT 或 F:/models/lingbot-vision",
+    )
+    parser.addoption(
+        "--inferrt-lingbot-vision-repo",
+        action="store",
+        default="",
+        help="LingBot-Vision 源码目录；默认 INFERRT_LINGBOT_VISION_REPO 或 F:/Github/lingbot-vision",
     )
     parser.addoption(
         "--inferrt-ultralytics-repo",
@@ -369,6 +387,36 @@ def model_root(pytestconfig: pytest.Config) -> Path:
     path = _configured_path(pytestconfig, "--inferrt-model-root", "INFERRT_MODEL_ROOT", "assets/models")
     if not path.exists():
         pytest.skip(f"Model root not found: {path}")
+    return path
+
+
+@pytest.fixture(scope="session")
+def lingbot_vision_root(pytestconfig: pytest.Config) -> Path:
+    """LingBot-Vision checkpoint 目录。"""
+
+    path = _configured_path(
+        pytestconfig,
+        "--inferrt-lingbot-vision-root",
+        "INFERRT_LINGBOT_VISION_ROOT",
+        "F:/models/lingbot-vision",
+    )
+    if not path.exists():
+        pytest.skip(f"LingBot-Vision model root not found: {path}")
+    return path
+
+
+@pytest.fixture(scope="session")
+def lingbot_vision_repo(pytestconfig: pytest.Config) -> Path:
+    """LingBot-Vision 上游源码目录，用于构造 PyTorch 参考模型。"""
+
+    path = _configured_path(
+        pytestconfig,
+        "--inferrt-lingbot-vision-repo",
+        "INFERRT_LINGBOT_VISION_REPO",
+        "F:/Github/lingbot-vision",
+    )
+    if not (path / "lingbot_vision").is_dir():
+        pytest.skip(f"LingBot-Vision source package not found: {path / 'lingbot_vision'}")
     return path
 
 

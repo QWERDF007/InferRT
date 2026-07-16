@@ -10,7 +10,7 @@ namespace irt::model {
 enum class DINOVersion
 {
     V2, ///< DINOv2：学习式位置编码，register token 可选。
-    V3, ///< DINOv3：RoPE 位置编码，storage token 固定用于主干表征。
+    V3, ///< DINOv3/LingBot-Vision：RoPE 位置编码，storage token 固定用于主干表征。
 };
 
 /**
@@ -24,7 +24,7 @@ enum class DINOMlpKind
 };
 
 /**
- * @brief DINO 系列模型结构参数。
+ * @brief DINO/LingBot-Vision Transformer 结构参数。
  *
  * 该结构只保存推理建网所需的静态超参数。权重命名差异会在构建阶段根据
  * `.wts` 中实际存在的 key 自动适配，便于同时支持官方仓库和 timm 转换后的权重。
@@ -43,10 +43,11 @@ struct DINOTransformerSpec
     DINOMlpKind mlp_kind;     ///< FFN 子层类型。
     int         swiglu_align; ///< SwiGLU 隐藏维度对齐粒度；标准 MLP 设为 1。
     float       norm_epsilon; ///< LayerNorm epsilon。
+    bool        exact_gelu{false}; ///< 标准 MLP 是否使用精确 GeLU；默认保持 DINO 兼容的近似实现。
 };
 
 /**
- * @brief DINOv2/DINOv3 ViT 主干的统一 TensorRT 实现。
+ * @brief DINOv2/DINOv3/LingBot-Vision ViT 主干的统一 TensorRT 实现。
  *
  * 主输出为归一化后的 CLS token 特征，形状为 `[N, embed_dim]`。当启用
  * feature-only 构建时，可导出 `tokens`、`blocks.N`、`x_norm_clstoken`、

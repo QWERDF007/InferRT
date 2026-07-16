@@ -214,6 +214,26 @@ def test_create_dino_without_build(irt_module: object) -> None:
     assert dinov3_alias.name() == "DINOv3ViTB16"
 
 
+def test_create_lingbot_vision_without_build(irt_module: object) -> None:
+    """LingBot-Vision small/base 变体及常用别名应可通过工厂创建。"""
+
+    small = irt_module.create_model("lingbot_vision_vits16")
+    assert small.name() == "LingBotVisionViTS16"
+    assert irt_module.is_supported_model("LingBot_Vision_VIT_Small")
+
+    base = irt_module.create_model("lingbot_vision_vitb16")
+    assert base.name() == "LingBotVisionViTB16"
+    assert irt_module.is_supported_model("lingbot-vision-vit-base")
+
+    large = irt_module.create_model("lingbot_vision_vitl16")
+    assert large.name() == "LingBotVisionViTL16"
+    assert irt_module.is_supported_model("LingBot_Vision_VIT_Large")
+
+    giant = irt_module.create_model("lingbot_vision_vitg16")
+    assert giant.name() == "LingBotVisionViTG16"
+    assert irt_module.is_supported_model("lingbot-vision-vit-giant")
+
+
 def test_create_yolo_without_build(irt_module: object) -> None:
     """YOLOv5/YOLOv8 检测模型应可通过 Python 绑定创建，并自动使用检测默认配置。
     Args:
