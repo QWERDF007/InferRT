@@ -88,7 +88,7 @@ float weightValue(const nvinfer1::Weights &weights, int64_t index)
 // weightValue() is DINO-specific and is kept here.
 
 // kPi, hasWeight, requireWeight (wrapped above), ownedScalarWeight, ownedFloatVector,
-// scalarDimsLike, addGeluApprox, addSilu, addLayerNorm, addLinear3D, reshapeToHeads,
+// scalarDimsLike, addGeluExact, addSilu, addLayerNorm, addLinear3D, reshapeToHeads,
 // mergeHeads are now provided by Layers.hpp.
 
 /**
@@ -365,7 +365,7 @@ nvinfer1::ITensor *addStandardMlp(nvinfer1::INetworkDefinition *network, const W
 {
     const int hidden = static_cast<int>(std::lround(static_cast<float>(spec.embed_dim) * spec.mlp_ratio));
     auto     *fc1    = addLinear3D(network, weights_map, input, prefix + ".mlp.fc1", spec.embed_dim, hidden, true);
-    auto *gelu = spec.exact_gelu ? addGeluExact(network, *fc1) : addGeluApprox(network, *fc1);
+    auto *gelu = addGeluExact(network, *fc1);
     return addLinear3D(network, weights_map, *gelu, prefix + ".mlp.fc2", hidden, spec.embed_dim, true);
 }
 

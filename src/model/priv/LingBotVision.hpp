@@ -6,10 +6,10 @@ namespace irt::model {
 
 inline DINOTransformerSpec makeLingBotVisionSpec(const char *display_name, int embed_dim, int depth, int num_heads,
                                                  DINOMlpKind mlp_kind = DINOMlpKind::Mlp,
-                                                 int          swiglu_align = 1, bool exact_gelu = true)
+                                                 int          swiglu_align = 1)
 {
     return {display_name, 512, 16, embed_dim, depth, num_heads, 4, 4.0F, DINOVersion::V3, mlp_kind, swiglu_align,
-            1e-5F, exact_gelu};
+            1e-5F};
 }
 
 /**
@@ -74,7 +74,7 @@ class LingBotVisionViTG16 : public DINOTransformer
 public:
     LingBotVisionViTG16()
         : DINOTransformer(makeLingBotVisionSpec("LingBotVisionViTG16", 1536, 40, 24,
-                                                 DINOMlpKind::SplitSwiGLU, 8, false))
+                                                 DINOMlpKind::SplitSwiGLU, 8))
     {
     }
 

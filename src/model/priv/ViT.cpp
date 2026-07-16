@@ -213,7 +213,7 @@ nvinfer1::ITensor *addTransformerBlock(nvinfer1::INetworkDefinition *network, co
     const auto fc1_prefix = layout == WeightLayout::Timm ? prefix + ".mlp.fc1" : prefix + ".intermediate.dense";
     const auto fc2_prefix = layout == WeightLayout::Timm ? prefix + ".mlp.fc2" : prefix + ".output.dense";
     auto      *fc1        = addLinear3D(network, weights_map, *norm2, fc1_prefix, spec.embed_dim, mlp_hidden, true);
-    auto      *gelu       = addGeluApprox(network, *fc1);
+    auto      *gelu       = addGeluExact(network, *fc1);
     auto      *fc2        = addLinear3D(network, weights_map, *gelu, fc2_prefix, mlp_hidden, spec.embed_dim, true);
 
     return network->addElementWise(*attn_residual, *fc2, E::kSUM)->getOutput(0);

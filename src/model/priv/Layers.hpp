@@ -249,28 +249,6 @@ inline nvinfer1::ITensor *flattenPreserveBatch(nvinfer1::INetworkDefinition *net
 }
 
 /**
- * @brief 添加 GeLU tanh 近似激活：0.5*x*(1+tanh(sqrt(2/pi)*(x+0.044715*x^3)))。
- */
-inline nvinfer1::ITensor *addGeluApprox(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input)
-{
-    const auto scalar_dims = scalarDimsLike(input);
-    auto      *half        = network->addConstant(scalar_dims, ownedScalarWeight(0.5F))->getOutput(0);
-    auto      *one         = network->addConstant(scalar_dims, ownedScalarWeight(1.0F))->getOutput(0);
-    auto *sqrt_2_div_pi    = network->addConstant(scalar_dims, ownedScalarWeight(std::sqrt(2.0F / kPi)))->getOutput(0);
-    auto *coeff            = network->addConstant(scalar_dims, ownedScalarWeight(0.044715F))->getOutput(0);
-
-    auto *x2        = network->addElementWise(input, input, nvinfer1::ElementWiseOperation::kPROD)->getOutput(0);
-    auto *x3        = network->addElementWise(*x2, input, nvinfer1::ElementWiseOperation::kPROD)->getOutput(0);
-    auto *scaled_x3 = network->addElementWise(*x3, *coeff, nvinfer1::ElementWiseOperation::kPROD)->getOutput(0);
-    auto *inner     = network->addElementWise(input, *scaled_x3, nvinfer1::ElementWiseOperation::kSUM)->getOutput(0);
-    auto *scaled = network->addElementWise(*inner, *sqrt_2_div_pi, nvinfer1::ElementWiseOperation::kPROD)->getOutput(0);
-    auto *tanh   = network->addActivation(*scaled, nvinfer1::ActivationType::kTANH)->getOutput(0);
-    auto *one_plus_tanh = network->addElementWise(*tanh, *one, nvinfer1::ElementWiseOperation::kSUM)->getOutput(0);
-    auto *half_x        = network->addElementWise(input, *half, nvinfer1::ElementWiseOperation::kPROD)->getOutput(0);
-    return network->addElementWise(*half_x, *one_plus_tanh, nvinfer1::ElementWiseOperation::kPROD)->getOutput(0);
-}
-
-/**
  * @brief 添加精确 GeLU 激活：0.5*x*(1+erf(x/sqrt(2)))。
  */
 inline nvinfer1::ITensor *addGeluExact(nvinfer1::INetworkDefinition *network, nvinfer1::ITensor &input)

@@ -43,7 +43,6 @@ struct DINOTransformerSpec
     DINOMlpKind mlp_kind;     ///< FFN 子层类型。
     int         swiglu_align; ///< SwiGLU 隐藏维度对齐粒度；标准 MLP 设为 1。
     float       norm_epsilon; ///< LayerNorm epsilon。
-    bool        exact_gelu{false}; ///< 标准 MLP 是否使用精确 GeLU；默认保持 DINO 兼容的近似实现。
 };
 
 /**
