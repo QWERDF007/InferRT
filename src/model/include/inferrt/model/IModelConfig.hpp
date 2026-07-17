@@ -220,6 +220,19 @@ public:
         device_ = device;
     }
 
+    /**
+     * @brief 设置模型使用的 GPU 设备编号。
+     *
+     * CPU 后端会保留该配置但不会使用它；GPU 后端使用从 0 开始的 CUDA/OpenVINO 设备编号。
+     * 具体设备是否存在在模型加载或构建时由对应后端校验。
+     *
+     * @param device_id 从 0 开始的设备编号。
+     */
+    virtual void setDeviceId(int device_id) noexcept
+    {
+        device_id_ = device_id;
+    }
+
     virtual void setPrecision(ModelPrecision precision) noexcept
     {
         precision_ = precision;
@@ -332,6 +345,15 @@ public:
         return device_;
     }
 
+    /**
+     * @brief 获取模型使用的 GPU 设备编号。
+     * @return 从 0 开始的设备编号。
+     */
+    virtual int deviceId() const noexcept
+    {
+        return device_id_;
+    }
+
     virtual ModelPrecision precision() const noexcept
     {
         return precision_;
@@ -390,6 +412,8 @@ protected:
     ModelBackend backend_{ModelBackend::TensorRT};
 
     ModelDevice device_{ModelDevice::GPU};
+
+    int device_id_{0};
 
     ModelPrecision precision_{ModelPrecision::FP32};
 };

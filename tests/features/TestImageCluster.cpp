@@ -34,6 +34,8 @@ TEST(ImageClusterTest, DefaultConstructsWithImageFeatureDefaults)
 
     EXPECT_EQ(cluster.config().model_name, irt::features::ImageCluster::kDefaultModelName);
     EXPECT_EQ(cluster.config().feature_name, irt::features::ImageCluster::kDefaultFeatureName);
+    EXPECT_EQ(cluster.config().model_device_id, 0);
+    EXPECT_EQ(cluster.config().model_precision, irt::model::ModelPrecision::FP32);
     EXPECT_FALSE(cluster.config().use_pca);
     EXPECT_EQ(cluster.config().pca_dim, 0);
     EXPECT_EQ(cluster.config().hdbscan.min_cluster_size, 5);
@@ -47,6 +49,8 @@ TEST(ImageClusterTest, ConstructorStoresConfig)
     config.feature_name                      = "x_norm_patchtokens";
     config.model_backend                     = irt::model::ModelBackend::ONNXRuntime;
     config.model_device                      = irt::model::ModelDevice::CPU;
+    config.model_device_id                   = 1;
+    config.model_precision                   = irt::model::ModelPrecision::FP16;
     config.norm                              = irt::features::ImageSearchFeatureNorm::L1;
     config.model_batch_size                  = 2;
     config.use_pca                           = true;
@@ -62,6 +66,8 @@ TEST(ImageClusterTest, ConstructorStoresConfig)
     EXPECT_EQ(cluster.config().feature_name, "x_norm_patchtokens");
     EXPECT_EQ(cluster.config().model_backend, irt::model::ModelBackend::ONNXRuntime);
     EXPECT_EQ(cluster.config().model_device, irt::model::ModelDevice::CPU);
+    EXPECT_EQ(cluster.config().model_device_id, 1);
+    EXPECT_EQ(cluster.config().model_precision, irt::model::ModelPrecision::FP16);
     EXPECT_EQ(cluster.config().norm, irt::features::ImageSearchFeatureNorm::L1);
     EXPECT_EQ(cluster.config().model_batch_size, 2U);
     EXPECT_TRUE(cluster.config().use_pca);
@@ -93,5 +99,10 @@ TEST(ImageClusterTest, ConstructorRejectsInvalidConfig)
     missing_pca_dim.use_pca = true;
     missing_pca_dim.pca_dim = 0;
     expectIrtExceptionCode([&] { irt::features::ImageCluster cluster(missing_pca_dim); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
+
+    irt::features::ImageClusterConfig negative_device_id;
+    negative_device_id.model_device_id = -1;
+    expectIrtExceptionCode([&] { irt::features::ImageCluster cluster(negative_device_id); },
                            irt::Status::ERROR_INVALID_ARGUMENT);
 }

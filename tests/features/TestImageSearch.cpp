@@ -118,6 +118,8 @@ TEST(ImageSearchTest, DefaultConstructsNotReadySearcher)
     EXPECT_EQ(search.config().preprocess_backend, irt::features::ImageSearchPreprocessBackend::CPU);
     EXPECT_EQ(search.config().model_backend, irt::model::ModelBackend::TensorRT);
     EXPECT_EQ(search.config().model_device, irt::model::ModelDevice::GPU);
+    EXPECT_EQ(search.config().model_device_id, 0);
+    EXPECT_EQ(search.config().model_precision, irt::model::ModelPrecision::FP32);
     EXPECT_EQ(search.config().norm, irt::features::ImageSearchFeatureNorm::L2);
     EXPECT_EQ(search.config().faiss_backend, irt::features::ImageSearchFaissBackend::CPU);
     EXPECT_EQ(search.config().index_storage, irt::features::ImageSearchIndexStorage::RAM);
@@ -134,6 +136,8 @@ TEST(ImageSearchTest, ConstructorStoresConfig)
     config.feature_name          = "layer4";
     config.model_backend         = irt::model::ModelBackend::OpenVINO;
     config.model_device          = irt::model::ModelDevice::CPU;
+    config.model_device_id       = 2;
+    config.model_precision       = irt::model::ModelPrecision::FP16;
     config.norm                  = irt::features::ImageSearchFeatureNorm::L1;
     config.index_storage         = irt::features::ImageSearchIndexStorage::Disk;
     config.model_batch_size      = 3;
@@ -144,6 +148,8 @@ TEST(ImageSearchTest, ConstructorStoresConfig)
     EXPECT_EQ(search.config().feature_name, "layer4");
     EXPECT_EQ(search.config().model_backend, irt::model::ModelBackend::OpenVINO);
     EXPECT_EQ(search.config().model_device, irt::model::ModelDevice::CPU);
+    EXPECT_EQ(search.config().model_device_id, 2);
+    EXPECT_EQ(search.config().model_precision, irt::model::ModelPrecision::FP16);
     EXPECT_EQ(search.config().preprocess_backend, irt::features::ImageSearchPreprocessBackend::CPU);
     EXPECT_EQ(search.config().norm, irt::features::ImageSearchFeatureNorm::L1);
     EXPECT_EQ(search.config().faiss_backend, irt::features::ImageSearchFaissBackend::CPU);
@@ -157,6 +163,8 @@ TEST(ImageSearchTest, ConstructorStoresConfig)
     EXPECT_EQ(default_search.config().feature_name, irt::features::ImageSearch::kDefaultFeatureName);
     EXPECT_EQ(default_search.config().model_backend, irt::model::ModelBackend::OpenVINO);
     EXPECT_EQ(default_search.config().model_device, irt::model::ModelDevice::CPU);
+    EXPECT_EQ(default_search.config().model_device_id, 2);
+    EXPECT_EQ(default_search.config().model_precision, irt::model::ModelPrecision::FP16);
     EXPECT_EQ(default_search.config().norm, irt::features::ImageSearchFeatureNorm::None);
     EXPECT_EQ(default_search.config().index_storage, irt::features::ImageSearchIndexStorage::Disk);
     EXPECT_EQ(default_search.config().model_batch_size, 3U);
@@ -332,6 +340,25 @@ TEST(ImageSearchTest, DefaultIndexPathUsesTimestampFileName)
     EXPECT_FALSE(path.stem().empty());
     EXPECT_EQ(path.filename().string().find("wide_resnet50_2"), std::string::npos);
     EXPECT_EQ(path.filename().string().find("layer"), std::string::npos);
+}
+
+/**
+ * @brief 图像检索配置应拒绝未知模型精度。
+ */
+TEST(ImageSearchTest, ConstructorRejectsInvalidModelPrecision)
+{
+    irt::features::ImageSearchConfig config;
+    config.model_precision = static_cast<irt::model::ModelPrecision>(99);
+
+    expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); }, irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+TEST(ImageSearchTest, ConstructorRejectsNegativeModelDeviceId)
+{
+    irt::features::ImageSearchConfig config;
+    config.model_device_id = -1;
+
+    expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**

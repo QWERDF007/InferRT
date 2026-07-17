@@ -95,6 +95,11 @@ ModelDevice IModel::device() const noexcept
     return impl_->modelConfig().device();
 }
 
+int IModel::deviceId() const noexcept
+{
+    return impl_->modelConfig().deviceId();
+}
+
 std::vector<std::string> IModel::ioTensorNames(nvinfer1::TensorIOMode mode) const
 {
     return impl_->ioTensorNames(mode);

@@ -222,6 +222,7 @@ cxxopts::Options makeOptions(const char *program_name)
         "backend", "Feature extraction backend: tensorrt, openvino, onnxruntime",
         cxxopts::value<std::string>()->default_value("tensorrt"))("device", "Feature extraction device: cpu, gpu",
                                                                   cxxopts::value<std::string>()->default_value("gpu"))(
+        "device-id", "GPU device id (zero-based)", cxxopts::value<int>()->default_value("0"))(
         "preprocess-backend", "Preprocess backend: cpu, gpu", cxxopts::value<std::string>()->default_value("cpu"))(
         "faiss-backend", "Faiss backend: cpu, gpu", cxxopts::value<std::string>()->default_value("cpu"))(
         "index-storage", "Index storage for CPU Faiss search: ram, disk",
@@ -248,7 +249,7 @@ Arguments parseArguments(int argc, char *argv[])
         std::cout << "Default model: " << irt::features::ImageSearch::kDefaultModelName << std::endl;
         std::cout << "Default feature tensor: " << irt::features::ImageSearch::kDefaultFeatureName << std::endl;
         std::cout << "Default top-k: " << irt::features::ImageSearch::kDefaultTopK << std::endl;
-        std::cout << "Default config: --norm l2 --backend tensorrt --device gpu --preprocess-backend cpu"
+        std::cout << "Default config: --norm l2 --backend tensorrt --device gpu --device-id 0 --preprocess-backend cpu"
                   << " --faiss-backend cpu --index-storage ram --model-batch-size "
                   << irt::features::kDefaultImageSearchModelBatchSize << std::endl;
         std::cout << "If --index is omitted, the sample writes <gallery_dir>/<timestamp>.faiss" << std::endl;
@@ -279,6 +280,7 @@ Arguments parseArguments(int argc, char *argv[])
     args.config.norm                  = parseNorm(result["norm"].as<std::string>());
     args.config.model_backend         = parseModelBackend(result["backend"].as<std::string>());
     args.config.model_device          = parseModelDevice(result["device"].as<std::string>());
+    args.config.model_device_id       = result["device-id"].as<int>();
     args.config.preprocess_backend    = parsePreprocessBackend(result["preprocess-backend"].as<std::string>());
     args.config.faiss_backend         = parseFaissBackend(result["faiss-backend"].as<std::string>());
     args.config.index_storage         = parseIndexStorage(result["index-storage"].as<std::string>());
@@ -353,6 +355,7 @@ int main(int argc, char *argv[])
                   << std::endl;
         std::cout << "Config: backend=" << modelBackendName(searcher.config().model_backend)
                   << ", device=" << modelDeviceName(searcher.config().model_device)
+                  << ", device_id=" << searcher.config().model_device_id
                   << ", norm=" << normName(searcher.config().norm)
                   << ", preprocess=" << preprocessBackendName(searcher.config().preprocess_backend)
                   << ", faiss=" << faissBackendName(searcher.config().faiss_backend)

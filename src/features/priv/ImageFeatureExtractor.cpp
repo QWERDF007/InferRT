@@ -35,6 +35,8 @@ ImageFeatureExtractor::ImageFeatureExtractor(std::string model_name, std::string
     model_config->setFeatureOnly(true);
     model_config->setBackend(config_.model_backend);
     model_config->setDevice(config_.model_device);
+    model_config->setDeviceId(config_.model_device_id);
+    model_config->setPrecision(config_.model_precision);
     if (usesTensorRtModelBackend(config_) && config_.model_batch_size > 1)
     {
         const int batch = static_cast<int>(config_.model_batch_size);
@@ -51,6 +53,10 @@ ImageFeatureExtractor::ImageFeatureExtractor(std::string model_name, std::string
 
     model_->setLogLevel(nvinfer1::ILogger::Severity::kINFO);
     model_->buildOrLoad(weights_file.string());
+    if (usesTensorRtModelBackend(config_))
+    {
+        irt::model::setCudaDevice(config_.model_device_id);
+    }
 
     const auto input_tensor_names = model_->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
     if (input_tensor_names.empty())
@@ -95,6 +101,7 @@ ImageFeatureExtractor::ImageFeatureExtractor(std::string model_name, std::string
     feature_dim_               = elementCount(output_dims_) / max_batch_size_;
     if (usesTensorRtModelBackend(config_))
     {
+        irt::model::setCudaDevice(config_.model_device_id);
         device_input_.resize(max_batch_size_ * input_elements_per_sample_, nvinfer1::DataType::kFLOAT);
         device_output_.resize(max_batch_size_ * feature_dim_, nvinfer1::DataType::kFLOAT);
     }
@@ -213,6 +220,10 @@ FeatureTensorBatch ImageFeatureExtractor::extractFeatureTensorBatch(const std::v
     }
 
     auto       input_batch     = preprocessBatch(image_paths, begin, count);
+    if (usesTensorRtModelBackend(config_))
+    {
+        irt::model::setCudaDevice(config_.model_device_id);
+    }
     const auto output_dims     = setRuntimeBatchSize(count);
     const auto output_elements = elementCount(output_dims);
     if (output_elements != count * feature_dim_)

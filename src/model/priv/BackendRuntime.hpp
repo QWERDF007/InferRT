@@ -218,6 +218,7 @@ private:
     void bindTensorAddresses(const std::vector<void *> &buffers);
 
     TRTParams params_;
+    int       device_id_{0}; ///< 当前 TensorRT engine 使用的 CUDA 设备编号。
 };
 
 /**

@@ -79,6 +79,7 @@ public:
             if (config.device() == ModelDevice::GPU)
             {
                 OrtCUDAProviderOptions cuda_options{};
+                cuda_options.device_id = config.deviceId();
                 session_options.AppendExecutionProvider_CUDA(cuda_options);
             }
 

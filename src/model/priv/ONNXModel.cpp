@@ -122,6 +122,8 @@ void SyncModelMetadataFromEngine(ONNXModel &model)
     }
     config->setBackend(current_config.backend());
     config->setDevice(current_config.device());
+    config->setDeviceId(current_config.deviceId());
+    config->setPrecision(current_config.precision());
     model.replaceModelConfigWithoutReset(std::move(config));
 }
 

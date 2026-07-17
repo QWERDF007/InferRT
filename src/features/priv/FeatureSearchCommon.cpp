@@ -5,8 +5,6 @@
 
 #include "FeatureSearchCommon.hpp"
 
-#include <cuda_runtime_api.h>
-
 #pragma warning(push)
 #pragma warning(disable : 4244)
 #include <faiss/gpu/GpuCloner.h>
@@ -67,16 +65,6 @@ void l1Normalize(float *values, size_t count)
     }
 }
 
-/**
- * @brief 获取当前 CUDA 设备编号，供 GPU Faiss 使用。
- */
-int currentCudaDevice()
-{
-    int device{0};
-    irt::model::checkCuda(cudaGetDevice(&device), "cudaGetDevice(Faiss GPU backend)");
-    return device;
-}
-
 } // namespace
 
 bool usesTensorRtModelBackend(const ImageSearchConfig &config) noexcept
@@ -116,6 +104,21 @@ void validateFeatureSearchConfig(const ImageSearchConfig &config, const char *ow
     if (usesTensorRtModelBackend(config) && config.model_device == irt::model::ModelDevice::CPU)
     {
         throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED, "%s TensorRT backend requires GPU device", owner);
+    }
+
+    if (config.model_device_id < 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "%s model device id must be non-negative, got %d",
+                             owner, config.model_device_id);
+    }
+
+    switch (config.model_precision)
+    {
+    case irt::model::ModelPrecision::FP32:
+    case irt::model::ModelPrecision::FP16:
+        break;
+    default:
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported %s model precision", owner);
     }
 
     switch (config.preprocess_backend)
@@ -244,7 +247,7 @@ void normalizeFeature(std::vector<float> &values, ImageSearchFeatureNorm norm)
 }
 
 FaissIndexBundle moveCpuIndexToConfiguredBackend(std::unique_ptr<faiss::Index> cpu_index,
-                                                 ImageSearchFaissBackend       backend)
+                                                 ImageSearchFaissBackend       backend, int device_id)
 {
     if (!cpu_index)
     {
@@ -259,11 +262,12 @@ FaissIndexBundle moveCpuIndexToConfiguredBackend(std::unique_ptr<faiss::Index> c
         break;
     case ImageSearchFaissBackend::GPU:
     {
+        irt::model::setCudaDevice(device_id);
         bundle.gpu_resources = std::make_unique<faiss::gpu::StandardGpuResources>();
         faiss::gpu::GpuClonerOptions options;
         options.useFloat16 = true;
         bundle.index.reset(
-            faiss::gpu::index_cpu_to_gpu(bundle.gpu_resources.get(), currentCudaDevice(), cpu_index.get(), &options));
+            faiss::gpu::index_cpu_to_gpu(bundle.gpu_resources.get(), device_id, cpu_index.get(), &options));
         if (!bundle.index)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to clone Faiss index to GPU");
@@ -302,7 +306,7 @@ FaissIndexBundle buildConfiguredFaissIndex(size_t vector_count, int feature_dim,
     reportBuildProgress(progress_callback, ImageSearchBuildStage::WritingIndex, 0, 0, 0, 1, 1);
 
     reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 0, 1);
-    auto bundle = moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend);
+    auto bundle = moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend, config.model_device_id);
     reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 1, 1);
     return bundle;
 }
@@ -325,7 +329,7 @@ FaissIndexBundle loadConfiguredFaissIndex(const std::filesystem::path &index_pat
         return bundle;
     }
 
-    return moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend);
+    return moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend, config.model_device_id);
 }
 
 } // namespace irt::features::priv

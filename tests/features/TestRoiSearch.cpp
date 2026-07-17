@@ -82,6 +82,8 @@ TEST(RoiSearchTest, DefaultConstructsNotReadySearcher)
 
     EXPECT_EQ(search.config().model_name, irt::features::RoiSearch::kDefaultModelName);
     EXPECT_EQ(search.config().feature_name, irt::features::RoiSearch::kDefaultFeatureName);
+    EXPECT_EQ(search.config().model_device_id, 0);
+    EXPECT_EQ(search.config().model_precision, irt::model::ModelPrecision::FP32);
     EXPECT_EQ(search.config().pooled_height, irt::features::kDefaultRoiSearchPooledHeight);
     EXPECT_EQ(search.config().pooled_width, irt::features::kDefaultRoiSearchPooledWidth);
     EXPECT_EQ(search.config().sampling_ratio, -1);
@@ -101,6 +103,8 @@ TEST(RoiSearchTest, ConstructorStoresConfig)
     config.feature_name          = "layer3";
     config.model_backend         = irt::model::ModelBackend::ONNXRuntime;
     config.model_device          = irt::model::ModelDevice::CPU;
+    config.model_device_id       = 2;
+    config.model_precision       = irt::model::ModelPrecision::FP16;
     config.norm                  = irt::features::ImageSearchFeatureNorm::L1;
     config.index_storage         = irt::features::ImageSearchIndexStorage::Disk;
     config.model_batch_size      = 2;
@@ -117,6 +121,8 @@ TEST(RoiSearchTest, ConstructorStoresConfig)
     EXPECT_EQ(search.config().feature_name, "layer3");
     EXPECT_EQ(search.config().model_backend, irt::model::ModelBackend::ONNXRuntime);
     EXPECT_EQ(search.config().model_device, irt::model::ModelDevice::CPU);
+    EXPECT_EQ(search.config().model_device_id, 2);
+    EXPECT_EQ(search.config().model_precision, irt::model::ModelPrecision::FP16);
     EXPECT_EQ(search.config().norm, irt::features::ImageSearchFeatureNorm::L1);
     EXPECT_EQ(search.config().index_storage, irt::features::ImageSearchIndexStorage::Disk);
     EXPECT_EQ(search.config().model_batch_size, 2U);

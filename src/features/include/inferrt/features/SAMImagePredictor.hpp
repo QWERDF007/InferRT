@@ -101,6 +101,8 @@ struct SAMImagePredictorConfig
     std::string              model_name{kDefaultSAMImagePredictorModelName};    ///< 内置 SAM/SAM2 模型名称。
     irt::model::ModelBackend model_backend{irt::model::ModelBackend::TensorRT}; ///< 模型运行时后端。
     irt::model::ModelDevice  model_device{irt::model::ModelDevice::GPU};        ///< 模型运行设备。
+    int                      model_device_id{0};                                ///< GPU 设备编号，从 0 开始。
+    irt::model::ModelPrecision model_precision{irt::model::ModelPrecision::FP32}; ///< TensorRT 构建/加载精度。
     SAMImageResizeMode       resize_mode{SAMImageResizeMode::StretchSquare};    ///< 默认 SAM2 几何；SAM v1 需显式设置。
 };
 

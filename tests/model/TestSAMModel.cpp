@@ -70,7 +70,8 @@ TEST(SAMModelFactoryTest, SAMDefaultKeyCreatesViTHContract)
 
     EXPECT_EQ(model->name(), "SAMViTH");
     expectSAMContract(*model, 1024);
-    EXPECT_EQ(model->modelConfig().numClasses(), 3);
+    // SAM 原始输出包含 1 个 single-mask 通道和 3 个 multimask 候选通道。
+    EXPECT_EQ(model->modelConfig().numClasses(), 4);
 }
 
 /**
@@ -83,7 +84,8 @@ TEST(SAMModelFactoryTest, EdgeSAMKeyCreatesRepViTContract)
 
     EXPECT_EQ(model->name(), "EdgeSAM");
     expectSAMContract(*model, 1024);
-    EXPECT_EQ(model->modelConfig().numClasses(), 3);
+    // EdgeSAM 与 SAM v1 使用相同的 4 通道 mask 输出契约。
+    EXPECT_EQ(model->modelConfig().numClasses(), 4);
 }
 
 /**

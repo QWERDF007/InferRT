@@ -99,6 +99,7 @@ std::unique_ptr<irt::model::IModelConfig> cloneModelConfig(const irt::model::IMo
     }
     cloned->setBackend(config.backend());
     cloned->setDevice(config.device());
+    cloned->setDeviceId(config.deviceId());
     cloned->setPrecision(config.precision());
     return cloned;
 }
@@ -709,6 +710,11 @@ public:
     irt::model::ModelDevice device() const noexcept
     {
         return model_->device();
+    }
+
+    int deviceId() const noexcept
+    {
+        return model_->deviceId();
     }
 
     /**
@@ -1752,6 +1758,8 @@ PYBIND11_MODULE(inferrt_model_py, m)
             })
         .def_property("backend", &irt::model::IModelConfig::backend, &irt::model::IModelConfig::setBackend)
         .def_property("device", &irt::model::IModelConfig::device, &irt::model::IModelConfig::setDevice)
+        .def_property("device_id", &irt::model::IModelConfig::deviceId, &irt::model::IModelConfig::setDeviceId,
+                      "GPU 设备编号，从 0 开始。")
         .def_property("precision", &irt::model::IModelConfig::precision, &irt::model::IModelConfig::setPrecision,
                       "TensorRT 构建精度；FP16 保持 float32 I/O。");
 
@@ -1773,6 +1781,7 @@ PYBIND11_MODULE(inferrt_model_py, m)
         .def("output_tensor_names", &PyModel::outputTensorNames, "返回输出张量名称列表（分类 logits 或特征导出名）。")
         .def("backend", &PyModel::backend)
         .def("device", &PyModel::device)
+        .def("device_id", &PyModel::deviceId)
         .def("tensor_shape", &PyModel::tensorShape, py::arg("tensor_name"), "返回指定张量的运行时形状。")
         .def("tensor_dtype", &PyModel::tensorDType, py::arg("tensor_name"), "返回指定张量的数据类型名称。")
         .def("set_tensor_shape", &PyModel::setTensorShape, py::arg("tensor_name"), py::arg("shape"),

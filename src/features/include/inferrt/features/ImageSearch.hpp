@@ -158,6 +158,17 @@ struct ImageSearchConfig
     ///< 特征提取模型运行设备。
     irt::model::ModelDevice model_device{irt::model::ModelDevice::GPU};
 
+    ///< 特征提取模型和 GPU Faiss 使用的设备编号，从 0 开始。
+    int model_device_id{0};
+
+    /**
+     * 特征提取模型构建/加载精度。
+     *
+     * TensorRT 后端会据此选择 FP16 或 FP32 engine；图后端的模型精度由其导出的图决定，
+     * 该字段会随配置保留但不会改变图文件本身。
+     */
+    irt::model::ModelPrecision model_precision{irt::model::ModelPrecision::FP32};
+
     ///< 预处理执行后端。
     ImageSearchPreprocessBackend preprocess_backend{ImageSearchPreprocessBackend::CPU};
 

@@ -79,8 +79,48 @@ TEST(SAMImagePredictorTest, DefaultConstructsNotReadyPredictor)
     EXPECT_EQ(predictor.config().model_name, irt::features::kDefaultSAMImagePredictorModelName);
     EXPECT_EQ(predictor.config().model_backend, irt::model::ModelBackend::TensorRT);
     EXPECT_EQ(predictor.config().model_device, irt::model::ModelDevice::GPU);
+    EXPECT_EQ(predictor.config().model_device_id, 0);
+    EXPECT_EQ(predictor.config().model_precision, irt::model::ModelPrecision::FP32);
     EXPECT_EQ(predictor.config().resize_mode, irt::features::SAMImageResizeMode::StretchSquare);
     EXPECT_FALSE(predictor.isReady());
+}
+
+TEST(SAMImagePredictorTest, ConstructorStoresModelPrecision)
+{
+    irt::features::SAMImagePredictorConfig config;
+    config.model_precision = irt::model::ModelPrecision::FP16;
+
+    const irt::features::SAMImagePredictor predictor(config);
+
+    EXPECT_EQ(predictor.config().model_precision, irt::model::ModelPrecision::FP16);
+}
+
+TEST(SAMImagePredictorTest, ConstructorStoresModelDeviceId)
+{
+    irt::features::SAMImagePredictorConfig config;
+    config.model_device_id = 2;
+
+    const irt::features::SAMImagePredictor predictor(config);
+
+    EXPECT_EQ(predictor.config().model_device_id, 2);
+}
+
+TEST(SAMImagePredictorTest, ConstructorRejectsInvalidModelPrecision)
+{
+    irt::features::SAMImagePredictorConfig config;
+    config.model_precision = static_cast<irt::model::ModelPrecision>(99);
+
+    expectIrtExceptionCode([&] { irt::features::SAMImagePredictor predictor(config); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+TEST(SAMImagePredictorTest, ConstructorRejectsNegativeModelDeviceId)
+{
+    irt::features::SAMImagePredictorConfig config;
+    config.model_device_id = -1;
+
+    expectIrtExceptionCode([&] { irt::features::SAMImagePredictor predictor(config); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 TEST(SAMImagePredictorTest, ConstructorRejectsTensorRtCpuDevice)

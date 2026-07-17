@@ -144,6 +144,12 @@ public:
     virtual ModelDevice device() const noexcept;
 
     /**
+     * @brief 获取当前模型使用的 GPU 设备编号。
+     * @return 从 0 开始的设备编号。
+     */
+    virtual int deviceId() const noexcept;
+
+    /**
      * @brief 获取当前 engine 中指定类型的 I/O 张量名称。
      * @param mode TensorRT 张量 I/O 类型。
      * @return 张量名称列表。

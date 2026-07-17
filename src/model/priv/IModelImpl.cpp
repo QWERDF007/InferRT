@@ -217,6 +217,12 @@ void ValidateModelConfig(const IModelImpl &impl)
     ValidateUniqueOutputTensorNames(config);
     ValidateDynamicBatchConfig(impl);
 
+    if (config.deviceId() < 0)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "device_id must be non-negative, got %d",
+                             config.deviceId());
+    }
+
     if (config.backend() == ModelBackend::TensorRT && config.device() == ModelDevice::CPU)
     {
         throw irt::Exception(Status::ERROR_NOT_IMPLEMENTED, "TensorRT backend requires GPU device");
@@ -285,6 +291,7 @@ irt::util::ManifestEntries engineManifestEntries(const IModelImpl &impl, const s
         {         "engine_file",           absolutePathValue(engine_file)},
         {         "num_classes",      std::to_string(config.numClasses())},
         {            "precision",             modelPrecisionName(config.precision())},
+        {           "device_id",            std::to_string(config.deviceId())},
         {        "input_shapes",   inputShapesValue(config.inputShapes())},
         {  "input_tensor_names",   joinStrings(config.inputTensorNames())},
         { "output_tensor_names",  joinStrings(config.outputTensorNames())},
@@ -756,6 +763,7 @@ void IModelImpl::load(const std::string &engine_file)
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "engine_file must not be empty when loading");
     }
 
+    ValidateModelConfig(*this);
     loadRuntimeFromFile(irt::util::ensureFileExtension(engine_file, engineExtension()).string());
     tensorRTBackend().setFeatureOnly(isFeatureOnlyConfig());
 }

@@ -95,6 +95,23 @@ void validateConfig(const SAMImagePredictorConfig &config)
                              "SAMImagePredictor TensorRT backend requires GPU device");
     }
 
+    if (config.model_device_id < 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "SAMImagePredictor model device id must be non-negative, got %d",
+                             config.model_device_id);
+    }
+
+    switch (config.model_precision)
+    {
+    case irt::model::ModelPrecision::FP32:
+    case irt::model::ModelPrecision::FP16:
+        break;
+    default:
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "Unsupported SAMImagePredictor model precision");
+    }
+
     switch (config.resize_mode)
     {
     case SAMImageResizeMode::ResizeLongestSide:
@@ -669,6 +686,8 @@ public:
         auto model_config = std::make_unique<irt::model::IModelConfig>();
         model_config->setBackend(config_.model_backend);
         model_config->setDevice(config_.model_device);
+        model_config->setDeviceId(config_.model_device_id);
+        model_config->setPrecision(config_.model_precision);
 
         const std::string runtime_model_name = usesTensorRt(config_.model_backend) ? config_.model_name : "onnx";
         model_                               = irt::model::CreateModel(runtime_model_name, std::move(model_config));
@@ -858,6 +877,7 @@ private:
             return;
         }
 
+        irt::model::setCudaDevice(config_.model_device_id);
         const auto                stream = model_->resolveExecutionStream();
         std::vector<DeviceBuffer> device_inputs;
         std::vector<DeviceBuffer> device_outputs;

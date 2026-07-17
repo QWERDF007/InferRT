@@ -19,6 +19,8 @@
 - `model_name`：用于提取特征的内置模型名，如 `resnet18`、`dinov2_vits14`。
 - `feature_name`：用于检索的中间特征名，如 `layer4`、`x_norm_clstoken`。
 - `model_backend` / `model_device`：特征提取后端和设备。
+- `model_device_id`：特征模型和 GPU Faiss 使用的设备编号，从 0 开始。
+- `model_precision`：底层模型构建/加载精度，支持 `FP32` 和 `FP16`；TensorRT 后端据此选择 engine，图后端精度由导出的图决定。
 - `preprocess_backend`：当前实现支持 CPU 预处理。
 - `norm`：特征归一化方式，默认 L2。
 - `faiss_backend`：Faiss 搜索后端，支持 CPU 或 GPU。
@@ -40,7 +42,7 @@ searcher.buildOrLoad(weights_file, gallery_dir, index_file, rebuild_index, progr
 2. 如果 `rebuild_index == false`，且 `.faiss`、`.manifest.yaml` 都存在并匹配当前配置，则直接加载索引。
 3. 否则进入完整重建流程。
 
-元数据匹配会校验模型名、特征名、图库目录、模型后端、设备、归一化方式、Faiss 后端、索引存储类型和索引类型。这样可以避免使用旧配置生成的索引。
+元数据匹配会校验模型名、特征名、图库目录、模型设备编号、模型精度、归一化方式、Faiss 后端、索引存储类型和索引类型。这样可以避免使用旧配置生成的索引。
 
 ## 4. 重建索引流程
 
@@ -63,10 +65,11 @@ searcher.buildOrLoad(weights_file, gallery_dir, index_file, rebuild_index, progr
 `ImageSearchFeatureExtractor` 负责把图片转换成检索向量：
 
 1. 构造 `IModelConfig`，开启 `featureOnly`，把 `feature_name` 设置为输出张量。
-2. TensorRT 后端会用 `model_batch_size` 设置动态 batch profile。
-3. OpenCV 读取图片，使用 ImageNet 预处理转换为 NCHW float 输入。
-4. 调用 `forwardFeatures` 得到指定中间层输出。
-5. 对每条特征按配置做 L1/L2/None 归一化。
+2. 将 `model_precision` 传递到底层模型配置；TensorRT 后端会据此选择 FP16/FP32 构建精度。
+3. TensorRT 后端会用 `model_batch_size` 设置动态 batch profile。
+4. OpenCV 读取图片，使用 ImageNet 预处理转换为 NCHW float 输入。
+5. 调用 `forwardFeatures` 得到指定中间层输出。
+6. 对每条特征按配置做 L1/L2/None 归一化。
 
 连续图片区间通过 `extractBatch(begin, count)` 批量提取；训练采样如果产生非连续下标，会通过 indexed batch 重排为临时批次，避免退化为逐图推理。
 

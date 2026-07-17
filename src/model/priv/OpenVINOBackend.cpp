@@ -19,9 +19,13 @@ struct TensorInfo
     bool              dynamic_batch{false};
 };
 
-std::string DeviceName(ModelDevice device)
+std::string DeviceName(ModelDevice device, int device_id)
 {
-    return device == ModelDevice::GPU ? "GPU" : "CPU";
+    if (device != ModelDevice::GPU)
+    {
+        return "CPU";
+    }
+    return device_id == 0 ? "GPU" : "GPU." + std::to_string(device_id);
 }
 
 nvinfer1::DataType OvTypeToTrt(const ov::element::Type &type)
@@ -122,7 +126,7 @@ public:
         try
         {
             model_          = core_.read_model(model_path);
-            compiled_model_ = core_.compile_model(model_, DeviceName(config.device()));
+            compiled_model_ = core_.compile_model(model_, DeviceName(config.device(), config.deviceId()));
             infer_request_  = compiled_model_.create_infer_request();
             refreshMetadata(config);
         }

@@ -90,6 +90,13 @@ INFERRT_MODEL_API std::string dimsToString(const nvinfer1::Dims &dims);
 INFERRT_MODEL_API void checkCuda(cudaError_t status, const char *op);
 
 /**
+ * @brief 将当前线程的 CUDA device 切换到指定编号。
+ * @param device_id 从 0 开始的 CUDA 设备编号。
+ * @throws irt::Exception 设备编号非法或 CUDA 切换失败时抛出。
+ */
+INFERRT_MODEL_API void setCudaDevice(int device_id);
+
+/**
  * @brief ImageNet 分类样例的通用工具集合。
  */
 class INFERRT_MODEL_API ImageNetUtil

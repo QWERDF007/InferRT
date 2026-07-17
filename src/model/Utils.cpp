@@ -192,6 +192,15 @@ void checkCuda(cudaError_t status, const char *op)
     }
 }
 
+void setCudaDevice(int device_id)
+{
+    if (device_id < 0)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "CUDA device id must be non-negative, got %d", device_id);
+    }
+    checkCuda(cudaSetDevice(device_id), "cudaSetDevice");
+}
+
 cv::Mat ImageNetUtil::preprocess(const cv::Mat &bgr_image, cv::Size target_size)
 {
     if (bgr_image.empty())

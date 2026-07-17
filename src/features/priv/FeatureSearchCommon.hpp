@@ -87,10 +87,11 @@ void normalizeFeature(std::vector<float> &values, ImageSearchFeatureNorm norm);
  * @brief 将 CPU Faiss 索引按配置保留在 CPU 或迁移到 GPU。
  * @param cpu_index 已构建或已加载的 CPU 索引。
  * @param backend 目标 Faiss 后端。
+ * @param device_id GPU Faiss 使用的设备编号。
  * @return 迁移后的索引包。
  */
 FaissIndexBundle moveCpuIndexToConfiguredBackend(std::unique_ptr<faiss::Index> cpu_index,
-                                                 ImageSearchFaissBackend       backend);
+                                                 ImageSearchFaissBackend       backend, int device_id);
 
 /**
  * @brief 按配置构建 Faiss 索引。

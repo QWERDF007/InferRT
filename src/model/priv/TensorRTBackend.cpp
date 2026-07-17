@@ -204,6 +204,8 @@ ModelBackend TensorRTBackend::backend() const noexcept
 
 void TensorRTBackend::load(const std::string &engine_file, const IModelConfig &config, const std::string &model_name)
 {
+    setCudaDevice(config.deviceId());
+    device_id_ = config.deviceId();
     params_.context.reset();
     params_.engine.reset();
 
@@ -348,6 +350,8 @@ void TensorRTBackend::clearStream()
 
 cudaStream_t TensorRTBackend::resolveExecutionStream(cudaStream_t stream_override)
 {
+    setCudaDevice(device_id_);
+
     if (stream_override)
     {
         return stream_override;
@@ -416,6 +420,8 @@ void TensorRTBackend::buildFromNetwork(const std::string &source_file, const std
                                        const IModelConfig &model_config, NetworkBuildFn build_fn)
 {
     using namespace nvinfer1;
+    setCudaDevice(model_config.deviceId());
+    device_id_ = model_config.deviceId();
     if (params_.logger == nullptr)
     {
         initLogger(model_name);
@@ -484,6 +490,7 @@ void TensorRTBackend::buildFromNetwork(const std::string &source_file, const std
 
 void TensorRTBackend::execute(const std::vector<void *> &buffers, cudaStream_t stream_override, bool non_blocking)
 {
+    setCudaDevice(device_id_);
     bindTensorAddresses(buffers);
 
     const auto stream = resolveExecutionStream(stream_override);

@@ -156,6 +156,7 @@ TEST(IModelConfigTest, DefaultConfigMatchesImageNetClassificationContract)
     EXPECT_FALSE(config.featureOnly());
     EXPECT_EQ(config.backend(), irt::model::ModelBackend::TensorRT);
     EXPECT_EQ(config.device(), irt::model::ModelDevice::GPU);
+    EXPECT_EQ(config.deviceId(), 0);
     EXPECT_FALSE(config.dynamicBatch());
     EXPECT_EQ(config.minBatchSize(), 1);
     EXPECT_EQ(config.optBatchSize(), 1);
@@ -183,6 +184,7 @@ TEST(IModelConfigTest, SettersUpdateAllPublicConfigFields)
     config.setDynamicBatchRange(1, 2, 4);
     config.setBackend(irt::model::ModelBackend::ONNXRuntime);
     config.setDevice(irt::model::ModelDevice::CPU);
+    config.setDeviceId(2);
 
     EXPECT_EQ(config.numClasses(), 7);
     EXPECT_EQ(config.inputTensorNames(), (std::vector<std::string>{"image"}));
@@ -195,6 +197,7 @@ TEST(IModelConfigTest, SettersUpdateAllPublicConfigFields)
     EXPECT_EQ(config.maxBatchSize(), 4);
     EXPECT_EQ(config.backend(), irt::model::ModelBackend::ONNXRuntime);
     EXPECT_EQ(config.device(), irt::model::ModelDevice::CPU);
+    EXPECT_EQ(config.deviceId(), 2);
     EXPECT_EQ(config.inputShape().d[0], 2);
     EXPECT_EQ(config.inputShape().d[2], 32);
 }
@@ -226,14 +229,17 @@ TEST(IModelConfigTest, CreateModelPreservesBackendAndDeviceFromConfig)
     auto config = std::make_unique<irt::model::IModelConfig>();
     config->setBackend(irt::model::ModelBackend::ONNXRuntime);
     config->setDevice(irt::model::ModelDevice::CPU);
+    config->setDeviceId(1);
 
     auto model = irt::model::CreateModel("onnx", std::move(config));
     ASSERT_NE(model, nullptr);
 
     EXPECT_EQ(model->backend(), irt::model::ModelBackend::ONNXRuntime);
     EXPECT_EQ(model->device(), irt::model::ModelDevice::CPU);
+    EXPECT_EQ(model->deviceId(), 1);
     EXPECT_EQ(model->modelConfig().backend(), irt::model::ModelBackend::ONNXRuntime);
     EXPECT_EQ(model->modelConfig().device(), irt::model::ModelDevice::CPU);
+    EXPECT_EQ(model->modelConfig().deviceId(), 1);
 }
 
 /**

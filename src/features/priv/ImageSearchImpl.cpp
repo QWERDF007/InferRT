@@ -258,6 +258,21 @@ void validateConfig(const ImageSearchConfig &config)
         throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED, "ImageSearch TensorRT backend requires GPU device");
     }
 
+    if (config.model_device_id < 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "ImageSearch model device id must be non-negative, got %d", config.model_device_id);
+    }
+
+    switch (config.model_precision)
+    {
+    case irt::model::ModelPrecision::FP32:
+    case irt::model::ModelPrecision::FP16:
+        break;
+    default:
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported ImageSearch model precision");
+    }
+
     switch (config.preprocess_backend)
     {
     case ImageSearchPreprocessBackend::CPU:
@@ -308,24 +323,14 @@ void validateConfig(const ImageSearchConfig &config)
 }
 
 /**
- * @brief 获取当前 CUDA 设备编号，供 GPU Faiss 索引使用。
- * @return 设备 ID。
- */
-int currentCudaDevice()
-{
-    int device{0};
-    checkCuda(cudaGetDevice(&device), "cudaGetDevice(Faiss GPU backend)");
-    return device;
-}
-
-/**
  * @brief 将磁盘读入的 CPU 索引迁移到配置指定的后端。
  * @param cpu_index 从文件加载的 CPU 索引。
  * @param backend 目标 Faiss 后端。
+ * @param device_id GPU Faiss 使用的设备编号。
  * @return 可在配置后端上搜索的索引包。
  */
 FaissIndexBundle moveCpuIndexToConfiguredBackend(std::unique_ptr<faiss::Index> cpu_index,
-                                                 ImageSearchFaissBackend       backend)
+                                                 ImageSearchFaissBackend       backend, int device_id)
 {
     if (!cpu_index)
     {
@@ -340,11 +345,12 @@ FaissIndexBundle moveCpuIndexToConfiguredBackend(std::unique_ptr<faiss::Index> c
         break;
     case ImageSearchFaissBackend::GPU:
     {
+        irt::model::setCudaDevice(device_id);
         bundle.gpu_resources = std::make_unique<faiss::gpu::StandardGpuResources>();
         faiss::gpu::GpuClonerOptions options;
         options.useFloat16 = true;
         bundle.index.reset(
-            faiss::gpu::index_cpu_to_gpu(bundle.gpu_resources.get(), currentCudaDevice(), cpu_index.get(), &options));
+            faiss::gpu::index_cpu_to_gpu(bundle.gpu_resources.get(), device_id, cpu_index.get(), &options));
         if (!bundle.index)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to clone Faiss index to GPU");
@@ -511,6 +517,8 @@ irt::util::ManifestEntries imageSearchManifestEntries(const fs::path &index_path
         {       "gallery_dir",                                    gallery_value},
         {     "model_backend",           modelBackendName(config.model_backend)},
         {      "model_device",             modelDeviceName(config.model_device)},
+        {   "model_device_id",           std::to_string(config.model_device_id)},
+        {   "model_precision",          modelPrecisionName(config.model_precision)},
         {"preprocess_backend", preprocessBackendName(config.preprocess_backend)},
         {              "norm",                     featureNormName(config.norm)},
         {     "faiss_backend",           faissBackendName(config.faiss_backend)},
@@ -621,6 +629,8 @@ bool existingIndexMatchesConfig(const fs::path &index_path, const fs::path &gall
         && irt::util::manifestValueEquals(manifest, "index_file", absolutePathManifestValue(index_path))
         && irt::util::manifestValueEquals(manifest, "model", config.model_name)
         && irt::util::manifestValueEquals(manifest, "feature", config.feature_name) && gallery_matches
+        && irt::util::manifestValueEquals(manifest, "model_device_id", std::to_string(config.model_device_id))
+        && irt::util::manifestValueEquals(manifest, "model_precision", modelPrecisionName(config.model_precision))
         && irt::util::manifestValueEquals(manifest, "norm", featureNormName(config.norm))
         && irt::util::manifestValueEquals(manifest, "index_storage", indexStorageName(config.index_storage))
         && irt::util::manifestValueEquals(manifest, "index_kind", indexKindName(config));
@@ -660,6 +670,8 @@ public:
         model_config->setFeatureOnly(true);
         model_config->setBackend(config_.model_backend);
         model_config->setDevice(config_.model_device);
+        model_config->setDeviceId(config_.model_device_id);
+        model_config->setPrecision(config_.model_precision);
         if (usesTensorRtModelBackend(config_) && config_.model_batch_size > 1)
         {
             const int batch = static_cast<int>(config_.model_batch_size);
@@ -676,6 +688,10 @@ public:
 
         model_->setLogLevel(nvinfer1::ILogger::Severity::kINFO);
         model_->buildOrLoad(weights_file.string());
+        if (usesTensorRtModelBackend(config_))
+        {
+            irt::model::setCudaDevice(config_.model_device_id);
+        }
 
         const auto input_tensor_names = model_->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
         if (input_tensor_names.empty())
@@ -721,6 +737,7 @@ public:
         feature_dim_               = elementCount(output_dims_) / max_batch_size_;
         if (usesTensorRtModelBackend(config_))
         {
+            irt::model::setCudaDevice(config_.model_device_id);
             device_input_.resize(max_batch_size_ * input_elements_per_sample_, nvinfer1::DataType::kFLOAT);
             device_output_.resize(max_batch_size_ * feature_dim_, nvinfer1::DataType::kFLOAT);
         }
@@ -784,6 +801,10 @@ public:
         }
 
         auto       input_data      = preprocessBatch(image_paths, begin, count);
+        if (usesTensorRtModelBackend(config_))
+        {
+            irt::model::setCudaDevice(config_.model_device_id);
+        }
         const auto output_dims     = setRuntimeBatchSize(count);
         const auto output_elements = elementCount(output_dims);
         if (output_elements != count * feature_dim_)
@@ -1058,7 +1079,7 @@ FaissIndexBundle buildRamIvfPqIndex(const std::vector<fs::path> &gallery_images,
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::WritingIndex, 0, 0, 0, 1, 1);
 
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 0, 1);
-    auto bundle = moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend);
+    auto bundle = moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend, config.model_device_id);
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 1, 1);
     return bundle;
 }
@@ -1116,7 +1137,7 @@ FaissIndexBundle loadIndex(const fs::path &index_path, const ImageSearchConfig &
     }
     else
     {
-        bundle = moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend);
+        bundle = moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend, config.model_device_id);
     }
     bundle.image_ids = std::move(image_ids);
     return bundle;
