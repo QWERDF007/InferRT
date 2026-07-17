@@ -116,9 +116,7 @@ TEST(ImageSearchTest, DefaultConstructsNotReadySearcher)
     EXPECT_TRUE(search.galleryIds().empty());
     EXPECT_EQ(search.featureDim(), 0);
     EXPECT_EQ(search.config().preprocess_backend, irt::features::ImageSearchPreprocessBackend::CPU);
-    EXPECT_EQ(search.config().model_backend, irt::model::ModelBackend::TensorRT);
-    EXPECT_EQ(search.config().model_device, irt::model::ModelDevice::GPU);
-    EXPECT_EQ(search.config().model_device_id, 0);
+    EXPECT_EQ(search.config().model_runtime, irt::model::ModelRuntime{});
     EXPECT_EQ(search.config().model_precision, irt::model::ModelPrecision::FP32);
     EXPECT_EQ(search.config().norm, irt::features::ImageSearchFeatureNorm::L2);
     EXPECT_EQ(search.config().faiss_backend, irt::features::ImageSearchFaissBackend::CPU);
@@ -134,9 +132,7 @@ TEST(ImageSearchTest, ConstructorStoresConfig)
     irt::features::ImageSearchConfig config;
     config.model_name            = "resnet18";
     config.feature_name          = "layer4";
-    config.model_backend         = irt::model::ModelBackend::OpenVINO;
-    config.model_device          = irt::model::ModelDevice::CPU;
-    config.model_device_id       = 2;
+    config.model_runtime         = irt::model::ModelRuntime::parse("openvino:2");
     config.model_precision       = irt::model::ModelPrecision::FP16;
     config.norm                  = irt::features::ImageSearchFeatureNorm::L1;
     config.index_storage         = irt::features::ImageSearchIndexStorage::Disk;
@@ -146,9 +142,7 @@ TEST(ImageSearchTest, ConstructorStoresConfig)
 
     EXPECT_EQ(search.config().model_name, "resnet18");
     EXPECT_EQ(search.config().feature_name, "layer4");
-    EXPECT_EQ(search.config().model_backend, irt::model::ModelBackend::OpenVINO);
-    EXPECT_EQ(search.config().model_device, irt::model::ModelDevice::CPU);
-    EXPECT_EQ(search.config().model_device_id, 2);
+    EXPECT_EQ(search.config().model_runtime.toString(), "openvino:2");
     EXPECT_EQ(search.config().model_precision, irt::model::ModelPrecision::FP16);
     EXPECT_EQ(search.config().preprocess_backend, irt::features::ImageSearchPreprocessBackend::CPU);
     EXPECT_EQ(search.config().norm, irt::features::ImageSearchFeatureNorm::L1);
@@ -161,9 +155,7 @@ TEST(ImageSearchTest, ConstructorStoresConfig)
 
     EXPECT_EQ(default_search.config().model_name, irt::features::ImageSearch::kDefaultModelName);
     EXPECT_EQ(default_search.config().feature_name, irt::features::ImageSearch::kDefaultFeatureName);
-    EXPECT_EQ(default_search.config().model_backend, irt::model::ModelBackend::OpenVINO);
-    EXPECT_EQ(default_search.config().model_device, irt::model::ModelDevice::CPU);
-    EXPECT_EQ(default_search.config().model_device_id, 2);
+    EXPECT_EQ(default_search.config().model_runtime.toString(), "openvino:2");
     EXPECT_EQ(default_search.config().model_precision, irt::model::ModelPrecision::FP16);
     EXPECT_EQ(default_search.config().norm, irt::features::ImageSearchFeatureNorm::None);
     EXPECT_EQ(default_search.config().index_storage, irt::features::ImageSearchIndexStorage::Disk);
@@ -193,13 +185,11 @@ TEST(ImageSearchTest, ConstructorAcceptsOnnxRuntimeBackend)
     irt::features::ImageSearchConfig config;
     config.model_name    = "resnet18";
     config.feature_name  = "layer4";
-    config.model_backend = irt::model::ModelBackend::ONNXRuntime;
-    config.model_device  = irt::model::ModelDevice::CPU;
+    config.model_runtime = irt::model::ModelRuntime::parse("onnxruntime:cpu");
 
     const irt::features::ImageSearch search(config);
 
-    EXPECT_EQ(search.config().model_backend, irt::model::ModelBackend::ONNXRuntime);
-    EXPECT_EQ(search.config().model_device, irt::model::ModelDevice::CPU);
+    EXPECT_EQ(search.config().model_runtime.toString(), "onnxruntime:cpu");
     EXPECT_FALSE(search.isReady());
 }
 
@@ -211,10 +201,13 @@ TEST(ImageSearchTest, ConstructorRejectsTensorRtCpuDevice)
     irt::features::ImageSearchConfig config;
     config.model_name    = "resnet18";
     config.feature_name  = "layer4";
-    config.model_backend = irt::model::ModelBackend::TensorRT;
-    config.model_device  = irt::model::ModelDevice::CPU;
-
-    expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); }, irt::Status::ERROR_NOT_IMPLEMENTED);
+    expectIrtExceptionCode(
+        [&]
+        {
+            config.model_runtime = irt::model::ModelRuntime::parse("tensorrt:cpu");
+            irt::features::ImageSearch search(config);
+        },
+        irt::Status::ERROR_NOT_IMPLEMENTED);
 }
 
 /**
@@ -266,9 +259,9 @@ TEST(ImageSearchTest, ConstructorRejectsZeroModelBatchSize)
  */
 TEST(ImageSearchTest, ConstructorStoresGraphBackendModelBatchSize)
 {
-    const std::vector<irt::model::ModelBackend> graph_backends{
-        irt::model::ModelBackend::ONNXRuntime,
-        irt::model::ModelBackend::OpenVINO,
+    const std::vector<irt::model::ModelRuntime::Backend> graph_backends{
+        irt::model::ModelRuntime::Backend::ONNXRuntime,
+        irt::model::ModelRuntime::Backend::OpenVINO,
     };
 
     for (const auto backend : graph_backends)
@@ -276,13 +269,12 @@ TEST(ImageSearchTest, ConstructorStoresGraphBackendModelBatchSize)
         irt::features::ImageSearchConfig config;
         config.model_name       = "resnet18";
         config.feature_name     = "layer4";
-        config.model_backend    = backend;
-        config.model_device     = irt::model::ModelDevice::CPU;
+        config.model_runtime    = {backend, irt::model::ModelRuntime::Device::CPU};
         config.model_batch_size = 2;
 
         const irt::features::ImageSearch search(config);
 
-        EXPECT_EQ(search.config().model_backend, backend);
+        EXPECT_EQ(search.config().model_runtime.backend(), backend);
         EXPECT_EQ(search.config().model_batch_size, 2U);
         EXPECT_FALSE(search.isReady());
     }
@@ -353,12 +345,17 @@ TEST(ImageSearchTest, ConstructorRejectsInvalidModelPrecision)
     expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
-TEST(ImageSearchTest, ConstructorRejectsNegativeModelDeviceId)
+TEST(ImageSearchTest, ConstructorRejectsInvalidModelRuntime)
 {
     irt::features::ImageSearchConfig config;
-    config.model_device_id = -1;
 
-    expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); }, irt::Status::ERROR_INVALID_ARGUMENT);
+    expectIrtExceptionCode(
+        [&]
+        {
+            config.model_runtime = irt::model::ModelRuntime::parse("cuda:-1");
+            irt::features::ImageSearch search(config);
+        },
+        irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**

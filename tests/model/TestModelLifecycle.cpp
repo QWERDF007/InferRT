@@ -52,8 +52,7 @@ void SetModelTensorNames(irt::model::IModel &model, std::vector<std::string> inp
     {
         new_config->setDynamicBatchRange(config.minBatchSize(), config.optBatchSize(), config.maxBatchSize());
     }
-    new_config->setBackend(config.backend());
-    new_config->setDevice(config.device());
+    new_config->setRuntime(config.runtime());
     model.setModelConfig(std::move(new_config));
 }
 
@@ -154,9 +153,7 @@ TEST(IModelConfigTest, DefaultConfigMatchesImageNetClassificationContract)
     EXPECT_EQ(config.outputTensorNames(), (std::vector<std::string>{"output"}));
     EXPECT_TRUE(config.featureTensorNames().empty());
     EXPECT_FALSE(config.featureOnly());
-    EXPECT_EQ(config.backend(), irt::model::ModelBackend::TensorRT);
-    EXPECT_EQ(config.device(), irt::model::ModelDevice::GPU);
-    EXPECT_EQ(config.deviceId(), 0);
+    EXPECT_EQ(config.runtime(), irt::model::ModelRuntime{});
     EXPECT_FALSE(config.dynamicBatch());
     EXPECT_EQ(config.minBatchSize(), 1);
     EXPECT_EQ(config.optBatchSize(), 1);
@@ -182,9 +179,7 @@ TEST(IModelConfigTest, SettersUpdateAllPublicConfigFields)
     config.setFeatureTensorNames({"layer1", "layer2"});
     config.setFeatureOnly(true);
     config.setDynamicBatchRange(1, 2, 4);
-    config.setBackend(irt::model::ModelBackend::ONNXRuntime);
-    config.setDevice(irt::model::ModelDevice::CPU);
-    config.setDeviceId(2);
+    config.setRuntime(irt::model::ModelRuntime::parse("onnxruntime:2"));
 
     EXPECT_EQ(config.numClasses(), 7);
     EXPECT_EQ(config.inputTensorNames(), (std::vector<std::string>{"image"}));
@@ -195,9 +190,9 @@ TEST(IModelConfigTest, SettersUpdateAllPublicConfigFields)
     EXPECT_EQ(config.minBatchSize(), 1);
     EXPECT_EQ(config.optBatchSize(), 2);
     EXPECT_EQ(config.maxBatchSize(), 4);
-    EXPECT_EQ(config.backend(), irt::model::ModelBackend::ONNXRuntime);
-    EXPECT_EQ(config.device(), irt::model::ModelDevice::CPU);
-    EXPECT_EQ(config.deviceId(), 2);
+    EXPECT_EQ(config.runtime().backend(), irt::model::ModelRuntime::Backend::ONNXRuntime);
+    EXPECT_EQ(config.runtime().device(), irt::model::ModelRuntime::Device::GPU);
+    EXPECT_EQ(config.runtime().deviceId(), 2);
     EXPECT_EQ(config.inputShape().d[0], 2);
     EXPECT_EQ(config.inputShape().d[2], 32);
 }
@@ -227,19 +222,40 @@ TEST(IModelConfigTest, DynamicBatchSupportIsModelScoped)
 TEST(IModelConfigTest, CreateModelPreservesBackendAndDeviceFromConfig)
 {
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setBackend(irt::model::ModelBackend::ONNXRuntime);
-    config->setDevice(irt::model::ModelDevice::CPU);
-    config->setDeviceId(1);
+    config->setRuntime(irt::model::ModelRuntime::parse("onnxruntime:1"));
 
     auto model = irt::model::CreateModel("onnx", std::move(config));
     ASSERT_NE(model, nullptr);
 
-    EXPECT_EQ(model->backend(), irt::model::ModelBackend::ONNXRuntime);
-    EXPECT_EQ(model->device(), irt::model::ModelDevice::CPU);
-    EXPECT_EQ(model->deviceId(), 1);
-    EXPECT_EQ(model->modelConfig().backend(), irt::model::ModelBackend::ONNXRuntime);
-    EXPECT_EQ(model->modelConfig().device(), irt::model::ModelDevice::CPU);
-    EXPECT_EQ(model->modelConfig().deviceId(), 1);
+    EXPECT_EQ(model->runtime(), irt::model::ModelRuntime::parse("onnxruntime:1"));
+    EXPECT_EQ(model->modelConfig().runtime(), irt::model::ModelRuntime::parse("onnxruntime:1"));
+}
+
+TEST(ModelRuntimeTest, ParsesDeviceShorthandsAndBackendTargets)
+{
+    const std::vector<std::pair<std::string, std::string>> cases{
+        {"cpu", "onnxruntime:cpu"},
+        {"gpu:0", "tensorrt:0"},
+        {"gpu:3", "tensorrt:3"},
+        {"cuda:2", "tensorrt:2"},
+        {"tensorrt:1", "tensorrt:1"},
+        {"onnx:cpu", "onnxruntime:cpu"},
+        {"openvino:4", "openvino:4"},
+    };
+
+    for (const auto &[specification, expected] : cases)
+    {
+        EXPECT_EQ(irt::model::ModelRuntime::parse(specification).toString(), expected) << specification;
+    }
+}
+
+TEST(ModelRuntimeTest, RejectsInvalidSpecifications)
+{
+    for (const auto &specification : {std::string{}, std::string{"gpu:x"}, std::string{"cuda:-1"},
+                                      std::string{"unknown:cpu"}, std::string{"tensorrt:cpu"}})
+    {
+        EXPECT_THROW(irt::model::ModelRuntime::parse(specification), irt::Exception) << specification;
+    }
 }
 
 /**

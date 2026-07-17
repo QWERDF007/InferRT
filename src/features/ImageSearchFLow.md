@@ -18,8 +18,9 @@
 
 - `model_name`：用于提取特征的内置模型名，如 `resnet18`、`dinov2_vits14`。
 - `feature_name`：用于检索的中间特征名，如 `layer4`、`x_norm_clstoken`。
-- `model_backend` / `model_device`：特征提取后端和设备。
-- `model_device_id`：特征模型和 GPU Faiss 使用的设备编号，从 0 开始。
+- `model_runtime`：特征提取模型运行目标，统一包含后端和设备；GPU 使用 `tensorrt:0`、`onnxruntime:0` 或
+  `openvino:1`，CPU 使用 `onnxruntime:cpu` 或 `openvino:cpu`。也支持裸设备简写 `cpu`、`gpu:0`、`cuda:0`。
+  GPU Faiss 使用该目标的设备编号。
 - `model_precision`：底层模型构建/加载精度，支持 `FP32` 和 `FP16`；TensorRT 后端据此选择 engine，图后端精度由导出的图决定。
 - `preprocess_backend`：当前实现支持 CPU 预处理。
 - `norm`：特征归一化方式，默认 L2。
@@ -42,7 +43,7 @@ searcher.buildOrLoad(weights_file, gallery_dir, index_file, rebuild_index, progr
 2. 如果 `rebuild_index == false`，且 `.faiss`、`.manifest.yaml` 都存在并匹配当前配置，则直接加载索引。
 3. 否则进入完整重建流程。
 
-元数据匹配会校验模型名、特征名、图库目录、模型设备编号、模型精度、归一化方式、Faiss 后端、索引存储类型和索引类型。这样可以避免使用旧配置生成的索引。
+元数据匹配会校验模型名、特征名、图库目录、模型运行目标、模型精度、归一化方式、Faiss 后端、索引存储类型和索引类型。这样可以避免使用旧配置生成的索引。
 
 ## 4. 重建索引流程
 

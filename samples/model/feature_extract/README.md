@@ -13,7 +13,7 @@ cmake --build build --config Debug --target inferrt_sample_feature_extract
 ## Run the C++ sample
 
 ```bash
-build/bin/inferrt_sample_feature_extract.exe --model <name> --weights-file <weights_or_model_file> --features <feature_a,feature_b,...> [--image-path PATH] [--output-dir DIR] [--backend tensorrt|openvino|onnxruntime] [--device cpu|gpu] [--warmup N] [--repeat N]
+build/bin/inferrt_sample_feature_extract.exe --model <name> --weights-file <weights_or_model_file> --features <feature_a,feature_b,...> [--image-path PATH] [--output-dir DIR] [--runtime tensorrt:0|onnxruntime:cpu|onnxruntime:0|openvino:cpu] [--warmup N] [--repeat N]
 build/bin/inferrt_sample_feature_extract.exe --help
 ```
 
@@ -23,7 +23,7 @@ Example:
 build/bin/inferrt_sample_feature_extract.exe -m resnet18 -w assets/models/resnet/resnet18.wts -f layer1,layer4 -i assets/pics/dog.jpg -o build/feature_dump_cpp
 build/bin/inferrt_sample_feature_extract.exe --model alexnet --weights-file assets/models/alexnet/alexnet.wts --features pool1,fc2
 build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w assets/models/dinov2/dinov2_vits14.wts -f x_norm_clstoken,x_norm_patchtokens -i assets/pics/dog.jpg -o build/dinov2_feature_dump_cpp
-build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx -f x_norm_clstoken -i assets/pics/dog.jpg -o build/dinov2_openvino_cpu_feature_dump --backend openvino --device cpu --warmup 10 --repeat 100
+build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx -f x_norm_clstoken -i assets/pics/dog.jpg -o build/dinov2_openvino_cpu_feature_dump --runtime openvino:cpu --warmup 10 --repeat 100
 build/bin/inferrt_sample_feature_extract.exe -m dinov3_vitb16 -w assets/models/dinov3/dinov3_vitb16.wts -f x_norm_clstoken,x_storage_tokens,x_norm_patchtokens -i assets/pics/dog.jpg -o build/dinov3_feature_dump_cpp
 ```
 
@@ -40,8 +40,7 @@ Defaults:
 
 - `--image-path`: `assets/pics/dog.jpg`
 - `--output-dir`: `feature_dump_cpp`
-- `--backend`: `tensorrt`
-- `--device`: `gpu`
+- `--runtime`: `tensorrt:0` by default; use `onnxruntime:0` for ONNX Runtime GPU or `onnxruntime:cpu`/`openvino:cpu` for CPU graph models
 - `--warmup`: `0`
 - `--repeat`: `1`
 

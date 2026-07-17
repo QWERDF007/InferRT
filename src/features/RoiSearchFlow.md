@@ -21,8 +21,9 @@
 
 - `model_name`：用于抽取特征图的模型名称，默认 `resnet18`。
 - `feature_name`：用于 ROIAlign 的空间特征图张量名称，默认 `layer4`。
-- `model_backend` / `model_device`：特征抽取模型后端和设备。
-- `model_device_id`：特征模型和 GPU Faiss 使用的设备编号，从 0 开始。
+- `model_runtime`：特征抽取模型运行目标，统一包含后端和设备；GPU 使用 `tensorrt:0`、`onnxruntime:0` 或
+  `openvino:1`，CPU 使用 `onnxruntime:cpu` 或 `openvino:cpu`。也支持裸设备简写 `cpu`、`gpu:0`、`cuda:0`。
+  GPU Faiss 使用该目标的设备编号。
 - `model_precision`：底层模型构建/加载精度，支持 `FP32` 和 `FP16`。
 - `preprocess_backend`：当前实现支持 CPU 预处理。
 - `norm`：ROI 展平特征的归一化方式，默认 L2。

@@ -97,9 +97,7 @@ std::unique_ptr<irt::model::IModelConfig> cloneModelConfig(const irt::model::IMo
     {
         cloned->setDynamicBatchRange(config.minBatchSize(), config.optBatchSize(), config.maxBatchSize());
     }
-    cloned->setBackend(config.backend());
-    cloned->setDevice(config.device());
-    cloned->setDeviceId(config.deviceId());
+    cloned->setRuntime(config.runtime());
     cloned->setPrecision(config.precision());
     return cloned;
 }
@@ -132,59 +130,22 @@ py::dtype dataTypeToPyDType(nvinfer1::DataType data_type)
     }
 }
 
-std::string lowerAscii(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    return value;
-}
-
-irt::model::ModelBackend parseBackendObject(const py::object &value, irt::model::ModelBackend fallback)
+irt::model::ModelRuntime parseRuntimeObject(const py::object &value, const irt::model::ModelRuntime &fallback)
 {
     if (value.is_none())
     {
         return fallback;
     }
-    if (py::isinstance<py::str>(value))
+    if (py::isinstance<irt::model::ModelRuntime>(value))
     {
-        const auto text = lowerAscii(value.cast<std::string>());
-        if (text == "tensorrt" || text == "trt")
-        {
-            return irt::model::ModelBackend::TensorRT;
-        }
-        if (text == "onnxruntime" || text == "onnx_runtime" || text == "ort")
-        {
-            return irt::model::ModelBackend::ONNXRuntime;
-        }
-        if (text == "openvino" || text == "ov")
-        {
-            return irt::model::ModelBackend::OpenVINO;
-        }
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported model backend: %s", text.c_str());
-    }
-    return value.cast<irt::model::ModelBackend>();
-}
-
-irt::model::ModelDevice parseDeviceObject(const py::object &value, irt::model::ModelDevice fallback)
-{
-    if (value.is_none())
-    {
-        return fallback;
+        return value.cast<irt::model::ModelRuntime>();
     }
     if (py::isinstance<py::str>(value))
     {
-        const auto text = lowerAscii(value.cast<std::string>());
-        if (text == "cpu")
-        {
-            return irt::model::ModelDevice::CPU;
-        }
-        if (text == "gpu" || text == "cuda")
-        {
-            return irt::model::ModelDevice::GPU;
-        }
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported model device: %s", text.c_str());
+        return irt::model::ModelRuntime::parse(value.cast<std::string>());
     }
-    return value.cast<irt::model::ModelDevice>();
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                         "runtime must be a ModelRuntime or a runtime specification string");
 }
 
 /**
@@ -702,19 +663,9 @@ public:
         return model_->modelConfig().outputTensorNames();
     }
 
-    irt::model::ModelBackend backend() const noexcept
+    irt::model::ModelRuntime runtime() const
     {
-        return model_->backend();
-    }
-
-    irt::model::ModelDevice device() const noexcept
-    {
-        return model_->device();
-    }
-
-    int deviceId() const noexcept
-    {
-        return model_->deviceId();
+        return model_->runtime();
     }
 
     /**
@@ -876,7 +827,7 @@ public:
 private:
     bool usesTensorRTBackend() const noexcept
     {
-        return model_->backend() == irt::model::ModelBackend::TensorRT;
+        return model_->runtime().backend() == irt::model::ModelRuntime::Backend::TensorRT;
     }
 
     /**
@@ -1673,14 +1624,22 @@ PYBIND11_MODULE(inferrt_model_py, m)
         .value("INFO", nvinfer1::ILogger::Severity::kINFO)
         .value("VERBOSE", nvinfer1::ILogger::Severity::kVERBOSE);
 
-    py::enum_<irt::model::ModelBackend>(m, "ModelBackend")
-        .value("TENSORRT", irt::model::ModelBackend::TensorRT)
-        .value("OPENVINO", irt::model::ModelBackend::OpenVINO)
-        .value("ONNXRUNTIME", irt::model::ModelBackend::ONNXRuntime);
-
-    py::enum_<irt::model::ModelDevice>(m, "ModelDevice")
-        .value("CPU", irt::model::ModelDevice::CPU)
-        .value("GPU", irt::model::ModelDevice::GPU);
+    py::class_<irt::model::ModelRuntime>(m, "ModelRuntime", "模型推理后端与设备的统一运行目标。")
+        .def(py::init<>(), "默认使用 tensorrt:0。")
+        .def(py::init<std::string>(), py::arg("specification"),
+             "解析 cpu、gpu:0、cuda:0 或 backend:gpu-id（例如 tensorrt:0）格式。")
+        .def_static("parse", &irt::model::ModelRuntime::parse, py::arg("specification"))
+        .def_property_readonly("backend", [](const irt::model::ModelRuntime &self)
+                               { return std::string(irt::model::ModelRuntime::backendName(self.backend())); })
+        .def_property_readonly("device", &irt::model::ModelRuntime::deviceName)
+        .def_property_readonly("device_id", &irt::model::ModelRuntime::deviceId)
+        .def_property_readonly("is_cpu", &irt::model::ModelRuntime::isCpu)
+        .def_property_readonly("is_gpu", &irt::model::ModelRuntime::isGpu)
+        .def("validate", &irt::model::ModelRuntime::validate)
+        .def("to_string", &irt::model::ModelRuntime::toString)
+        .def("__str__", &irt::model::ModelRuntime::toString)
+        .def("__repr__", [](const irt::model::ModelRuntime &self)
+             { return "ModelRuntime('" + self.toString() + "')"; });
 
     py::enum_<irt::model::ModelPrecision>(m, "ModelPrecision")
         .value("FP32", irt::model::ModelPrecision::FP32)
@@ -1756,10 +1715,11 @@ PYBIND11_MODULE(inferrt_model_py, m)
                 self.setDynamicBatchRange(static_cast<int32_t>(range[0]), static_cast<int32_t>(range[1]),
                                           static_cast<int32_t>(range[2]));
             })
-        .def_property("backend", &irt::model::IModelConfig::backend, &irt::model::IModelConfig::setBackend)
-        .def_property("device", &irt::model::IModelConfig::device, &irt::model::IModelConfig::setDevice)
-        .def_property("device_id", &irt::model::IModelConfig::deviceId, &irt::model::IModelConfig::setDeviceId,
-                      "GPU 设备编号，从 0 开始。")
+        .def_property(
+            "runtime", [](const irt::model::IModelConfig &self) { return self.runtime(); },
+            [](irt::model::IModelConfig &self, const py::object &value)
+            { self.setRuntime(parseRuntimeObject(value, self.runtime())); },
+            "模型后端与设备的统一运行目标。")
         .def_property("precision", &irt::model::IModelConfig::precision, &irt::model::IModelConfig::setPrecision,
                       "TensorRT 构建精度；FP16 保持 float32 I/O。");
 
@@ -1779,9 +1739,7 @@ PYBIND11_MODULE(inferrt_model_py, m)
              "执行一次特征前向，输入支持 ndarray、sequence 或 dict。")
         .def("input_tensor_names", &PyModel::inputTensorNames, "返回输入张量名称列表。")
         .def("output_tensor_names", &PyModel::outputTensorNames, "返回输出张量名称列表（分类 logits 或特征导出名）。")
-        .def("backend", &PyModel::backend)
-        .def("device", &PyModel::device)
-        .def("device_id", &PyModel::deviceId)
+        .def("runtime", &PyModel::runtime, "返回模型后端与设备的统一运行目标。")
         .def("tensor_shape", &PyModel::tensorShape, py::arg("tensor_name"), "返回指定张量的运行时形状。")
         .def("tensor_dtype", &PyModel::tensorDType, py::arg("tensor_name"), "返回指定张量的数据类型名称。")
         .def("set_tensor_shape", &PyModel::setTensorShape, py::arg("tensor_name"), py::arg("shape"),
@@ -1790,8 +1748,7 @@ PYBIND11_MODULE(inferrt_model_py, m)
 
     m.def(
         "create_model",
-        [](const std::string &name, const py::object &config_object, const py::object &backend_object,
-           const py::object &device_object)
+        [](const std::string &name, const py::object &config_object)
         {
             std::unique_ptr<irt::model::IModelConfig> config;
             if (config_object.is_none())
@@ -1804,12 +1761,9 @@ PYBIND11_MODULE(inferrt_model_py, m)
                 config                 = cloneModelConfig(config_ref);
             }
 
-            config->setBackend(parseBackendObject(backend_object, config->backend()));
-            config->setDevice(parseDeviceObject(device_object, config->device()));
             return PyModel(irt::model::CreateModel(name, std::move(config)));
         },
-        py::arg("name"), py::arg("config") = py::none(), py::arg("backend") = py::none(),
-        py::arg("device") = py::none(), "根据注册名称创建模型对象。");
+        py::arg("name"), py::arg("config") = py::none(), "根据注册名称和配置对象创建模型对象。");
 
     m.def("is_supported_model", &irt::model::isSupportedModel, py::arg("name"), "查询模型名称是否已注册。");
     m.def("get_registered_model_names", &irt::model::getRegisteredModelNames, "返回当前所有已注册模型名称。");

@@ -33,8 +33,7 @@ build/bin/inferrt_sample_segmentation.exe ^
   -w build/python_test_artifacts/rfdetr/rfdetr_seg_nano.wts ^
   -i assets/pics/dog.jpg ^
   -o build/rfdetr_seg_nano_result.jpg ^
-  --backend tensorrt ^
-  --device gpu ^
+  --runtime tensorrt:0 ^
   --warmup 5 ^
   --repeat 20
 

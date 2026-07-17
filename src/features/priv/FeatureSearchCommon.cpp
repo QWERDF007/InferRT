@@ -69,7 +69,7 @@ void l1Normalize(float *values, size_t count)
 
 bool usesTensorRtModelBackend(const ImageSearchConfig &config) noexcept
 {
-    return config.model_backend == irt::model::ModelBackend::TensorRT;
+    return config.model_runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT;
 }
 
 bool useCpuDiskIndex(const ImageSearchConfig &config) noexcept
@@ -82,35 +82,7 @@ void validateFeatureSearchConfig(const ImageSearchConfig &config, const char *ow
 {
     const char *owner = owner_name == nullptr ? "FeatureSearch" : owner_name;
 
-    switch (config.model_backend)
-    {
-    case irt::model::ModelBackend::TensorRT:
-    case irt::model::ModelBackend::OpenVINO:
-    case irt::model::ModelBackend::ONNXRuntime:
-        break;
-    default:
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported %s model backend", owner);
-    }
-
-    switch (config.model_device)
-    {
-    case irt::model::ModelDevice::CPU:
-    case irt::model::ModelDevice::GPU:
-        break;
-    default:
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported %s model device", owner);
-    }
-
-    if (usesTensorRtModelBackend(config) && config.model_device == irt::model::ModelDevice::CPU)
-    {
-        throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED, "%s TensorRT backend requires GPU device", owner);
-    }
-
-    if (config.model_device_id < 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "%s model device id must be non-negative, got %d",
-                             owner, config.model_device_id);
-    }
+    config.model_runtime.validate();
 
     switch (config.model_precision)
     {
@@ -306,7 +278,8 @@ FaissIndexBundle buildConfiguredFaissIndex(size_t vector_count, int feature_dim,
     reportBuildProgress(progress_callback, ImageSearchBuildStage::WritingIndex, 0, 0, 0, 1, 1);
 
     reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 0, 1);
-    auto bundle = moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend, config.model_device_id);
+    auto bundle = moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend,
+                                                   config.model_runtime.deviceId());
     reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 1, 1);
     return bundle;
 }
@@ -329,7 +302,8 @@ FaissIndexBundle loadConfiguredFaissIndex(const std::filesystem::path &index_pat
         return bundle;
     }
 
-    return moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend, config.model_device_id);
+    return moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend,
+                                           config.model_runtime.deviceId());
 }
 
 } // namespace irt::features::priv

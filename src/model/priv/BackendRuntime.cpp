@@ -49,15 +49,15 @@ const TensorRTBackend *IBackendRuntime::asTensorRT() const noexcept
     return nullptr;
 }
 
-std::unique_ptr<IBackendRuntime> CreateBackendRuntime(ModelBackend backend)
+std::unique_ptr<IBackendRuntime> CreateBackendRuntime(ModelRuntime::Backend backend)
 {
     switch (backend)
     {
-    case ModelBackend::TensorRT:
+    case ModelRuntime::Backend::TensorRT:
         return std::make_unique<TensorRTBackend>();
-    case ModelBackend::ONNXRuntime:
+    case ModelRuntime::Backend::ONNXRuntime:
         return CreateONNXRuntimeBackend();
-    case ModelBackend::OpenVINO:
+    case ModelRuntime::Backend::OpenVINO:
         return CreateOpenVINOBackend();
     }
 

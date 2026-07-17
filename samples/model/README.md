@@ -30,7 +30,7 @@ cmake --build build --config Debug --target inferrt_model_py
 ## 运行
 
 ```bash
-build/bin/inferrt_sample_classification.exe --model <model_name> --weights-file <weights_or_model_file> [--image-path PATH] [--label-file PATH] [--backend tensorrt|openvino|onnxruntime] [--device cpu|gpu] [--warmup N] [--repeat N]
+build/bin/inferrt_sample_classification.exe --model <model_name> --weights-file <weights_or_model_file> [--image-path PATH] [--label-file PATH] [--runtime tensorrt:0|onnxruntime:cpu|onnxruntime:0|openvino:cpu] [--warmup N] [--repeat N]
 build/bin/inferrt_sample_classification.exe --help
 ```
 
@@ -39,13 +39,13 @@ build/bin/inferrt_sample_classification.exe --help
 ```bash
 build/bin/inferrt_sample_classification.exe --model alexnet --weights-file assets/models/alexnet/alexnet.wts --image-path assets/pics/dog.jpg
 build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file assets/models/resnet/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt
-build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file D:/Models/resnet/<checkpoint-stem-or-dir>/resnet50.onnx --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend openvino --device cpu
-build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file assets/models/resnet/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend tensorrt --device gpu --warmup 10 --repeat 100
-build/bin/inferrt_sample_detection.exe -m yolov8n -w samples/model/detection/yolov8n.wts -i assets/pics/dog.jpg -l assets/coco80.names -o build/yolov8n_result.jpg --backend tensorrt --device gpu --warmup 10 --repeat 100
-build/bin/inferrt_sample_detection.exe -m rfdetr_nano -w build/python_test_artifacts/rfdetr/rfdetr_nano.wts -i assets/pics/dog.jpg -l assets/coco80.names -o build/rfdetr_nano_result.jpg --backend tensorrt --device gpu --warmup 5 --repeat 20
-build/bin/inferrt_sample_segmentation.exe -m rfdetr_seg_nano -w build/python_test_artifacts/rfdetr/rfdetr_seg_nano.wts -i assets/pics/dog.jpg -o build/rfdetr_seg_nano_result.jpg --backend tensorrt --device gpu --warmup 5 --repeat 20
-build/bin/inferrt_sample_segmentation.exe -m yolov8n_seg -w build/python_test_artifacts/yolo/yolov8n_seg.wts -i assets/pics/dog.jpg -o build/yolov8n_seg_result.jpg --backend tensorrt --device gpu --conf-threshold 0.10 --warmup 5 --repeat 20
-build/bin/inferrt_sample_sam.exe -m sam_vit_b -w samples/model/sam/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_mask.jpg --point-x 0.5 --point-y 0.5 --backend tensorrt --device gpu --warmup 5 --repeat 20
+build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file D:/Models/resnet/<checkpoint-stem-or-dir>/resnet50.onnx --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --runtime openvino:cpu
+build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file assets/models/resnet/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --runtime tensorrt:0 --warmup 10 --repeat 100
+build/bin/inferrt_sample_detection.exe -m yolov8n -w samples/model/detection/yolov8n.wts -i assets/pics/dog.jpg -l assets/coco80.names -o build/yolov8n_result.jpg --runtime tensorrt:0 --warmup 10 --repeat 100
+build/bin/inferrt_sample_detection.exe -m rfdetr_nano -w build/python_test_artifacts/rfdetr/rfdetr_nano.wts -i assets/pics/dog.jpg -l assets/coco80.names -o build/rfdetr_nano_result.jpg --runtime tensorrt:0 --warmup 5 --repeat 20
+build/bin/inferrt_sample_segmentation.exe -m rfdetr_seg_nano -w build/python_test_artifacts/rfdetr/rfdetr_seg_nano.wts -i assets/pics/dog.jpg -o build/rfdetr_seg_nano_result.jpg --runtime tensorrt:0 --warmup 5 --repeat 20
+build/bin/inferrt_sample_segmentation.exe -m yolov8n_seg -w build/python_test_artifacts/yolo/yolov8n_seg.wts -i assets/pics/dog.jpg -o build/yolov8n_seg_result.jpg --runtime tensorrt:0 --conf-threshold 0.10 --warmup 5 --repeat 20
+build/bin/inferrt_sample_sam.exe -m sam_vit_b -w samples/model/sam/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_mask.jpg --point-x 0.5 --point-y 0.5 --runtime tensorrt:0 --warmup 5 --repeat 20
 ```
 
 ## 权重导出
@@ -123,8 +123,8 @@ ONNX / OpenVINO 注意事项：
 `segmentation` 示例为纯图像输入，不接受点或框提示。RF-DETR-Seg 返回 `dets`/`labels`/`masks`；YOLOv8-Seg 返回三个 DFL 输出加上 `proto`。
 
 ```bash
-build/bin/inferrt_sample_segmentation.exe -m rfdetr_seg_nano -w build/python_test_artifacts/rfdetr/rfdetr_seg_nano.wts -i assets/pics/dog.jpg -o build/rfdetr_seg_nano_result.jpg --backend tensorrt --device gpu
-build/bin/inferrt_sample_segmentation.exe -m yolov8n_seg -w build/python_test_artifacts/yolo/yolov8n_seg.wts -i assets/pics/dog.jpg -o build/yolov8n_seg_result.jpg --backend tensorrt --device gpu --conf-threshold 0.10
+build/bin/inferrt_sample_segmentation.exe -m rfdetr_seg_nano -w build/python_test_artifacts/rfdetr/rfdetr_seg_nano.wts -i assets/pics/dog.jpg -o build/rfdetr_seg_nano_result.jpg --runtime tensorrt:0
+build/bin/inferrt_sample_segmentation.exe -m yolov8n_seg -w build/python_test_artifacts/yolo/yolov8n_seg.wts -i assets/pics/dog.jpg -o build/yolov8n_seg_result.jpg --runtime tensorrt:0 --conf-threshold 0.10
 build/bin/inferrt_sample_segmentation.exe --help
 ```
 
@@ -135,8 +135,8 @@ SAM 示例驱动所选 InferRT 后端，使用默认提示协议：
 SAM v1 基于 `python/gen_sam_wts.py` 导出的官方 `segment_anything` 权重构建 ViT 图像编码器、提示编码器和掩码解码器。SAM2/SAM2.1 基于 `python/gen_sam_wts.py` 导出的权重构建 Hiera 图像编码器、FPN 颈部、提示编码器和高分辨率掩码解码器。SAM3 key 已注册，但其原生主干目前显式返回 `ERROR_NOT_IMPLEMENTED`。
 
 ```bash
-build/bin/inferrt_sample_sam.exe -m sam_vit_b -w samples/model/sam/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_vit_b_mask.jpg --box 0.2,0.2,0.8,0.8 --backend tensorrt --device gpu --warmup 5 --repeat 20
-build/bin/inferrt_sample_sam.exe -m sam2_1_hiera_tiny -w samples/model/sam/sam2_1_hiera_tiny.wts -i assets/pics/dog.jpg -o build/sam2_mask.jpg --backend tensorrt --device gpu
+build/bin/inferrt_sample_sam.exe -m sam_vit_b -w samples/model/sam/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_vit_b_mask.jpg --box 0.2,0.2,0.8,0.8 --runtime tensorrt:0 --warmup 5 --repeat 20
+build/bin/inferrt_sample_sam.exe -m sam2_1_hiera_tiny -w samples/model/sam/sam2_1_hiera_tiny.wts -i assets/pics/dog.jpg -o build/sam2_mask.jpg --runtime tensorrt:0
 build/bin/inferrt_sample_sam.exe --help
 ```
 
@@ -149,7 +149,7 @@ build/bin/inferrt_sample_sam.exe --help
 ```bash
 build/bin/inferrt_sample_feature_extract.exe -m resnet18 -w assets/models/resnet/resnet18.wts -f layer1,layer4 -i assets/pics/dog.jpg -o build/feature_dump_cpp
 build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w assets/models/dinov2/dinov2_vits14.wts -f x_norm_clstoken,x_norm_patchtokens -i assets/pics/dog.jpg -o build/dinov2_feature_dump_cpp
-build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx -f x_norm_clstoken -i assets/pics/dog.jpg -o build/dinov2_openvino_cpu_feature_dump --backend openvino --device cpu --warmup 10 --repeat 100
+build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx -f x_norm_clstoken -i assets/pics/dog.jpg -o build/dinov2_openvino_cpu_feature_dump --runtime openvino:cpu --warmup 10 --repeat 100
 build/bin/inferrt_sample_feature_extract.exe -m dinov3_vitb16 -w assets/models/dinov3/dinov3_vitb16.wts -f x_norm_clstoken,x_storage_tokens,x_norm_patchtokens -i assets/pics/dog.jpg -o build/dinov3_feature_dump_cpp
 build/bin/inferrt_sample_feature_extract.exe --help
 python samples/model/python/compare_features.py --compare_dir build/feature_dump_cpp
@@ -169,8 +169,8 @@ build/bin/inferrt_sample_image_search.exe -w assets/models/resnet/resnet18.wts -
 build/bin/inferrt_sample_image_search.exe --weights-file assets/models/resnet/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --topk 5 --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file assets/models/resnet/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --faiss-backend cpu --index-storage disk --model-batch-size 4 --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file assets/models/resnet/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --norm l2 --preprocess-backend cpu --faiss-backend gpu --rebuild-index
-build/bin/inferrt_sample_image_search.exe --weights-file D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --backend onnxruntime --device cpu --rebuild-index
-build/bin/inferrt_sample_image_search.exe --weights-file D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --backend openvino --device cpu --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --runtime onnxruntime:cpu --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --runtime openvino:cpu --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file assets/models/resnet/resnet50.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model resnet50 --feature layer3
 build/bin/inferrt_sample_image_search.exe --weights-file assets/models/dinov2/dinov2_vits14.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --index build/gallery/dinov2_vits14_x_norm_clstoken.faiss
 build/bin/inferrt_sample_image_search.exe --weights-file assets/models/dinov3/dinov3_vitb16.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov3_vitb16 --feature x_norm_clstoken --index build/gallery/dinov3_vitb16_x_norm_clstoken.faiss
@@ -182,8 +182,7 @@ build/bin/inferrt_sample_image_search.exe --help
 - 默认模型：`resnet18`
 - 默认特征张量：`layer4`
 - `--model` 和 `--feature` 可切换至其他内置分类、ViT 和 DINO 特征张量
-- `--backend` 选择特征提取运行时：`tensorrt`、`openvino` 或 `onnxruntime`；图后端要求目标特征已导出为图输出
-- `--device` 选择 `cpu` 或 `gpu`；TensorRT 需要 `gpu`
+- `--runtime` 统一选择模型后端和设备：GPU 使用 `tensorrt:0`、`onnxruntime:0` 或 `openvino:0`，CPU 使用 `onnxruntime:cpu` 或 `openvino:cpu`；也支持裸设备简写 `cpu`、`gpu:0`、`cuda:0`
 - `--norm` 选择归一化方式：`l2`、`l1` 或 `none`
 - `--preprocess-backend` 选择预处理后端：`cpu` 或 `gpu`；GPU 预处理为预留项，当前报告未实现
 - `--faiss-backend` 选择 Faiss 后端：`cpu` 或 `gpu`

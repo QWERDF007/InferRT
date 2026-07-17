@@ -80,7 +80,7 @@ python samples/model/python/classification_gen_wts.py -b transformers -l
 ## Run
 
 ```bash
-build/bin/inferrt_sample_classification.exe --model <model_name> --weights-file <weights_or_model_file> [--image-path PATH] [--label-file PATH] [--backend tensorrt|openvino|onnxruntime] [--device cpu|gpu] [--warmup N] [--repeat N]
+build/bin/inferrt_sample_classification.exe --model <model_name> --weights-file <weights_or_model_file> [--runtime tensorrt:0|onnxruntime:cpu|onnxruntime:0|openvino:cpu] [--warmup N] [--repeat N]
 build/bin/inferrt_sample_classification.exe --help
 ```
 
@@ -90,16 +90,15 @@ Examples:
 build/bin/inferrt_sample_classification.exe --model alexnet --weights-file assets/models/alexnet/alexnet.wts --image-path assets/pics/dog.jpg
 build/bin/inferrt_sample_classification.exe --model mobilenet_v2 --weights-file assets/models/mobilenet/mobilenet_v2.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt
 build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file assets/models/resnet/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt
-build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file D:/Models/resnet/<checkpoint-stem-or-dir>/resnet50.onnx --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend openvino --device cpu
-build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file assets/models/resnet/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --backend tensorrt --device gpu --warmup 10 --repeat 100
+build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file D:/Models/resnet/<checkpoint-stem-or-dir>/resnet50.onnx --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --runtime openvino:cpu
+build/bin/inferrt_sample_classification.exe --model resnet50 --weights-file assets/models/resnet/resnet50.wts --image-path assets/pics/dog.jpg --label-file assets/imagenet1000_clsidx_to_labels.txt --runtime tensorrt:0 --warmup 10 --repeat 100
 ```
 
 Defaults:
 
 - `image_path`: `assets/pics/dog.jpg`
 - `label_file`: `assets/imagenet1000_clsidx_to_labels.txt`
-- `backend`: `tensorrt`
-- `device`: `gpu`
+- `runtime`: `tensorrt:0`; use `onnxruntime:0` for ONNX Runtime GPU or `onnxruntime:cpu`/`openvino:cpu` for CPU graph models
 - `warmup`: `0`
 - `repeat`: `1`
 

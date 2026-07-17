@@ -137,7 +137,7 @@ TEST(RFDETRModelConfigTest, PreservesExplicitNativeConfig)
     config->setInputShape(nvinfer1::Dims4{2, 3, 640, 640});
     config->setNumClasses(7);
     config->setOutputTensorNames({"boxes", "logits"});
-    config->setBackend(irt::model::ModelBackend::ONNXRuntime);
+    config->setRuntime(irt::model::ModelRuntime::parse("onnxruntime:cpu"));
 
     auto model = irt::model::CreateModel("rfdetr_medium", std::move(config));
     ASSERT_NE(model, nullptr);
@@ -146,7 +146,7 @@ TEST(RFDETRModelConfigTest, PreservesExplicitNativeConfig)
     expectInputShape(*model, 2, 3, 640, 640);
     EXPECT_EQ(model->modelConfig().numClasses(), 7);
     EXPECT_EQ(model->modelConfig().outputTensorNames(), (std::vector<std::string>{"boxes", "logits"}));
-    EXPECT_EQ(model->modelConfig().backend(), irt::model::ModelBackend::ONNXRuntime);
+    EXPECT_EQ(model->modelConfig().runtime().backend(), irt::model::ModelRuntime::Backend::ONNXRuntime);
 }
 
 /**

@@ -197,15 +197,15 @@ void SetConfiguredInputShapes(nvinfer1::ICudaEngine &engine, nvinfer1::IExecutio
 
 } // namespace
 
-ModelBackend TensorRTBackend::backend() const noexcept
+ModelRuntime::Backend TensorRTBackend::backend() const noexcept
 {
-    return ModelBackend::TensorRT;
+    return ModelRuntime::Backend::TensorRT;
 }
 
 void TensorRTBackend::load(const std::string &engine_file, const IModelConfig &config, const std::string &model_name)
 {
-    setCudaDevice(config.deviceId());
-    device_id_ = config.deviceId();
+    setCudaDevice(config.runtime().deviceId());
+    device_id_ = config.runtime().deviceId();
     params_.context.reset();
     params_.engine.reset();
 
@@ -420,8 +420,8 @@ void TensorRTBackend::buildFromNetwork(const std::string &source_file, const std
                                        const IModelConfig &model_config, NetworkBuildFn build_fn)
 {
     using namespace nvinfer1;
-    setCudaDevice(model_config.deviceId());
-    device_id_ = model_config.deviceId();
+    setCudaDevice(model_config.runtime().deviceId());
+    device_id_ = model_config.runtime().deviceId();
     if (params_.logger == nullptr)
     {
         initLogger(model_name);

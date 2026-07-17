@@ -54,9 +54,9 @@ struct PreprocessedSAMImage
  * @param backend 模型后端。
  * @return 使用 TensorRT 时返回 true。
  */
-bool usesTensorRt(irt::model::ModelBackend backend) noexcept
+bool usesTensorRt(const irt::model::ModelRuntime &runtime) noexcept
 {
-    return backend == irt::model::ModelBackend::TensorRT;
+    return runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT;
 }
 
 /**
@@ -70,37 +70,7 @@ void validateConfig(const SAMImagePredictorConfig &config)
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAMImagePredictor model_name must not be empty");
     }
 
-    switch (config.model_backend)
-    {
-    case irt::model::ModelBackend::TensorRT:
-    case irt::model::ModelBackend::OpenVINO:
-    case irt::model::ModelBackend::ONNXRuntime:
-        break;
-    default:
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported SAMImagePredictor model backend");
-    }
-
-    switch (config.model_device)
-    {
-    case irt::model::ModelDevice::CPU:
-    case irt::model::ModelDevice::GPU:
-        break;
-    default:
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported SAMImagePredictor model device");
-    }
-
-    if (usesTensorRt(config.model_backend) && config.model_device == irt::model::ModelDevice::CPU)
-    {
-        throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED,
-                             "SAMImagePredictor TensorRT backend requires GPU device");
-    }
-
-    if (config.model_device_id < 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "SAMImagePredictor model device id must be non-negative, got %d",
-                             config.model_device_id);
-    }
+    config.model_runtime.validate();
 
     switch (config.model_precision)
     {
@@ -684,12 +654,10 @@ public:
     void load(const fs::path &weights_file)
     {
         auto model_config = std::make_unique<irt::model::IModelConfig>();
-        model_config->setBackend(config_.model_backend);
-        model_config->setDevice(config_.model_device);
-        model_config->setDeviceId(config_.model_device_id);
+        model_config->setRuntime(config_.model_runtime);
         model_config->setPrecision(config_.model_precision);
 
-        const std::string runtime_model_name = usesTensorRt(config_.model_backend) ? config_.model_name : "onnx";
+        const std::string runtime_model_name = usesTensorRt(config_.model_runtime) ? config_.model_name : "onnx";
         model_                               = irt::model::CreateModel(runtime_model_name, std::move(model_config));
         if (!model_)
         {
@@ -860,7 +828,7 @@ private:
     void runModel(const std::vector<std::vector<float> *> &input_vectors,
                   std::vector<std::vector<float>>         &output_vectors)
     {
-        const bool use_trt = usesTensorRt(config_.model_backend);
+        const bool use_trt = usesTensorRt(config_.model_runtime);
         if (!use_trt)
         {
             std::vector<void *> buffers;
@@ -877,7 +845,7 @@ private:
             return;
         }
 
-        irt::model::setCudaDevice(config_.model_device_id);
+        irt::model::setCudaDevice(config_.model_runtime.deviceId());
         const auto                stream = model_->resolveExecutionStream();
         std::vector<DeviceBuffer> device_inputs;
         std::vector<DeviceBuffer> device_outputs;

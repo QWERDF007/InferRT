@@ -140,8 +140,7 @@ def _run_inferrt_rfdetr(
     """通过 InferRT pybind11 运行 RF-DETR 原生 TensorRT engine。"""
 
     config = irt_module.ModelConfig()
-    config.backend = irt_module.ModelBackend.TENSORRT
-    config.device = irt_module.ModelDevice.GPU
+    config.runtime = "tensorrt:0"
     config.input_shape = [1, 3, resolution, resolution]
 
     model = irt_module.create_model(model_name, config=config)

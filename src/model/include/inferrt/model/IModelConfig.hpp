@@ -2,6 +2,7 @@
 
 #include <NvInfer.h>
 #include <inferrt/model/Export.h>
+#include <inferrt/model/ModelRuntime.hpp>
 
 #include <cstdint>
 #include <limits>
@@ -9,19 +10,6 @@
 #include <vector>
 
 namespace irt::model {
-
-enum class ModelBackend
-{
-    TensorRT,
-    OpenVINO,
-    ONNXRuntime
-};
-
-enum class ModelDevice
-{
-    CPU,
-    GPU
-};
 
 /**
  * @brief TensorRT 构建时使用的计算精度。
@@ -35,32 +23,6 @@ enum class ModelPrecision
     FP32,
     FP16
 };
-
-INFERRT_MODEL_API inline const char *modelBackendName(irt::model::ModelBackend backend)
-{
-    switch (backend)
-    {
-    case irt::model::ModelBackend::TensorRT:
-        return "tensorrt";
-    case irt::model::ModelBackend::OpenVINO:
-        return "openvino";
-    case irt::model::ModelBackend::ONNXRuntime:
-        return "onnxruntime";
-    }
-    return "unknown";
-}
-
-INFERRT_MODEL_API inline const char *modelDeviceName(irt::model::ModelDevice device)
-{
-    switch (device)
-    {
-    case irt::model::ModelDevice::CPU:
-        return "cpu";
-    case irt::model::ModelDevice::GPU:
-        return "gpu";
-    }
-    return "unknown";
-}
 
 INFERRT_MODEL_API inline const char *modelPrecisionName(irt::model::ModelPrecision precision)
 {
@@ -210,27 +172,13 @@ public:
         max_batch_size_               = max_batch;
     }
 
-    virtual void setBackend(ModelBackend backend) noexcept
-    {
-        backend_ = backend;
-    }
-
-    virtual void setDevice(ModelDevice device) noexcept
-    {
-        device_ = device;
-    }
-
     /**
-     * @brief 设置模型使用的 GPU 设备编号。
-     *
-     * CPU 后端会保留该配置但不会使用它；GPU 后端使用从 0 开始的 CUDA/OpenVINO 设备编号。
-     * 具体设备是否存在在模型加载或构建时由对应后端校验。
-     *
-     * @param device_id 从 0 开始的设备编号。
+     * @brief 设置模型运行目标。
+     * @param runtime 同时包含推理后端、CPU/GPU 类型和 GPU 编号的运行目标。
      */
-    virtual void setDeviceId(int device_id) noexcept
+    virtual void setRuntime(ModelRuntime runtime) noexcept
     {
-        device_id_ = device_id;
+        runtime_ = std::move(runtime);
     }
 
     virtual void setPrecision(ModelPrecision precision) noexcept
@@ -335,23 +283,13 @@ public:
         return max_batch_size_;
     }
 
-    virtual ModelBackend backend() const noexcept
-    {
-        return backend_;
-    }
-
-    virtual ModelDevice device() const noexcept
-    {
-        return device_;
-    }
-
     /**
-     * @brief 获取模型使用的 GPU 设备编号。
-     * @return 从 0 开始的设备编号。
+     * @brief 获取模型运行目标。
+     * @return 同时包含后端和设备信息的运行目标。
      */
-    virtual int deviceId() const noexcept
+    virtual const ModelRuntime &runtime() const noexcept
     {
-        return device_id_;
+        return runtime_;
     }
 
     virtual ModelPrecision precision() const noexcept
@@ -409,11 +347,7 @@ protected:
 
     int max_batch_size_{1};
 
-    ModelBackend backend_{ModelBackend::TensorRT};
-
-    ModelDevice device_{ModelDevice::GPU};
-
-    int device_id_{0};
+    ModelRuntime runtime_{};
 
     ModelPrecision precision_{ModelPrecision::FP32};
 };

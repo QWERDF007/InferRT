@@ -258,9 +258,7 @@ irt::util::ManifestEntries roiSearchManifestEntries(const fs::path &index_path, 
         {        "index_file",                  absolutePathManifestValue(index_path)},
         {             "model",                                      config.model_name},
         {           "feature",                                    config.feature_name},
-        {     "model_backend",     irt::model::modelBackendName(config.model_backend)},
-        {      "model_device",       irt::model::modelDeviceName(config.model_device)},
-        {   "model_device_id",        std::to_string(config.model_device_id)},
+        {     "model_runtime",       config.model_runtime.toString()},
         {   "model_precision",  irt::model::modelPrecisionName(config.model_precision)},
         {"preprocess_backend", priv::preprocessBackendName(config.preprocess_backend)},
         {              "norm",                     priv::featureNormName(config.norm)},
@@ -372,7 +370,7 @@ bool existingRoiIndexMatchesConfig(const fs::path &index_path, const RoiSearchCo
         && irt::util::manifestValueEquals(manifest, "index_file", absolutePathManifestValue(index_path))
         && irt::util::manifestValueEquals(manifest, "model", config.model_name)
         && irt::util::manifestValueEquals(manifest, "feature", config.feature_name)
-        && irt::util::manifestValueEquals(manifest, "model_device_id", std::to_string(config.model_device_id))
+        && irt::util::manifestValueEquals(manifest, "model_runtime", config.model_runtime.toString())
         && irt::util::manifestValueEquals(manifest, "model_precision",
                                           irt::model::modelPrecisionName(config.model_precision))
         && irt::util::manifestValueEquals(manifest, "norm", priv::featureNormName(config.norm))

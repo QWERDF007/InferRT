@@ -14,8 +14,8 @@ cmake --build build --config Debug --target inferrt_sample_image_search
 ## Run
 
 ```bash
-build/bin/inferrt_sample_image_search.exe --weights-file <weights_or_model_file> --gallery-dir <gallery_dir> --query-image <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--backend tensorrt|openvino|onnxruntime] [--device cpu|gpu] [--norm l2|l1|none] [--preprocess-backend cpu|gpu] [--faiss-backend cpu|gpu] [--index-storage ram|disk] [--model-batch-size N] [--rebuild-index]
-build/bin/inferrt_sample_image_search.exe -w <weights_or_model_file> -g <gallery_dir> -q <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--backend tensorrt|openvino|onnxruntime] [--device cpu|gpu] [--norm l2|l1|none] [--preprocess-backend cpu|gpu] [--faiss-backend cpu|gpu] [--index-storage ram|disk] [--model-batch-size N] [--rebuild-index]
+build/bin/inferrt_sample_image_search.exe --weights-file <weights_or_model_file> --gallery-dir <gallery_dir> --query-image <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--runtime tensorrt:0|onnxruntime:cpu|onnxruntime:0|openvino:cpu] [--norm l2|l1|none] [--preprocess-backend cpu|gpu] [--faiss-backend cpu|gpu] [--index-storage ram|disk] [--model-batch-size N] [--rebuild-index]
+build/bin/inferrt_sample_image_search.exe -w <weights_or_model_file> -g <gallery_dir> -q <query_image> [--model NAME] [--feature NAME] [--topk N] [--index PATH] [--runtime tensorrt:0|onnxruntime:cpu|onnxruntime:0|openvino:cpu] [--norm l2|l1|none] [--preprocess-backend cpu|gpu] [--faiss-backend cpu|gpu] [--index-storage ram|disk] [--model-batch-size N] [--rebuild-index]
 build/bin/inferrt_sample_image_search.exe --help
 ```
 
@@ -30,8 +30,8 @@ build/bin/inferrt_sample_image_search.exe --weights-file assets/models/resnet/re
 build/bin/inferrt_sample_image_search.exe --weights-file assets/models/resnet/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --norm l2 --preprocess-backend cpu --faiss-backend cpu --index-storage disk --model-batch-size 4 --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file assets/models/dinov2/dinov2_vits14.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --model-batch-size 4 --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file assets/models/resnet/resnet18.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --norm l2 --preprocess-backend cpu --faiss-backend gpu --rebuild-index
-build/bin/inferrt_sample_image_search.exe --weights-file D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --backend onnxruntime --device cpu --rebuild-index
-build/bin/inferrt_sample_image_search.exe --weights-file D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --backend openvino --device cpu --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --runtime onnxruntime:cpu --rebuild-index
+build/bin/inferrt_sample_image_search.exe --weights-file D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --runtime openvino:cpu --rebuild-index
 build/bin/inferrt_sample_image_search.exe --weights-file assets/models/dinov2/dinov2_vits14.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov2_vits14 --feature x_norm_clstoken --index build/gallery/dinov2_vits14_x_norm_clstoken.faiss
 build/bin/inferrt_sample_image_search.exe --weights-file assets/models/dinov3/dinov3_vitb16.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov3_vitb16 --feature x_norm_clstoken --index build/gallery/dinov3_vitb16_x_norm_clstoken.faiss
 ```
@@ -50,8 +50,7 @@ Use `--rebuild-index` when the gallery directory has changed and you want to inc
 
 - `--model`: selects the built-in classification model, default is `resnet18`
 - `--feature`: selects the feature tensor name used for retrieval, default is `layer4`
-- `--backend`: selects the feature extraction backend, one of `tensorrt`, `openvino`, `onnxruntime`; `onnx` and `ort` are accepted aliases for ONNX Runtime
-- `--device`: selects the feature extraction device, one of `cpu`, `gpu`; TensorRT requires `gpu`
+- `--runtime`: combines the feature extraction backend and device, for example `tensorrt:0`, `onnxruntime:cpu`, `onnxruntime:0`, or `openvino:cpu`; shorthand `cpu`, `gpu:0`, and `cuda:0` is also supported
 - `--norm`: selects feature normalization, one of `l2`, `l1`, `none`; default is `l2`
 - `--preprocess-backend`: selects preprocessing backend, one of `cpu`, `gpu`; default is `cpu`; GPU preprocessing is reserved and currently reports not implemented
 - `--faiss-backend`: selects Faiss backend, one of `cpu`, `gpu`; default is `cpu`

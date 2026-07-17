@@ -82,8 +82,7 @@ struct Arguments
     float                    conf_threshold{0.25F};
     float                    nms_threshold{0.45F};
     DetectionFamily          family{DetectionFamily::YOLO};
-    irt::model::ModelBackend backend{irt::model::ModelBackend::TensorRT};
-    irt::model::ModelDevice  device{irt::model::ModelDevice::GPU};
+    irt::model::ModelRuntime runtime{};
     int                      warmup{0};
     int                      repeat{1};
 };
@@ -135,54 +134,11 @@ struct TimingStats
     double max_ms{0.0};
 };
 
-std::string trim(std::string value)
-{
-    auto not_space = [](unsigned char ch)
-    {
-        return !std::isspace(ch);
-    };
-    value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
-    value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
-    return value;
-}
-
 std::string toLower(std::string value)
 {
     std::transform(value.begin(), value.end(), value.begin(),
                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
     return value;
-}
-
-irt::model::ModelBackend parseBackend(std::string value)
-{
-    value = toLower(trim(std::move(value)));
-    if (value == "tensorrt" || value == "trt")
-    {
-        return irt::model::ModelBackend::TensorRT;
-    }
-    if (value == "openvino" || value == "ov")
-    {
-        return irt::model::ModelBackend::OpenVINO;
-    }
-    if (value == "onnxruntime" || value == "onnx" || value == "ort")
-    {
-        return irt::model::ModelBackend::ONNXRuntime;
-    }
-    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported backend: %s", value.c_str());
-}
-
-irt::model::ModelDevice parseDevice(std::string value)
-{
-    value = toLower(trim(std::move(value)));
-    if (value == "cpu")
-    {
-        return irt::model::ModelDevice::CPU;
-    }
-    if (value == "gpu" || value == "cuda")
-    {
-        return irt::model::ModelDevice::GPU;
-    }
-    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported device: %s", value.c_str());
 }
 
 DetectionFamily modelFamily(const std::string &model_name)
@@ -335,10 +291,9 @@ cxxopts::Options makeOptions(const char *program_name)
         "nms-threshold", "Class-wise NMS IoU threshold", cxxopts::value<float>()->default_value("0.45"))(
         "max-detections", "Maximum detections printed after NMS", cxxopts::value<int>()->default_value("100"))(
         "legacy-anchors", "Legacy YOLOv5 anchors as 18 comma-separated numbers; empty uses COCO defaults",
-        cxxopts::value<std::string>()->default_value(""))("backend",
-                                                          "Inference backend: tensorrt, openvino, onnxruntime",
-                                                          cxxopts::value<std::string>()->default_value("tensorrt"))(
-        "device", "Inference device: cpu or gpu", cxxopts::value<std::string>()->default_value("gpu"))(
+        cxxopts::value<std::string>()->default_value(""))("runtime",
+                                                          "Model runtime: cpu, gpu:0, cuda:0, or backend:gpu-id (e.g. tensorrt:0)",
+                                                          cxxopts::value<std::string>()->default_value("tensorrt:0"))(
         "warmup", "Warmup iterations before timing", cxxopts::value<int>()->default_value("0"))(
         "repeat", "Timed inference iterations", cxxopts::value<int>()->default_value("1"))("h,help", "Show help");
     return options;
@@ -383,8 +338,7 @@ Arguments parseArguments(int argc, char *argv[])
     args.nms_threshold       = result["nms-threshold"].as<float>();
     args.max_detections      = result["max-detections"].as<int>();
     args.legacy_anchors      = result["legacy-anchors"].as<std::string>();
-    args.backend             = parseBackend(result["backend"].as<std::string>());
-    args.device              = parseDevice(result["device"].as<std::string>());
+    args.runtime             = irt::model::ModelRuntime::parse(result["runtime"].as<std::string>());
     args.warmup              = result["warmup"].as<int>();
     args.repeat              = result["repeat"].as<int>();
 
@@ -875,7 +829,8 @@ int main(int argc, char *argv[])
             std::cerr << "Unsupported model: " << args.model_name << std::endl;
             return -1;
         }
-        if (args.family == DetectionFamily::RFDETR && args.backend != irt::model::ModelBackend::TensorRT)
+        if (args.family == DetectionFamily::RFDETR
+            && args.runtime.backend() != irt::model::ModelRuntime::Backend::TensorRT)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                                  "RF-DETR in the detection sample currently requires TensorRT backend");
@@ -886,9 +841,8 @@ int main(int argc, char *argv[])
         fs::path label_path   = args.label_file.empty() ? project_root / kDefaultLabelPath : args.label_file;
 
         auto config = std::make_unique<irt::model::IModelConfig>();
-        config->setBackend(args.backend);
-        config->setDevice(args.device);
-        if (args.backend == irt::model::ModelBackend::TensorRT)
+        config->setRuntime(args.runtime);
+        if (args.runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT)
         {
             if (args.family == DetectionFamily::YOLO)
             {
@@ -903,7 +857,7 @@ int main(int argc, char *argv[])
         }
 
         const std::string runtime_model_name
-            = args.backend == irt::model::ModelBackend::TensorRT ? args.model_name : "onnx";
+            = args.runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT ? args.model_name : "onnx";
         auto model = irt::model::CreateModel(runtime_model_name, std::move(config));
         if (!model)
         {
@@ -952,7 +906,7 @@ int main(int argc, char *argv[])
                                                                     static_cast<int>(input_dims.d[2]), letterbox);
         const auto         preprocess_end = Clock::now();
 
-        const bool uses_tensorrt = args.backend == irt::model::ModelBackend::TensorRT;
+        const bool uses_tensorrt = args.runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT;
         const auto stream        = uses_tensorrt ? model->resolveExecutionStream() : nullptr;
 
         DeviceBuffer device_input;
@@ -1068,8 +1022,7 @@ int main(int argc, char *argv[])
         printDetections(detections, labels);
         drawDetections(image, detections, labels, args.output_image);
 
-        std::cout << "Backend: " << irt::model::modelBackendName(args.backend)
-                  << ", device=" << irt::model::modelDeviceName(args.device) << std::endl;
+        std::cout << "Runtime: " << args.runtime.toString() << std::endl;
         const auto h2d_stats        = summarizeTimings(h2d_times_ms);
         const auto inference_stats  = summarizeTimings(inference_times_ms);
         const auto d2h_stats        = summarizeTimings(d2h_times_ms);

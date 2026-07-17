@@ -152,14 +152,8 @@ struct ImageSearchConfig
     ///< 用作检索向量的中间特征名。
     std::string feature_name{kDefaultImageSearchFeatureName};
 
-    ///< 特征提取模型运行时后端。
-    irt::model::ModelBackend model_backend{irt::model::ModelBackend::TensorRT};
-
-    ///< 特征提取模型运行设备。
-    irt::model::ModelDevice model_device{irt::model::ModelDevice::GPU};
-
-    ///< 特征提取模型和 GPU Faiss 使用的设备编号，从 0 开始。
-    int model_device_id{0};
+    ///< 特征提取模型运行目标，统一包含后端、CPU/GPU 类型和 GPU 编号。
+    irt::model::ModelRuntime model_runtime{};
 
     /**
      * 特征提取模型构建/加载精度。

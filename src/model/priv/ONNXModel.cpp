@@ -120,9 +120,7 @@ void SyncModelMetadataFromEngine(ONNXModel &model)
         config->setDynamicBatchRange(current_config.minBatchSize(), current_config.optBatchSize(),
                                      current_config.maxBatchSize());
     }
-    config->setBackend(current_config.backend());
-    config->setDevice(current_config.device());
-    config->setDeviceId(current_config.deviceId());
+    config->setRuntime(current_config.runtime());
     config->setPrecision(current_config.precision());
     model.replaceModelConfigWithoutReset(std::move(config));
 }

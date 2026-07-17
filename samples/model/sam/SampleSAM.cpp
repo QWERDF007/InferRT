@@ -55,8 +55,7 @@ struct Arguments
     float                    threshold{0.0F};
     bool                     has_box{false};
     std::array<float, 4>     box{0.0F, 0.0F, 1.0F, 1.0F};
-    irt::model::ModelBackend backend{irt::model::ModelBackend::TensorRT};
-    irt::model::ModelDevice  device{irt::model::ModelDevice::GPU};
+    irt::model::ModelRuntime runtime{};
     int                      warmup{0};
     int                      repeat{1};
 };
@@ -95,56 +94,6 @@ struct TimingStats
     double min_ms{0.0};
     double max_ms{0.0};
 };
-
-std::string trim(std::string value)
-{
-    auto not_space = [](unsigned char ch)
-    {
-        return !std::isspace(ch);
-    };
-    value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
-    value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
-    return value;
-}
-
-std::string toLower(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    return value;
-}
-
-irt::model::ModelBackend parseBackend(std::string value)
-{
-    value = toLower(trim(std::move(value)));
-    if (value == "tensorrt" || value == "trt")
-    {
-        return irt::model::ModelBackend::TensorRT;
-    }
-    if (value == "openvino" || value == "ov")
-    {
-        return irt::model::ModelBackend::OpenVINO;
-    }
-    if (value == "onnxruntime" || value == "onnx" || value == "ort")
-    {
-        return irt::model::ModelBackend::ONNXRuntime;
-    }
-    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported backend: %s", value.c_str());
-}
-
-irt::model::ModelDevice parseDevice(std::string value)
-{
-    value = toLower(trim(std::move(value)));
-    if (value == "cpu")
-    {
-        return irt::model::ModelDevice::CPU;
-    }
-    if (value == "gpu" || value == "cuda")
-    {
-        return irt::model::ModelDevice::GPU;
-    }
-    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported device: %s", value.c_str());
-}
 
 TimingStats summarizeTimings(const std::vector<double> &values)
 {
@@ -217,9 +166,8 @@ cxxopts::Options makeOptions(const char *program_name)
         "box", "Optional box prompt x0,y0,x1,y1; <=1 means normalized coordinate",
         cxxopts::value<std::string>()->default_value(""))("threshold", "Mask logit threshold",
                                                           cxxopts::value<float>()->default_value("0.0"))(
-        "backend", "Inference backend: tensorrt, openvino, onnxruntime",
-        cxxopts::value<std::string>()->default_value("tensorrt"))("device", "Inference device: cpu or gpu",
-                                                                  cxxopts::value<std::string>()->default_value("gpu"))(
+        "runtime", "Model runtime: cpu, gpu:0, cuda:0, or backend:gpu-id (e.g. tensorrt:0)",
+        cxxopts::value<std::string>()->default_value("tensorrt:0"))(
         "warmup", "Warmup iterations before timing", cxxopts::value<int>()->default_value("0"))(
         "repeat", "Timed inference iterations", cxxopts::value<int>()->default_value("1"))("h,help", "Show help");
     return options;
@@ -260,8 +208,7 @@ Arguments parseArguments(int argc, char *argv[])
     args.output_image = result["output-image"].as<std::string>();
     args.point_x      = result["point-x"].as<float>();
     args.point_y      = result["point-y"].as<float>();
-    args.backend      = parseBackend(result["backend"].as<std::string>());
-    args.device       = parseDevice(result["device"].as<std::string>());
+    args.runtime      = irt::model::ModelRuntime::parse(result["runtime"].as<std::string>());
     args.warmup       = result["warmup"].as<int>();
     args.repeat       = result["repeat"].as<int>();
     const auto box    = result["box"].as<std::string>();
@@ -418,10 +365,9 @@ int main(int argc, char *argv[])
                                         : args.output_image;
 
         auto config = std::make_unique<irt::model::IModelConfig>();
-        config->setBackend(args.backend);
-        config->setDevice(args.device);
+        config->setRuntime(args.runtime);
         const std::string runtime_model_name
-            = args.backend == irt::model::ModelBackend::TensorRT ? args.model_name : "onnx";
+            = args.runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT ? args.model_name : "onnx";
         auto model = irt::model::CreateModel(runtime_model_name, std::move(config));
         if (!model)
         {
@@ -491,7 +437,8 @@ int main(int argc, char *argv[])
         };
 
         const auto                stream        = model->resolveExecutionStream();
-        const bool                uses_tensorrt = args.backend == irt::model::ModelBackend::TensorRT;
+        const bool                uses_tensorrt
+            = args.runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT;
         std::vector<DeviceBuffer> device_inputs;
         std::vector<DeviceBuffer> device_outputs;
         std::vector<HostBuffer>   host_outputs;
@@ -603,8 +550,7 @@ int main(int argc, char *argv[])
         const auto post_end = Clock::now();
 
         std::cout << "Saved mask overlay to: " << fs::absolute(output_path).string() << std::endl;
-        std::cout << "Backend: " << irt::model::modelBackendName(args.backend)
-                  << ", device=" << irt::model::modelDeviceName(args.device) << std::endl;
+        std::cout << "Runtime: " << args.runtime.toString() << std::endl;
         const auto h2d_stats        = summarizeTimings(h2d_times_ms);
         const auto inference_stats  = summarizeTimings(inference_times_ms);
         const auto d2h_stats        = summarizeTimings(d2h_times_ms);

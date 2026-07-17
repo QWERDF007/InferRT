@@ -85,40 +85,6 @@ irt::features::ImageSearchPreprocessBackend parsePreprocessBackend(std::string v
     throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported preprocess backend: %s", value.c_str());
 }
 
-irt::model::ModelBackend parseModelBackend(std::string value)
-{
-    value = toLower(std::move(value));
-    if (value == "tensorrt" || value == "trt")
-    {
-        return irt::model::ModelBackend::TensorRT;
-    }
-    if (value == "openvino" || value == "ov")
-    {
-        return irt::model::ModelBackend::OpenVINO;
-    }
-    if (value == "onnxruntime" || value == "onnx" || value == "ort")
-    {
-        return irt::model::ModelBackend::ONNXRuntime;
-    }
-
-    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported model backend: %s", value.c_str());
-}
-
-irt::model::ModelDevice parseModelDevice(std::string value)
-{
-    value = toLower(std::move(value));
-    if (value == "cpu")
-    {
-        return irt::model::ModelDevice::CPU;
-    }
-    if (value == "gpu" || value == "cuda")
-    {
-        return irt::model::ModelDevice::GPU;
-    }
-
-    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported model device: %s", value.c_str());
-}
-
 irt::features::ImageSearchFaissBackend parseFaissBackend(std::string value)
 {
     value = toLower(std::move(value));
@@ -219,10 +185,8 @@ cxxopts::Options makeOptions(const char *program_name)
         cxxopts::value<int>()->default_value(std::to_string(irt::features::ImageSearch::kDefaultTopK)))(
         "index", "Faiss index path", cxxopts::value<std::string>()->default_value(""))(
         "norm", "Feature norm mode: none, l1, l2", cxxopts::value<std::string>()->default_value("l2"))(
-        "backend", "Feature extraction backend: tensorrt, openvino, onnxruntime",
-        cxxopts::value<std::string>()->default_value("tensorrt"))("device", "Feature extraction device: cpu, gpu",
-                                                                  cxxopts::value<std::string>()->default_value("gpu"))(
-        "device-id", "GPU device id (zero-based)", cxxopts::value<int>()->default_value("0"))(
+        "runtime", "Feature model runtime: cpu, gpu:0, cuda:0, or backend:gpu-id (e.g. tensorrt:0)",
+        cxxopts::value<std::string>()->default_value("tensorrt:0"))(
         "preprocess-backend", "Preprocess backend: cpu, gpu", cxxopts::value<std::string>()->default_value("cpu"))(
         "faiss-backend", "Faiss backend: cpu, gpu", cxxopts::value<std::string>()->default_value("cpu"))(
         "index-storage", "Index storage for CPU Faiss search: ram, disk",
@@ -249,7 +213,7 @@ Arguments parseArguments(int argc, char *argv[])
         std::cout << "Default model: " << irt::features::ImageSearch::kDefaultModelName << std::endl;
         std::cout << "Default feature tensor: " << irt::features::ImageSearch::kDefaultFeatureName << std::endl;
         std::cout << "Default top-k: " << irt::features::ImageSearch::kDefaultTopK << std::endl;
-        std::cout << "Default config: --norm l2 --backend tensorrt --device gpu --device-id 0 --preprocess-backend cpu"
+        std::cout << "Default config: --norm l2 --runtime tensorrt:0 --preprocess-backend cpu"
                   << " --faiss-backend cpu --index-storage ram --model-batch-size "
                   << irt::features::kDefaultImageSearchModelBatchSize << std::endl;
         std::cout << "If --index is omitted, the sample writes <gallery_dir>/<timestamp>.faiss" << std::endl;
@@ -278,9 +242,7 @@ Arguments parseArguments(int argc, char *argv[])
     args.config.model_name            = result["model"].as<std::string>();
     args.config.feature_name          = result["feature"].as<std::string>();
     args.config.norm                  = parseNorm(result["norm"].as<std::string>());
-    args.config.model_backend         = parseModelBackend(result["backend"].as<std::string>());
-    args.config.model_device          = parseModelDevice(result["device"].as<std::string>());
-    args.config.model_device_id       = result["device-id"].as<int>();
+    args.config.model_runtime         = irt::model::ModelRuntime::parse(result["runtime"].as<std::string>());
     args.config.preprocess_backend    = parsePreprocessBackend(result["preprocess-backend"].as<std::string>());
     args.config.faiss_backend         = parseFaissBackend(result["faiss-backend"].as<std::string>());
     args.config.index_storage         = parseIndexStorage(result["index-storage"].as<std::string>());
@@ -353,9 +315,7 @@ int main(int argc, char *argv[])
         std::cout << "Query image: " << fs::absolute(args.query_image).string() << std::endl;
         std::cout << "Model: " << searcher.config().model_name << ", feature tensor: " << searcher.config().feature_name
                   << std::endl;
-        std::cout << "Config: backend=" << modelBackendName(searcher.config().model_backend)
-                  << ", device=" << modelDeviceName(searcher.config().model_device)
-                  << ", device_id=" << searcher.config().model_device_id
+        std::cout << "Config: runtime=" << searcher.config().model_runtime.toString()
                   << ", norm=" << normName(searcher.config().norm)
                   << ", preprocess=" << preprocessBackendName(searcher.config().preprocess_backend)
                   << ", faiss=" << faissBackendName(searcher.config().faiss_backend)

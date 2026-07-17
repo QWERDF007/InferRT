@@ -160,7 +160,7 @@ const char *preprocessBackendName(ImageSearchPreprocessBackend backend)
  */
 bool usesTensorRtModelBackend(const ImageSearchConfig &config)
 {
-    return config.model_backend == irt::model::ModelBackend::TensorRT;
+    return config.model_runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT;
 }
 
 /**
@@ -234,44 +234,7 @@ const char *indexKindName(const ImageSearchConfig &config)
  */
 void validateConfig(const ImageSearchConfig &config)
 {
-    switch (config.model_backend)
-    {
-    case irt::model::ModelBackend::TensorRT:
-    case irt::model::ModelBackend::OpenVINO:
-    case irt::model::ModelBackend::ONNXRuntime:
-        break;
-    default:
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported ImageSearch model backend");
-    }
-
-    switch (config.model_device)
-    {
-    case irt::model::ModelDevice::CPU:
-    case irt::model::ModelDevice::GPU:
-        break;
-    default:
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported ImageSearch model device");
-    }
-
-    if (usesTensorRtModelBackend(config) && config.model_device == irt::model::ModelDevice::CPU)
-    {
-        throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED, "ImageSearch TensorRT backend requires GPU device");
-    }
-
-    if (config.model_device_id < 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "ImageSearch model device id must be non-negative, got %d", config.model_device_id);
-    }
-
-    switch (config.model_precision)
-    {
-    case irt::model::ModelPrecision::FP32:
-    case irt::model::ModelPrecision::FP16:
-        break;
-    default:
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported ImageSearch model precision");
-    }
+    priv::validateFeatureSearchConfig(config, "ImageSearch");
 
     switch (config.preprocess_backend)
     {
@@ -515,9 +478,7 @@ irt::util::ManifestEntries imageSearchManifestEntries(const fs::path &index_path
         {             "model",                                config.model_name},
         {           "feature",                              config.feature_name},
         {       "gallery_dir",                                    gallery_value},
-        {     "model_backend",           modelBackendName(config.model_backend)},
-        {      "model_device",             modelDeviceName(config.model_device)},
-        {   "model_device_id",           std::to_string(config.model_device_id)},
+        {     "model_runtime",           config.model_runtime.toString()},
         {   "model_precision",          modelPrecisionName(config.model_precision)},
         {"preprocess_backend", preprocessBackendName(config.preprocess_backend)},
         {              "norm",                     featureNormName(config.norm)},
@@ -629,7 +590,7 @@ bool existingIndexMatchesConfig(const fs::path &index_path, const fs::path &gall
         && irt::util::manifestValueEquals(manifest, "index_file", absolutePathManifestValue(index_path))
         && irt::util::manifestValueEquals(manifest, "model", config.model_name)
         && irt::util::manifestValueEquals(manifest, "feature", config.feature_name) && gallery_matches
-        && irt::util::manifestValueEquals(manifest, "model_device_id", std::to_string(config.model_device_id))
+        && irt::util::manifestValueEquals(manifest, "model_runtime", config.model_runtime.toString())
         && irt::util::manifestValueEquals(manifest, "model_precision", modelPrecisionName(config.model_precision))
         && irt::util::manifestValueEquals(manifest, "norm", featureNormName(config.norm))
         && irt::util::manifestValueEquals(manifest, "index_storage", indexStorageName(config.index_storage))
@@ -668,9 +629,7 @@ public:
         model_config->setFeatureTensorNames({feature_name_});
         model_config->setOutputTensorNames({feature_name_});
         model_config->setFeatureOnly(true);
-        model_config->setBackend(config_.model_backend);
-        model_config->setDevice(config_.model_device);
-        model_config->setDeviceId(config_.model_device_id);
+        model_config->setRuntime(config_.model_runtime);
         model_config->setPrecision(config_.model_precision);
         if (usesTensorRtModelBackend(config_) && config_.model_batch_size > 1)
         {
@@ -690,7 +649,7 @@ public:
         model_->buildOrLoad(weights_file.string());
         if (usesTensorRtModelBackend(config_))
         {
-            irt::model::setCudaDevice(config_.model_device_id);
+            irt::model::setCudaDevice(config_.model_runtime.deviceId());
         }
 
         const auto input_tensor_names = model_->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
@@ -737,7 +696,7 @@ public:
         feature_dim_               = elementCount(output_dims_) / max_batch_size_;
         if (usesTensorRtModelBackend(config_))
         {
-            irt::model::setCudaDevice(config_.model_device_id);
+            irt::model::setCudaDevice(config_.model_runtime.deviceId());
             device_input_.resize(max_batch_size_ * input_elements_per_sample_, nvinfer1::DataType::kFLOAT);
             device_output_.resize(max_batch_size_ * feature_dim_, nvinfer1::DataType::kFLOAT);
         }
@@ -803,7 +762,7 @@ public:
         auto       input_data      = preprocessBatch(image_paths, begin, count);
         if (usesTensorRtModelBackend(config_))
         {
-            irt::model::setCudaDevice(config_.model_device_id);
+            irt::model::setCudaDevice(config_.model_runtime.deviceId());
         }
         const auto output_dims     = setRuntimeBatchSize(count);
         const auto output_elements = elementCount(output_dims);
@@ -1079,7 +1038,8 @@ FaissIndexBundle buildRamIvfPqIndex(const std::vector<fs::path> &gallery_images,
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::WritingIndex, 0, 0, 0, 1, 1);
 
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 0, 1);
-    auto bundle = moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend, config.model_device_id);
+    auto bundle = moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend,
+                                                   config.model_runtime.deviceId());
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 1, 1);
     return bundle;
 }
@@ -1137,7 +1097,8 @@ FaissIndexBundle loadIndex(const fs::path &index_path, const ImageSearchConfig &
     }
     else
     {
-        bundle = moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend, config.model_device_id);
+        bundle = moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend,
+                                                 config.model_runtime.deviceId());
     }
     bundle.image_ids = std::move(image_ids);
     return bundle;

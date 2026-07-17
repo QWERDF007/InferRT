@@ -31,7 +31,7 @@ std::filesystem::path SampleResNet50Onnx()
     return ProjectRoot() / "samples" / "model" / "onnx" / "resnet50.onnx";
 }
 
-void RunOnnxGraphBackend(irt::model::ModelBackend backend, bool feature_only)
+void RunOnnxGraphBackend(irt::model::ModelRuntime::Backend backend, bool feature_only)
 {
     const auto onnx_path = SampleResNet50Onnx();
     if (!std::filesystem::exists(onnx_path))
@@ -40,8 +40,7 @@ void RunOnnxGraphBackend(irt::model::ModelBackend backend, bool feature_only)
     }
 
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setBackend(backend);
-    config->setDevice(irt::model::ModelDevice::CPU);
+    config->setRuntime({backend, irt::model::ModelRuntime::Device::CPU});
     if (feature_only)
     {
         config->setFeatureOnly(true);
@@ -55,8 +54,8 @@ void RunOnnxGraphBackend(irt::model::ModelBackend backend, bool feature_only)
 
     const auto input_names = model->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
     const auto output_names = model->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
-    EXPECT_EQ(model->backend(), backend);
-    EXPECT_EQ(model->device(), irt::model::ModelDevice::CPU);
+    EXPECT_EQ(model->runtime().backend(), backend);
+    EXPECT_TRUE(model->runtime().isCpu());
     ASSERT_EQ(input_names.size(), 1U);
     ASSERT_EQ(output_names.size(), 1U);
     EXPECT_EQ(model->tensorDataType(input_names.front()), nvinfer1::DataType::kFLOAT);
@@ -90,7 +89,7 @@ void RunOnnxGraphBackend(irt::model::ModelBackend backend, bool feature_only)
     EXPECT_TRUE(std::any_of(output.begin(), output.end(), [](float value) { return std::abs(value) > 1.0e-7F; }));
 }
 
-void ExpectInvalidOutputRejected(irt::model::ModelBackend backend)
+void ExpectInvalidOutputRejected(irt::model::ModelRuntime::Backend backend)
 {
     const auto onnx_path = SampleResNet50Onnx();
     if (!std::filesystem::exists(onnx_path))
@@ -99,8 +98,7 @@ void ExpectInvalidOutputRejected(irt::model::ModelBackend backend)
     }
 
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setBackend(backend);
-    config->setDevice(irt::model::ModelDevice::CPU);
+    config->setRuntime({backend, irt::model::ModelRuntime::Device::CPU});
     config->setOutputTensorNames({"missing_output"});
 
     auto model = irt::model::CreateModel("onnx", std::move(config));
@@ -186,8 +184,7 @@ TEST(ONNXModelRuntimeQueryTest, SetTensorShapeWithoutContextThrowsInvalidOperati
 TEST(ONNXRuntimeBackendTest, RuntimeQueriesBeforeLoadThrowInvalidOperation)
 {
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setBackend(irt::model::ModelBackend::ONNXRuntime);
-    config->setDevice(irt::model::ModelDevice::CPU);
+    config->setRuntime(irt::model::ModelRuntime::parse("onnxruntime:cpu"));
 
     auto model = irt::model::CreateModel("onnx", std::move(config));
     ASSERT_NE(model, nullptr);
@@ -213,8 +210,7 @@ TEST(ONNXModelLifecycleTest, BuildWithNonExistentOnnxThrowsInvalidArgument)
 TEST(ONNXRuntimeBackendTest, BuildWithNonExistentOnnxThrowsInvalidArgument)
 {
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setBackend(irt::model::ModelBackend::ONNXRuntime);
-    config->setDevice(irt::model::ModelDevice::CPU);
+    config->setRuntime(irt::model::ModelRuntime::parse("onnxruntime:cpu"));
 
     auto model = irt::model::CreateModel("onnx", std::move(config));
     ASSERT_NE(model, nullptr);
@@ -228,32 +224,32 @@ TEST(ONNXRuntimeBackendTest, BuildWithNonExistentOnnxThrowsInvalidArgument)
  */
 TEST(ONNXRuntimeBackendTest, BuildsAndRunsCpuInferenceFromSampleOnnx)
 {
-    RunOnnxGraphBackend(irt::model::ModelBackend::ONNXRuntime, false);
+    RunOnnxGraphBackend(irt::model::ModelRuntime::Backend::ONNXRuntime, false);
 }
 
 TEST(ONNXRuntimeBackendTest, ForwardFeaturesRunsConfiguredGraphOutput)
 {
-    RunOnnxGraphBackend(irt::model::ModelBackend::ONNXRuntime, true);
+    RunOnnxGraphBackend(irt::model::ModelRuntime::Backend::ONNXRuntime, true);
 }
 
 TEST(ONNXRuntimeBackendTest, RejectsOutputNameThatIsNotGraphOutput)
 {
-    ExpectInvalidOutputRejected(irt::model::ModelBackend::ONNXRuntime);
+    ExpectInvalidOutputRejected(irt::model::ModelRuntime::Backend::ONNXRuntime);
 }
 
 TEST(OpenVINOBackendTest, BuildsAndRunsCpuInferenceFromSampleOnnx)
 {
-    RunOnnxGraphBackend(irt::model::ModelBackend::OpenVINO, false);
+    RunOnnxGraphBackend(irt::model::ModelRuntime::Backend::OpenVINO, false);
 }
 
 TEST(OpenVINOBackendTest, ForwardFeaturesRunsConfiguredGraphOutput)
 {
-    RunOnnxGraphBackend(irt::model::ModelBackend::OpenVINO, true);
+    RunOnnxGraphBackend(irt::model::ModelRuntime::Backend::OpenVINO, true);
 }
 
 TEST(OpenVINOBackendTest, RejectsOutputNameThatIsNotGraphOutput)
 {
-    ExpectInvalidOutputRejected(irt::model::ModelBackend::OpenVINO);
+    ExpectInvalidOutputRejected(irt::model::ModelRuntime::Backend::OpenVINO);
 }
 
 TEST(ONNXModelLifecycleTest, BuildOrLoadWithNonExistentOnnxThrowsInvalidArgument)

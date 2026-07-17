@@ -53,8 +53,7 @@ struct Arguments
     std::vector<fs::path>    image_paths;
     fs::path                 label_file;
     fs::path                 dump_dir;
-    irt::model::ModelBackend backend{irt::model::ModelBackend::TensorRT};
-    irt::model::ModelDevice  device{irt::model::ModelDevice::GPU};
+    irt::model::ModelRuntime runtime{};
     int                      warmup{0};
     int                      repeat{1};
 };
@@ -119,13 +118,6 @@ std::string trim(std::string value)
     return value;
 }
 
-std::string toLower(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    return value;
-}
-
 std::vector<fs::path> splitPathList(const std::string &value)
 {
     std::vector<fs::path> paths;
@@ -187,64 +179,6 @@ std::vector<float> preprocessBatch(const std::vector<cv::Mat> &images, const nvi
         std::memcpy(batch_data.data() + i * image_elements, single.data(), image_elements * sizeof(float));
     }
     return batch_data;
-}
-
-irt::model::ModelBackend parseBackend(std::string value)
-{
-    value = toLower(trim(std::move(value)));
-    if (value == "tensorrt" || value == "trt")
-    {
-        return irt::model::ModelBackend::TensorRT;
-    }
-    if (value == "openvino" || value == "ov")
-    {
-        return irt::model::ModelBackend::OpenVINO;
-    }
-    if (value == "onnxruntime" || value == "onnx" || value == "ort")
-    {
-        return irt::model::ModelBackend::ONNXRuntime;
-    }
-    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported backend: %s", value.c_str());
-}
-
-irt::model::ModelDevice parseDevice(std::string value)
-{
-    value = toLower(trim(std::move(value)));
-    if (value == "cpu")
-    {
-        return irt::model::ModelDevice::CPU;
-    }
-    if (value == "gpu" || value == "cuda")
-    {
-        return irt::model::ModelDevice::GPU;
-    }
-    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported device: %s", value.c_str());
-}
-
-const char *backendName(irt::model::ModelBackend backend)
-{
-    switch (backend)
-    {
-    case irt::model::ModelBackend::TensorRT:
-        return "tensorrt";
-    case irt::model::ModelBackend::OpenVINO:
-        return "openvino";
-    case irt::model::ModelBackend::ONNXRuntime:
-        return "onnxruntime";
-    }
-    return "unknown";
-}
-
-const char *deviceName(irt::model::ModelDevice device)
-{
-    switch (device)
-    {
-    case irt::model::ModelDevice::CPU:
-        return "cpu";
-    case irt::model::ModelDevice::GPU:
-        return "gpu";
-    }
-    return "unknown";
 }
 
 TimingStats summarizeTimings(const std::vector<double> &values)
@@ -318,10 +252,9 @@ cxxopts::Options makeOptions(const char *program_name)
         cxxopts::value<std::string>()->default_value(""))("label-file,l", "ImageNet label file",
                                                           cxxopts::value<std::string>()->default_value(""))(
         "dump-dir,o", "Optional directory to dump input/output tensors for parity tests",
-        cxxopts::value<std::string>()->default_value(""))("backend",
-                                                          "Inference backend: tensorrt, openvino, onnxruntime",
-                                                          cxxopts::value<std::string>()->default_value("tensorrt"))(
-        "device", "Inference device: cpu or gpu", cxxopts::value<std::string>()->default_value("gpu"))(
+        cxxopts::value<std::string>()->default_value(""))("runtime",
+                                                          "Model runtime: cpu, gpu:0, cuda:0, or backend:gpu-id (e.g. tensorrt:0)",
+                                                          cxxopts::value<std::string>()->default_value("tensorrt:0"))(
         "warmup", "Warmup iterations before timing", cxxopts::value<int>()->default_value("0"))(
         "repeat", "Timed inference iterations", cxxopts::value<int>()->default_value("1"))("h,help", "Show help");
     return options;
@@ -362,8 +295,7 @@ Arguments parseArguments(int argc, char *argv[])
     args.image_paths  = splitPathList(result["image-path"].as<std::string>());
     args.label_file   = result["label-file"].as<std::string>();
     args.dump_dir     = result["dump-dir"].as<std::string>();
-    args.backend      = parseBackend(result["backend"].as<std::string>());
-    args.device       = parseDevice(result["device"].as<std::string>());
+    args.runtime      = irt::model::ModelRuntime::parse(result["runtime"].as<std::string>());
     args.warmup       = result["warmup"].as<int>();
     args.repeat       = result["repeat"].as<int>();
     if (args.warmup < 0)
@@ -418,11 +350,10 @@ int main(int argc, char *argv[])
             const int batch_size = static_cast<int>(image_paths.size());
             config->setDynamicBatchRange(1, batch_size, batch_size);
         }
-        config->setBackend(args.backend);
-        config->setDevice(args.device);
+        config->setRuntime(args.runtime);
 
         const std::string runtime_model_name
-            = args.backend == irt::model::ModelBackend::TensorRT ? args.model_name : "onnx";
+            = args.runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT ? args.model_name : "onnx";
         auto model = irt::model::CreateModel(runtime_model_name, std::move(config));
         if (!model)
         {
@@ -497,7 +428,7 @@ int main(int argc, char *argv[])
                                  "Preprocessed input byte size does not match model input tensor");
         }
 
-        const bool uses_tensorrt = args.backend == irt::model::ModelBackend::TensorRT;
+        const bool uses_tensorrt = args.runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT;
         const auto stream        = uses_tensorrt ? model->resolveExecutionStream() : nullptr;
 
         void *d_input = nullptr;
@@ -661,8 +592,7 @@ int main(int argc, char *argv[])
             }
 
             manifest << "version=1\n";
-            manifest << "backend=" << backendName(args.backend) << "\n";
-            manifest << "device=" << deviceName(args.device) << "\n";
+            manifest << "runtime=" << args.runtime.toString() << "\n";
             manifest << "warmup=" << args.warmup << "\n";
             manifest << "repeat=" << args.repeat << "\n";
             manifest << "model_name=" << args.model_name << "\n";
@@ -687,7 +617,7 @@ int main(int argc, char *argv[])
             std::cout << "Primary output tensor: " << primary_output_name << std::endl;
         }
 
-        std::cout << "Backend: " << backendName(args.backend) << ", device=" << deviceName(args.device) << std::endl;
+        std::cout << "Runtime: " << args.runtime.toString() << std::endl;
         const auto h2d_stats        = summarizeTimings(h2d_times_ms);
         const auto inference_stats  = summarizeTimings(inference_times_ms);
         const auto d2h_stats        = summarizeTimings(d2h_times_ms);

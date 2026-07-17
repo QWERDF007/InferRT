@@ -148,7 +148,7 @@ void ValidateFeatureTensorConfig(const IModelConfig &config)
 void ValidateDynamicBatchConfig(const IModelImpl &impl)
 {
     const auto &config = impl.modelConfig();
-    if (config.backend() != ModelBackend::TensorRT || !config.dynamicBatch())
+    if (config.runtime().backend() != ModelRuntime::Backend::TensorRT || !config.dynamicBatch())
     {
         return;
     }
@@ -217,16 +217,7 @@ void ValidateModelConfig(const IModelImpl &impl)
     ValidateUniqueOutputTensorNames(config);
     ValidateDynamicBatchConfig(impl);
 
-    if (config.deviceId() < 0)
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "device_id must be non-negative, got %d",
-                             config.deviceId());
-    }
-
-    if (config.backend() == ModelBackend::TensorRT && config.device() == ModelDevice::CPU)
-    {
-        throw irt::Exception(Status::ERROR_NOT_IMPLEMENTED, "TensorRT backend requires GPU device");
-    }
+    config.runtime().validate();
 }
 
 /**
@@ -291,7 +282,7 @@ irt::util::ManifestEntries engineManifestEntries(const IModelImpl &impl, const s
         {         "engine_file",           absolutePathValue(engine_file)},
         {         "num_classes",      std::to_string(config.numClasses())},
         {            "precision",             modelPrecisionName(config.precision())},
-        {           "device_id",            std::to_string(config.deviceId())},
+        {             "runtime",                  config.runtime().toString()},
         {        "input_shapes",   inputShapesValue(config.inputShapes())},
         {  "input_tensor_names",   joinStrings(config.inputTensorNames())},
         { "output_tensor_names",  joinStrings(config.outputTensorNames())},
@@ -351,7 +342,7 @@ void IModelImpl::setModelConfig(std::unique_ptr<IModelConfig> config)
     const auto severity = logLevel();
     config_             = config ? std::move(config) : std::make_unique<IModelConfig>();
     normalizeModelConfig(*config_);
-    backend_runtime_ = CreateBackendRuntime(config_->backend());
+    backend_runtime_ = CreateBackendRuntime(config_->runtime().backend());
     backend_runtime_->setLogLevel(severity);
 }
 
@@ -611,7 +602,7 @@ void IModelImpl::saveRuntimeToFile(const std::string &engine_file) const
 
 bool IModelImpl::usesTensorRTBackend() const noexcept
 {
-    return modelConfig().backend() == ModelBackend::TensorRT;
+    return modelConfig().runtime().backend() == ModelRuntime::Backend::TensorRT;
 }
 
 TensorRTBackend &IModelImpl::tensorRTBackend()
@@ -636,12 +627,12 @@ const TensorRTBackend &IModelImpl::tensorRTBackend() const
 
 void IModelImpl::ensureBackendRuntime()
 {
-    if (backend_runtime_ && backend_runtime_->backend() == modelConfig().backend())
+    if (backend_runtime_ && backend_runtime_->backend() == modelConfig().runtime().backend())
     {
         return;
     }
 
-    backend_runtime_ = CreateBackendRuntime(modelConfig().backend());
+    backend_runtime_ = CreateBackendRuntime(modelConfig().runtime().backend());
 }
 
 void IModelImpl::syncModelConfigFromBackendRuntime()

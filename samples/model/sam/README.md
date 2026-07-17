@@ -42,16 +42,15 @@ SAM3 `.wts` export writes the Hugging Face `Sam3Model.state_dict()` for inspecti
 integration; the current SAM3 TensorRT model entry still returns `ERROR_NOT_IMPLEMENTED`.
 
 ```bash
-build/bin/inferrt_sample_sam.exe -m sam_vit_b -w samples/model/sam/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_mask.jpg --point-x 0.5 --point-y 0.5 --backend tensorrt --device gpu --warmup 5 --repeat 20
+build/bin/inferrt_sample_sam.exe -m sam_vit_b -w samples/model/sam/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_mask.jpg --point-x 0.5 --point-y 0.5 --runtime tensorrt:0 --warmup 5 --repeat 20
 build/bin/inferrt_sample_sam.exe -m sam_vit_b -w samples/model/sam/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_box_mask.jpg --box 0.2,0.2,0.8,0.8
 build/bin/inferrt_sample_sam.exe -m sam2_1_hiera_tiny -w samples/model/sam/sam2_1_hiera_tiny.wts -i assets/pics/dog.jpg -o build/sam2_mask.jpg --point-x 0.5 --point-y 0.5
-build/bin/inferrt_sample_sam.exe -m sam2_1_hiera_tiny -w sam2_1_hiera_tiny.onnx -i assets/pics/dog.jpg -o build/sam2_onnx_mask.jpg --point-x 0.5 --point-y 0.5 --backend onnxruntime --device cpu
+build/bin/inferrt_sample_sam.exe -m sam2_1_hiera_tiny -w sam2_1_hiera_tiny.onnx -i assets/pics/dog.jpg -o build/sam2_onnx_mask.jpg --point-x 0.5 --point-y 0.5 --runtime onnxruntime:cpu
 ```
 
-Backend options:
+Runtime options:
 
-- `--backend`: `tensorrt`, `openvino`, or `onnxruntime`; `onnx` and `ort` are accepted aliases for ONNX Runtime.
-- `--device`: `cpu` or `gpu`; TensorRT requires `gpu`.
+- `--runtime`: combines backend and device, for example `tensorrt:0`, `onnxruntime:cpu`, `onnxruntime:0`, or `openvino:cpu`; shorthand `cpu`, `gpu:0`, and `cuda:0` is also supported.
 - `--warmup`: iterations to run before measurement.
 - `--repeat`: measured iterations used for total/avg/min/max timing.
 

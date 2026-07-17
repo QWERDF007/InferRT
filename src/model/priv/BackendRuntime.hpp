@@ -26,9 +26,9 @@ public:
 
     /**
      * @brief 返回当前后端类型。
-     * @return 对应的 ``ModelBackend`` 枚举值。
+     * @return 对应的 ``ModelRuntime::Backend`` 枚举值。
      */
-    virtual ModelBackend backend() const noexcept = 0;
+    virtual ModelRuntime::Backend backend() const noexcept = 0;
 
     /**
      * @brief 从磁盘加载已序列化的模型或图文件。
@@ -141,7 +141,7 @@ public:
     /// 网络构建回调：向 ``INetworkDefinition`` 填入层与张量。
     using NetworkBuildFn = std::function<void(nvinfer1::INetworkDefinition *)>;
 
-    ModelBackend backend() const noexcept override;
+    ModelRuntime::Backend backend() const noexcept override;
 
     void load(const std::string &engine_file, const IModelConfig &config, const std::string &model_name) override;
 
@@ -223,10 +223,10 @@ private:
 
 /**
  * @brief 按后端类型创建对应的运行时实例。
- * @param backend 目标 ``ModelBackend``。
+ * @param backend 目标 ``ModelRuntime::Backend``。
  * @return 新创建的后端运行时；不支持的后端抛出异常。
  */
-std::unique_ptr<IBackendRuntime> CreateBackendRuntime(ModelBackend backend);
+std::unique_ptr<IBackendRuntime> CreateBackendRuntime(ModelRuntime::Backend backend);
 
 /**
  * @brief 创建 ONNX Runtime 后端实例。

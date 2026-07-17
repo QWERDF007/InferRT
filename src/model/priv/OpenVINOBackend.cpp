@@ -19,13 +19,13 @@ struct TensorInfo
     bool              dynamic_batch{false};
 };
 
-std::string DeviceName(ModelDevice device, int device_id)
+std::string DeviceName(const ModelRuntime &runtime)
 {
-    if (device != ModelDevice::GPU)
+    if (runtime.isCpu())
     {
         return "CPU";
     }
-    return device_id == 0 ? "GPU" : "GPU." + std::to_string(device_id);
+    return runtime.deviceId() == 0 ? "GPU" : "GPU." + std::to_string(runtime.deviceId());
 }
 
 nvinfer1::DataType OvTypeToTrt(const ov::element::Type &type)
@@ -108,9 +108,9 @@ std::string PortName(const ov::Output<const ov::Node> &port)
 class OpenVINOBackend final : public IBackendRuntime
 {
 public:
-    ModelBackend backend() const noexcept override
+    ModelRuntime::Backend backend() const noexcept override
     {
-        return ModelBackend::OpenVINO;
+        return ModelRuntime::Backend::OpenVINO;
     }
 
     void load(const std::string &model_file, const IModelConfig &config, const std::string &model_name) override
@@ -126,7 +126,7 @@ public:
         try
         {
             model_          = core_.read_model(model_path);
-            compiled_model_ = core_.compile_model(model_, DeviceName(config.device(), config.deviceId()));
+            compiled_model_ = core_.compile_model(model_, DeviceName(config.runtime()));
             infer_request_  = compiled_model_.create_infer_request();
             refreshMetadata(config);
         }

@@ -55,9 +55,9 @@ TensorInfo ReadTensorInfo(const Ort::TypeInfo &type_info)
 class ONNXRuntimeBackend final : public IBackendRuntime
 {
 public:
-    ModelBackend backend() const noexcept override
+    ModelRuntime::Backend backend() const noexcept override
     {
-        return ModelBackend::ONNXRuntime;
+        return ModelRuntime::Backend::ONNXRuntime;
     }
 
     void load(const std::string &model_file, const IModelConfig &config, const std::string &model_name) override
@@ -76,10 +76,10 @@ public:
             Ort::SessionOptions session_options;
             session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
-            if (config.device() == ModelDevice::GPU)
+            if (config.runtime().isGpu())
             {
                 OrtCUDAProviderOptions cuda_options{};
-                cuda_options.device_id = config.deviceId();
+                cuda_options.device_id = config.runtime().deviceId();
                 session_options.AppendExecutionProvider_CUDA(cuda_options);
             }
 

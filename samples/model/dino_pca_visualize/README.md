@@ -35,8 +35,7 @@ Default values:
 - `--image-path`: `assets/pics/dog.jpg`
 - `--output-dir`: `dino_pca_visualize_cpp`
 - `--threshold`: `0.5`
-- `--backend`: `tensorrt`
-- `--device`: `gpu`
+- `--runtime`: `tensorrt:0` (the sample currently requires TensorRT)
 
 The sample writes:
 

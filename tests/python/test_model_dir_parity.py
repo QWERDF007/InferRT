@@ -844,8 +844,7 @@ def _run_inferrt_primary(
     """
 
     config = irt_module.ModelConfig()
-    config.backend = getattr(irt_module.ModelBackend, backend_attr)
-    config.device = getattr(irt_module.ModelDevice, device_attr)
+    config.runtime = _runtime_spec(backend_attr, device_attr)
     if backend_attr == "TENSORRT":
         _set_input_shape(config, input_tensor)
 
@@ -889,8 +888,7 @@ def _run_inferrt_features(
     """
 
     config = irt_module.ModelConfig()
-    config.backend = getattr(irt_module.ModelBackend, backend_attr)
-    config.device = getattr(irt_module.ModelDevice, device_attr)
+    config.runtime = _runtime_spec(backend_attr, device_attr)
     config.feature_only = True
     config.feature_tensor_names = case.feature_names
     config.output_tensor_names = case.feature_names
@@ -966,6 +964,13 @@ def _runtime_label(runtime_attr: str) -> str:
         "ONNXRUNTIME": "onnx",
         "OPENVINO": "openvino",
     }[runtime_attr]
+
+
+def _runtime_spec(runtime_attr: str, device_attr: str) -> str:
+    """将测试后端和设备组合为统一 runtime 字符串。"""
+
+    device = "0" if device_attr.upper() == "GPU" else "cpu"
+    return f"{_runtime_label(runtime_attr)}:{device}"
 
 
 def _runtime_device_pairs(compare_runtimes: list[str], compare_devices: list[str]) -> list[tuple[str, str]]:

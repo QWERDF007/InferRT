@@ -51,8 +51,7 @@ build/bin/inferrt_sample_detection.exe ^
   -i assets/pics/dog.jpg ^
   -l assets/coco80.names ^
   -o build/yolov8n_result.jpg ^
-  --backend tensorrt ^
-  --device gpu ^
+  --runtime tensorrt:0 ^
   --warmup 10 ^
   --repeat 100
 
@@ -72,8 +71,7 @@ build/bin/inferrt_sample_detection.exe ^
   -i assets/pics/dog.jpg ^
   -l assets/coco80.names ^
   -o build/rfdetr_nano_result.jpg ^
-  --backend tensorrt ^
-  --device gpu ^
+  --runtime tensorrt:0 ^
   --warmup 5 ^
   --repeat 20
 ```
@@ -85,10 +83,9 @@ YOLO uses letterbox preprocessing. RF-DETR uses the model's registered square in
 Both paths apply class-wise NMS, print detections, and optionally write a visualized image. The timing line reports
 `build_or_load`, `preprocess`, H2D, inference, D2H, end-to-end, timed-loop wall time, and postprocess.
 
-Backend options:
+Runtime options:
 
-- `--backend`: `tensorrt`, `openvino`, or `onnxruntime`; `onnx` and `ort` are accepted aliases for ONNX Runtime.
-- `--device`: `cpu` or `gpu`; TensorRT requires `gpu`.
+- `--runtime`: combines backend and device, for example `tensorrt:0`, `onnxruntime:cpu`, `onnxruntime:0`, or `openvino:cpu`; shorthand `cpu`, `gpu:0`, and `cuda:0` is also supported.
 - `--warmup`: iterations to run before measurement.
 - `--repeat`: measured iterations used for total/avg/min/max timing.
 

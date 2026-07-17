@@ -43,6 +43,13 @@ def _runtime_label(runtime_attr: str) -> str:
     }[runtime_attr]
 
 
+def _runtime_spec(runtime_attr: str, device_attr: str) -> str:
+    """将测试后端和设备组合为统一 runtime 字符串。"""
+
+    device = "0" if device_attr.upper() == "GPU" else "cpu"
+    return f"{_runtime_label(runtime_attr)}:{device}"
+
+
 def _runtime_device_pairs(compare_runtimes: list[str], compare_devices: list[str]) -> list[tuple[str, str]]:
     """根据 runtime/device 参数生成 YOLO 可执行的后端组合。
 
@@ -314,8 +321,7 @@ def _run_inferrt_yolo(
     """通过 InferRT pybind11 运行 YOLO TensorRT engine，返回三个尺度分支输出。"""
 
     config = irt_module.ModelConfig()
-    config.backend = irt_module.ModelBackend.TENSORRT
-    config.device = irt_module.ModelDevice.GPU
+    config.runtime = "tensorrt:0"
     model = irt_module.create_model(model_name, config=config)
     _build_model_or_skip(model, weights_path, label=f"TENSORRT/GPU/{model_name}")
 
@@ -353,8 +359,7 @@ def _run_graph_yolo(
     """
 
     config = irt_module.ModelConfig()
-    config.backend = getattr(irt_module.ModelBackend, backend_attr)
-    config.device = getattr(irt_module.ModelDevice, device_attr)
+    config.runtime = _runtime_spec(backend_attr, device_attr)
     config.output_tensor_names = ["output"]
 
     model = irt_module.create_model("onnx", config=config)

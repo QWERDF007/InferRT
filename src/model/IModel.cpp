@@ -85,19 +85,9 @@ const IModelConfig &IModel::modelConfig() const noexcept
     return impl_->modelConfig();
 }
 
-ModelBackend IModel::backend() const noexcept
+const ModelRuntime &IModel::runtime() const noexcept
 {
-    return impl_->modelConfig().backend();
-}
-
-ModelDevice IModel::device() const noexcept
-{
-    return impl_->modelConfig().device();
-}
-
-int IModel::deviceId() const noexcept
-{
-    return impl_->modelConfig().deviceId();
+    return impl_->modelConfig().runtime();
 }
 
 std::vector<std::string> IModel::ioTensorNames(nvinfer1::TensorIOMode mode) const

@@ -146,8 +146,7 @@ def _run_inferrt_yolo_seg(
     """
 
     config = irt_module.ModelConfig()
-    config.backend = irt_module.ModelBackend.TENSORRT
-    config.device = irt_module.ModelDevice.GPU
+    config.runtime = "tensorrt:0"
 
     model = irt_module.create_model("yolov8n_seg", config=config)
     _build_model_or_skip(model, weights_path, label="TENSORRT/GPU/yolov8n_seg")

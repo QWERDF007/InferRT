@@ -20,6 +20,17 @@ FEATURE_RTOL = 1.0e-4
 FEATURE_ATOL = 1.0e-4
 
 
+def _runtime_spec(backend_attr: str, device: str = "cpu") -> str:
+    """将测试参数转换为统一的 InferRT runtime 字符串。"""
+
+    backend = {
+        "TENSORRT": "tensorrt",
+        "ONNXRUNTIME": "onnxruntime",
+        "OPENVINO": "openvino",
+    }[backend_attr]
+    return f"{backend}:{'0' if device.lower() == 'gpu' else 'cpu'}"
+
+
 @pytest.fixture(params=["ONNXRUNTIME", "OPENVINO"])
 def graph_backend_attr(request: pytest.FixtureRequest, compare_runtimes: list[str]) -> str:
     """按 ``--inferrt-compare-runtime`` 选择当前要执行的图后端。
@@ -95,19 +106,21 @@ def tiny_onnx_path(tmp_path: Path) -> Path:
     return path
 
 
-def _run_backend(irt_module: object, onnx_path: Path, backend: object) -> tuple[object, dict[str, np.ndarray]]:
+def _run_backend(irt_module: object, onnx_path: Path, backend_attr: str) -> tuple[object, dict[str, np.ndarray]]:
     """使用指定图后端构建 ONNX 模型并执行一次推理。
 
     Args:
         irt_module: 已导入的 ``inferrt_model_py`` 模块。
         onnx_path: 待加载的 ONNX 文件路径。
-        backend: InferRT 后端枚举值。
+        backend_attr: 测试后端名称。
 
     Returns:
         已构建模型对象和输出张量字典。
     """
 
-    model = irt_module.create_model("onnx", backend=backend, device=irt_module.ModelDevice.CPU)
+    config = irt_module.ModelConfig()
+    config.runtime = _runtime_spec(backend_attr)
+    model = irt_module.create_model("onnx", config=config)
     model.build_or_load(str(onnx_path))
 
     input_names = model.input_tensor_names()
@@ -139,11 +152,10 @@ def test_onnx_graph_backends_build_and_infer_cpu(
 ) -> None:
     """验证图后端能在 CPU 上构建 ONNX 模型并完成基础推理。"""
 
-    backend = getattr(irt_module.ModelBackend, graph_backend_attr)
-    model, _outputs = _run_backend(irt_module, tiny_onnx_path, backend)
+    model, _outputs = _run_backend(irt_module, tiny_onnx_path, graph_backend_attr)
 
-    assert model.backend() == backend
-    assert model.device() == irt_module.ModelDevice.CPU
+    assert model.runtime().backend == _runtime_spec(graph_backend_attr).split(":", 1)[0]
+    assert model.runtime().device == "cpu"
 
 
 def test_onnx_graph_backends_forward_features_uses_graph_outputs(
@@ -153,10 +165,8 @@ def test_onnx_graph_backends_forward_features_uses_graph_outputs(
 ) -> None:
     """验证图后端的 ``forward_features`` 使用配置的图输出。"""
 
-    backend = getattr(irt_module.ModelBackend, graph_backend_attr)
     config = irt_module.ModelConfig()
-    config.backend = backend
-    config.device = irt_module.ModelDevice.CPU
+    config.runtime = _runtime_spec(graph_backend_attr)
     config.feature_only = True
     config.feature_tensor_names = ["output"]
     config.output_tensor_names = ["output"]
@@ -181,8 +191,7 @@ def test_onnx_graph_backends_reject_missing_output_name(
     """验证指定不存在的输出张量名时，构建阶段会报错。"""
 
     config = irt_module.ModelConfig()
-    config.backend = getattr(irt_module.ModelBackend, graph_backend_attr)
-    config.device = irt_module.ModelDevice.CPU
+    config.runtime = _runtime_spec(graph_backend_attr)
     config.output_tensor_names = ["missing_output"]
 
     model = irt_module.create_model("onnx", config=config)
@@ -334,8 +343,7 @@ def _run_feature_backend_outputs_or_skip(
     """
 
     config = irt_module.ModelConfig()
-    config.backend = getattr(irt_module.ModelBackend, backend_attr)
-    config.device = irt_module.ModelDevice.CPU
+    config.runtime = _runtime_spec(backend_attr)
     config.feature_only = True
     config.feature_tensor_names = FEATURE_NAMES
     config.output_tensor_names = FEATURE_NAMES

@@ -77,9 +77,7 @@ TEST(SAMImagePredictorTest, DefaultConstructsNotReadyPredictor)
     const irt::features::SAMImagePredictor predictor;
 
     EXPECT_EQ(predictor.config().model_name, irt::features::kDefaultSAMImagePredictorModelName);
-    EXPECT_EQ(predictor.config().model_backend, irt::model::ModelBackend::TensorRT);
-    EXPECT_EQ(predictor.config().model_device, irt::model::ModelDevice::GPU);
-    EXPECT_EQ(predictor.config().model_device_id, 0);
+    EXPECT_EQ(predictor.config().model_runtime, irt::model::ModelRuntime{});
     EXPECT_EQ(predictor.config().model_precision, irt::model::ModelPrecision::FP32);
     EXPECT_EQ(predictor.config().resize_mode, irt::features::SAMImageResizeMode::StretchSquare);
     EXPECT_FALSE(predictor.isReady());
@@ -95,14 +93,14 @@ TEST(SAMImagePredictorTest, ConstructorStoresModelPrecision)
     EXPECT_EQ(predictor.config().model_precision, irt::model::ModelPrecision::FP16);
 }
 
-TEST(SAMImagePredictorTest, ConstructorStoresModelDeviceId)
+TEST(SAMImagePredictorTest, ConstructorStoresModelRuntime)
 {
     irt::features::SAMImagePredictorConfig config;
-    config.model_device_id = 2;
+    config.model_runtime = irt::model::ModelRuntime::parse("tensorrt:2");
 
     const irt::features::SAMImagePredictor predictor(config);
 
-    EXPECT_EQ(predictor.config().model_device_id, 2);
+    EXPECT_EQ(predictor.config().model_runtime.toString(), "tensorrt:2");
 }
 
 TEST(SAMImagePredictorTest, ConstructorRejectsInvalidModelPrecision)
@@ -114,21 +112,18 @@ TEST(SAMImagePredictorTest, ConstructorRejectsInvalidModelPrecision)
                            irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
-TEST(SAMImagePredictorTest, ConstructorRejectsNegativeModelDeviceId)
+TEST(SAMImagePredictorTest, ConstructorRejectsInvalidModelRuntime)
 {
     irt::features::SAMImagePredictorConfig config;
-    config.model_device_id = -1;
 
-    expectIrtExceptionCode([&] { irt::features::SAMImagePredictor predictor(config); },
+    expectIrtExceptionCode([&] { config.model_runtime = irt::model::ModelRuntime::parse("cuda:-1"); },
                            irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 TEST(SAMImagePredictorTest, ConstructorRejectsTensorRtCpuDevice)
 {
     irt::features::SAMImagePredictorConfig config;
-    config.model_device = irt::model::ModelDevice::CPU;
-
-    expectIrtExceptionCode([&] { irt::features::SAMImagePredictor predictor(config); },
+    expectIrtExceptionCode([&] { config.model_runtime = irt::model::ModelRuntime::parse("tensorrt:cpu"); },
                            irt::Status::ERROR_NOT_IMPLEMENTED);
 }
 

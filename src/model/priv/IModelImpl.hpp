@@ -41,7 +41,7 @@ public:
      */
     IModelImpl()
         : config_(std::make_unique<IModelConfig>())
-        , backend_runtime_(CreateBackendRuntime(config_->backend()))
+        , backend_runtime_(CreateBackendRuntime(config_->runtime().backend()))
     {
     }
 
@@ -363,7 +363,7 @@ private:
     /// 当前 buildNetwork 正在构建的 engine 类型。
     BuildVariant build_variant_{BuildVariant::Primary};
 
-    /// 当前后端运行时；由 modelConfig().backend() 决定具体派生实现。
+    /// 当前后端运行时；由 modelConfig().runtime().backend() 决定具体派生实现。
     std::unique_ptr<IBackendRuntime> backend_runtime_;
 };
 

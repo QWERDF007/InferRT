@@ -139,15 +139,11 @@ public:
      */
     virtual const IModelConfig &modelConfig() const noexcept;
 
-    virtual ModelBackend backend() const noexcept;
-
-    virtual ModelDevice device() const noexcept;
-
     /**
-     * @brief 获取当前模型使用的 GPU 设备编号。
-     * @return 从 0 开始的设备编号。
+     * @brief 获取当前模型运行目标。
+     * @return 同时包含后端和设备信息的运行目标。
      */
-    virtual int deviceId() const noexcept;
+    virtual const ModelRuntime &runtime() const noexcept;
 
     /**
      * @brief 获取当前 engine 中指定类型的 I/O 张量名称。
