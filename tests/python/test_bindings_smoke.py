@@ -140,6 +140,11 @@ def test_create_model_uses_runtime_from_config(irt_module: object) -> None:
 
     config = irt_module.ModelConfig()
     config.runtime = "onnxruntime:cpu"
+    assert str(config.runtime) == "onnxruntime:cpu"
+
+    if not irt_module.onnxruntime_enabled:
+        pytest.skip("ONNX Runtime backend was disabled at CMake configure time")
+
     model = irt_module.create_model("onnx", config=config)
     assert str(model.runtime()) == "onnxruntime:cpu"
 

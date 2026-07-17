@@ -56,9 +56,19 @@ std::unique_ptr<IBackendRuntime> CreateBackendRuntime(ModelRuntime::Backend back
     case ModelRuntime::Backend::TensorRT:
         return std::make_unique<TensorRTBackend>();
     case ModelRuntime::Backend::ONNXRuntime:
+#if INFERRT_BUILD_ONNX
         return CreateONNXRuntimeBackend();
+#else
+        throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED,
+                             "ONNX Runtime backend is disabled; configure with -DINFERRT_BUILD_ONNX=ON");
+#endif
     case ModelRuntime::Backend::OpenVINO:
+#if INFERRT_BUILD_OPENVINO
         return CreateOpenVINOBackend();
+#else
+        throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED,
+                             "OpenVINO backend is disabled; configure with -DINFERRT_BUILD_OPENVINO=ON");
+#endif
     }
 
     throw irt::Exception(Status::ERROR_NOT_IMPLEMENTED, "Unsupported model backend");

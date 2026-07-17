@@ -32,7 +32,7 @@ def _runtime_spec(backend_attr: str, device: str = "cpu") -> str:
 
 
 @pytest.fixture(params=["ONNXRUNTIME", "OPENVINO"])
-def graph_backend_attr(request: pytest.FixtureRequest, compare_runtimes: list[str]) -> str:
+def graph_backend_attr(request: pytest.FixtureRequest, compare_runtimes: list[str], irt_module: object) -> str:
     """按 ``--inferrt-compare-runtime`` 选择当前要执行的图后端。
 
     Args:
@@ -46,6 +46,10 @@ def graph_backend_attr(request: pytest.FixtureRequest, compare_runtimes: list[st
     backend_attr = str(request.param)
     if backend_attr not in compare_runtimes:
         pytest.skip(f"{backend_attr} is disabled; pass --inferrt-compare-runtime=onnx,openvino")
+    if backend_attr == "ONNXRUNTIME" and not irt_module.onnxruntime_enabled:
+        pytest.skip("ONNX Runtime backend was disabled at CMake configure time")
+    if backend_attr == "OPENVINO" and not irt_module.openvino_enabled:
+        pytest.skip("OpenVINO backend was disabled at CMake configure time")
     return backend_attr
 
 

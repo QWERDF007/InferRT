@@ -7,6 +7,10 @@
 #include <string>
 #include <vector>
 
+#ifndef INFERRT_BUILD_ONNX
+#define INFERRT_BUILD_ONNX 0
+#endif
+
 using test::model::ExpectIrtExceptionCode;
 using test::model::kRegisteredModels;
 using test::model::RegisteredModelsTest;
@@ -221,6 +225,10 @@ TEST(IModelConfigTest, DynamicBatchSupportIsModelScoped)
  */
 TEST(IModelConfigTest, CreateModelPreservesBackendAndDeviceFromConfig)
 {
+#if !INFERRT_BUILD_ONNX
+    GTEST_SKIP() << "ONNX Runtime backend was disabled at CMake configure time";
+#endif
+
     auto config = std::make_unique<irt::model::IModelConfig>();
     config->setRuntime(irt::model::ModelRuntime::parse("onnxruntime:1"));
 

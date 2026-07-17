@@ -9,6 +9,14 @@
 #include <string>
 #include <vector>
 
+#ifndef INFERRT_BUILD_ONNX
+#define INFERRT_BUILD_ONNX 0
+#endif
+
+#ifndef INFERRT_BUILD_OPENVINO
+#define INFERRT_BUILD_OPENVINO 0
+#endif
+
 namespace irt::model::priv {
 
 class TensorRTBackend;
@@ -232,12 +240,16 @@ std::unique_ptr<IBackendRuntime> CreateBackendRuntime(ModelRuntime::Backend back
  * @brief 创建 ONNX Runtime 后端实例。
  * @return ONNX Runtime 运行时；未启用编译选项时抛出异常。
  */
+#if INFERRT_BUILD_ONNX
 std::unique_ptr<IBackendRuntime> CreateONNXRuntimeBackend();
+#endif
 
 /**
  * @brief 创建 OpenVINO 后端实例。
  * @return OpenVINO 运行时；未启用编译选项时抛出异常。
  */
+#if INFERRT_BUILD_OPENVINO
 std::unique_ptr<IBackendRuntime> CreateOpenVINOBackend();
+#endif
 
 } // namespace irt::model::priv

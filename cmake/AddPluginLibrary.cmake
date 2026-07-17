@@ -7,13 +7,17 @@ function(add_plugin_library PLUGIN_NAME)
     # 解析函数参数
     set(options "")
     set(oneValueArgs "")
-    set(multiValueArgs PRIVATE_LIBS PUBLIC_LIBS PRIVATE_INCS PUBLIC_INCS)
+    set(multiValueArgs PRIVATE_LIBS PUBLIC_LIBS PRIVATE_INCS PUBLIC_INCS EXCLUDE_SOURCES)
     cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
     
     set(TARGET_NAME "${PROJECT_NAME_LOWER}_${PLUGIN_NAME}")
 
     # 获取所有源文件的相对路径
     file(GLOB_RECURSE SOURCES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.cpp *.cu)
+
+    if(ARG_EXCLUDE_SOURCES)
+        list(REMOVE_ITEM SOURCES ${ARG_EXCLUDE_SOURCES})
+    endif()
 
     # 获取所有头文件的相对路径
     file(GLOB_RECURSE HEADERS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.h *.hpp *.cuh)

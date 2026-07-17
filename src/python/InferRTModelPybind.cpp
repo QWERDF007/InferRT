@@ -28,6 +28,14 @@
 #include <utility>
 #include <vector>
 
+#ifndef INFERRT_BUILD_ONNX
+#define INFERRT_BUILD_ONNX 0
+#endif
+
+#ifndef INFERRT_BUILD_OPENVINO
+#define INFERRT_BUILD_OPENVINO 0
+#endif
+
 namespace py = pybind11;
 
 /** @brief 匿名命名空间，封装仅在本翻译单元内使用的绑定辅助逻辑。 */
@@ -1613,6 +1621,8 @@ private:
 PYBIND11_MODULE(inferrt_model_py, m)
 {
     m.doc() = "InferRT 模型 Python 扩展模块（pybind11）。";
+    m.attr("onnxruntime_enabled") = py::bool_(INFERRT_BUILD_ONNX != 0);
+    m.attr("openvino_enabled")    = py::bool_(INFERRT_BUILD_OPENVINO != 0);
 
     /** Python 侧 InferRT 异常类型，对应 C++ `irt::Exception`。 */
     py::register_exception<irt::Exception>(m, "InferRTError");

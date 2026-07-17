@@ -11,6 +11,14 @@
 #include <memory>
 #include <vector>
 
+#ifndef INFERRT_BUILD_ONNX
+#define INFERRT_BUILD_ONNX 0
+#endif
+
+#ifndef INFERRT_BUILD_OPENVINO
+#define INFERRT_BUILD_OPENVINO 0
+#endif
+
 using test::model::ExpectIrtExceptionCode;
 using test::model::MakeNullBuffers;
 
@@ -181,6 +189,7 @@ TEST(ONNXModelRuntimeQueryTest, SetTensorShapeWithoutContextThrowsInvalidOperati
                            irt::Status::ERROR_INVALID_OPERATION);
 }
 
+#if INFERRT_BUILD_ONNX
 TEST(ONNXRuntimeBackendTest, RuntimeQueriesBeforeLoadThrowInvalidOperation)
 {
     auto config = std::make_unique<irt::model::IModelConfig>();
@@ -236,7 +245,9 @@ TEST(ONNXRuntimeBackendTest, RejectsOutputNameThatIsNotGraphOutput)
 {
     ExpectInvalidOutputRejected(irt::model::ModelRuntime::Backend::ONNXRuntime);
 }
+#endif
 
+#if INFERRT_BUILD_OPENVINO
 TEST(OpenVINOBackendTest, BuildsAndRunsCpuInferenceFromSampleOnnx)
 {
     RunOnnxGraphBackend(irt::model::ModelRuntime::Backend::OpenVINO, false);
@@ -251,6 +262,7 @@ TEST(OpenVINOBackendTest, RejectsOutputNameThatIsNotGraphOutput)
 {
     ExpectInvalidOutputRejected(irt::model::ModelRuntime::Backend::OpenVINO);
 }
+#endif
 
 TEST(ONNXModelLifecycleTest, BuildOrLoadWithNonExistentOnnxThrowsInvalidArgument)
 {

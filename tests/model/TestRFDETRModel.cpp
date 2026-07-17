@@ -6,6 +6,10 @@
 #include <string>
 #include <vector>
 
+#ifndef INFERRT_BUILD_ONNX
+#define INFERRT_BUILD_ONNX 0
+#endif
+
 using test::model::ExpectIrtExceptionCode;
 using test::model::TempWeightsFile;
 
@@ -132,6 +136,10 @@ TEST(RFDETRModelFactoryTest, SegmentationXXLargeAliasCreates2XLarge)
  */
 TEST(RFDETRModelConfigTest, PreservesExplicitNativeConfig)
 {
+#if !INFERRT_BUILD_ONNX
+    GTEST_SKIP() << "ONNX Runtime backend was disabled at CMake configure time";
+#endif
+
     auto config = std::make_unique<irt::model::IModelConfig>();
     config->setInputTensorNames({"image"});
     config->setInputShape(nvinfer1::Dims4{2, 3, 640, 640});
