@@ -8,17 +8,17 @@ The sample automatically reads engine tensor names, runtime input shape, and out
 Run in a Python environment with `torch` and `torchvision` installed:
 
 ```bash
-python samples/model/python/export_onnx.py -m alexnet
-python samples/model/python/export_onnx.py -m resnet50
-python samples/model/python/export_onnx.py -m vgg16
-python samples/model/python/export_onnx.py -m resnet50 --exporter legacy
+python samples/model/python/classification_export_onnx.py -m alexnet
+python samples/model/python/classification_export_onnx.py -m resnet50
+python samples/model/python/classification_export_onnx.py -m vgg16
+python samples/model/python/classification_export_onnx.py -m resnet50 --exporter legacy
 ```
 
 List supported models:
 
 ```bash
-python samples/model/python/export_onnx.py -l
-python samples/model/python/export_onnx.py -b timm -l
+python samples/model/python/classification_export_onnx.py -l
+python samples/model/python/classification_export_onnx.py -b timm -l
 ```
 
 Exporter options:
@@ -29,16 +29,16 @@ Exporter options:
 
 ## Export Feature ONNX / OpenVINO IR
 
-`export_feature_onnx.py` wraps `model.forward_features()` and exports selected feature keys as graph outputs.
+`dino_export_onnx.py` wraps DINO/LingBot-Vision `model.forward_features()` and exports selected feature keys as graph outputs.
 Those output names can then be used by the ONNX Runtime or OpenVINO backend through `output_tensor_names` /
 `feature_tensor_names`.
 
 Examples:
 
 ```bash
-python samples/model/python/export_feature_onnx.py -m dinov2_vits14 -b torchhub -f x_norm_clstoken,x_norm_patchtokens --input-size 518 -o dinov2_vits14_features.onnx
-python samples/model/python/export_feature_onnx.py -m dinov2_vits14 -b torchhub -f x_norm_clstoken --input-size 518 -o dinov2_vits14_cls.onnx --emit-openvino
-python samples/model/python/export_feature_onnx.py -m dinov3_vitb16 -b transformers -f x_norm_clstoken,x_storage_tokens,x_norm_patchtokens --local-files-only --openvino-output build/openvino_ir
+python samples/model/python/dino_export_onnx.py -m dinov2_vits14 -b torchhub -f x_norm_clstoken,x_norm_patchtokens --input-size 518 -o dinov2_vits14_features.onnx
+python samples/model/python/dino_export_onnx.py -m dinov2_vits14 -b torchhub -f x_norm_clstoken --input-size 518 -o dinov2_vits14_cls.onnx --emit-openvino
+python samples/model/python/dino_export_onnx.py -m dinov3_vitb16 -b transformers -f x_norm_clstoken,x_storage_tokens,x_norm_patchtokens --local-files-only --openvino-output build/openvino_ir
 ```
 
 OpenVINO conversion uses the Python OpenVINO API. By default the script also searches

@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from helpers.model_integration import ensure_rfdetr_wts
-from util import allocate_output_tensors, preprocess_image
+from helpers.vision import allocate_output_tensors, preprocess_image
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 

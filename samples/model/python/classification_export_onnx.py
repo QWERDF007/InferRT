@@ -12,7 +12,14 @@ import torch
 from classification_model_zoo import create_model, list_supported_models, parse_image_size, resolve_input_size
 
 
-MODEL_BACKENDS = ("timm", "torchhub", "torchvision", "transformers")
+MODEL_BACKENDS = ("torchvision", "timm")
+
+
+def list_supported_classification_models(backend: str) -> list[str]:
+    models = list_supported_models(backend)
+    if backend == "timm":
+        return [name for name in models if "dino" not in name.lower()]
+    return models
 
 
 def configure_stdio() -> None:
@@ -93,7 +100,7 @@ def main(args: argparse.Namespace) -> None:
     configure_stdio()
 
     if args.list_model:
-        models = list_supported_models(args.backend)
+        models = list_supported_classification_models(args.backend)
         print(f"{args.backend} models:", len(models))
         print(models)
         return
@@ -101,12 +108,7 @@ def main(args: argparse.Namespace) -> None:
     model = create_model(
         args.model,
         args.backend,
-        hub_repo=args.hub_repo,
-        hub_source=args.hub_source,
         pretrained=args.pretrained,
-        hub_weights=args.hub_weights,
-        hf_model_id=args.hf_model_id,
-        local_files_only=args.local_files_only,
     )
     model.eval()
 
@@ -181,36 +183,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dynamic-batch", action="store_true", help="Export dynamic batch axes")
     parser.add_argument("-l", "--list-model", "--list_model", dest="list_model", action="store_true")
-    parser.add_argument(
-        "--hub-repo",
-        type=str,
-        default=None,
-        help="torch.hub repo or local directory; default is inferred from the DINO model name",
-    )
-    parser.add_argument(
-        "--hub-source",
-        type=str,
-        choices=("github", "local"),
-        default="github",
-        help="torch.hub source, used when --backend torchhub",
-    )
-    parser.add_argument(
-        "--hub-weights",
-        type=str,
-        default=None,
-        help="Optional DINO torch.hub weights path or URL, used when --backend torchhub",
-    )
-    parser.add_argument(
-        "--hf-model-id",
-        type=str,
-        default=None,
-        help="Optional Hugging Face model id, used when --backend transformers",
-    )
-    parser.add_argument(
-        "--local-files-only",
-        action="store_true",
-        help="Load Hugging Face models from the local cache only, used when --backend transformers",
-    )
     parser.add_argument(
         "--no-pretrained",
         dest="pretrained",

@@ -8,7 +8,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-import export_feature_onnx  # noqa: E402
+import dino_export_onnx  # noqa: E402
 
 
 class FakeFeatureModel(torch.nn.Module):
@@ -40,7 +40,7 @@ def test_feature_output_wrapper_returns_requested_features_in_order() -> None:
     """验证 FeatureOutputWrapper 按用户请求顺序返回特征。"""
 
     model = FakeFeatureModel()
-    wrapper = export_feature_onnx.FeatureOutputWrapper(model, ["patch", "cls"])
+    wrapper = dino_export_onnx.FeatureOutputWrapper(model, ["patch", "cls"])
     x = torch.ones((2, 3, 4, 5), dtype=torch.float32)
 
     patch, cls = wrapper(x)
@@ -53,7 +53,7 @@ def test_feature_output_wrapper_returns_requested_features_in_order() -> None:
 def test_feature_output_wrapper_rejects_missing_features() -> None:
     """验证请求不存在特征时 wrapper 会抛出明确错误。"""
 
-    wrapper = export_feature_onnx.FeatureOutputWrapper(FakeFeatureModel(), ["missing"])
+    wrapper = dino_export_onnx.FeatureOutputWrapper(FakeFeatureModel(), ["missing"])
 
     with pytest.raises(KeyError, match="missing"):
         wrapper(torch.ones((1, 3, 4, 5), dtype=torch.float32))
@@ -62,7 +62,7 @@ def test_feature_output_wrapper_rejects_missing_features() -> None:
 def test_export_feature_parser_accepts_feature_csv_and_image_size() -> None:
     """验证特征 CSV 和输入尺寸命令行参数解析。"""
 
-    args = export_feature_onnx.build_arg_parser().parse_args(
+    args = dino_export_onnx.build_arg_parser().parse_args(
         ["--features", "cls, patch", "--input-size", "1x3x16x20"]
     )
 
@@ -111,11 +111,11 @@ def test_export_feature_onnx_uses_features_as_graph_outputs(
         captured["wrapped_output_shapes"] = [tuple(output.shape) for output in model(dummy_input)]
         Path(output_path).write_text("fake feature onnx", encoding="utf-8")
 
-    monkeypatch.setattr(export_feature_onnx, "create_model", fake_create_model)
-    monkeypatch.setattr(export_feature_onnx.torch.onnx, "export", fake_export)
+    monkeypatch.setattr(dino_export_onnx, "create_model", fake_create_model)
+    monkeypatch.setattr(dino_export_onnx.torch.onnx, "export", fake_export)
 
     output_path = tmp_path / "dinov2_features.onnx"
-    args = export_feature_onnx.build_arg_parser().parse_args(
+    args = dino_export_onnx.build_arg_parser().parse_args(
         [
             "-m",
             "dinov2_vits14",
@@ -137,7 +137,7 @@ def test_export_feature_onnx_uses_features_as_graph_outputs(
         ]
     )
 
-    export_feature_onnx.main(args)
+    dino_export_onnx.main(args)
 
     assert captured["model_name"] == "dinov2_vits14"
     assert captured["backend"] == "torchhub"
@@ -214,13 +214,13 @@ def test_export_feature_main_can_emit_openvino_ir(
         xml_path.parent.mkdir(parents=True, exist_ok=True)
         xml_path.write_text("fake openvino xml", encoding="utf-8")
 
-    monkeypatch.setattr(export_feature_onnx, "create_model", fake_create_model)
-    monkeypatch.setattr(export_feature_onnx.torch.onnx, "export", fake_export)
-    monkeypatch.setattr(export_feature_onnx, "convert_to_openvino_ir", fake_convert)
+    monkeypatch.setattr(dino_export_onnx, "create_model", fake_create_model)
+    monkeypatch.setattr(dino_export_onnx.torch.onnx, "export", fake_export)
+    monkeypatch.setattr(dino_export_onnx, "convert_to_openvino_ir", fake_convert)
 
     onnx_path = tmp_path / "features.onnx"
     openvino_dir = tmp_path / "openvino_ir"
-    args = export_feature_onnx.build_arg_parser().parse_args(
+    args = dino_export_onnx.build_arg_parser().parse_args(
         [
             "-f",
             "cls",
@@ -235,7 +235,7 @@ def test_export_feature_main_can_emit_openvino_ir(
         ]
     )
 
-    export_feature_onnx.main(args)
+    dino_export_onnx.main(args)
 
     assert captured["onnx_path"] == onnx_path
     assert captured["xml_path"] == openvino_dir / "features.xml"

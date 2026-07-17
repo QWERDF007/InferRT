@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from util import allocate_output_tensors, preprocess_image
+from helpers.vision import allocate_output_tensors, preprocess_image
 
 
 def project_root() -> Path:

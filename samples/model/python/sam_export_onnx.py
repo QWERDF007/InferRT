@@ -12,7 +12,7 @@ import warnings
 import numpy as np
 import torch
 
-from gen_sam_wts import (
+from sam_gen_wts import (
     SAM2_IMAGE_SIZE,
     SAM2_MODEL_CONFIGS,
     SAM_IMAGE_SIZE,
@@ -464,3 +464,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

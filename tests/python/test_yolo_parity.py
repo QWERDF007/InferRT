@@ -12,7 +12,7 @@ import pytest
 
 from helpers.manifest import assert_tensors_close
 from helpers.model_integration import conversion_artifact_dir, ensure_yolo_wts, is_fresh_against_all
-from util import allocate_output_tensors
+from helpers.vision import allocate_output_tensors
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 

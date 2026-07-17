@@ -53,7 +53,7 @@ for module_path in reversed(SAMPLE_MODULE_PATHS):
         sys.path.remove(module_path_text)
     sys.path.insert(0, module_path_text)
 
-from util import ensure_module_path, preprocess_image  # noqa: E402
+from helpers.vision import ensure_module_path, preprocess_image  # noqa: E402
 
 from helpers.runtime import default_build_dir, project_root  # noqa: E402
 

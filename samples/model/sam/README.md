@@ -23,17 +23,17 @@ cmake --build build --config Debug --target inferrt_sample_sam
 Export official SAM/SAM2 weights first:
 
 ```bash
-python samples/model/python/gen_sam_wts.py -m vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.wts
-python samples/model/python/gen_sam_wts.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.wts
-python samples/model/python/gen_sam_wts.py -m sam3 -c D:/Models/sam3 -o sam3.wts --skip-forward
+python samples/model/python/sam_gen_wts.py -m vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.wts
+python samples/model/python/sam_gen_wts.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.wts
+python samples/model/python/sam_gen_wts.py -m sam3 -c D:/Models/sam3 -o sam3.wts --skip-forward
 ```
 
 Export SAM v1/SAM2/SAM3 to ONNX for ONNX Runtime or OpenVINO:
 
 ```bash
-python samples/model/python/export_sam_onnx.py -m sam_vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.onnx
-python samples/model/python/export_sam_onnx.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.onnx
-python samples/model/python/export_sam_onnx.py -m sam3 -c D:/Models/sam3 -o sam3.onnx
+python samples/model/python/sam_export_onnx.py -m sam_vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.onnx
+python samples/model/python/sam_export_onnx.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.onnx
+python samples/model/python/sam_export_onnx.py -m sam3 -c D:/Models/sam3 -o sam3.onnx
 ```
 
 For SAM3, `--checkpoint` is a Hugging Face `Sam3Model` id or local model directory, and the exporter uses

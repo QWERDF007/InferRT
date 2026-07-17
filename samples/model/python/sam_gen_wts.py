@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import math
-import struct
 import sys
 import time
 import types
@@ -13,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from wts_utils import write_wts as write_state_dict
 
 
 DEFAULT_IMAGE_PATH = Path(__file__).resolve().parents[3] / "assets" / "pics" / "dog.jpg"
@@ -276,18 +276,7 @@ def install_edge_sam_optional_dependency_shims() -> None:
 
 
 def write_wts(state_dict: dict[str, torch.Tensor], output_path: Path, *, verbose: bool = False) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as file:
-        file.write(f"{len(state_dict)}\n")
-        for key, tensor in state_dict.items():
-            if verbose:
-                print(f"key: {key}\tvalue: {tuple(tensor.shape)}")
-            values = tensor.detach().float().reshape(-1).cpu().numpy()
-            file.write(f"{key} {len(values)}")
-            for value in values:
-                file.write(" ")
-                file.write(struct.pack(">f", float(value)).hex())
-            file.write("\n")
+    write_state_dict(state_dict, output_path, verbose=verbose)
 
 
 def compute_resize_shape(original_h: int, original_w: int, target_size: int = SAM_IMAGE_SIZE) -> tuple[int, int]:
@@ -863,3 +852,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

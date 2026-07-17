@@ -10,15 +10,19 @@ import warnings
 
 import torch
 
-from export_onnx import (
-    MODEL_BACKENDS,
+from classification_export_onnx import (
     configure_stdio,
     make_dummy_input,
     parse_cli_image_size,
     resolve_export_image_size,
 )
-
-from classification_model_zoo import create_model, list_supported_models
+from dino_model_zoo import (
+    DEFAULT_LINGBOT_MODEL_DIR,
+    DEFAULT_LINGBOT_ROOT,
+    DINO_BACKENDS,
+    create_model,
+    list_supported_models,
+)
 
 
 DEFAULT_OPENVINO_ROOT = os.environ.get("OPENVINO_ROOT", "D:/Software/openvino_toolkit")
@@ -194,16 +198,22 @@ def main(args: argparse.Namespace) -> None:
     if not args.features:
         raise ValueError("--features is required unless --list-model is used")
 
-    model = create_model(
-        args.model,
-        args.backend,
-        hub_repo=args.hub_repo,
-        hub_source=args.hub_source,
-        pretrained=args.pretrained,
-        hub_weights=args.hub_weights,
-        hf_model_id=args.hf_model_id,
-        local_files_only=args.local_files_only,
-    )
+    model_kwargs = {
+        "hub_repo": args.hub_repo,
+        "hub_source": args.hub_source,
+        "pretrained": args.pretrained,
+        "hub_weights": args.hub_weights,
+        "hf_model_id": args.hf_model_id,
+        "local_files_only": args.local_files_only,
+    }
+    if args.backend == "lingbot":
+        model_kwargs.update(
+            checkpoint=args.checkpoint,
+            model_dir=args.lingbot_model_dir,
+            lingbot_root=args.lingbot_root,
+            device=args.device,
+        )
+    model = create_model(args.model, args.backend, **model_kwargs)
     model.eval()
 
     image_size, size_source = resolve_export_image_size(model, args)
@@ -253,7 +263,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "-b",
         "--backend",
         type=str,
-        choices=MODEL_BACKENDS,
+        choices=DINO_BACKENDS,
         default="torchhub",
         help="Model provider backend",
     )
@@ -266,6 +276,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Comma-separated forward_features() keys to export as graph outputs",
     )
     parser.add_argument("-o", "--output", type=str, default="", help="Output ONNX file path")
+    parser.add_argument("-c", "--checkpoint", type=Path, default=None, help="DINO/LingBot checkpoint path")
+    parser.add_argument("--lingbot-root", type=Path, default=DEFAULT_LINGBOT_ROOT)
+    parser.add_argument("--lingbot-model-dir", type=Path, default=DEFAULT_LINGBOT_MODEL_DIR)
+    parser.add_argument("--device", default="cpu", help="PyTorch loading device")
     parser.add_argument("--input-name", type=str, default="input", help="Input tensor name")
     parser.add_argument("--batch-size", type=int, default=1, help="Input batch size")
     parser.add_argument("--channels", type=int, default=3, help="Input channels")

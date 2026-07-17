@@ -272,7 +272,7 @@ def ensure_sam_v1_wts(*, repo_root: Path, model_root: Path, checkpoint: Path, sa
 
     command = [
         sys.executable,
-        "samples/model/python/gen_sam_wts.py",
+        "samples/model/python/sam_gen_wts.py",
         "--model",
         "vit_b",
         "--checkpoint",
@@ -318,7 +318,7 @@ def ensure_sam2_wts(
 
     command = [
         sys.executable,
-        "samples/model/python/gen_sam_wts.py",
+        "samples/model/python/sam_gen_wts.py",
         "--model",
         "sam2_1_hiera_tiny",
         "--checkpoint",
@@ -358,13 +358,13 @@ def ensure_edge_sam_wts(*, repo_root: Path, model_root: Path, checkpoint: Path, 
         output_dir = checkpoint.with_suffix("")
         output_dir.mkdir(parents=True, exist_ok=True)
     output = output_dir / "edge_sam.wts"
-    exporter_sources = [checkpoint, repo_root / "samples" / "model" / "python" / "gen_sam_wts.py"]
+    exporter_sources = [checkpoint, repo_root / "samples" / "model" / "python" / "sam_gen_wts.py"]
     if is_fresh_against_all(output, exporter_sources):
         return output
 
     command = [
         sys.executable,
-        "samples/model/python/gen_sam_wts.py",
+        "samples/model/python/sam_gen_wts.py",
         "--model",
         "edge_sam",
         "--checkpoint",

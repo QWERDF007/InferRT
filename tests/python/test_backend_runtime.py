@@ -282,7 +282,7 @@ def _reference_features(model, input_tensor: np.ndarray) -> dict[str, np.ndarray
     """
 
     torch = pytest.importorskip("torch")
-    from export_feature_onnx import FeatureOutputWrapper
+    from dino_export_onnx import FeatureOutputWrapper
 
     wrapper = FeatureOutputWrapper(model, FEATURE_NAMES)
     wrapper.eval()
@@ -311,7 +311,7 @@ def _export_feature_onnx(
 
     pytest.importorskip("onnx")
     torch = pytest.importorskip("torch")
-    from export_feature_onnx import FeatureOutputWrapper, export_features_with_onnx
+    from dino_export_onnx import FeatureOutputWrapper, export_features_with_onnx
 
     args = SimpleNamespace(
         input_name="input",
@@ -639,7 +639,7 @@ def test_openvino_ir_feature_model_matches_pytorch(
     xml_path = tmp_path / "openvino_ir" / "tiny_feature.xml"
     _export_feature_onnx(model, input_tensor, onnx_path)
 
-    from export_feature_onnx import convert_to_openvino_ir
+    from dino_export_onnx import convert_to_openvino_ir
 
     try:
         convert_to_openvino_ir(onnx_path, xml_path, openvino_root="D:/Software/openvino_toolkit")

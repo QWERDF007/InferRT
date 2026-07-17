@@ -17,7 +17,7 @@ from helpers.model_integration import (
     ensure_sam_v1_wts,
     is_fresh_against_all,
 )
-from util import allocate_output_tensors
+from helpers.vision import allocate_output_tensors
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -108,7 +108,7 @@ def _import_sam_v1_export_helpers(repo_root: Path):
     if str(samples_python) not in sys.path:
         sys.path.insert(0, str(samples_python))
 
-    from gen_sam_wts import SAM_IMAGE_SIZE, import_segment_anything, preprocess_image
+    from sam_gen_wts import SAM_IMAGE_SIZE, import_segment_anything, preprocess_image
 
     return SAM_IMAGE_SIZE, import_segment_anything, preprocess_image
 
@@ -120,7 +120,7 @@ def _import_sam2_export_helpers(repo_root: Path):
     if str(samples_python) not in sys.path:
         sys.path.insert(0, str(samples_python))
 
-    from gen_sam_wts import SAM2_IMAGE_SIZE, build_sam2_without_hydra, preprocess_sam2_image
+    from sam_gen_wts import SAM2_IMAGE_SIZE, build_sam2_without_hydra, preprocess_sam2_image
 
     return SAM2_IMAGE_SIZE, build_sam2_without_hydra, preprocess_sam2_image
 
@@ -132,7 +132,7 @@ def _import_edge_sam_export_helpers(repo_root: Path):
     if str(samples_python) not in sys.path:
         sys.path.insert(0, str(samples_python))
 
-    from gen_sam_wts import SAM_IMAGE_SIZE, load_edge_sam_model, preprocess_image
+    from sam_gen_wts import SAM_IMAGE_SIZE, load_edge_sam_model, preprocess_image
 
     return SAM_IMAGE_SIZE, load_edge_sam_model, preprocess_image
 
@@ -524,7 +524,7 @@ def _export_sam_v1_onnx(
     pytest.importorskip("onnx")
     pytest.importorskip("torch")
 
-    from export_sam_onnx import export_sam_v1_onnx
+    from sam_export_onnx import export_sam_v1_onnx
 
     export_sam_v1_onnx(
         model_name=SAM_V1_MODEL_NAME,
@@ -557,7 +557,7 @@ def _export_sam2_onnx(
     pytest.importorskip("onnx")
     pytest.importorskip("torch")
 
-    from export_sam_onnx import export_sam2_onnx
+    from sam_export_onnx import export_sam2_onnx
 
     export_sam2_onnx(
         model_name=SAM2_MODEL_NAME,

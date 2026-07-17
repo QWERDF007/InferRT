@@ -638,7 +638,7 @@ def _ensure_wts(case: ModelDirCase, model: Any, output_dir: Path) -> Path:
         ``.wts`` 文件路径。
     """
 
-    from classification_gen_wts import write_wts
+    from dino_gen_wts import write_wts
 
     output = output_dir / f"{case.model_name}.wts"
     if is_fresh_against_all(output, list(case.source_files)):
@@ -727,7 +727,7 @@ def _export_feature_onnx(case: ModelDirCase, model: Any, input_tensor: np.ndarra
     """
 
     torch = pytest.importorskip("torch")
-    from export_feature_onnx import export_features_with_onnx
+    from dino_export_onnx import export_features_with_onnx
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wrapper = _feature_wrapper_for_case(case, model)

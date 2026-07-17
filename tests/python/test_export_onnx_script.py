@@ -8,7 +8,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-import export_onnx  # noqa: E402
+import classification_export_onnx  # noqa: E402
 
 
 class FakeModel(torch.nn.Module):
@@ -73,22 +73,16 @@ def test_export_onnx_uses_shared_model_zoo_options(
         captured["export_kwargs"] = kwargs
         Path(output_path).write_text("fake onnx", encoding="utf-8")
 
-    monkeypatch.setattr(export_onnx, "create_model", fake_create_model)
-    monkeypatch.setattr(export_onnx.torch.onnx, "export", fake_export)
+    monkeypatch.setattr(classification_export_onnx, "create_model", fake_create_model)
+    monkeypatch.setattr(classification_export_onnx.torch.onnx, "export", fake_export)
 
-    output_path = tmp_path / "dinov2_vits14.onnx"
-    args = export_onnx.build_arg_parser().parse_args(
+    output_path = tmp_path / "resnet18.onnx"
+    args = classification_export_onnx.build_arg_parser().parse_args(
         [
             "-m",
-            "dinov2_vits14",
+            "resnet18",
             "-b",
-            "torchhub",
-            "--hub-repo",
-            "local_dinov2",
-            "--hub-source",
-            "local",
-            "--hub-weights",
-            "dinov2_vits14.pth",
+            "torchvision",
             "-o",
             str(output_path),
             "--exporter",
@@ -96,18 +90,11 @@ def test_export_onnx_uses_shared_model_zoo_options(
         ]
     )
 
-    export_onnx.main(args)
+    classification_export_onnx.main(args)
 
-    assert captured["model_name"] == "dinov2_vits14"
-    assert captured["backend"] == "torchhub"
-    assert captured["create_kwargs"] == {
-        "hub_repo": "local_dinov2",
-        "hub_source": "local",
-        "pretrained": True,
-        "hub_weights": "dinov2_vits14.pth",
-        "hf_model_id": None,
-        "local_files_only": False,
-    }
+    assert captured["model_name"] == "resnet18"
+    assert captured["backend"] == "torchvision"
+    assert captured["create_kwargs"] == {"pretrained": True}
     assert captured["dummy_shape"] == (1, 3, 32, 48)
     assert captured["output_path"] == str(output_path)
     assert "dynamo" not in captured["export_kwargs"]
@@ -118,6 +105,6 @@ def test_export_onnx_uses_shared_model_zoo_options(
 def test_export_onnx_parser_accepts_model_zoo_image_size_formats() -> None:
     """验证导出脚本参数解析复用 model_zoo 的输入尺寸格式。"""
 
-    args = export_onnx.build_arg_parser().parse_args(["--input-size", "1x3x16x32"])
+    args = classification_export_onnx.build_arg_parser().parse_args(["--input-size", "1x3x16x32"])
 
     assert args.input_size == (16, 32)

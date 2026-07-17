@@ -27,9 +27,9 @@ build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w D:/Models/dinov
 build/bin/inferrt_sample_feature_extract.exe -m dinov3_vitb16 -w assets/models/dinov3/dinov3_vitb16.wts -f x_norm_clstoken,x_storage_tokens,x_norm_patchtokens -i assets/pics/dog.jpg -o build/dinov3_feature_dump_cpp
 ```
 
-DINO weights can be exported from `samples/model/python/classification_gen_wts.py` with
-`python samples/model/python/classification_gen_wts.py -m dinov2_vits14 -b torchhub -o dinov2_vits14.wts` and
-`python samples/model/python/classification_gen_wts.py -m dinov3_vitb16 -b transformers -o dinov3_vitb16.wts`.
+DINO weights can be exported from `samples/model/python/dino_gen_wts.py` with
+`python samples/model/python/dino_gen_wts.py -m dinov2_vits14 -b torchhub -o dinov2_vits14.wts` and
+`python samples/model/python/dino_gen_wts.py -m dinov3_vitb16 -b transformers -o dinov3_vitb16.wts`.
 
 The sample always builds the model instance as a truncated feature extractor via
 `IModelConfig::setFeatureOnly(true)`.
@@ -50,26 +50,15 @@ The sample writes:
 - `input.bin`
 - one `.bin` file per requested feature tensor
 
-## Compare with Python
+## Export feature ONNX
+
+Python 侧只负责生成模型文件。需要将 DINO 的命名特征导出为 ONNX 图输出时，使用：
 
 ```bash
-python samples/model/python/compare_features.py --compare_dir build/feature_dump_cpp
-```
-
-For TensorRT vs PyTorch intermediate features, the script defaults to `--rtol 1e-2 --atol 1.2e-1`.
-Those defaults are intentionally looser than exact tensor checks because TensorRT may fuse layers and
-use different FP32 kernels while still producing numerically aligned features.
-
-You can also select the model and features explicitly:
-
-```bash
-python samples/model/python/compare_features.py -m resnet18 -f layer1,layer4 -i assets/pics/dog.jpg --compare_dir build/feature_dump_cpp
-```
-
-Optional Python-side dump:
-
-```bash
-python samples/model/python/compare_features.py -m resnet18 -f layer1,layer4 -i assets/pics/dog.jpg --dump_dir build/feature_dump_py
+python samples/model/python/dino_export_onnx.py \
+  -m dinov2_vits14 -b torchhub \
+  -f x_norm_clstoken,x_norm_patchtokens \
+  -o build/dinov2_vits14.features.onnx --exporter legacy
 ```
 
 ## DINO Feature Keys
@@ -80,15 +69,5 @@ python samples/model/python/compare_features.py -m resnet18 -f layer1,layer4 -i 
 
 ## Notes
 
-- The Python script reuses the same ImageNet preprocessing as `classification_gen_wts.py`.
-- `--compare_dir` expects the directory produced by `inferrt_sample_feature_extract`.
-- For `timm` backend comparison, use `-b timm` with a matching timm-exported weight file.
-- For DINO comparison, `compare_features.py` infers `torchhub` for DINOv2 and `transformers` for DINOv3
-  when `--backend` is omitted; pass `--local-files-only` if you want Hugging Face to use only cached files.
-- You can still override `--backend` explicitly if you want to compare a timm-alias DINO key.
-- The comparison output reports both absolute and relative error: `max_abs`, `mean_abs`, `max_rel`,
-  `mean_rel`, and `ref_abs_max`.
-- Relative error is reported only where the PyTorch reference magnitude is above `1e-3`, so near-zero
-  activations do not dominate the summary with meaningless ratios.
-- For feature tensors, treat `mean_abs` and `mean_rel` as the primary signal; a single `max_abs` around
-  `1e-1` can still be acceptable when the tensor value range is much larger.
+- Use `--local-files-only` for offline DINOv3 export after the Hugging Face model has been cached.
+- Use `--emit-openvino` or `--openvino-output` to generate OpenVINO IR from the exported ONNX graph.

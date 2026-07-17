@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import argparse
-import struct
 import time
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
 import torch
 
 from rfdetr_compat import configure_rfdetr_import
+from wts_utils import write_wts as write_state_dict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_RFDETR_ROOT = Path("F:/Github/CV/rf-detr")
@@ -114,15 +114,15 @@ def infer_checkpoint_num_classes(checkpoint: Path) -> int | None:
     return int(class_bias.shape[0]) - 1
 
 
-def load_export_model(
+def load_rfdetr_wrapper(
     checkpoint: Path,
     *,
     model_name: str,
     rfdetr_root: Path | None,
     device: str,
     num_classes: int | None = None,
-) -> torch.nn.Module:
-    """加载上游 RF-DETR checkpoint 并切换到 export 前向。
+) -> Any:
+    """加载上游 RF-DETR checkpoint，返回官方模型包装器。
 
     Args:
         checkpoint: 上游 RF-DETR ``.pth`` checkpoint。
@@ -131,7 +131,7 @@ def load_export_model(
         num_classes: 前景类别数；为空时使用上游 checkpoint 中的 ``args``。
 
     Returns:
-        已加载、``eval`` 且调用过 ``export()`` 的 PyTorch 模型。
+        已加载且处于评估模式的 RF-DETR 包装器。
     """
 
     configure_rfdetr_import(rfdetr_root)
@@ -153,8 +153,28 @@ def load_export_model(
     else:
         raise ValueError(f"Unsupported RF-DETR checkpoint format: {checkpoint}")
 
+    wrapper.model.model.eval()
+    return wrapper
+
+
+def load_export_model(
+    checkpoint: Path,
+    *,
+    model_name: str,
+    rfdetr_root: Path | None,
+    device: str,
+    num_classes: int | None = None,
+) -> torch.nn.Module:
+    """加载 RF-DETR 并切换到原生 TensorRT 权重导出前向。"""
+
+    wrapper = load_rfdetr_wrapper(
+        checkpoint,
+        model_name=model_name,
+        rfdetr_root=rfdetr_root,
+        device=device,
+        num_classes=num_classes,
+    )
     model = wrapper.model.model
-    model.eval()
     model.export()
     return model
 
@@ -186,18 +206,7 @@ def write_wts(state_dict: Mapping[str, torch.Tensor], output_path: Path, *, verb
         verbose: 为 ``True`` 时打印每个权重 key 和 shape。
     """
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as handle:
-        handle.write(f"{len(state_dict)}\n")
-        for key, tensor in state_dict.items():
-            value = tensor.detach().float().reshape(-1).cpu().numpy()
-            if verbose:
-                print(f"key: {key}\tvalue: {tuple(tensor.shape)}")
-            handle.write(f"{key} {len(value)}")
-            for item in value:
-                handle.write(" ")
-                handle.write(struct.pack(">f", float(item)).hex())
-            handle.write("\n")
+    write_state_dict(state_dict, output_path, verbose=verbose)
 
 
 def parse_args() -> argparse.Namespace:

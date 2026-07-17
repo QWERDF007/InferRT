@@ -80,7 +80,7 @@ def _reference_outputs(model: Any) -> tuple[np.ndarray, dict[str, np.ndarray], n
 def _ensure_wts(model: Any, checkpoint: Path, model_name: str, build_dir: Path) -> Path:
     """将 checkpoint 对应的 PyTorch state_dict 缓存为 InferRT ``.wts``。"""
 
-    from classification_gen_wts import write_wts
+    from dino_gen_wts import write_wts
 
     output = artifact_dir(build_dir, "lingbot_vision") / f"{model_name}.wts"
     sources = [checkpoint, Path(__file__).resolve()]

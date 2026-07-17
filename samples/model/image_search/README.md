@@ -36,9 +36,9 @@ build/bin/inferrt_sample_image_search.exe --weights-file assets/models/dinov2/di
 build/bin/inferrt_sample_image_search.exe --weights-file assets/models/dinov3/dinov3_vitb16.wts --gallery-dir assets/pics --query-image assets/pics/dog.jpg --model dinov3_vitb16 --feature x_norm_clstoken --index build/gallery/dinov3_vitb16_x_norm_clstoken.faiss
 ```
 
-DINO weights can be exported from `samples/model/python/classification_gen_wts.py` with
-`python samples/model/python/classification_gen_wts.py -m dinov2_vits14 -b torchhub -o dinov2_vits14.wts` and
-`python samples/model/python/classification_gen_wts.py -m dinov3_vitb16 -b transformers -o dinov3_vitb16.wts`.
+DINO weights can be exported from `samples/model/python/dino_gen_wts.py` with
+`python samples/model/python/dino_gen_wts.py -m dinov2_vits14 -b torchhub -o dinov2_vits14.wts` and
+`python samples/model/python/dino_gen_wts.py -m dinov3_vitb16 -b transformers -o dinov3_vitb16.wts`.
 
 ## Index Reuse
 

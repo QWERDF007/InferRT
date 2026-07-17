@@ -56,17 +56,17 @@ build/bin/inferrt_sample_sam.exe -m sam_vit_b -w samples/model/sam/sam_vit_b.wts
 python samples/model/python/classification_gen_wts.py -m alexnet
 python samples/model/python/classification_gen_wts.py -m resnet50
 python samples/model/python/classification_gen_wts.py -m vgg16
-python samples/model/python/classification_gen_wts.py -m dinov2_vits14 -b torchhub -o dinov2_vits14.wts
-python samples/model/python/classification_gen_wts.py -m dinov3_vitb16 -b transformers -o dinov3_vitb16.wts
-python samples/model/python/gen_sam_wts.py -m vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.wts
-python samples/model/python/gen_sam_wts.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.wts
-python samples/model/python/gen_sam_wts.py -m sam3 -c D:/Models/sam3 -o sam3.wts --skip-forward
+python samples/model/python/dino_gen_wts.py -m dinov2_vits14 -b torchhub -o dinov2_vits14.wts
+python samples/model/python/dino_gen_wts.py -m dinov3_vitb16 -b transformers -o dinov3_vitb16.wts
+python samples/model/python/sam_gen_wts.py -m vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.wts
+python samples/model/python/sam_gen_wts.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.wts
+python samples/model/python/sam_gen_wts.py -m sam3 -c D:/Models/sam3 -o sam3.wts --skip-forward
 python samples/model/python/rfdetr_gen_wts.py -m rfdetr_nano -c F:/models/rfdetr/rf-detr-nano.pth --rfdetr-root F:/Github/CV/rf-detr -o build/python_test_artifacts/rfdetr/rfdetr_nano.wts --quiet
 python samples/model/python/rfdetr_gen_wts.py -m rfdetr_seg_nano -c F:/models/rfdetr/rf-detr-seg-nano.pt --rfdetr-root F:/Github/CV/rf-detr -o build/python_test_artifacts/rfdetr/rfdetr_seg_nano.wts --quiet
 python samples/model/python/detection_gen_wts.py -m yolov8n_seg -w F:/models/yolov8/yolov8n-seg.pt --ultralytics-repo F:/Github/CV/ultralytics -o build/python_test_artifacts/yolo/yolov8n_seg.wts --quiet
-python samples/model/python/export_sam_onnx.py -m sam_vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.onnx
-python samples/model/python/export_sam_onnx.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.onnx
-python samples/model/python/export_sam_onnx.py -m sam3 -c D:/Models/sam3 -o sam3.onnx
+python samples/model/python/sam_export_onnx.py -m sam_vit_b -c D:/Models/sam_vit_b_01ec64.pth --sam-root D:/Github/SAM/segment-anything -o sam_vit_b.onnx
+python samples/model/python/sam_export_onnx.py -m sam2_1_hiera_tiny -c D:/Models/sam2.1_hiera_tiny.pt --sam2-root D:/Github/SAM/sam2 -o sam2_1_hiera_tiny.onnx
+python samples/model/python/sam_export_onnx.py -m sam3 -c D:/Models/sam3 -o sam3.onnx
 ```
 
 SAM3 ONNX 导出使用 `transformers.Sam3Model`；通过 `--checkpoint` 传入 Hugging Face 模型 id 或本地模型目录。
@@ -75,7 +75,7 @@ SAM3 `.wts` 导出会写出 Hugging Face `Sam3Model.state_dict()` 供检查及�
 ## 说明
 
 - 输入预处理与标准 ImageNet 分类对齐
-- 示例从构建好的 engine 中读取输入/输出张量形状，因此 ViT/DINO 变体可使用其注册的默认尺寸，或使用 `classification_gen_wts.py --input-size` 导出的自定义尺寸
+- ONNX/权重转换命令、DINO 特征输出和第三方依赖见 [`python/README.md`](python/README.md)
 - DINO 主干输出特征向量；当主输出不是 1000 类 logits 张量时，示例会打印特征 top 值
 - 首次运行会从 `.wts` 构建 engine，后续运行复用已生成的 `.engine`
 
@@ -116,7 +116,7 @@ model->forwardFeatures(feature_buffers);
 ONNX / OpenVINO 注意事项：
 
 - ONNX 图后端无法在导出后选取隐藏张量；需要先将目标特征导出为图输出
-- 使用 `python/export_feature_onnx.py` 将 `forward_features()` 的 key（如 `x_norm_clstoken`）转为 ONNX/OpenVINO 输出张量
+- 使用 `python/dino_export_onnx.py` 将 DINO/LingBot-Vision `forward_features()` 的 key（如 `x_norm_clstoken`）转为 ONNX/OpenVINO 输出张量
 
 ## 实例分割示例
 
@@ -132,7 +132,7 @@ build/bin/inferrt_sample_segmentation.exe --help
 
 SAM 示例驱动所选 InferRT 后端，使用默认提示协议：
 `image`、`point_coords`、`point_labels`、`mask_input`、`has_mask_input` -> `masks`、`iou_predictions`、`low_res_masks`。
-SAM v1 基于 `python/gen_sam_wts.py` 导出的官方 `segment_anything` 权重构建 ViT 图像编码器、提示编码器和掩码解码器。SAM2/SAM2.1 基于 `python/gen_sam_wts.py` 导出的权重构建 Hiera 图像编码器、FPN 颈部、提示编码器和高分辨率掩码解码器。SAM3 key 已注册，但其原生主干目前显式返回 `ERROR_NOT_IMPLEMENTED`。
+SAM v1 基于 `python/sam_gen_wts.py` 导出的官方 `segment_anything` 权重构建 ViT 图像编码器、提示编码器和掩码解码器。SAM2/SAM2.1 基于 `python/sam_gen_wts.py` 导出的权重构建 Hiera 图像编码器、FPN 颈部、提示编码器和高分辨率掩码解码器。SAM3 key 已注册，但其原生主干目前显式返回 `ERROR_NOT_IMPLEMENTED`。
 
 ```bash
 build/bin/inferrt_sample_sam.exe -m sam_vit_b -w samples/model/sam/sam_vit_b.wts -i assets/pics/dog.jpg -o build/sam_vit_b_mask.jpg --box 0.2,0.2,0.8,0.8 --runtime tensorrt:0 --warmup 5 --repeat 20
@@ -152,7 +152,6 @@ build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w assets/models/d
 build/bin/inferrt_sample_feature_extract.exe -m dinov2_vits14 -w D:/Models/dinov2/<checkpoint-stem-or-dir>/dinov2_vits14.features.onnx -f x_norm_clstoken -i assets/pics/dog.jpg -o build/dinov2_openvino_cpu_feature_dump --runtime openvino:cpu --warmup 10 --repeat 100
 build/bin/inferrt_sample_feature_extract.exe -m dinov3_vitb16 -w assets/models/dinov3/dinov3_vitb16.wts -f x_norm_clstoken,x_storage_tokens,x_norm_patchtokens -i assets/pics/dog.jpg -o build/dinov3_feature_dump_cpp
 build/bin/inferrt_sample_feature_extract.exe --help
-python samples/model/python/compare_features.py --compare_dir build/feature_dump_cpp
 ```
 
 特征示例始终将模型配置为 `featureOnly=true`，因此直接构建/加载截断后的特征提取器。
@@ -195,22 +194,7 @@ build/bin/inferrt_sample_image_search.exe --help
 
 详见 [`image_search/README.md`](image_search/README.md)。
 
-## Python 绑定示例
+## Python 模型转换
 
-基于 pybind11 的 Python 示例展示如何创建 InferRT 模型、执行 NumPy 推理以及直接从 Python 导出中间特征：
-
-```bash
-cmake -S . -B build -DINFERRT_BUILD_PYTHON=ON -DINFERRT_PYTHON_ROOT=D:/Software/anaconda3/envs/py312
-cmake --build build --config Debug --target inferrt_model_py
-D:/Software/anaconda3/envs/py312/python.exe samples/model/python/SamplePythonClassification.py
-```
-
-Python 扩展与依赖的 InferRT DLL 一起生成在 `build/bin` 下。
-
-Python 特征提取：
-
-```bash
-D:/Software/anaconda3/envs/py312/python.exe samples/model/python/python_feature_extract.py --build-dir build_py312_final --model resnet18 --weights assets/models/resnet/resnet18.wts --features layer1,layer4 --output-dir build/feature_dump_py
-```
-
-详见 [`python/README.md`](python/README.md)。
+Python 目录只保留分类、DINO、YOLO、RF-DETR 和 SAM 的 `.wts`/`.onnx` 转换工具。
+完整命令和依赖见 [`python/README.md`](python/README.md)。

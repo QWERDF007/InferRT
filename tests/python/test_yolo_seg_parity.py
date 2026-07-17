@@ -19,7 +19,7 @@ from test_yolo_parity import (
     _load_torch_yolo_model,
     _sigmoid,
 )
-from util import allocate_output_tensors
+from helpers.vision import allocate_output_tensors
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 

@@ -46,35 +46,35 @@ python samples/model/python/classification_gen_wts.py -m resnet50
 python samples/model/python/classification_gen_wts.py -m vgg16
 ```
 
-For timm-backed ResNet, ViT, and DINO variants:
+For timm-backed ResNet and ViT variants:
 
 ```bash
 python samples/model/python/classification_gen_wts.py -b timm -m resnet18
-python samples/model/python/classification_gen_wts.py -b timm -m vit_base_patch16_384 --input-size 384
-python samples/model/python/classification_gen_wts.py -b timm -m vit_base_patch16_dinov3
+python samples/model/python/classification_gen_wts.py -b timm -m vit_base_patch16_384
+python samples/model/python/dino_gen_wts.py -b timm -m vit_base_patch16_dinov3
 ```
 
 For official DINO weights:
 
 ```bash
-python samples/model/python/classification_gen_wts.py -b torchhub -m dinov2_vits14
-python samples/model/python/classification_gen_wts.py -b torchhub -m dinov2_vits14 --hub-repo <local-dinov2-repo> --hub-source local
-python samples/model/python/classification_gen_wts.py -b torchhub -m dinov2_vits14 --hub-repo <local-dinov2-repo> --hub-source local --hub-weights <dinov2-vits14-pretrain.pth>
-python samples/model/python/classification_gen_wts.py -b transformers -m dinov3_vitb16
-python samples/model/python/classification_gen_wts.py -b transformers -m dinov3_vitb16 --hf-model-id facebook/dinov3-vitb16-pretrain-lvd1689m
-python samples/model/python/classification_gen_wts.py -b transformers -m dinov3_vitb16 --local-files-only
+python samples/model/python/dino_gen_wts.py -b torchhub -m dinov2_vits14
+python samples/model/python/dino_gen_wts.py -b torchhub -m dinov2_vits14 --hub-repo <local-dinov2-repo> --hub-source local
+python samples/model/python/dino_gen_wts.py -b torchhub -m dinov2_vits14 --hub-repo <local-dinov2-repo> --hub-source local --hub-weights <dinov2-vits14-pretrain.pth>
+python samples/model/python/dino_gen_wts.py -b transformers -m dinov3_vitb16
+python samples/model/python/dino_gen_wts.py -b transformers -m dinov3_vitb16 --hf-model-id facebook/dinov3-vitb16-pretrain-lvd1689m
+python samples/model/python/dino_gen_wts.py -b transformers -m dinov3_vitb16 --local-files-only
 ```
 
 DINOv2 uses PyTorch Hub. DINOv3 uses Hugging Face `pipeline(model="facebook/dinov3-vitb16-pretrain-lvd1689m", task="image-feature-extraction")` by default and converts the Transformers state dict to the InferRT DINOv3 weight names during `.wts` export. In offline environments, use `--local-files-only` after the Hugging Face model is cached.
 
-DINO models export feature-vector backbones rather than 1000-class logits. `classification_gen_wts.py` and the C++ sample print feature top values when the output dimension does not match the ImageNet label count.
+DINO models export feature-vector backbones rather than 1000-class logits. Use `dino_gen_wts.py` and `dino_export_onnx.py` for DINO conversion.
 
 List supported models for a backend:
 
 ```bash
 python samples/model/python/classification_gen_wts.py -l
 python samples/model/python/classification_gen_wts.py -b timm -l
-python samples/model/python/classification_gen_wts.py -b transformers -l
+python samples/model/python/dino_gen_wts.py -b transformers -l
 ```
 
 ## Run

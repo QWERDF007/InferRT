@@ -4,12 +4,12 @@ from collections.abc import Mapping
 import importlib.util
 import os
 from pathlib import Path
-import struct
 import sys
 import types
 from typing import Any
 
 import torch
+from wts_utils import write_wts as write_state_dict
 
 
 YOLO_DETECTION_MODEL_NAMES = [
@@ -248,15 +248,4 @@ def write_wts(model: Any, output_path: str | Path, *, verbose: bool = True) -> N
         verbose: 为 true 时打印每个权重 key 和 shape。
     """
 
-    state_dict = export_state_dict(model)
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(f"{len(state_dict)}\n")
-        for key, tensor in state_dict.items():
-            value = tensor.detach().reshape(-1).cpu().numpy()
-            if verbose:
-                print(f"key: {key}\tvalue: {tuple(tensor.shape)}")
-            f.write(f"{key} {len(value)}")
-            for item in value:
-                f.write(" ")
-                f.write(struct.pack(">f", float(item)).hex())
-            f.write("\n")
+    write_state_dict(export_state_dict(model), output_path, verbose=verbose)
