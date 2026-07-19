@@ -353,10 +353,6 @@ bool existingRoiIndexMatchesConfig(const fs::path &index_path, const RoiSearchCo
         && irt::util::manifestValueEquals(manifest, "model_runtime", config.model_runtime.toString())
         && irt::util::manifestValueEquals(manifest, "model_precision",
                                           irt::model::modelPrecisionName(config.model_precision))
-        && irt::util::manifestValueEquals(manifest, "preprocess_backend",
-                                          priv::preprocessBackendName(config.preprocess_backend))
-        && irt::util::manifestValueEquals(manifest, "faiss_backend", priv::faissBackendName(config.faiss_backend))
-        && irt::util::manifestValueEquals(manifest, "model_batch_size", std::to_string(config.model_batch_size))
         && irt::util::manifestValueEquals(manifest, "norm", priv::featureNormName(config.norm))
         && irt::util::manifestValueEquals(manifest, "index_storage", priv::indexStorageName(config.index_storage))
         && irt::util::manifestValueEquals(manifest, "index_kind", priv::indexKindName(config))

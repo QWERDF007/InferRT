@@ -53,18 +53,11 @@ struct ImageSearchResult
 
 enum class ImageSearchBuildStage
 {
-    Unknown,          ///< 未知或未初始化阶段。
-    Started,          ///< 构建/加载流程已经开始。
-    CollectingImages, ///< 正在扫描或规范化图库图片列表。
-    LoadingModel,     ///< 正在创建并加载特征提取模型。
-    TrainingFeatures, ///< 正在抽样提取 Faiss 训练特征。
-    TrainingIndex,    ///< 正在训练 IVF/PQ 等 Faiss 索引结构。
-    AssigningVectors, ///< CPU 磁盘 IVF 模式下正在统计向量所属倒排列表。
-    AddingVectors,    ///< 正在向 Faiss 索引或磁盘倒排列表写入图库向量。
-    WritingIndex,     ///< 正在写入 ``.faiss`` 索引文件。
-    LoadingIndex,     ///< 正在从磁盘加载索引或迁移到 GPU。
-    SavingMetadata,   ///< 正在写入 manifest。
-    Finished,         ///< 构建或加载流程完成。
+    Unknown,            ///< 未知或未初始化阶段。
+    LoadingModel,       ///< 正在创建并加载特征提取模型。
+    ExtractingFeatures, ///< 正在按批次提取图库特征。
+    BuildingIndex,      ///< 正在构建特征库索引。
+    LoadingIndex,       ///< 正在加载已有特征库索引。
 };
 
 /**
@@ -78,28 +71,14 @@ inline const char *imageSearchBuildStageName(ImageSearchBuildStage stage) noexce
     {
     case ImageSearchBuildStage::Unknown:
         return "unknown";
-    case ImageSearchBuildStage::Started:
-        return "started";
-    case ImageSearchBuildStage::CollectingImages:
-        return "collecting_images";
     case ImageSearchBuildStage::LoadingModel:
         return "loading_model";
-    case ImageSearchBuildStage::TrainingFeatures:
-        return "training_features";
-    case ImageSearchBuildStage::TrainingIndex:
-        return "training_index";
-    case ImageSearchBuildStage::AssigningVectors:
-        return "assigning_vectors";
-    case ImageSearchBuildStage::AddingVectors:
-        return "adding_vectors";
-    case ImageSearchBuildStage::WritingIndex:
-        return "writing_index";
+    case ImageSearchBuildStage::ExtractingFeatures:
+        return "extracting_features";
+    case ImageSearchBuildStage::BuildingIndex:
+        return "building_index";
     case ImageSearchBuildStage::LoadingIndex:
         return "loading_index";
-    case ImageSearchBuildStage::SavingMetadata:
-        return "saving_metadata";
-    case ImageSearchBuildStage::Finished:
-        return "finished";
     }
     return "unknown";
 }

@@ -25,6 +25,7 @@ namespace irt::features {
 namespace priv {
 /** @brief 图像检索与 ROI 检索共用的模型特征抽取器。 */
 class ImageFeatureExtractor;
+struct FaissIndexBundle;
 } // namespace priv
 
 /**
@@ -156,6 +157,12 @@ private:
     void buildWithImages(const std::filesystem::path &weights_file, const std::filesystem::path &gallery_dir,
                          std::vector<ImageSearchItem> gallery_items, const std::filesystem::path &index_path,
                          const std::string &metadata_gallery_value, ImageSearchBuildProgressCallback progress_callback);
+
+    /** @brief 提交已经构建或加载完成的索引及其映射状态。 */
+    void installIndex(const std::filesystem::path &weights_file, const std::filesystem::path &gallery_dir,
+                      const std::filesystem::path &index_path, priv::FaissIndexBundle bundle,
+                      std::vector<int64_t> gallery_ids, int feature_dim,
+                      std::unique_ptr<priv::ImageFeatureExtractor> extractor);
 
     /**
      * @brief 按需懒加载特征提取器。

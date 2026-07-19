@@ -50,11 +50,9 @@ struct ImageClusterAssignment
 enum class ImageClusterStage
 {
     Unknown,            ///< 未知或未初始化阶段。
-    Started,            ///< 聚类流程已开始。
     LoadingModel,       ///< 正在加载特征提取模型。
-    ExtractingFeatures, ///< 正在抽取图像特征。
+    ExtractingFeatures, ///< 正在按批次抽取图像特征。
     Clustering,         ///< 正在执行 HDBSCAN 聚类。
-    Finished,           ///< 聚类流程完成。
 };
 
 /**
@@ -66,16 +64,12 @@ inline const char *imageClusterStageName(ImageClusterStage stage) noexcept
     {
     case ImageClusterStage::Unknown:
         return "unknown";
-    case ImageClusterStage::Started:
-        return "started";
     case ImageClusterStage::LoadingModel:
         return "loading_model";
     case ImageClusterStage::ExtractingFeatures:
         return "extracting_features";
     case ImageClusterStage::Clustering:
         return "clustering";
-    case ImageClusterStage::Finished:
-        return "finished";
     }
     return "unknown";
 }

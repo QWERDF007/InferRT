@@ -413,9 +413,9 @@ TEST(ImageSearchTest, RamIndexUsesInMemoryIvfPqCompression)
 }
 
 /**
- * @brief RAM IVF-PQ build reports early training progress and vector add batches through one callback.
+ * @brief RAM IVF-PQ build reports vector-add batches through the unified index-build stage.
  */
-TEST(ImageSearchTest, RamIndexBuildReportsStagesAndAddBatches)
+TEST(ImageSearchTest, RamIndexBuildReportsBatchProgress)
 {
     constexpr int    feature_dim  = 16;
     constexpr size_t vector_count = 17;
@@ -437,18 +437,13 @@ TEST(ImageSearchTest, RamIndexBuildReportsStagesAndAddBatches)
 
     std::vector<irt::features::ImageSearchBuildStage> stages;
     std::vector<std::pair<size_t, size_t>>            add_batches;
-    size_t                                            training_progress = 0;
-    size_t                                            add_progress      = 0;
+    size_t                                            build_progress = 0;
     auto progress_callback = [&](const irt::features::ImageSearchBuildProgress &progress)
     {
         stages.push_back(progress.stage);
-        if (progress.stage == irt::features::ImageSearchBuildStage::TrainingFeatures)
+        if (progress.stage == irt::features::ImageSearchBuildStage::BuildingIndex)
         {
-            training_progress = std::max(training_progress, progress.processed_count);
-        }
-        if (progress.stage == irt::features::ImageSearchBuildStage::AddingVectors)
-        {
-            add_progress = std::max(add_progress, progress.processed_count);
+            build_progress = std::max(build_progress, progress.processed_count);
             if (progress.batch_count > 0)
             {
                 add_batches.emplace_back(progress.batch_begin, progress.batch_count);
@@ -459,11 +454,7 @@ TEST(ImageSearchTest, RamIndexBuildReportsStagesAndAddBatches)
     auto index = irt::features::priv::buildRamIvfPqIndex(vector_count, feature_dim, 5, load_feature, progress_callback);
 
     ASSERT_TRUE(index);
-    EXPECT_NE(std::find(stages.begin(), stages.end(), irt::features::ImageSearchBuildStage::TrainingFeatures),
-              stages.end());
-    EXPECT_NE(std::find(stages.begin(), stages.end(), irt::features::ImageSearchBuildStage::TrainingIndex),
-              stages.end());
-    EXPECT_NE(std::find(stages.begin(), stages.end(), irt::features::ImageSearchBuildStage::AddingVectors),
+    EXPECT_NE(std::find(stages.begin(), stages.end(), irt::features::ImageSearchBuildStage::BuildingIndex),
               stages.end());
     const std::vector<std::pair<size_t, size_t>> expected_add_batches{
         { 0, 5},
@@ -472,12 +463,11 @@ TEST(ImageSearchTest, RamIndexBuildReportsStagesAndAddBatches)
         {15, 2}
     };
     EXPECT_EQ(add_batches, expected_add_batches);
-    EXPECT_EQ(training_progress, vector_count);
-    EXPECT_EQ(add_progress, vector_count);
+    EXPECT_EQ(build_progress, vector_count);
     EXPECT_EQ(single_loads, vector_count * 2);
 }
 
-TEST(ImageSearchTest, TrainingFeatureSamplingUsesContiguousBatchCallback)
+TEST(ImageSearchTest, FeatureSamplingUsesContiguousBatchCallback)
 {
     constexpr int    feature_dim     = 2;
     constexpr size_t vector_count    = 10;
@@ -520,18 +510,10 @@ TEST(ImageSearchTest, TrainingFeatureSamplingUsesContiguousBatchCallback)
         return features;
     };
 
-    std::vector<std::pair<size_t, size_t>> progress_batches;
-    auto progress_callback = [&](const irt::features::ImageSearchBuildProgress &progress)
-    {
-        if (progress.stage == irt::features::ImageSearchBuildStage::TrainingFeatures && progress.batch_count > 0)
-        {
-            progress_batches.emplace_back(progress.batch_begin, progress.batch_count);
-        }
-    };
 
     const auto sample = irt::features::priv::loadTrainingFeatures(
         vector_count, feature_dim, training_count, stride, training_batch, load_feature, load_feature_batch,
-        load_feature_index_batch, progress_callback);
+        load_feature_index_batch);
 
     const std::vector<std::pair<size_t, size_t>> expected_batches{
         {0, 4},
@@ -539,14 +521,13 @@ TEST(ImageSearchTest, TrainingFeatureSamplingUsesContiguousBatchCallback)
         {8, 2}
     };
     EXPECT_EQ(loaded_batches, expected_batches);
-    EXPECT_EQ(progress_batches, expected_batches);
     EXPECT_EQ(single_loads, 0U);
     EXPECT_EQ(indexed_loads, 0U);
     EXPECT_EQ(sample.count, training_count);
     EXPECT_EQ(sample.indices, (std::vector<size_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}));
 }
 
-TEST(ImageSearchTest, TrainingFeatureSamplingUsesIndexedBatchCallbackForStridedSamples)
+TEST(ImageSearchTest, FeatureSamplingUsesIndexedBatchCallbackForStridedSamples)
 {
     constexpr int    feature_dim     = 2;
     constexpr size_t vector_count    = 10;
@@ -589,29 +570,16 @@ TEST(ImageSearchTest, TrainingFeatureSamplingUsesIndexedBatchCallbackForStridedS
         return features;
     };
 
-    std::vector<std::pair<size_t, size_t>> progress_batches;
-    auto progress_callback = [&](const irt::features::ImageSearchBuildProgress &progress)
-    {
-        if (progress.stage == irt::features::ImageSearchBuildStage::TrainingFeatures && progress.batch_count > 0)
-        {
-            progress_batches.emplace_back(progress.batch_begin, progress.batch_count);
-        }
-    };
 
     const auto sample = irt::features::priv::loadTrainingFeatures(
         vector_count, feature_dim, training_count, stride, training_batch, load_feature, load_feature_batch,
-        load_feature_index_batch, progress_callback);
+        load_feature_index_batch);
 
     const std::vector<std::vector<size_t>> expected_index_batches{
         {0, 2, 4},
         {6, 8}
     };
-    const std::vector<std::pair<size_t, size_t>> expected_progress{
-        {0, 3},
-        {6, 2}
-    };
     EXPECT_EQ(loaded_index_batches, expected_index_batches);
-    EXPECT_EQ(progress_batches, expected_progress);
     EXPECT_EQ(single_loads, 0U);
     EXPECT_EQ(contiguous_loads, 0U);
     EXPECT_EQ(sample.count, training_count);
@@ -676,7 +644,8 @@ TEST(ImageSearchTest, CpuDiskIndexUsesOnDiskIvfInvertedLists)
         vector_count, feature_dim, index_path, 3, load_feature,
         [&](const irt::features::ImageSearchBuildProgress &progress)
         {
-            if (progress.stage == irt::features::ImageSearchBuildStage::AddingVectors && progress.batch_count > 0)
+            if (progress.stage == irt::features::ImageSearchBuildStage::BuildingIndex
+                && progress.batch_count > 0 && progress.processed_count > vector_count)
             {
                 batches.emplace_back(progress.batch_begin, progress.batch_count);
             }

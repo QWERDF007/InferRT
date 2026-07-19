@@ -223,17 +223,12 @@ index_->search(1, query_feature.data(), result_count, distances.data(), indices.
 
 ROI 搜索复用 `ImageSearchBuildProgress` 和 `ImageSearchBuildStage`：
 
-- `Started`：流程开始。
-- `CollectingImages`：校验并规范化 ROI 条目。
 - `LoadingModel`：加载模型与创建 ROI 特征抽取器。
-- `TrainingFeatures`：抽样提取 Faiss 训练特征。
-- `TrainingIndex`：训练 Faiss 索引结构。
-- `AssigningVectors`：CPU 磁盘 IVF 模式统计倒排列表。
-- `AddingVectors`：提取 ROI 特征并添加到索引或写入磁盘倒排列表。
-- `WritingIndex`：写入 `.faiss`。
-- `LoadingIndex`：加载索引或迁移到 GPU。
-- `SavingMetadata`：写入 ROI 映射和元数据。
-- `Finished`：构建或加载完成。
+- `ExtractingFeatures`：按模型 batch 提取 ROI 特征，并写入构建期间的临时特征存储。
+- `BuildingIndex`：按 batch 从临时特征存储构建 Faiss 特征库；CPU 磁盘 IVF 的两次扫描也统一归入此阶段。
+- `LoadingIndex`：已有索引被复用时，加载索引或迁移到 GPU。
+
+进度回调只报告上述主要阶段，不再报告 ROI 校验、Faiss 内部训练/分配、写文件和保存元数据等实现细节。阶段完成通过最后一次进度事件的 `processed_count == total_count` 表示。
 
 `processed_count` 与 `total_count` 表示当前阶段已处理和总计的 ROI 条目数或向量数。
 

@@ -15,10 +15,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <fstream>
 #include <limits>
 #include <memory>
+#include <string>
+#include <system_error>
 
 namespace irt::features::priv {
+namespace fs = std::filesystem;
 namespace {
 
 /**
@@ -66,6 +71,209 @@ void l1Normalize(float *values, size_t count)
 }
 
 } // namespace
+
+void processFeatureBatches(size_t item_count, size_t batch_size, int feature_dim,
+                           const FeatureBatchLoader &loader, const FeatureBatchConsumer &consumer,
+                           const FeatureBatchProgressCallback &progress_callback)
+{
+    if (batch_size == 0 || feature_dim <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Feature batch configuration is invalid");
+    }
+
+    size_t batch_index{0};
+    for (size_t begin = 0; begin < item_count; begin += batch_size, ++batch_index)
+    {
+        const size_t count    = std::min(batch_size, item_count - begin);
+        const auto   features = loader(begin, count);
+        if (features.size() != count * static_cast<size_t>(feature_dim))
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Feature batch size mismatch");
+        }
+
+        if (consumer)
+        {
+            consumer(begin, count, features);
+        }
+        if (progress_callback)
+        {
+            progress_callback(FeatureBatchProgress{batch_index, begin, count, begin + count, item_count});
+        }
+    }
+}
+
+std::filesystem::path normalizeImageFilePath(const std::filesystem::path &image_path, const char *owner_name)
+{
+    const std::string owner = owner_name == nullptr ? "FeatureSearch" : owner_name;
+    if (image_path.empty())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "%s image path must not be empty", owner.c_str());
+    }
+
+    std::error_code ec;
+    if (!fs::is_regular_file(image_path, ec))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "%s image path does not exist: %s", owner.c_str(),
+                             image_path.string().c_str());
+    }
+    if (!ImageSearch::isImageFile(image_path))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported %s image file: %s", owner.c_str(),
+                             image_path.string().c_str());
+    }
+    return fs::absolute(image_path);
+}
+
+std::filesystem::path featureStorePath(const std::filesystem::path &index_path)
+{
+    return index_path.string() + ".features.tmp";
+}
+
+FeatureStore::FeatureStore(std::filesystem::path path, size_t item_count, int feature_dim)
+    : path_(std::move(path))
+    , item_count_(item_count)
+    , feature_dim_(feature_dim)
+{
+    if (path_.empty() || item_count_ == 0 || feature_dim_ <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Feature store configuration is invalid");
+    }
+    if (!path_.parent_path().empty())
+    {
+        fs::create_directories(path_.parent_path());
+    }
+
+    std::error_code ec;
+    fs::remove(path_, ec);
+    if (ec)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to prepare feature store: %s",
+                             path_.string().c_str());
+    }
+
+    output_.open(path_, std::ios::binary | std::ios::trunc);
+    if (!output_)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to create feature store: %s",
+                             path_.string().c_str());
+    }
+}
+
+FeatureStore::~FeatureStore()
+{
+    if (output_.is_open())
+    {
+        output_.close();
+    }
+    std::error_code ec;
+    fs::remove(path_, ec);
+}
+
+void FeatureStore::validateRange(size_t begin, size_t count) const
+{
+    if (begin > item_count_ || count > item_count_ - begin)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Feature store range is invalid");
+    }
+}
+
+void FeatureStore::writeBatch(size_t begin, size_t count, const std::vector<float> &features)
+{
+    if (writing_finished_ || !output_ || begin != next_write_index_)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "Feature store is not writable");
+    }
+    validateRange(begin, count);
+    if (features.size() != count * static_cast<size_t>(feature_dim_))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Feature store batch size mismatch");
+    }
+
+    output_.write(reinterpret_cast<const char *>(features.data()),
+                  static_cast<std::streamsize>(features.size() * sizeof(float)));
+    if (!output_)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to write feature store: %s",
+                             path_.string().c_str());
+    }
+    next_write_index_ += count;
+}
+
+void FeatureStore::finishWriting()
+{
+    if (writing_finished_ || next_write_index_ != item_count_)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "Feature store is incomplete");
+    }
+    output_.close();
+    writing_finished_ = true;
+}
+
+std::vector<float> FeatureStore::read(size_t index) const
+{
+    return readBatch(index, 1);
+}
+
+std::vector<float> FeatureStore::readBatch(size_t begin, size_t count) const
+{
+    validateRange(begin, count);
+    if (!writing_finished_)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "Feature store is not ready for reading");
+    }
+
+    std::ifstream input(path_, std::ios::binary);
+    if (!input)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to open feature store: %s",
+                             path_.string().c_str());
+    }
+
+    const auto offset = static_cast<std::streamoff>(begin * static_cast<size_t>(feature_dim_) * sizeof(float));
+    input.seekg(offset, std::ios::beg);
+    std::vector<float> features(count * static_cast<size_t>(feature_dim_));
+    input.read(reinterpret_cast<char *>(features.data()), static_cast<std::streamsize>(features.size() * sizeof(float)));
+    if (!input)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to read feature store: %s",
+                             path_.string().c_str());
+    }
+    return features;
+}
+
+std::vector<float> FeatureStore::readBatch(const std::vector<size_t> &indices) const
+{
+    if (!writing_finished_)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "Feature store is not ready for reading");
+    }
+
+    std::ifstream input(path_, std::ios::binary);
+    if (!input)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to open feature store: %s",
+                             path_.string().c_str());
+    }
+
+    const auto feature_size = static_cast<size_t>(feature_dim_);
+    std::vector<float> features;
+    features.reserve(indices.size() * feature_size);
+    std::vector<float> batch(feature_size);
+    for (const size_t index : indices)
+    {
+        validateRange(index, 1);
+        const auto offset = static_cast<std::streamoff>(index * feature_size * sizeof(float));
+        input.seekg(offset, std::ios::beg);
+        input.read(reinterpret_cast<char *>(batch.data()), static_cast<std::streamsize>(batch.size() * sizeof(float)));
+        if (!input)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to read feature store: %s",
+                                 path_.string().c_str());
+        }
+        features.insert(features.end(), batch.begin(), batch.end());
+    }
+    return features;
+}
 
 bool usesTensorRtModelBackend(const ImageSearchConfig &config) noexcept
 {
@@ -273,15 +481,8 @@ FaissIndexBundle buildConfiguredFaissIndex(size_t vector_count, int feature_dim,
                                         load_feature_batch, load_feature_index_batch, progress_callback,
                                         config.faiss_backend == ImageSearchFaissBackend::GPU);
 
-    reportBuildProgress(progress_callback, ImageSearchBuildStage::WritingIndex, 0, 0, 0, 0, 1);
     faiss::write_index(cpu_index.get(), index_path.string().c_str());
-    reportBuildProgress(progress_callback, ImageSearchBuildStage::WritingIndex, 0, 0, 0, 1, 1);
-
-    reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 0, 1);
-    auto bundle = moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend,
-                                                   config.model_runtime.deviceId());
-    reportBuildProgress(progress_callback, ImageSearchBuildStage::LoadingIndex, 0, 0, 0, 1, 1);
-    return bundle;
+    return moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend, config.model_runtime.deviceId());
 }
 
 FaissIndexBundle loadConfiguredFaissIndex(const std::filesystem::path &index_path, const ImageSearchConfig &config)

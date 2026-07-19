@@ -49,17 +49,12 @@ searcher.buildOrLoad(weights_file, gallery_dir, index_file, rebuild_index, progr
 
 重建索引的主要阶段对应 `ImageSearchBuildStage`：
 
-1. `Started`：流程开始。
-2. `CollectingImages`：递归扫描图库目录，收集支持的图片格式并排序。
-3. `LoadingModel`：创建 `ImageSearchFeatureExtractor`，构建或加载模型。
-4. `TrainingFeatures`：抽样图库图片并提取训练特征。
-5. `TrainingIndex`：训练 Faiss IVF/PQ 索引结构。
-6. `AssigningVectors`：CPU 磁盘 IVF 模式下统计每个倒排列表需要容纳的向量数量。
-7. `AddingVectors`：提取图库特征并添加到 Faiss 索引或写入磁盘倒排列表。
-8. `WritingIndex`：写入 `.faiss` 文件。
-9. `LoadingIndex`：按配置加载索引，RAM 索引可迁移到 GPU。
-10. `SavingMetadata`：写入 manifest。
-11. `Finished`：构建完成。
+1. `LoadingModel`：创建 `ImageSearchFeatureExtractor`，构建或加载模型。
+2. `ExtractingFeatures`：按模型 batch 提取图库图片特征，并写入构建期间的临时特征存储。
+3. `BuildingIndex`：按 batch 从临时特征存储构建 Faiss 特征库；CPU 磁盘 IVF 的两次扫描也统一归入此阶段。
+4. `LoadingIndex`：已有索引路径被复用时，按配置加载索引；RAM 索引可迁移到 GPU。
+
+进度回调只报告上述主要阶段，不再报告 Faiss 内部训练、分配、写文件和保存元数据等实现细节。阶段完成通过该阶段最后一次进度事件的 `processed_count == total_count` 表示，构建路径的最后阶段为 `BuildingIndex`，加载路径的最后阶段为 `LoadingIndex`。
 
 ## 5. 特征提取
 

@@ -29,12 +29,6 @@ namespace fs = std::filesystem;
 namespace irt::features {
 namespace {
 
-ImageSearchConfig featureSearchConfig(const ImageClusterConfig &config)
-{
-    const ImageSearchConfig &base = config;
-    return base;
-}
-
 void reportProgress(const ImageClusterProgressCallback &callback, ImageClusterStage stage, size_t batch_index = 0,
                     size_t batch_begin = 0, size_t batch_count = 0, size_t processed_count = 0, size_t total_count = 0)
 {
@@ -47,25 +41,7 @@ void reportProgress(const ImageClusterProgressCallback &callback, ImageClusterSt
 
 ImageClusterItem normalizeItem(const ImageClusterItem &item)
 {
-    if (item.image_path.empty())
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageCluster image path must not be empty");
-    }
-
-    std::error_code ec;
-    const bool      exists          = fs::exists(item.image_path, ec);
-    const bool      is_regular_file = exists && fs::is_regular_file(item.image_path, ec);
-    if (!is_regular_file)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageCluster image path does not exist: %s",
-                             item.image_path.string().c_str());
-    }
-    if (!ImageSearch::isImageFile(item.image_path))
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported ImageCluster image file: %s",
-                             item.image_path.string().c_str());
-    }
-    return ImageClusterItem{item.image_id, fs::absolute(item.image_path)};
+    return ImageClusterItem{item.image_id, priv::normalizeImageFilePath(item.image_path, "ImageCluster")};
 }
 
 std::vector<ImageClusterItem> normalizeItems(const std::vector<ImageClusterItem> &items)
@@ -162,7 +138,7 @@ class ClusterFeatureExtractor
 public:
     ClusterFeatureExtractor(const ImageClusterConfig &config, const fs::path &weights_file)
         : config_(config)
-        , image_extractor_(config.model_name, config.feature_name, weights_file, featureSearchConfig(config))
+        , image_extractor_(config.model_name, config.feature_name, weights_file, ImageSearchConfig(config))
     {
         if (!config_.use_pca)
         {
@@ -363,7 +339,6 @@ ImageCluster::Impl::~Impl() = default;
 ImageClusterResult ImageCluster::Impl::cluster(const fs::path &weights_file, const std::vector<ImageClusterItem> &items,
                                                ImageClusterProgressCallback progress_callback)
 {
-    reportProgress(progress_callback, ImageClusterStage::Started);
     auto       normalized_items = normalizeItems(items);
     const auto image_paths      = itemPaths(normalized_items);
     const auto image_ids        = itemIds(normalized_items);
@@ -375,20 +350,16 @@ ImageClusterResult ImageCluster::Impl::cluster(const fs::path &weights_file, con
 
     std::vector<float> features;
     features.reserve(normalized_items.size() * static_cast<size_t>(feature_dim_));
-    const size_t batch_size = std::max<size_t>(1, extractor.maxBatchSize());
-    size_t       batch_index{0};
-    for (size_t begin = 0; begin < image_paths.size(); begin += batch_size, ++batch_index)
-    {
-        const size_t count = std::min(batch_size, image_paths.size() - begin);
-        auto         batch = extractor.extractBatch(image_paths, begin, count);
-        if (batch.size() != count * static_cast<size_t>(feature_dim_))
+    reportProgress(progress_callback, ImageClusterStage::ExtractingFeatures, 0, 0, 0, 0, image_paths.size());
+    priv::processFeatureBatches(
+        image_paths.size(), extractor.maxBatchSize(), feature_dim_,
+        [&](size_t begin, size_t count) { return extractor.extractBatch(image_paths, begin, count); },
+        [&](size_t, size_t, const std::vector<float> &batch) { features.insert(features.end(), batch.begin(), batch.end()); },
+        [&](const priv::FeatureBatchProgress &progress)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageCluster feature batch size mismatch");
-        }
-        features.insert(features.end(), batch.begin(), batch.end());
-        reportProgress(progress_callback, ImageClusterStage::ExtractingFeatures, batch_index, begin, count,
-                       begin + count, image_paths.size());
-    }
+            reportProgress(progress_callback, ImageClusterStage::ExtractingFeatures, progress.batch_index,
+                           progress.batch_begin, progress.batch_count, progress.processed_count, progress.total_count);
+        });
 
     reportProgress(progress_callback, ImageClusterStage::Clustering, 0, 0, 0, 0, 1);
     const auto hdbscan = irt::ops::hdbscan(features.data(), static_cast<int64_t>(normalized_items.size()), feature_dim_,
@@ -420,8 +391,6 @@ ImageClusterResult ImageCluster::Impl::cluster(const fs::path &weights_file, con
     }
     result.cluster_count = static_cast<int64_t>(cluster_ids.size());
 
-    reportProgress(progress_callback, ImageClusterStage::Finished, 0, 0, 0, normalized_items.size(),
-                   normalized_items.size());
     return result;
 }
 

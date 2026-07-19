@@ -298,7 +298,9 @@ int main(int argc, char *argv[])
             }
             std::cout << std::flush;
             last_width = std::max(last_width, text.size());
-            if (progress.stage == irt::features::ImageSearchBuildStage::Finished)
+            if (progress.total_count > 0 && progress.processed_count >= progress.total_count
+                && (progress.stage == irt::features::ImageSearchBuildStage::BuildingIndex
+                    || progress.stage == irt::features::ImageSearchBuildStage::LoadingIndex))
             {
                 std::cout << std::endl;
                 last_width = 0;

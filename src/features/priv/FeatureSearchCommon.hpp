@@ -16,10 +16,86 @@
 #pragma warning(pop)
 
 #include <filesystem>
+#include <fstream>
+#include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace irt::features::priv {
+
+/**
+ * @brief 一次特征批处理完成后的进度信息。
+ */
+struct FeatureBatchProgress
+{
+    size_t batch_index{0};
+    size_t batch_begin{0};
+    size_t batch_count{0};
+    size_t processed_count{0};
+    size_t total_count{0};
+};
+
+using FeatureBatchLoader   = std::function<std::vector<float>(size_t, size_t)>;
+using FeatureBatchConsumer = std::function<void(size_t, size_t, const std::vector<float> &)>;
+using FeatureBatchProgressCallback = std::function<void(const FeatureBatchProgress &)>;
+
+/**
+ * @brief 按统一批量策略提取并消费一组特征。
+ *
+ * 该函数只负责批边界、结果尺寸校验和进度推进；图像、ROI 和聚类的特征后处理由 loader 负责。
+ */
+void processFeatureBatches(size_t item_count, size_t batch_size, int feature_dim,
+                           const FeatureBatchLoader &loader, const FeatureBatchConsumer &consumer,
+                           const FeatureBatchProgressCallback &progress_callback = {});
+
+/**
+ * @brief 校验并规范化一个图像文件路径。
+ */
+std::filesystem::path normalizeImageFilePath(const std::filesystem::path &image_path, const char *owner_name);
+
+/**
+ * @brief 返回构建阶段使用的临时特征文件路径。
+ */
+std::filesystem::path featureStorePath(const std::filesystem::path &index_path);
+
+/**
+ * @brief 构建阶段的临时特征存储。
+ *
+ * 特征先按模型 batch 写入临时文件，Faiss 建库阶段按需读取，避免图库特征在内存中完整驻留，
+ * 同时让“特征提取”和“索引构建”成为两个独立的进度阶段。
+ */
+class FeatureStore
+{
+public:
+    FeatureStore(std::filesystem::path path, size_t item_count, int feature_dim);
+    ~FeatureStore();
+
+    FeatureStore(const FeatureStore &)            = delete;
+    FeatureStore &operator=(const FeatureStore &) = delete;
+
+    void writeBatch(size_t begin, size_t count, const std::vector<float> &features);
+    void finishWriting();
+
+    int featureDim() const noexcept
+    {
+        return feature_dim_;
+    }
+
+    std::vector<float> read(size_t index) const;
+    std::vector<float> readBatch(size_t begin, size_t count) const;
+    std::vector<float> readBatch(const std::vector<size_t> &indices) const;
+
+private:
+    void validateRange(size_t begin, size_t count) const;
+
+    std::filesystem::path path_;
+    size_t                item_count_{0};
+    int                   feature_dim_{0};
+    size_t                next_write_index_{0};
+    bool                  writing_finished_{false};
+    std::ofstream         output_;
+};
 
 /**
  * @brief Faiss 索引及其可选 GPU 资源的生命周期包。

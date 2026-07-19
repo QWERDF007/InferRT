@@ -23,6 +23,7 @@ namespace irt::features {
 
 namespace priv {
 class RoiFeatureExtractor;
+struct FaissIndexBundle;
 } // namespace priv
 
 /**
@@ -57,6 +58,9 @@ public:
 private:
     void buildWithItems(const std::filesystem::path &weights_file, std::vector<RoiSearchItem> gallery_items,
                         const std::filesystem::path &index_file, RoiSearchBuildProgressCallback progress_callback);
+    void installIndex(const std::filesystem::path &weights_file, const std::filesystem::path &index_file,
+                      priv::FaissIndexBundle bundle, std::vector<int64_t> gallery_ids, int feature_dim,
+                      std::unique_ptr<priv::RoiFeatureExtractor> extractor);
     void ensureExtractor();
 
     RoiSearchConfig config_{}; ///< ROI 检索配置。
