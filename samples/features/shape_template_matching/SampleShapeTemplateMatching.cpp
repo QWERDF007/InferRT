@@ -3,6 +3,8 @@
  * @brief 形状模板匹配示例程序。
  */
 
+#include <SampleSupport.hpp>
+
 #include <cxxopts.hpp>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/features/ShapeTemplateMatcher.hpp>
@@ -20,12 +22,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-/**
- * @brief 用于在显示帮助后中断主流程。
- */
-struct HelpRequested
-{
-};
+using irt::samples::HelpRequested;
 
 /**
  * @brief 示例程序命令行参数集合。

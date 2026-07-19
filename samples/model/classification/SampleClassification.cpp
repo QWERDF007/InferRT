@@ -1,9 +1,13 @@
+#include <SampleSupport.hpp>
+
 #include <cuda_runtime_api.h>
 #include <cxxopts.hpp>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/IModel.h>
 #include <inferrt/model/Utils.hpp>
+#include <inferrt/util/File.hpp>
 #include <inferrt/util/Path.hpp>
+#include <inferrt/util/Timing.hpp>
 #include <opencv2/opencv.hpp>
 
 #include <algorithm>
@@ -24,24 +28,19 @@ namespace fs = std::filesystem;
 
 namespace {
 
-using Clock = std::chrono::steady_clock;
+using Clock = irt::util::TimingClock;
 using irt::model::checkCuda;
 using irt::model::dataTypeToString;
 using irt::model::dimsToCsv;
 using irt::model::elementCount;
 using irt::model::elementSize;
-
-double elapsedMs(Clock::time_point start, Clock::time_point end)
-{
-    return std::chrono::duration<double, std::milli>(end - start).count();
-}
-
-/**
- * @brief 用于在显示帮助后中断主流程。
- */
-struct HelpRequested
-{
-};
+using irt::samples::HelpRequested;
+using irt::util::elapsedMs;
+using irt::util::printTimingStats;
+using irt::util::sanitizeFileStem;
+using irt::util::summarizeTimings;
+using irt::util::TimingStats;
+using irt::util::writeBinaryFile;
 
 /**
  * @brief 分类 sample 的命令行参数集合。
@@ -70,91 +69,6 @@ struct IterationTiming
     }
 };
 
-struct TimingStats
-{
-    double total_ms{0.0};
-    double avg_ms{0.0};
-    double min_ms{0.0};
-    double max_ms{0.0};
-};
-
-std::string sanitizeFileStem(std::string_view value)
-{
-    std::string stem;
-    stem.reserve(value.size());
-    for (unsigned char ch : value)
-    {
-        if (std::isalnum(ch))
-        {
-            stem.push_back(static_cast<char>(ch));
-        }
-        else
-        {
-            stem.push_back('_');
-        }
-    }
-    return stem.empty() ? "tensor" : stem;
-}
-
-void writeBinaryFile(const fs::path &file_path, const void *data, size_t num_bytes)
-{
-    std::ofstream output(file_path, std::ios::binary);
-    if (!output)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to open output file: %s",
-                             file_path.string().c_str());
-    }
-    output.write(static_cast<const char *>(data), static_cast<std::streamsize>(num_bytes));
-}
-
-std::string trim(std::string value)
-{
-    auto not_space = [](unsigned char ch)
-    {
-        return !std::isspace(ch);
-    };
-    value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
-    value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
-    return value;
-}
-
-std::vector<fs::path> splitPathList(const std::string &value)
-{
-    std::vector<fs::path> paths;
-    size_t                start = 0;
-    while (start <= value.size())
-    {
-        const size_t end   = value.find_first_of(",;", start);
-        auto         token = trim(value.substr(start, end == std::string::npos ? std::string::npos : end - start));
-        if (!token.empty())
-        {
-            paths.emplace_back(std::move(token));
-        }
-        if (end == std::string::npos)
-        {
-            break;
-        }
-        start = end + 1;
-    }
-    return paths;
-}
-
-std::vector<fs::path> resolveImagePaths(const fs::path &project_root, const std::vector<fs::path> &configured_paths)
-{
-    if (configured_paths.empty())
-    {
-        return {project_root / irt::model::ImageNetUtil::kDefaultImagePath};
-    }
-
-    std::vector<fs::path> resolved;
-    resolved.reserve(configured_paths.size());
-    for (const auto &path : configured_paths)
-    {
-        resolved.push_back(path.is_absolute() ? path : project_root / path);
-    }
-    return resolved;
-}
-
 std::vector<float> preprocessBatch(const std::vector<cv::Mat> &images, const nvinfer1::Dims &input_dims)
 {
     if (input_dims.nbDims != 4 || input_dims.d[1] != 3 || input_dims.d[2] <= 0 || input_dims.d[3] <= 0)
@@ -179,24 +93,6 @@ std::vector<float> preprocessBatch(const std::vector<cv::Mat> &images, const nvi
         std::memcpy(batch_data.data() + i * image_elements, single.data(), image_elements * sizeof(float));
     }
     return batch_data;
-}
-
-TimingStats summarizeTimings(const std::vector<double> &values)
-{
-    if (values.empty())
-    {
-        return {};
-    }
-
-    const auto [min_it, max_it] = std::minmax_element(values.begin(), values.end());
-    const double total          = std::accumulate(values.begin(), values.end(), 0.0);
-    return TimingStats{total, total / static_cast<double>(values.size()), *min_it, *max_it};
-}
-
-void printTimingStats(const char *name, const TimingStats &stats)
-{
-    std::cout << ", " << name << "_total=" << stats.total_ms << " ms, " << name << "_avg=" << stats.avg_ms << " ms, "
-              << name << "_min=" << stats.min_ms << " ms, " << name << "_max=" << stats.max_ms << " ms";
 }
 
 /**
@@ -254,9 +150,9 @@ cxxopts::Options makeOptions(const char *program_name)
         "dump-dir,o", "Optional directory to dump input/output tensors for parity tests",
         cxxopts::value<std::string>()->default_value(""))("runtime",
                                                           "Model runtime: cpu, gpu:0, cuda:0, or backend:gpu-id (e.g. tensorrt:0)",
-                                                          cxxopts::value<std::string>()->default_value("tensorrt:0"))(
-        "warmup", "Warmup iterations before timing", cxxopts::value<int>()->default_value("0"))(
-        "repeat", "Timed inference iterations", cxxopts::value<int>()->default_value("1"))("h,help", "Show help");
+                                                           cxxopts::value<std::string>()->default_value("tensorrt:0"));
+    irt::samples::addTimingOptions(options, "Timed inference iterations");
+    options.add_options()("h,help", "Show help");
     return options;
 }
 
@@ -292,20 +188,13 @@ Arguments parseArguments(int argc, char *argv[])
     Arguments args;
     args.model_name   = result["model"].as<std::string>();
     args.weights_file = result["weights-file"].as<std::string>();
-    args.image_paths  = splitPathList(result["image-path"].as<std::string>());
+    args.image_paths  = irt::samples::parsePathList(result["image-path"].as<std::string>());
     args.label_file   = result["label-file"].as<std::string>();
     args.dump_dir     = result["dump-dir"].as<std::string>();
     args.runtime      = irt::model::ModelRuntime::parse(result["runtime"].as<std::string>());
-    args.warmup       = result["warmup"].as<int>();
-    args.repeat       = result["repeat"].as<int>();
-    if (args.warmup < 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--warmup must be >= 0");
-    }
-    if (args.repeat <= 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--repeat must be > 0");
-    }
+    const auto timing = irt::samples::parseTimingOptions(result);
+    args.warmup       = timing.warmup;
+    args.repeat       = timing.repeat;
     return args;
 }
 
@@ -331,7 +220,8 @@ int main(int argc, char *argv[])
         fs::path project_root = irt::util::findProjectRoot(
             argv[0], {irt::model::ImageNetUtil::kDefaultImagePath, irt::model::ImageNetUtil::kDefaultLabelPath},
             __FILE__);
-        std::vector<fs::path> image_paths = resolveImagePaths(project_root, args.image_paths);
+        std::vector<fs::path> image_paths
+            = irt::samples::resolvePaths(project_root, args.image_paths, irt::model::ImageNetUtil::kDefaultImagePath);
         if (image_paths.empty())
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "At least one image path is required");
@@ -624,10 +514,10 @@ int main(int argc, char *argv[])
         const auto end_to_end_stats = summarizeTimings(end_to_end_times_ms);
         std::cout << "Timing: build_or_load=" << elapsedMs(build_start, build_end)
                   << " ms, preprocess=" << elapsedMs(preprocess_start, preprocess_end) << " ms";
-        printTimingStats("h2d", h2d_stats);
-        printTimingStats("inference", inference_stats);
-        printTimingStats("d2h", d2h_stats);
-        printTimingStats("end_to_end", end_to_end_stats);
+        printTimingStats(std::cout, "h2d", h2d_stats);
+        printTimingStats(std::cout, "inference", inference_stats);
+        printTimingStats(std::cout, "d2h", d2h_stats);
+        printTimingStats(std::cout, "end_to_end", end_to_end_stats);
         std::cout << ", timed_loop_wall=" << elapsedMs(infer_start, infer_end)
                   << " ms, postprocess=" << elapsedMs(postprocess_start, postprocess_end) << " ms" << std::endl;
 

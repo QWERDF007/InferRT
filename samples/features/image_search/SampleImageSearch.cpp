@@ -1,3 +1,5 @@
+#include <SampleSupport.hpp>
+
 #include <cxxopts.hpp>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/features/ImageSearch.hpp>
@@ -16,19 +18,10 @@ namespace fs = std::filesystem;
 
 namespace {
 
-using Clock = std::chrono::steady_clock;
-
-double elapsedMs(Clock::time_point start, Clock::time_point end)
-{
-    return std::chrono::duration<double, std::milli>(end - start).count();
-}
-
-/**
- * @brief 用于在显示帮助后中断主流程。
- */
-struct HelpRequested
-{
-};
+using Clock = irt::util::TimingClock;
+using irt::samples::HelpRequested;
+using irt::util::elapsedMs;
+using irt::util::toLower;
 
 /**
  * @brief 图像检索 sample 的命令行参数集合。
@@ -43,13 +36,6 @@ struct Arguments
     int                              top_k{irt::features::ImageSearch::kDefaultTopK};
     bool                             rebuild_index{false};
 };
-
-std::string toLower(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    return value;
-}
 
 irt::features::ImageSearchFeatureNorm parseNorm(std::string value)
 {

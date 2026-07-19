@@ -1,3 +1,5 @@
+#include <SampleSupport.hpp>
+
 #include <cuda_runtime_api.h>
 #include <cxxopts.hpp>
 #include <inferrt/core/Exception.hpp>
@@ -25,18 +27,20 @@ namespace fs = std::filesystem;
 
 namespace {
 
-using Clock        = std::chrono::steady_clock;
+using Clock        = irt::util::TimingClock;
 using DeviceBuffer = irt::model::DeviceBuffer;
 using irt::model::checkCuda;
 using irt::model::dataTypeToString;
 using irt::model::dimsToCsv;
 using irt::model::elementCount;
 using irt::model::elementSize;
-
-double elapsedMs(Clock::time_point start, Clock::time_point end)
-{
-    return std::chrono::duration<double, std::milli>(end - start).count();
-}
+using irt::samples::HelpRequested;
+using irt::util::elapsedMs;
+using irt::util::printTimingStats;
+using irt::util::sanitizeFileStem;
+using irt::util::summarizeTimings;
+using irt::util::TimingStats;
+using irt::util::writeBinaryFile;
 
 /**
  * @brief 特征导出 sample 的命令行参数集合。
@@ -65,14 +69,6 @@ struct IterationTiming
     }
 };
 
-struct TimingStats
-{
-    double total_ms{0.0};
-    double avg_ms{0.0};
-    double min_ms{0.0};
-    double max_ms{0.0};
-};
-
 /**
  * @brief 单个输出特征张量的主机侧描述。
  */
@@ -86,92 +82,6 @@ struct TensorDump
 };
 
 const fs::path kDefaultOutputDir = "feature_dump_cpp";
-
-/**
- * @brief 用于在显示帮助后中断主流程。
- */
-struct HelpRequested
-{
-};
-
-/**
- * @brief 去除字符串首尾空白字符。
- * @param value 待处理字符串。
- * @return 去除空白后的结果。
- */
-std::string trim(std::string value)
-{
-    auto not_space = [](unsigned char ch)
-    {
-        return !std::isspace(ch);
-    };
-    value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
-    value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
-    return value;
-}
-
-/**
- * @brief 按逗号分割特征名列表，并去除每项首尾空白。
- * @param csv 逗号分隔字符串。
- * @return 特征名数组。
- */
-std::vector<std::string> splitFeatureNames(const std::string &csv)
-{
-    std::vector<std::string> feature_names;
-    size_t                   start = 0;
-    while (start <= csv.size())
-    {
-        const size_t end   = csv.find(',', start);
-        auto         token = trim(csv.substr(start, end == std::string::npos ? std::string::npos : end - start));
-        if (!token.empty())
-        {
-            feature_names.push_back(std::move(token));
-        }
-        if (end == std::string::npos)
-        {
-            break;
-        }
-        start = end + 1;
-    }
-    return feature_names;
-}
-
-std::vector<fs::path> splitPathList(const std::string &value)
-{
-    std::vector<fs::path> paths;
-    size_t                start = 0;
-    while (start <= value.size())
-    {
-        const size_t end   = value.find_first_of(",;", start);
-        auto         token = trim(value.substr(start, end == std::string::npos ? std::string::npos : end - start));
-        if (!token.empty())
-        {
-            paths.emplace_back(std::move(token));
-        }
-        if (end == std::string::npos)
-        {
-            break;
-        }
-        start = end + 1;
-    }
-    return paths;
-}
-
-std::vector<fs::path> resolveImagePaths(const fs::path &project_root, const std::vector<fs::path> &configured_paths)
-{
-    if (configured_paths.empty())
-    {
-        return {project_root / irt::model::ImageNetUtil::kDefaultImagePath};
-    }
-
-    std::vector<fs::path> resolved;
-    resolved.reserve(configured_paths.size());
-    for (const auto &path : configured_paths)
-    {
-        resolved.push_back(path.is_absolute() ? path : project_root / path);
-    }
-    return resolved;
-}
 
 std::vector<float> preprocessBatch(const std::vector<cv::Mat> &images, const nvinfer1::Dims &input_dims)
 {
@@ -198,24 +108,6 @@ std::vector<float> preprocessBatch(const std::vector<cv::Mat> &images, const nvi
     return batch_data;
 }
 
-TimingStats summarizeTimings(const std::vector<double> &values)
-{
-    if (values.empty())
-    {
-        return {};
-    }
-
-    const auto [min_it, max_it] = std::minmax_element(values.begin(), values.end());
-    const double total          = std::accumulate(values.begin(), values.end(), 0.0);
-    return TimingStats{total, total / static_cast<double>(values.size()), *min_it, *max_it};
-}
-
-void printTimingStats(const char *name, const TimingStats &stats)
-{
-    std::cout << ", " << name << "_total=" << stats.total_ms << " ms, " << name << "_avg=" << stats.avg_ms << " ms, "
-              << name << "_min=" << stats.min_ms << " ms, " << name << "_max=" << stats.max_ms << " ms";
-}
-
 /**
  * @brief 构造命令行选项定义。
  * @param program_name 可执行文件名。
@@ -231,9 +123,9 @@ cxxopts::Options makeOptions(const char *program_name)
         cxxopts::value<std::string>()->default_value(""))("output-dir,o", "Output directory",
                                                           cxxopts::value<std::string>()->default_value(""))(
         "runtime", "Model runtime: cpu, gpu:0, cuda:0, or backend:gpu-id (e.g. tensorrt:0)",
-        cxxopts::value<std::string>()->default_value("tensorrt:0"))(
-        "warmup", "Warmup iterations before timing", cxxopts::value<int>()->default_value("0"))(
-        "repeat", "Timed feature forward iterations", cxxopts::value<int>()->default_value("1"))("h,help", "Show help");
+         cxxopts::value<std::string>()->default_value("tensorrt:0"));
+    irt::samples::addTimingOptions(options, "Timed feature forward iterations");
+    options.add_options()("h,help", "Show help");
     return options;
 }
 
@@ -272,82 +164,19 @@ Arguments parseArguments(int argc, char *argv[])
     Arguments args;
     args.model_name    = result["model"].as<std::string>();
     args.weights_file  = result["weights-file"].as<std::string>();
-    args.feature_names = splitFeatureNames(result["features"].as<std::string>());
+    args.feature_names = irt::util::split(result["features"].as<std::string>());
     args.runtime       = irt::model::ModelRuntime::parse(result["runtime"].as<std::string>());
-    args.warmup        = result["warmup"].as<int>();
-    args.repeat        = result["repeat"].as<int>();
+    const auto timing  = irt::samples::parseTimingOptions(result);
+    args.warmup        = timing.warmup;
+    args.repeat        = timing.repeat;
     if (args.feature_names.empty())
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "At least one feature name is required in --features");
     }
-    if (args.warmup < 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--warmup must be >= 0");
-    }
-    if (args.repeat <= 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--repeat must be > 0");
-    }
-    args.image_paths = splitPathList(result["image-path"].as<std::string>());
+    args.image_paths = irt::samples::parsePathList(result["image-path"].as<std::string>());
     args.output_dir  = result["output-dir"].as<std::string>();
     return args;
-}
-
-/**
- * @brief 将张量名转换为适合文件名使用的安全字符串。
- * @param value 原始名称。
- * @return 处理后的文件名 stem。
- */
-std::string sanitizeFileStem(std::string_view value)
-{
-    std::string stem;
-    stem.reserve(value.size());
-    for (unsigned char ch : value)
-    {
-        if (std::isalnum(ch))
-        {
-            stem.push_back(static_cast<char>(ch));
-        }
-        else
-        {
-            stem.push_back('_');
-        }
-    }
-    return stem;
-}
-
-/**
- * @brief 将原始字节写入二进制文件。
- * @param file_path 输出文件路径。
- * @param bytes 原始字节数据。
- */
-void writeBinaryFile(const fs::path &file_path, const std::vector<char> &bytes)
-{
-    std::ofstream output(file_path, std::ios::binary);
-    if (!output)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to open output file: %s",
-                             file_path.string().c_str());
-    }
-    output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-}
-
-/**
- * @brief 将 float 向量写入二进制文件。
- * @param file_path 输出文件路径。
- * @param values float 数据。
- */
-void writeFloatBinaryFile(const fs::path &file_path, const std::vector<float> &values)
-{
-    std::ofstream output(file_path, std::ios::binary);
-    if (!output)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to open output file: %s",
-                             file_path.string().c_str());
-    }
-    output.write(reinterpret_cast<const char *>(values.data()),
-                 static_cast<std::streamsize>(values.size() * sizeof(float)));
 }
 
 /**
@@ -392,7 +221,8 @@ int main(int argc, char *argv[])
 
         const fs::path project_root
             = irt::util::findProjectRoot(argv[0], {irt::model::ImageNetUtil::kDefaultImagePath}, __FILE__);
-        const std::vector<fs::path> image_paths = resolveImagePaths(project_root, cli.image_paths);
+        const std::vector<fs::path> image_paths
+            = irt::samples::resolvePaths(project_root, cli.image_paths, irt::model::ImageNetUtil::kDefaultImagePath);
         if (image_paths.empty())
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "At least one image path is required");
@@ -498,7 +328,7 @@ int main(int argc, char *argv[])
             tensor.name      = output_name;
             tensor.dims      = model->tensorShape(output_name);
             tensor.data_type = model->tensorDataType(output_name);
-            tensor.file_name = sanitizeFileStem(output_name) + ".bin";
+            tensor.file_name = sanitizeFileStem(output_name, "tensor") + ".bin";
 
             const size_t element_count = elementCount(tensor.dims);
             const size_t num_bytes     = element_count * elementSize(tensor.data_type);
@@ -593,7 +423,7 @@ int main(int argc, char *argv[])
 
         const auto postprocess_start = Clock::now();
         fs::create_directories(output_dir);
-        writeFloatBinaryFile(output_dir / "input.bin", input_data);
+        writeBinaryFile(output_dir / "input.bin", input_data.data(), input_data.size() * sizeof(float));
 
         std::ofstream manifest(output_dir / "manifest.txt");
         if (!manifest)
@@ -628,7 +458,7 @@ int main(int argc, char *argv[])
 
         for (const auto &tensor : dumps)
         {
-            writeBinaryFile(output_dir / tensor.file_name, tensor.host_bytes);
+            writeBinaryFile(output_dir / tensor.file_name, tensor.host_bytes.data(), tensor.host_bytes.size());
             manifest << "tensor|" << tensor.name << "|" << dataTypeToString(tensor.data_type) << "|"
                      << dimsToCsv(tensor.dims) << "|" << tensor.file_name << "\n";
         }
@@ -642,10 +472,10 @@ int main(int argc, char *argv[])
         const auto end_to_end_stats = summarizeTimings(end_to_end_times_ms);
         std::cout << "Timing: build_or_load=" << elapsedMs(build_start, build_end)
                   << " ms, preprocess=" << elapsedMs(preprocess_start, preprocess_end) << " ms";
-        printTimingStats("h2d", h2d_stats);
-        printTimingStats("inference", inference_stats);
-        printTimingStats("d2h", d2h_stats);
-        printTimingStats("end_to_end", end_to_end_stats);
+        printTimingStats(std::cout, "h2d", h2d_stats);
+        printTimingStats(std::cout, "inference", inference_stats);
+        printTimingStats(std::cout, "d2h", d2h_stats);
+        printTimingStats(std::cout, "end_to_end", end_to_end_stats);
         std::cout << ", timed_loop_wall=" << elapsedMs(infer_start, infer_end)
                   << " ms, postprocess=" << elapsedMs(postprocess_start, postprocess_end) << " ms" << std::endl;
         std::cout << "Input dims=[" << dimsToCsv(input_dims) << "]" << std::endl;

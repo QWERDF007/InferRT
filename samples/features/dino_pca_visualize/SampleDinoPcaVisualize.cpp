@@ -1,3 +1,5 @@
+#include <SampleSupport.hpp>
+
 #include <cuda_runtime_api.h>
 #include <cxxopts.hpp>
 #include <inferrt/core/Exception.hpp>
@@ -28,26 +30,23 @@ namespace fs = std::filesystem;
 
 namespace {
 
-using Clock        = std::chrono::steady_clock;
+using Clock        = irt::util::TimingClock;
 using DeviceBuffer = irt::model::DeviceBuffer;
 using irt::model::checkCuda;
 using irt::model::dataTypeToString;
 using irt::model::dimsToCsv;
 using irt::model::elementCount;
 using irt::model::elementSize;
+using irt::samples::HelpRequested;
+using irt::util::elapsedMs;
+using irt::util::printTimingStats;
+using irt::util::sanitizeFileStem;
+using irt::util::summarizeTimings;
+using irt::util::TimingStats;
 
 constexpr const char *kDefaultModel   = "dinov2_vits14";
 constexpr const char *kDefaultFeature = "x_norm_patchtokens";
 const fs::path        kDefaultOutputDir{"dino_pca_visualize_cpp"};
-
-double elapsedMs(Clock::time_point start, Clock::time_point end)
-{
-    return std::chrono::duration<double, std::milli>(end - start).count();
-}
-
-struct HelpRequested
-{
-};
 
 struct Arguments
 {
@@ -74,14 +73,6 @@ struct IterationTiming
     }
 };
 
-struct TimingStats
-{
-    double total_ms{0.0};
-    double avg_ms{0.0};
-    double min_ms{0.0};
-    double max_ms{0.0};
-};
-
 struct OutputTensor
 {
     std::string                         name;
@@ -102,52 +93,6 @@ struct PatchFeatureMatrix
     int     channels{0};
 };
 
-std::string trim(std::string value)
-{
-    auto not_space = [](unsigned char ch)
-    {
-        return !std::isspace(ch);
-    };
-    value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
-    value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
-    return value;
-}
-
-std::string sanitizeFileStem(std::string_view value)
-{
-    std::string stem;
-    stem.reserve(value.size());
-    for (unsigned char ch : value)
-    {
-        if (std::isalnum(ch))
-        {
-            stem.push_back(static_cast<char>(ch));
-        }
-        else
-        {
-            stem.push_back('_');
-        }
-    }
-    return stem.empty() ? "image" : stem;
-}
-
-TimingStats summarizeTimings(const std::vector<double> &values)
-{
-    if (values.empty())
-    {
-        return {};
-    }
-    const auto [min_it, max_it] = std::minmax_element(values.begin(), values.end());
-    const double total          = std::accumulate(values.begin(), values.end(), 0.0);
-    return TimingStats{total, total / static_cast<double>(values.size()), *min_it, *max_it};
-}
-
-void printTimingStats(const char *name, const TimingStats &stats)
-{
-    std::cout << "  " << name << ": total=" << stats.total_ms << " ms, avg=" << stats.avg_ms
-              << " ms, min=" << stats.min_ms << " ms, max=" << stats.max_ms << " ms\n";
-}
-
 cxxopts::Options makeOptions(const char *program_name)
 {
     cxxopts::Options options(program_name, "Visualize DINO patch tokens with OpenCV PCA");
@@ -161,10 +106,9 @@ cxxopts::Options makeOptions(const char *program_name)
         "threshold,t", "Background mask threshold after 1D PCA normalization",
         cxxopts::value<float>()->default_value("0.5"))(
         "runtime", "Model runtime: cpu, gpu:0, cuda:0, or backend:gpu-id (e.g. tensorrt:0)",
-        cxxopts::value<std::string>()->default_value("tensorrt:0"))(
-        "warmup", "Warmup iterations before timing", cxxopts::value<int>()->default_value("0"))(
-        "repeat", "Timed feature forward iterations", cxxopts::value<int>()->default_value("1"))("h,help",
-                                                                                                 "Show help");
+        cxxopts::value<std::string>()->default_value("tensorrt:0"));
+    irt::samples::addTimingOptions(options, "Timed feature forward iterations");
+    options.add_options()("h,help", "Show help");
     return options;
 }
 
@@ -189,14 +133,15 @@ Arguments parseArguments(int argc, char *argv[])
     args.output_dir   = result["output-dir"].as<std::string>();
     args.threshold    = result["threshold"].as<float>();
     args.runtime      = irt::model::ModelRuntime::parse(result["runtime"].as<std::string>());
-    args.warmup       = result["warmup"].as<int>();
-    args.repeat       = result["repeat"].as<int>();
+    const auto timing = irt::samples::parseTimingOptions(result);
+    args.warmup       = timing.warmup;
+    args.repeat       = timing.repeat;
 
-    if (trim(args.model_name).empty())
+    if (irt::util::trim(args.model_name).empty())
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--model must not be empty");
     }
-    if (trim(args.feature_name).empty())
+    if (irt::util::trim(args.feature_name).empty())
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--feature must not be empty");
     }
@@ -204,20 +149,7 @@ Arguments parseArguments(int argc, char *argv[])
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--threshold must be in [0, 1]");
     }
-    if (args.warmup < 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--warmup must be >= 0");
-    }
-    if (args.repeat <= 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--repeat must be > 0");
-    }
     return args;
-}
-
-fs::path resolvePathUnderProject(const fs::path &project_root, const fs::path &path)
-{
-    return path.is_absolute() ? path : project_root / path;
 }
 
 fs::path resolveImagePath(const fs::path &project_root, const fs::path &configured)
@@ -226,14 +158,14 @@ fs::path resolveImagePath(const fs::path &project_root, const fs::path &configur
     {
         return project_root / irt::model::ImageNetUtil::kDefaultImagePath;
     }
-    return resolvePathUnderProject(project_root, configured);
+    return irt::samples::resolvePath(project_root, configured);
 }
 
 fs::path resolveWeightsPath(const fs::path &project_root, const Arguments &args)
 {
     if (!args.weights_file.empty())
     {
-        return resolvePathUnderProject(project_root, args.weights_file);
+        return irt::samples::resolvePath(project_root, args.weights_file);
     }
     if (args.runtime.backend() != irt::model::ModelRuntime::Backend::TensorRT)
     {
@@ -854,7 +786,7 @@ int main(int argc, char *argv[])
 
         const auto save_start = Clock::now();
         fs::create_directories(output_dir);
-        const std::string image_stem   = sanitizeFileStem(image_path.stem().string());
+        const std::string image_stem   = sanitizeFileStem(image_path.stem().string(), "image");
         const fs::path    direct_path  = output_dir / (image_stem + "_pca3.png");
         const fs::path    bg_path      = output_dir / (image_stem + "_background_zeroed_pca3.png");
         const fs::path    mask_path    = output_dir / (image_stem + "_background_mask.png");
@@ -883,10 +815,11 @@ int main(int argc, char *argv[])
         std::cout << "  build_or_load: " << elapsedMs(build_start, build_end) << " ms\n";
         std::cout << "  image_load: " << elapsedMs(image_load_start, image_load_end) << " ms\n";
         std::cout << "  preprocess: " << elapsedMs(preprocess_start, preprocess_end) << " ms\n";
-        printTimingStats("h2d", summarizeTimings(h2d_times_ms));
-        printTimingStats("inference", summarizeTimings(inference_times_ms));
-        printTimingStats("d2h", summarizeTimings(d2h_times_ms));
-        printTimingStats("end_to_end", summarizeTimings(end_to_end_times_ms));
+        printTimingStats(std::cout, "h2d", summarizeTimings(h2d_times_ms), "\n  ");
+        printTimingStats(std::cout, "inference", summarizeTimings(inference_times_ms), "\n  ");
+        printTimingStats(std::cout, "d2h", summarizeTimings(d2h_times_ms), "\n  ");
+        printTimingStats(std::cout, "end_to_end", summarizeTimings(end_to_end_times_ms), "\n  ");
+        std::cout << '\n';
         std::cout << "  timed_loop_wall: " << elapsedMs(infer_loop_start, infer_loop_end) << " ms\n";
         std::cout << "  feature_matrix: " << elapsedMs(matrix_start, matrix_end) << " ms\n";
         std::cout << "  direct_pca3: " << elapsedMs(direct_pca_start, direct_pca_end) << " ms\n";

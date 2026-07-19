@@ -188,7 +188,7 @@ build/bin/inferrt_sample_image_search.exe --help
 - 传入 `--rebuild-index` 可重新扫描图库以纳入新增图像
 - 示例通过批次完成回调打印索引构建进度
 
-详见 [`image_search/README.md`](../features/image_search/README.md)。
+详见 [`image_search/README.md`](image_search/README.md)。
 
 ## Python 模型转换
 

@@ -1,3 +1,5 @@
+#include <SampleSupport.hpp>
+
 #include <cuda_runtime_api.h>
 #include <cxxopts.hpp>
 #include <inferrt/core/Exception.hpp>
@@ -27,24 +29,23 @@ namespace fs = std::filesystem;
 
 namespace {
 
-using Clock = std::chrono::steady_clock;
+using Clock = irt::util::TimingClock;
 using irt::model::checkCuda;
 using irt::model::DeviceBuffer;
 using irt::model::dimsToCsv;
 using irt::model::elementCount;
 using irt::model::HostBuffer;
+using irt::samples::HelpRequested;
+using irt::util::elapsedMs;
+using irt::util::printTimingStats;
+using irt::util::summarizeTimings;
+using irt::util::TimingStats;
+using irt::util::toLower;
 
 constexpr std::array<int, 3> kYoloStrides{8, 16, 32};
 constexpr int                kYoloMaskChannels = 32;
 const fs::path               kDefaultImagePath{"assets/pics/dog.jpg"};
 const fs::path               kDefaultLabelPath{"assets/coco80.names"};
-
-/**
- * @brief 用于在显示帮助后中断主流程。
- */
-struct HelpRequested
-{
-};
 
 enum class SegmentationFamily
 {
@@ -116,37 +117,6 @@ struct IterationTiming
     }
 };
 
-struct TimingStats
-{
-    double total_ms{0.0};
-    double avg_ms{0.0};
-    double min_ms{0.0};
-    double max_ms{0.0};
-};
-
-double elapsedMs(Clock::time_point start, Clock::time_point end)
-{
-    return std::chrono::duration<double, std::milli>(end - start).count();
-}
-
-std::string trim(std::string value)
-{
-    auto not_space = [](unsigned char ch)
-    {
-        return !std::isspace(ch);
-    };
-    value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
-    value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
-    return value;
-}
-
-std::string toLower(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    return value;
-}
-
 bool isRFDETRSegModelName(const std::string &model_name)
 {
     const std::string normalized = toLower(model_name);
@@ -207,45 +177,6 @@ float sigmoid(float value)
 float clampFloat(float value, float lower, float upper)
 {
     return std::max(lower, std::min(value, upper));
-}
-
-TimingStats summarizeTimings(const std::vector<double> &values)
-{
-    if (values.empty())
-    {
-        return {};
-    }
-    const auto [min_it, max_it] = std::minmax_element(values.begin(), values.end());
-    const double total          = std::accumulate(values.begin(), values.end(), 0.0);
-    return TimingStats{total, total / static_cast<double>(values.size()), *min_it, *max_it};
-}
-
-void printTimingStats(const char *name, const TimingStats &stats)
-{
-    std::cout << ", " << name << "_total=" << stats.total_ms << " ms, " << name << "_avg=" << stats.avg_ms << " ms, "
-              << name << "_min=" << stats.min_ms << " ms, " << name << "_max=" << stats.max_ms << " ms";
-}
-
-std::vector<std::string> readLabels(const fs::path &label_file)
-{
-    std::vector<std::string> labels;
-    if (label_file.empty() || !fs::exists(label_file))
-    {
-        std::cout << "Label file not found, class ids will be printed: " << label_file.generic_string() << std::endl;
-        return labels;
-    }
-
-    std::ifstream input(label_file);
-    std::string   line;
-    while (std::getline(input, line))
-    {
-        line = trim(line);
-        if (!line.empty())
-        {
-            labels.push_back(line);
-        }
-    }
-    return labels;
 }
 
 std::string className(int class_id, const std::vector<std::string> &labels)
@@ -752,9 +683,9 @@ cxxopts::Options makeOptions(const char *program_name)
         "nms-threshold", "Class-wise NMS IoU threshold", cxxopts::value<float>()->default_value("0.50"))(
         "max-instances", "Maximum instances to draw", cxxopts::value<int>()->default_value("20"))(
         "runtime", "Model runtime: gpu:0, cuda:0, or backend:gpu-id (e.g. tensorrt:0)",
-        cxxopts::value<std::string>()->default_value("tensorrt:0"))(
-        "warmup", "Warmup iterations before timing", cxxopts::value<int>()->default_value("0"))(
-        "repeat", "Timed inference iterations", cxxopts::value<int>()->default_value("1"))("h,help", "Show help");
+         cxxopts::value<std::string>()->default_value("tensorrt:0"));
+    irt::samples::addTimingOptions(options, "Timed inference iterations");
+    options.add_options()("h,help", "Show help");
     return options;
 }
 
@@ -788,8 +719,9 @@ Arguments parseArguments(int argc, char *argv[])
     args.nms_threshold       = result["nms-threshold"].as<float>();
     args.max_instances       = result["max-instances"].as<int>();
     args.runtime             = irt::model::ModelRuntime::parse(result["runtime"].as<std::string>());
-    args.warmup              = result["warmup"].as<int>();
-    args.repeat              = result["repeat"].as<int>();
+    const auto timing        = irt::samples::parseTimingOptions(result);
+    args.warmup              = timing.warmup;
+    args.repeat              = timing.repeat;
     args.family              = modelFamily(args.model_name);
 
     if (args.runtime.backend() != irt::model::ModelRuntime::Backend::TensorRT || !args.runtime.isGpu())
@@ -817,14 +749,6 @@ Arguments parseArguments(int argc, char *argv[])
     if (args.max_instances <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--max-instances must be positive");
-    }
-    if (args.warmup < 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--warmup must be >= 0");
-    }
-    if (args.repeat <= 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--repeat must be > 0");
     }
     return args;
 }
@@ -1012,7 +936,7 @@ int main(int argc, char *argv[])
         const auto infer_end = Clock::now();
 
         const auto            post_start = Clock::now();
-        const auto            labels     = readLabels(label_path);
+        const auto            labels     = irt::samples::readLabelNames(label_path);
         std::vector<Instance> instances;
         if (args.family == SegmentationFamily::RFDETR)
         {
@@ -1045,10 +969,10 @@ int main(int argc, char *argv[])
         const auto end_to_end_stats = summarizeTimings(end_to_end_times_ms);
         std::cout << "Timing: build_or_load=" << elapsedMs(build_start, build_end)
                   << " ms, preprocess=" << elapsedMs(preprocess_start, preprocess_end) << " ms";
-        printTimingStats("h2d", h2d_stats);
-        printTimingStats("inference", inference_stats);
-        printTimingStats("d2h", d2h_stats);
-        printTimingStats("end_to_end", end_to_end_stats);
+        printTimingStats(std::cout, "h2d", h2d_stats);
+        printTimingStats(std::cout, "inference", inference_stats);
+        printTimingStats(std::cout, "d2h", d2h_stats);
+        printTimingStats(std::cout, "end_to_end", end_to_end_stats);
         std::cout << ", timed_loop_wall=" << elapsedMs(infer_start, infer_end)
                   << " ms, postprocess=" << elapsedMs(post_start, post_end) << " ms" << std::endl;
         return 0;

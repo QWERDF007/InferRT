@@ -1,1 +1,4 @@
 add_subdirectory(shape_template_matching)
+add_subdirectory(dino_pca_visualize)
+add_subdirectory(feature_extract)
+add_subdirectory(image_search)

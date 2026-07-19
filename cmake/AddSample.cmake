@@ -14,6 +14,7 @@ function(add_inferrt_sample SAMPLE_NAME)
     target_link_libraries(${TARGET_NAME}
         PRIVATE
             cxxopts::cxxopts
+            ${PROJECT_NAME_LOWER}_sample_common
             ${ARG_PRIVATE_LIBS}
         PUBLIC
             ${ARG_PUBLIC_LIBS}

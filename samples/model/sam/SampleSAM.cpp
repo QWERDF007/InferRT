@@ -1,3 +1,5 @@
+#include <SampleSupport.hpp>
+
 #include <cuda_runtime_api.h>
 #include <cxxopts.hpp>
 #include <inferrt/core/Exception.hpp>
@@ -24,22 +26,21 @@ namespace fs = std::filesystem;
 
 namespace {
 
-using Clock = std::chrono::steady_clock;
+using Clock = irt::util::TimingClock;
 using irt::model::checkCuda;
 using irt::model::DeviceBuffer;
 using irt::model::dimsToCsv;
 using irt::model::elementCount;
 using irt::model::HostBuffer;
+using irt::samples::HelpRequested;
+using irt::util::elapsedMs;
+using irt::util::printTimingStats;
+using irt::util::summarizeTimings;
+using irt::util::TimingStats;
+using irt::util::toLower;
 
 constexpr int  kSamMaxPoints = 16;
 const fs::path kDefaultImagePath{"assets/pics/dog.jpg"};
-
-/**
- * @brief 用于在显示帮助后中断主流程。
- */
-struct HelpRequested
-{
-};
 
 /**
  * @brief SAM 分割 sample 的命令行参数。
@@ -70,11 +71,6 @@ struct PreprocessedSAMImage
     int                resized_w; ///< padding 前的缩放宽度。
 };
 
-double elapsedMs(Clock::time_point start, Clock::time_point end)
-{
-    return std::chrono::duration<double, std::milli>(end - start).count();
-}
-
 struct IterationTiming
 {
     double h2d_ms{0.0};
@@ -87,39 +83,12 @@ struct IterationTiming
     }
 };
 
-struct TimingStats
-{
-    double total_ms{0.0};
-    double avg_ms{0.0};
-    double min_ms{0.0};
-    double max_ms{0.0};
-};
-
-TimingStats summarizeTimings(const std::vector<double> &values)
-{
-    if (values.empty())
-    {
-        return {};
-    }
-
-    const auto [min_it, max_it] = std::minmax_element(values.begin(), values.end());
-    const double total          = std::accumulate(values.begin(), values.end(), 0.0);
-    return TimingStats{total, total / static_cast<double>(values.size()), *min_it, *max_it};
-}
-
-void printTimingStats(const char *name, const TimingStats &stats)
-{
-    std::cout << ", " << name << "_total=" << stats.total_ms << " ms, " << name << "_avg=" << stats.avg_ms << " ms, "
-              << name << "_min=" << stats.min_ms << " ms, " << name << "_max=" << stats.max_ms << " ms";
-}
-
 /**
  * @brief 判断当前模型是否属于 SAM2/SAM2.1。
  */
 bool isSAM2Model(std::string model_name)
 {
-    std::transform(model_name.begin(), model_name.end(), model_name.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    model_name = toLower(model_name);
     return model_name.rfind("sam2", 0) == 0;
 }
 
@@ -128,8 +97,7 @@ bool isSAM2Model(std::string model_name)
  */
 bool isSAMFamilyModel(std::string model_name)
 {
-    std::transform(model_name.begin(), model_name.end(), model_name.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    model_name = toLower(model_name);
     return model_name.rfind("sam", 0) == 0 || model_name == "edge_sam";
 }
 
@@ -167,9 +135,9 @@ cxxopts::Options makeOptions(const char *program_name)
         cxxopts::value<std::string>()->default_value(""))("threshold", "Mask logit threshold",
                                                           cxxopts::value<float>()->default_value("0.0"))(
         "runtime", "Model runtime: cpu, gpu:0, cuda:0, or backend:gpu-id (e.g. tensorrt:0)",
-        cxxopts::value<std::string>()->default_value("tensorrt:0"))(
-        "warmup", "Warmup iterations before timing", cxxopts::value<int>()->default_value("0"))(
-        "repeat", "Timed inference iterations", cxxopts::value<int>()->default_value("1"))("h,help", "Show help");
+         cxxopts::value<std::string>()->default_value("tensorrt:0"));
+    irt::samples::addTimingOptions(options, "Timed inference iterations");
+    options.add_options()("h,help", "Show help");
     return options;
 }
 
@@ -209,8 +177,9 @@ Arguments parseArguments(int argc, char *argv[])
     args.point_x      = result["point-x"].as<float>();
     args.point_y      = result["point-y"].as<float>();
     args.runtime      = irt::model::ModelRuntime::parse(result["runtime"].as<std::string>());
-    args.warmup       = result["warmup"].as<int>();
-    args.repeat       = result["repeat"].as<int>();
+    const auto timing = irt::samples::parseTimingOptions(result);
+    args.warmup       = timing.warmup;
+    args.repeat       = timing.repeat;
     const auto box    = result["box"].as<std::string>();
     if (!box.empty())
     {
@@ -218,14 +187,6 @@ Arguments parseArguments(int argc, char *argv[])
         args.box     = parseBoxPrompt(box);
     }
     args.threshold = result["threshold"].as<float>();
-    if (args.warmup < 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--warmup must be >= 0");
-    }
-    if (args.repeat <= 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--repeat must be > 0");
-    }
     return args;
 }
 
@@ -557,10 +518,10 @@ int main(int argc, char *argv[])
         const auto end_to_end_stats = summarizeTimings(end_to_end_times_ms);
         std::cout << "Timing: build_or_load=" << elapsedMs(build_start, build_end)
                   << " ms, preprocess=" << elapsedMs(preprocess_start, preprocess_end) << " ms";
-        printTimingStats("h2d", h2d_stats);
-        printTimingStats("inference", inference_stats);
-        printTimingStats("d2h", d2h_stats);
-        printTimingStats("end_to_end", end_to_end_stats);
+        printTimingStats(std::cout, "h2d", h2d_stats);
+        printTimingStats(std::cout, "inference", inference_stats);
+        printTimingStats(std::cout, "d2h", d2h_stats);
+        printTimingStats(std::cout, "end_to_end", end_to_end_stats);
         std::cout << ", timed_loop_wall=" << elapsedMs(infer_start, infer_end)
                   << " ms, postprocess=" << elapsedMs(post_start, post_end) << " ms" << std::endl;
         return 0;

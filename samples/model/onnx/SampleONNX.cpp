@@ -1,3 +1,5 @@
+#include <SampleSupport.hpp>
+
 #include <cxxopts.hpp>
 #include <cuda_runtime_api.h>
 #include <cuda_fp16.h>
@@ -21,23 +23,13 @@ namespace fs = std::filesystem;
 
 namespace {
 
-using Clock = std::chrono::steady_clock;
+using Clock = irt::util::TimingClock;
 using irt::model::dataTypeToString;
 using irt::model::dimsToString;
 using irt::model::elementCount;
 using irt::model::elementSize;
-
-double elapsedMs(Clock::time_point start, Clock::time_point end)
-{
-    return std::chrono::duration<double, std::milli>(end - start).count();
-}
-
-/**
- * @brief 用于在显示帮助后中断主流程。
- */
-struct HelpRequested
-{
-};
+using irt::samples::HelpRequested;
+using irt::util::elapsedMs;
 
 /**
  * @brief ONNX sample 的命令行参数集合。
