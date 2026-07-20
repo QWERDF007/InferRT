@@ -1,21 +1,27 @@
 /**
  * @file SampleShapeTemplateMatching.cpp
- * @brief 形状模板匹配示例程序。
+ * @brief 形状模板匹配两阶段示例程序。
  */
 
 #include <SampleSupport.hpp>
-
 #include <cxxopts.hpp>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/features/ShapeTemplateMatcher.hpp>
-
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
+#include <memory>
+#include <numeric>
+#include <optional>
+#include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -24,50 +30,70 @@ namespace {
 
 using irt::samples::HelpRequested;
 
-/**
- * @brief 示例程序命令行参数集合。
- */
-struct Arguments
+/** @brief 示例运行阶段。 */
+enum class Stage
 {
-    fs::path template_image; ///< 模板图像路径；为空时使用合成模板。
-    fs::path source_image;   ///< 待匹配源图路径；为空时使用合成源图。
-    fs::path mask_image;     ///< 可选模板掩膜路径。
-    fs::path load_templates; ///< 已训练模板文件路径。
-    fs::path save_templates; ///< 训练后保存模板文件路径。
-    fs::path output_image{"shape_template_matching_result.png"}; ///< 可视化输出路径。
-    std::string class_id{"part"};                                ///< 模板类别 ID。
-    float threshold{85.0f};                                      ///< 匹配阈值。
-    float angle_begin{0.0f};                                     ///< 起始训练角度。
-    float angle_end{90.0f};                                      ///< 结束训练角度。
-    float angle_step{15.0f};                                     ///< 训练角度步长。
-    float scale_begin{1.0f};                                     ///< 起始训练尺度。
-    float scale_end{1.0f};                                       ///< 结束训练尺度。
-    float scale_step{1.0f};                                      ///< 训练尺度步长。
-    int   max_results{20};                                       ///< 最大输出匹配数量。
-    irt::features::ShapeTemplateMatcherConfig config;            ///< 模板匹配器配置。
+    Train,
+    Match,
 };
 
-/**
- * @brief 生成默认 L 形模板，用于无参数运行示例。
- */
-cv::Mat makeLShape(int size = 64)
+/** @brief 训练阶段命令行参数。 */
+struct TrainingArguments
 {
-    cv::Mat image(size, size, CV_8UC1, cv::Scalar(0));
-    cv::rectangle(image, cv::Rect(12, 12, 38, 9), cv::Scalar(255), cv::FILLED);
-    cv::rectangle(image, cv::Rect(12, 12, 9, 38), cv::Scalar(255), cv::FILLED);
-    return image;
-}
+    fs::path                                  template_image; ///< 模板输入图像；可以是大图。
+    fs::path                                  template_mask;  ///< 可选目标掩膜。
+    std::optional<cv::Rect>                   template_roi;   ///< 可选大图裁剪区域。
+    fs::path                                  save_templates; ///< 训练后写入的 YAML/XML 文件。
+    std::string                               class_id{"part"};
+    float                                     angle_begin{0.0f};
+    float                                     angle_end{90.0f};
+    float                                     angle_step{15.0f};
+    float                                     scale_begin{1.0f};
+    float                                     scale_end{1.0f};
+    float                                     scale_step{1.0f};
+    irt::features::ShapeTemplateMatcherConfig config;
+};
 
-/**
- * @brief 生成包含一个旋转目标的默认合成源图。
- */
-cv::Mat makeSyntheticScene(const cv::Mat &object)
+/** @brief 匹配阶段命令行参数。 */
+struct MatchingArguments
 {
-    const auto rotated = irt::features::ShapeTemplateMatcher::transform(
-        object, irt::features::ShapeTemplateVariant{90.0f, 1.0f});
-    cv::Mat scene(160, 180, CV_8UC1, cv::Scalar(0));
-    rotated.copyTo(scene(cv::Rect(72, 54, rotated.cols, rotated.rows)));
-    return scene;
+    fs::path    load_templates; ///< 训练阶段生成的 YAML/XML 文件。
+    fs::path    source_image;   ///< 待搜索大图。
+    fs::path    search_mask;    ///< 可选搜索区域掩膜。
+    fs::path    output_image{"shape_template_matching_result.png"};
+    std::string class_filter;     ///< 为空时搜索所有类别。
+    float       threshold{-1.0f}; ///< 负数时使用模板文件中保存的阈值。
+};
+
+/** @brief 计时控制参数。 */
+struct TimingArguments
+{
+    int warmup{3};  ///< 不计入统计的预热次数。
+    int repeat{10}; ///< 计入统计的重复次数。
+};
+
+/** @brief 示例程序命令行参数集合。 */
+struct Arguments
+{
+    Stage             stage{Stage::Train};
+    irt::features::ShapeTemplateMatcherVersion version{irt::features::ShapeTemplateMatcherVersion::V1};
+    TrainingArguments training;
+    MatchingArguments matching;
+    TimingArguments   timing;
+};
+
+/** @brief 解析独立实现版本名称。 */
+irt::features::ShapeTemplateMatcherVersion parseMatcherVersion(const std::string &text)
+{
+    if (text == "v0")
+    {
+        return irt::features::ShapeTemplateMatcherVersion::V0;
+    }
+    if (text == "v1")
+    {
+        return irt::features::ShapeTemplateMatcherVersion::V1;
+    }
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--version must be either v0 or v1");
 }
 
 /**
@@ -82,31 +108,111 @@ cv::Mat loadImage(const fs::path &path, int flags, const char *name)
     cv::Mat image = cv::imread(path.string(), flags);
     if (image.empty())
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to load %s: %s", name,
-                             path.string().c_str());
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to load %s: %s", name, path.string().c_str());
     }
     return image;
 }
 
 /**
- * @brief 构造命令行选项定义。
+ * @brief 解析 ``x,y,width,height`` 格式的模板裁剪区域。
+ */
+cv::Rect parseRoi(const std::string &text)
+{
+    std::istringstream stream(text);
+    cv::Rect           roi;
+    char               comma1 = 0;
+    char               comma2 = 0;
+    char               comma3 = 0;
+    std::string        trailing;
+    if (!(stream >> roi.x >> comma1 >> roi.y >> comma2 >> roi.width >> comma3 >> roi.height) || comma1 != ','
+        || comma2 != ',' || comma3 != ',' || (stream >> trailing))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "template-roi must use the format x,y,width,height");
+    }
+    return roi;
+}
+
+/**
+ * @brief 校验裁剪区域是否完全位于输入图像内。
+ */
+void validateRoi(const cv::Rect &roi, const cv::Size &image_size)
+{
+    if (roi.x < 0 || roi.y < 0 || roi.width <= 0 || roi.height <= 0 || roi.x >= image_size.width
+        || roi.y >= image_size.height || roi.width > image_size.width - roi.x || roi.height > image_size.height - roi.y)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "template-roi must be fully inside the template image");
+    }
+}
+
+/** @brief 为输出文件创建父目录。 */
+void createParentDirectory(const fs::path &path)
+{
+    if (!path.parent_path().empty())
+    {
+        fs::create_directories(path.parent_path());
+    }
+}
+
+/**
+ * @brief 输出以毫秒为单位的重复执行耗时统计。
+ */
+void printTimingStats(const char *operation, int warmup, const std::vector<double> &samples_ms)
+{
+    if (samples_ms.empty())
+    {
+        return;
+    }
+
+    std::vector<double> sorted = samples_ms;
+    std::sort(sorted.begin(), sorted.end());
+    const double total  = std::accumulate(samples_ms.begin(), samples_ms.end(), 0.0);
+    const double mean   = total / static_cast<double>(samples_ms.size());
+    const double median = sorted.size() % 2 == 0 ? (sorted[sorted.size() / 2 - 1] + sorted[sorted.size() / 2]) * 0.5
+                                                 : sorted[sorted.size() / 2];
+    const double squared_error      = std::accumulate(samples_ms.begin(), samples_ms.end(), 0.0,
+                                                      [mean](double sum, double value)
+                                                      {
+                                                     const double delta = value - mean;
+                                                     return sum + delta * delta;
+                                                 });
+    const double standard_deviation = std::sqrt(squared_error / static_cast<double>(samples_ms.size()));
+
+    std::ostringstream output;
+    output << std::fixed << std::setprecision(3) << "timing (" << operation << "): warmup=" << warmup
+           << ", repeats=" << samples_ms.size() << ", total=" << total << " ms, avg=" << mean
+           << " ms, median=" << median << " ms, min=" << sorted.front() << " ms, max=" << sorted.back()
+           << " ms, stddev=" << standard_deviation << " ms";
+    std::cout << output.str() << std::endl;
+}
+
+/**
+ * @brief 构造按运行阶段分组的命令行选项定义。
  */
 cxxopts::Options makeOptions(const char *program_name)
 {
-    cxxopts::Options options(program_name, "Shape-based template matching sample");
-    options.add_options()("template", "Template image. If omitted, a synthetic template is used.",
-                          cxxopts::value<std::string>()->default_value(""))(
-        "source", "Source image. If omitted, a synthetic source is used.",
+    cxxopts::Options options(program_name, "Two-stage shape-based template matching sample");
+
+    options.add_options("Stage")("mode", "Stage to run: train or match (required)",
+                                 cxxopts::value<std::string>()->default_value(""))("h,help", "Show help");
+
+    options.add_options("Implementation")(
+        "version", "Matcher implementation: v0 (original scalar) or v1 (AVX2 accelerated)",
+        cxxopts::value<std::string>()->default_value("v1"));
+
+    options.add_options("Timing")("warmup", "Warmup iterations for the selected stage; excluded from timing",
+                                  cxxopts::value<int>()->default_value("3"))(
+        "repeat", "Timed repetitions for the selected stage", cxxopts::value<int>()->default_value("10"));
+
+    options.add_options("Training")("template", "Training image; it may be a cropped template or a larger image",
+                                    cxxopts::value<std::string>()->default_value(""))(
+        "template-roi", "Optional crop rectangle in the training image: x,y,width,height",
         cxxopts::value<std::string>()->default_value(""))(
-        "mask", "Optional template mask image", cxxopts::value<std::string>()->default_value(""))(
-        "load-templates", "Load trained templates from YAML/XML instead of training",
-        cxxopts::value<std::string>()->default_value(""))(
-        "save-templates", "Save trained templates to YAML/XML",
-        cxxopts::value<std::string>()->default_value(""))(
-        "output,o", "Output visualization image",
-        cxxopts::value<std::string>()->default_value("shape_template_matching_result.png"))(
-        "class-id,c", "Template class id", cxxopts::value<std::string>()->default_value("part"))(
-        "threshold,t", "Match threshold in [0, 100]", cxxopts::value<float>()->default_value("85"))(
+        "template-mask", "Optional object mask; full-image or cropped-template size is accepted",
+        cxxopts::value<std::string>()->default_value(""))("save-templates",
+                                                          "Output YAML/XML path for the trained templates",
+                                                          cxxopts::value<std::string>()->default_value(""))(
+        "class-id,c", "Class id written to the template file", cxxopts::value<std::string>()->default_value("part"))(
         "angle-begin", "First training angle in degrees", cxxopts::value<float>()->default_value("0"))(
         "angle-end", "Last training angle in degrees", cxxopts::value<float>()->default_value("90"))(
         "angle-step", "Training angle step in degrees", cxxopts::value<float>()->default_value("15"))(
@@ -114,9 +220,20 @@ cxxopts::Options makeOptions(const char *program_name)
         "scale-end", "Last training scale", cxxopts::value<float>()->default_value("1"))(
         "scale-step", "Training scale step", cxxopts::value<float>()->default_value("1"))(
         "features", "Maximum feature points per template", cxxopts::value<int>()->default_value("96"))(
-        "max-results", "Maximum displayed matches", cxxopts::value<int>()->default_value("20"))(
-        "nms", "Per-class NMS IoU threshold; negative disables NMS",
-        cxxopts::value<float>()->default_value("0.3"))("h,help", "Show help");
+        "max-results", "Matching result limit saved in the template file", cxxopts::value<int>()->default_value("20"))(
+        "nms", "Matching NMS IoU threshold saved in the template file; negative disables NMS",
+        cxxopts::value<float>()->default_value("0.3"));
+
+    options.add_options("Matching")("load-templates", "Input YAML/XML template file",
+                                    cxxopts::value<std::string>()->default_value(""))(
+        "source", "Source image to search", cxxopts::value<std::string>()->default_value(""))(
+        "search-mask", "Optional source-image search mask", cxxopts::value<std::string>()->default_value(""))(
+        "class-filter", "Only search this class id; empty searches every class",
+        cxxopts::value<std::string>()->default_value(""))(
+        "threshold,t", "Match threshold in [0, 100]; negative uses the value saved in the template file",
+        cxxopts::value<float>()->default_value("-1"))(
+        "output,o", "Output visualization image",
+        cxxopts::value<std::string>()->default_value("shape_template_matching_result.png"));
     return options;
 }
 
@@ -134,29 +251,88 @@ Arguments parseArguments(int argc, char *argv[])
     }
 
     Arguments args;
-    args.template_image              = result["template"].as<std::string>();
-    args.source_image                = result["source"].as<std::string>();
-    args.mask_image                  = result["mask"].as<std::string>();
-    args.load_templates              = result["load-templates"].as<std::string>();
-    args.save_templates              = result["save-templates"].as<std::string>();
-    args.output_image                = result["output"].as<std::string>();
-    args.class_id                    = result["class-id"].as<std::string>();
-    args.threshold                   = result["threshold"].as<float>();
-    args.angle_begin                 = result["angle-begin"].as<float>();
-    args.angle_end                   = result["angle-end"].as<float>();
-    args.angle_step                  = result["angle-step"].as<float>();
-    args.scale_begin                 = result["scale-begin"].as<float>();
-    args.scale_end                   = result["scale-end"].as<float>();
-    args.scale_step                  = result["scale-step"].as<float>();
-    args.max_results                 = result["max-results"].as<int>();
-    args.config.num_features         = result["features"].as<int>();
-    args.config.min_features         = std::min(8, std::max(1, args.config.num_features));
-    args.config.weak_threshold       = 10.0f;
-    args.config.strong_threshold     = 20.0f;
-    args.config.match_threshold      = args.threshold;
-    args.config.max_results          = args.max_results;
-    args.config.nms_threshold        = result["nms"].as<float>();
-    args.config.max_label_difference = 1;
+    args.version       = parseMatcherVersion(result["version"].as<std::string>());
+    args.timing.warmup = result["warmup"].as<int>();
+    args.timing.repeat = result["repeat"].as<int>();
+    if (args.timing.warmup < 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--warmup must be non-negative");
+    }
+    if (args.timing.repeat <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--repeat must be positive");
+    }
+
+    const auto mode = result["mode"].as<std::string>();
+    if (mode == "train")
+    {
+        args.stage                           = Stage::Train;
+        auto &training                       = args.training;
+        training.template_image              = result["template"].as<std::string>();
+        training.template_mask               = result["template-mask"].as<std::string>();
+        training.save_templates              = result["save-templates"].as<std::string>();
+        training.class_id                    = result["class-id"].as<std::string>();
+        training.angle_begin                 = result["angle-begin"].as<float>();
+        training.angle_end                   = result["angle-end"].as<float>();
+        training.angle_step                  = result["angle-step"].as<float>();
+        training.scale_begin                 = result["scale-begin"].as<float>();
+        training.scale_end                   = result["scale-end"].as<float>();
+        training.scale_step                  = result["scale-step"].as<float>();
+        training.config.num_features         = result["features"].as<int>();
+        training.config.min_features         = std::min(8, std::max(1, training.config.num_features));
+        training.config.weak_threshold       = 10.0f;
+        training.config.strong_threshold     = 20.0f;
+        training.config.match_threshold      = 85.0f;
+        training.config.max_results          = result["max-results"].as<int>();
+        training.config.nms_threshold        = result["nms"].as<float>();
+        training.config.max_label_difference = 1;
+
+        const auto roi = result["template-roi"].as<std::string>();
+        if (!roi.empty())
+        {
+            training.template_roi = parseRoi(roi);
+        }
+        if (training.template_image.empty())
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--template is required in train mode");
+        }
+        if (training.save_templates.empty())
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--save-templates is required in train mode");
+        }
+        if (training.class_id.empty())
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--class-id must not be empty");
+        }
+    }
+    else if (mode == "match")
+    {
+        args.stage              = Stage::Match;
+        auto &matching          = args.matching;
+        matching.load_templates = result["load-templates"].as<std::string>();
+        matching.source_image   = result["source"].as<std::string>();
+        matching.search_mask    = result["search-mask"].as<std::string>();
+        matching.class_filter   = result["class-filter"].as<std::string>();
+        matching.threshold      = result["threshold"].as<float>();
+        matching.output_image   = result["output"].as<std::string>();
+        if (matching.load_templates.empty())
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--load-templates is required in match mode");
+        }
+        if (matching.source_image.empty())
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--source is required in match mode");
+        }
+        if (!std::isfinite(matching.threshold) || matching.threshold > 100.0f)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "--threshold must be finite and no greater than 100");
+        }
+    }
+    else
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--mode must be either train or match");
+    }
     return args;
 }
 
@@ -172,84 +348,163 @@ void drawMatches(cv::Mat &image, const std::vector<irt::features::ShapeTemplateM
     for (const auto &match : matches)
     {
         const cv::Rect box(match.x, match.y, match.width, match.height);
-        cv::rectangle(image, box, cv::Scalar(0, 220, 255), 2);
-        const std::string label = match.class_id + " "
-                                + std::to_string(static_cast<int>(std::round(match.similarity))) + "% a="
-                                + std::to_string(static_cast<int>(std::round(match.angle_degrees)));
+        cv::rectangle(image, box, cv::Scalar(0, 255, 0), 2);
+        const std::string label = match.class_id + " " + std::to_string(static_cast<int>(std::round(match.similarity)))
+                                + "% a=" + std::to_string(static_cast<int>(std::round(match.angle_degrees)));
         cv::putText(image, label, cv::Point(match.x, std::max(12, match.y - 4)), cv::FONT_HERSHEY_SIMPLEX, 0.45,
-                    cv::Scalar(0, 220, 255), 1, cv::LINE_AA);
+                    cv::Scalar(0, 0, 255), 1, cv::LINE_AA);
     }
+}
+
+/** @brief 执行模板训练、统计核心训练耗时并保存模板文件。 */
+void runTraining(const TrainingArguments &args, const TimingArguments &timing,
+                 irt::features::ShapeTemplateMatcherVersion version)
+{
+    const cv::Mat  full_image = loadImage(args.template_image, cv::IMREAD_UNCHANGED, "template image");
+    const cv::Rect roi        = args.template_roi.value_or(cv::Rect(0, 0, full_image.cols, full_image.rows));
+    validateRoi(roi, full_image.size());
+
+    const cv::Mat template_image = full_image(roi).clone();
+    cv::Mat       template_mask;
+    if (!args.template_mask.empty())
+    {
+        const cv::Mat mask = loadImage(args.template_mask, cv::IMREAD_GRAYSCALE, "template mask");
+        if (mask.size() == full_image.size())
+        {
+            template_mask = mask(roi).clone();
+        }
+        else if (mask.size() == template_image.size())
+        {
+            template_mask = mask;
+        }
+        else
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "template mask must match either the training image or the cropped template size");
+        }
+    }
+
+    const auto variants = irt::features::makeShapeTemplateAngleScaleVariants(
+        args.angle_begin, args.angle_end, args.angle_step, args.scale_begin, args.scale_end, args.scale_step);
+
+    for (int iteration = 0; iteration < timing.warmup; ++iteration)
+    {
+        auto warmup_matcher = irt::features::createShapeTemplateMatcher(version, args.config);
+        (void)warmup_matcher->addTemplateVariants(template_image, args.class_id, template_mask, variants);
+    }
+
+    std::unique_ptr<irt::features::IShapeTemplateMatcher> trained_matcher;
+    std::vector<int>                                    template_ids;
+    std::vector<double>                                 samples_ms;
+    samples_ms.reserve(static_cast<size_t>(timing.repeat));
+    for (int iteration = 0; iteration < timing.repeat; ++iteration)
+    {
+        auto       matcher = irt::features::createShapeTemplateMatcher(version, args.config);
+        const auto start   = std::chrono::steady_clock::now();
+        auto ids = matcher->addTemplateVariants(template_image, args.class_id, template_mask, variants);
+        const auto stop = std::chrono::steady_clock::now();
+        samples_ms.push_back(std::chrono::duration<double, std::milli>(stop - start).count());
+        if (iteration == timing.repeat - 1)
+        {
+            trained_matcher = std::move(matcher);
+            template_ids    = std::move(ids);
+        }
+    }
+
+    createParentDirectory(args.save_templates);
+    trained_matcher->save(args.save_templates);
+
+    std::cout << "stage: train" << std::endl;
+    std::cout << "version: " << irt::features::shapeTemplateMatcherVersionName(version) << std::endl;
+    std::cout << "template input: " << fs::absolute(args.template_image).string() << std::endl;
+    std::cout << "template roi: (" << roi.x << "," << roi.y << "," << roi.width << "," << roi.height << ")"
+              << std::endl;
+    std::cout << "templates: " << template_ids.size() << std::endl;
+    std::cout << "template file: " << fs::absolute(args.save_templates).string() << std::endl;
+    printTimingStats("train/addTemplateVariants", timing.warmup, samples_ms);
+}
+
+/** @brief 加载模板文件，统计匹配耗时并保存可视化结果。 */
+void runMatching(const MatchingArguments &args, const TimingArguments &timing,
+                 irt::features::ShapeTemplateMatcherVersion version)
+{
+    auto matcher = irt::features::createShapeTemplateMatcher(version);
+    matcher->load(args.load_templates);
+
+    cv::Mat source = loadImage(args.source_image, cv::IMREAD_UNCHANGED, "source image");
+    cv::Mat search_mask;
+    if (!args.search_mask.empty())
+    {
+        search_mask = loadImage(args.search_mask, cv::IMREAD_GRAYSCALE, "search mask");
+    }
+
+    std::vector<std::string> class_ids;
+    if (!args.class_filter.empty())
+    {
+        class_ids.push_back(args.class_filter);
+    }
+
+    for (int iteration = 0; iteration < timing.warmup; ++iteration)
+    {
+        (void)matcher->match(source, args.threshold, class_ids, search_mask);
+    }
+
+    std::vector<irt::features::ShapeTemplateMatch> matches;
+    std::vector<double>                            samples_ms;
+    samples_ms.reserve(static_cast<size_t>(timing.repeat));
+    for (int iteration = 0; iteration < timing.repeat; ++iteration)
+    {
+        const auto start           = std::chrono::steady_clock::now();
+        auto current_matches = matcher->match(source, args.threshold, class_ids, search_mask);
+        const auto stop            = std::chrono::steady_clock::now();
+        samples_ms.push_back(std::chrono::duration<double, std::milli>(stop - start).count());
+        if (iteration == timing.repeat - 1)
+        {
+            matches = std::move(current_matches);
+        }
+    }
+
+    drawMatches(source, matches);
+    createParentDirectory(args.output_image);
+    if (!cv::imwrite(args.output_image.string(), source))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to write output image: %s",
+                             args.output_image.string().c_str());
+    }
+
+    std::cout << "stage: match" << std::endl;
+    std::cout << "version: " << irt::features::shapeTemplateMatcherVersionName(version) << std::endl;
+    std::cout << "templates: " << matcher->numTemplates() << std::endl;
+    std::cout << "matches: " << matches.size() << std::endl;
+    for (size_t i = 0; i < matches.size(); ++i)
+    {
+        const auto &match = matches[i];
+        std::cout << (i + 1) << ". class=" << match.class_id << " template=" << match.template_id
+                  << " score=" << match.similarity << " box=(" << match.x << "," << match.y << "," << match.width << ","
+                  << match.height << ") angle=" << match.angle_degrees << " scale=" << match.scale << std::endl;
+    }
+    std::cout << "output: " << fs::absolute(args.output_image).string() << std::endl;
+    printTimingStats("match/IShapeTemplateMatcher::match", timing.warmup, samples_ms);
 }
 
 } // namespace
 
 /**
- * @brief 训练或加载形状模板，在源图中匹配并保存可视化结果。
+ * @brief 根据 ``--mode`` 执行模板训练或模板匹配。
  */
 int main(int argc, char *argv[])
 {
     try
     {
         const auto args = parseArguments(argc, argv);
-
-        cv::Mat templ;
-        cv::Mat source;
-        cv::Mat mask;
-        if (args.template_image.empty() && args.source_image.empty())
+        if (args.stage == Stage::Train)
         {
-            templ  = makeLShape();
-            source = makeSyntheticScene(templ);
+            runTraining(args.training, args.timing, args.version);
         }
         else
         {
-            templ  = args.template_image.empty() ? makeLShape() : loadImage(args.template_image, cv::IMREAD_UNCHANGED,
-                                                                            "template image");
-            source = loadImage(args.source_image, cv::IMREAD_UNCHANGED, "source image");
-            if (!args.mask_image.empty())
-            {
-                mask = loadImage(args.mask_image, cv::IMREAD_GRAYSCALE, "template mask");
-            }
+            runMatching(args.matching, args.timing, args.version);
         }
-
-        irt::features::ShapeTemplateMatcher matcher(args.config);
-        if (!args.load_templates.empty())
-        {
-            matcher.load(args.load_templates);
-        }
-        else
-        {
-            const auto variants = irt::features::ShapeTemplateMatcher::makeAngleScaleVariants(
-                args.angle_begin, args.angle_end, args.angle_step, args.scale_begin, args.scale_end, args.scale_step);
-            matcher.addTemplateVariants(templ, args.class_id, mask, variants);
-            if (!args.save_templates.empty())
-            {
-                matcher.save(args.save_templates);
-            }
-        }
-
-        auto matches = matcher.match(source, args.threshold, {args.class_id});
-        drawMatches(source, matches);
-        if (!args.output_image.parent_path().empty())
-        {
-            fs::create_directories(args.output_image.parent_path());
-        }
-        if (!cv::imwrite(args.output_image.string(), source))
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to write output image: %s",
-                                 args.output_image.string().c_str());
-        }
-
-        std::cout << "templates: " << matcher.numTemplates(args.class_id) << std::endl;
-        std::cout << "matches: " << matches.size() << std::endl;
-        for (size_t i = 0; i < matches.size(); ++i)
-        {
-            const auto &match = matches[i];
-            std::cout << (i + 1) << ". class=" << match.class_id << " template=" << match.template_id
-                      << " score=" << match.similarity << " box=(" << match.x << "," << match.y << ","
-                      << match.width << "," << match.height << ") angle=" << match.angle_degrees
-                      << " scale=" << match.scale << std::endl;
-        }
-        std::cout << "output: " << fs::absolute(args.output_image).string() << std::endl;
         return 0;
     }
     catch (const HelpRequested &)

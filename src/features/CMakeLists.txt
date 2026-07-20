@@ -3,6 +3,16 @@ if(NOT Faiss_LIBS)
     message(FATAL "Faiss not found, can't build features module")
 endif()
 
+# v0 保持可在非 AVX2 CPU 上运行；只为 v1 的 intrinsic 内核启用 AVX2，避免把该 ISA
+# 要求扩散到整个库、示例和其他模块。未来 AVX512 版本可按同样方式增加单独的源文件选项。
+if(MSVC)
+    set_source_files_properties(priv/ShapeTemplateMatcherAvx2Kernel.cpp
+        PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+else()
+    set_source_files_properties(priv/ShapeTemplateMatcherAvx2Kernel.cpp
+        PROPERTIES COMPILE_OPTIONS "-mavx2")
+endif()
+
 # 图像检索需要 OpenCV 做图片读取/预处理，CUDA 支持 TensorRT/GPU Faiss 路径，
 # inferrt_model 提供特征提取模型抽象。
 add_plugin_library(features

@@ -1,21 +1,21 @@
 /**
- * @file ScalarShapeTemplateMatcher.cpp
- * @brief v0 原始标量形状模板匹配器实现。
+ * @file Avx2ShapeTemplateMatcher.cpp
+ * @brief v1 AVX2 形状模板匹配器实现。
  */
 
 #include "priv/ShapeTemplateMatcherEngine.hpp"
 
 #include <inferrt/features/ShapeTemplateMatcher.hpp>
-#include <inferrt/features/v0/ShapeTemplateMatcher.hpp>
+#include <inferrt/features/v1/ShapeTemplateMatcher.hpp>
 
 #include <memory>
 #include <utility>
 
-namespace irt::features::v0 {
+namespace irt::features::v1 {
 
 ShapeTemplateMatcher::ShapeTemplateMatcher(ShapeTemplateMatcherConfig config)
     : impl_(std::make_unique<detail::ShapeTemplateMatcherEngine>(
-          std::move(config), detail::createShapeTemplateMatcherKernel(detail::ShapeTemplateMatcherBackend::Scalar)))
+          std::move(config), detail::createShapeTemplateMatcherKernel(detail::ShapeTemplateMatcherBackend::Avx2)))
 {
 }
 
@@ -122,4 +122,4 @@ cv::Mat ShapeTemplateMatcher::transform(const cv::Mat &image, ShapeTemplateVaria
     return transformShapeTemplateImage(image, variant, border_value);
 }
 
-} // namespace irt::features::v0
+} // namespace irt::features::v1

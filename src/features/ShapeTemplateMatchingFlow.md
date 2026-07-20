@@ -1,7 +1,9 @@
 # ShapeTemplateMatcher 形状模板匹配完整流程
 
-本文档说明 `src/features` 中形状模板匹配模块的端到端流程。核心入口是
-`irt::features::ShapeTemplateMatcher`，它参考 `shape_based_matching`/LINEMOD 的思路：
+本文档说明 `src/features` 中形状模板匹配模块的端到端流程。公共入口是
+`IShapeTemplateMatcher` 和版本工厂；具体实现为
+`irt::features::v0::ShapeTemplateMatcher`（原始标量）与
+`irt::features::v1::ShapeTemplateMatcher`（AVX2）。它参考 `shape_based_matching`/LINEMOD 的思路：
 训练阶段把目标轮廓表示为稀疏的梯度方向特征点，匹配阶段在源图中滑窗统计这些特征点平移后的方向一致性，
 最后通过阈值、类别过滤、同类别 NMS 和最大数量限制返回匹配框。
 
@@ -9,11 +11,17 @@
 
 ## 1. 主要文件
 
-- `include/inferrt/features/ShapeTemplateMatcher.hpp`：公共 API、配置、模板信息、匹配结果和工具函数声明。
+- `include/inferrt/features/ShapeTemplateMatcherTypes.hpp`：配置、模板信息、匹配结果和版本枚举。
+- `include/inferrt/features/IShapeTemplateMatcher.hpp`：版本无关的公共接口。
+- `include/inferrt/features/ShapeTemplateMatcher.hpp`：版本工厂和公共工具函数。
+- `include/inferrt/features/v0/ShapeTemplateMatcher.hpp`：原始标量版本的具体 API。
+- `include/inferrt/features/v1/ShapeTemplateMatcher.hpp`：AVX2 版本的具体 API。
 - `include/inferrt/features/ShapeTemplateMatcher.h`：C 风格头文件转发，便于统一 include 入口。
-- `ShapeTemplateMatcher.cpp`：公共 API 的 PIMPL 转发，以及角度/尺度变体生成和中心仿射变换工具。
-- `priv/ShapeTemplateMatcherImpl.hpp`：`ShapeTemplateMatcher::Impl` 私有实现声明。
-- `priv/ShapeTemplateMatcherImpl.cpp`：图像校验、掩膜规范化、梯度量化、训练选点、响应图构建、滑窗匹配、NMS 和序列化实现。
+- `ShapeTemplateMatcher.cpp`：版本工厂，以及角度/尺度变体与中心仿射变换工具的公共转发。
+- `ScalarShapeTemplateMatcher.cpp` / `Avx2ShapeTemplateMatcher.cpp`：v0、v1 独立包装器；两者不会相互包含或调用。
+- `priv/ShapeTemplateMatcherEngine.hpp`：版本无关调度引擎和可替换热点内核接口。
+- `priv/ShapeTemplateMatcherImpl.cpp`：图像校验、掩膜规范化、训练选点、响应图构建、滑窗匹配、NMS 和序列化引擎。
+- `priv/ShapeTemplateMatcherScalarKernel.cpp` / `priv/ShapeTemplateMatcherAvx2Kernel.cpp`：各版本独立的标量、AVX2 内核。
 - `samples/features/shape_template_matching/SampleShapeTemplateMatching.cpp`：训练、保存、加载、匹配和结果可视化示例。
 - `tests/features/TestShapeTemplateMatcher.cpp`：配置校验、训练失败、平移匹配、非 SIMD 对齐尺寸、类别过滤、NMS、旋转变体、保存加载和文件 API 测试。
 
@@ -45,7 +53,7 @@ config.match_threshold      = 85.0f;
 config.nms_threshold        = 0.3f;
 config.max_results          = 20;
 
-irt::features::ShapeTemplateMatcher matcher(config);
+irt::features::v1::ShapeTemplateMatcher matcher(config);
 ```
 
 ## 3. 输入数据要求
@@ -112,7 +120,7 @@ const int template_id = matcher.addTemplateFile("part.png", "part", "part_mask.p
 目标存在角度或尺度变化时，推荐用模板变体显式训练多份模板：
 
 ```cpp
-const auto variants = irt::features::ShapeTemplateMatcher::makeAngleScaleVariants(
+const auto variants = irt::features::makeShapeTemplateAngleScaleVariants(
     0.0f, 180.0f, 15.0f, 0.9f, 1.1f, 0.1f);
 
 const auto ids = matcher.addTemplateVariants(template_image, "part", object_mask, variants);
@@ -150,7 +158,7 @@ matcher.save("shape_templates.yaml");
 下次直接加载：
 
 ```cpp
-irt::features::ShapeTemplateMatcher matcher;
+irt::features::v1::ShapeTemplateMatcher matcher;
 matcher.load("shape_templates.yaml");
 ```
 
@@ -216,25 +224,36 @@ similarity = 100 * sum(response(feature_i)) / (denominator_per_feature * feature
 - `class_id` / `template_id`：命中的类别和模板。
 - `angle_degrees` / `scale`：命中模板的训练变体元数据。
 
-## 8. 指令集加速路径
+## 8. 版本与指令集抽象
 
-当前实现要求使用 AVX2 编译模板匹配模块。MSVC 目标使用 `/arch:AVX2`，GCC/Clang 目标使用 `-mavx2`；
-非 AVX2 编译环境不再保留旧的 SSE2/标量 fallback。
+公共层将“如何管理模板和调度匹配”与“如何执行指令集热点”分开：
 
-当前自定义 AVX2 覆盖三段热点：
+```text
+IShapeTemplateMatcher / createShapeTemplateMatcher(version)
+                  │
+        v0 wrapper          v1 wrapper
+        (Scalar)             (AVX2)
+                  │            │
+                  └──── ShapeTemplateMatcherEngine ────┘
+                                  │
+                   ShapeTemplateMatcherKernel 策略接口
+```
 
-- 训练和匹配共用的方向量化：`fillQuantizedLabelsAvx2()` 每次处理 8 个 `float` 幅值/角度，合并幅值阈值和掩膜条件。
-- 训练候选点收集：`collectCandidatesAvx2()` 每次先过滤 32 个像素，完全无候选的块直接跳过，只对有效 lane 创建候选点。
-- 匹配响应图构建：`fillResponseMapAvx2()` 每次处理 32 个方向标签，使用 AVX2 字节 shuffle 直接完成方向响应查表。
+- `ShapeTemplateMatcherEngine` 是版本无关核心，只负责输入校验、模板管理、变体训练、序列化、响应数据调度、并行、NMS 和结果排序。
+- `ShapeTemplateMatcherKernel` 定义可替换热点：是否物化响应图、方向标签量化、训练候选点收集、单方向响应图构建及单模板滑窗评分。
+- v0 注入 `Scalar` kernel，不使用显式 SIMD intrinsic，并保持 `shape_based_matching` 风格的标量响应图/逐窗口基线；v1 注入 `Avx2` kernel，并在创建时检查 CPU 是否支持 AVX2。两个公开类不会相互包含、相互继承或相互调用。
+- 两条路径产生相同的 `ShapeTemplateInfo`、`ShapeTemplateMatch` 和 YAML/XML 模板格式，因此可交叉加载与对照测试。
 
-OpenCV 的 `Sobel`、`cartToPolar`、`warpAffine` 自身也会按 OpenCV 构建配置使用可用优化。模块层面的自定义指令集加速主要减少：
+v1 的 AVX2 内核覆盖四段热点：每次处理 8 个 `float` 的方向量化、每次处理 32 个像素的候选点过滤、方向标签字节 shuffle 查表，以及批量滑窗打分。评分时按当前源图的方向响应均值重排特征；每累计 4 个特征即以理论上界淘汰不可能达标的整组候选。常见的分子上界不超过 255 时，v1 用 8-bit 累加一次处理 32 个相邻候选；较大但仍安全的配置使用 16-bit/16-lane 路径，`scan_step != 1` 或更大累计范围会精确回退到标量评分。v1 正常路径直接读取量化标签并查表，不再物化 8 张响应图；v0 保持物化响应图的标量基线。CMake 只为该内核源文件开启 AVX2，不会把 CPU 指令集要求扩散到 v0 或其他模块。OpenCV 的 `Sobel`、`cartToPolar`、`warpAffine` 仍会按其构建配置使用优化。
 
-- 大图方向量化时逐像素判断的开销。
-- 训练阶段强/弱阈值候选扫描的开销。
-- 匹配前响应图预计算的逐像素查表开销。
+后续扩展 AVX512 时无需修改引擎流程：
 
-滑窗打分阶段目前保持标量累加，因为模板特征点是稀疏且坐标不连续的访问模式。性能主要由
-`模板数量 x 滑窗数量 x 每模板特征点数` 决定。
+1. 新增 `ShapeTemplateMatcherAvx512Kernel.cpp`，实现同一个 `ShapeTemplateMatcherKernel` 的全部热点方法，尤其是批量评分。
+2. 在内部 `ShapeTemplateMatcherBackend` 增加 `Avx512`，并在 kernel 工厂注册它。
+3. 新增 `v2::ShapeTemplateMatcher` 与公共 `ShapeTemplateMatcherVersion::V2`，由该包装器选择 `Avx512` 后端。
+4. 复用现有 v0/v1 奇偶测试，验证模板内容、序列化文件和匹配结果逐字段一致。
+
+这样 AVX512 的工作局限于新的 ISA 内核和版本包装器，不会污染 v0/v1，也不需要复制训练、保存加载或 NMS 逻辑。本轮明确不新增 v2/AVX512。
 
 ## 9. 示例程序
 
@@ -244,21 +263,15 @@ OpenCV 的 `Sobel`、`cartToPolar`、`warpAffine` 自身也会按 OpenCV 构建�
 inferrt_sample_shape_template_matching
 ```
 
-无输入参数时，示例会生成一个 L 形模板和一张包含旋转目标的合成源图：
-
-```powershell
-.\build\bin\inferrt_sample_shape_template_matching.exe --output .\build\shape_template_matching_result.png
-```
-
-使用真实图像训练并匹配：
+示例通过 `--mode train` 和 `--mode match` 分开训练、匹配两个阶段。训练阶段只需要模板图和可选的模板掩膜，不需要传入源图：
 
 ```powershell
 .\build\bin\inferrt_sample_shape_template_matching.exe `
+  --mode train `
+  --version v1 `
   --template D:\data\part.png `
-  --source D:\data\scene.png `
-  --mask D:\data\part_mask.png `
+  --template-mask D:\data\part_mask.png `
   --class-id part `
-  --threshold 85 `
   --angle-begin 0 `
   --angle-end 180 `
   --angle-step 15 `
@@ -267,20 +280,33 @@ inferrt_sample_shape_template_matching
   --scale-step 0.1 `
   --features 96 `
   --max-results 20 `
-  --save-templates D:\data\shape_templates.yaml `
-  --output D:\data\shape_template_matching_result.png
+  --warmup 3 `
+  --repeat 10 `
+  --save-templates D:\data\shape_templates.yaml
 ```
 
-复用已训练模板：
+`--template` 也可传入大图；提供 `--template-roi x,y,width,height` 后，示例会先裁剪该区域再训练。训练掩膜可与原始大图同尺寸（自动按 ROI 裁剪），也可直接与裁剪后的模板小图同尺寸。
+
+匹配阶段加载训练文件，在源图中搜索：
 
 ```powershell
 .\build\bin\inferrt_sample_shape_template_matching.exe `
+  --mode match `
+  --version v1 `
   --source D:\data\scene.png `
   --load-templates D:\data\shape_templates.yaml `
-  --class-id part `
+  --class-filter part `
   --threshold 85 `
+  --warmup 3 `
+  --repeat 10 `
   --output D:\data\shape_template_matching_result.png
 ```
+
+匹配区域可通过与源图同尺寸的 `--search-mask` 限制；该参数不同于训练阶段的 `--template-mask`。
+
+`--version` 支持 `v0` 和 `v1`，默认 `v1`。模板文件不绑定实现版本，因此可用 v0 训练、v1 匹配，或将两种版本作为结果与性能对照。
+
+示例默认预热 `3` 次并采样 `10` 次。`--warmup` 指定不计入统计的预热次数，`--repeat` 指定计时重复次数；输出会给出总耗时、均值、中位数、最小/最大值和标准差。训练计时只覆盖 `addTemplateVariants()`，匹配计时只覆盖 `match()`，不包括图像/YAML 读写、ROI 裁剪、绘制与结果写入。
 
 ## 10. 参数调优建议
 

@@ -7,12 +7,14 @@
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/core/Status.h>
 #include <inferrt/features/ShapeTemplateMatcher.hpp>
-#include <inferrt/features/scalar/ShapeTemplateMatcher.hpp>
+#include <inferrt/features/v0/ShapeTemplateMatcher.hpp>
+#include <inferrt/features/v1/ShapeTemplateMatcher.hpp>
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <filesystem>
 #include <string>
@@ -22,6 +24,9 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+using V0ShapeTemplateMatcher = irt::features::v0::ShapeTemplateMatcher;
+using V1ShapeTemplateMatcher = irt::features::v1::ShapeTemplateMatcher;
 
 /**
  * @brief 自动清理的临时目录。
@@ -143,7 +148,7 @@ const irt::features::ShapeTemplateMatch *findExactMatch(const std::vector<irt::f
  */
 TEST(ShapeTemplateMatcherTest, DefaultConstructsEmptyMatcher)
 {
-    const irt::features::ShapeTemplateMatcher matcher;
+    const V1ShapeTemplateMatcher matcher;
 
     EXPECT_TRUE(matcher.empty());
     EXPECT_EQ(matcher.numClasses(), 0);
@@ -154,6 +159,20 @@ TEST(ShapeTemplateMatcherTest, DefaultConstructsEmptyMatcher)
     EXPECT_FLOAT_EQ(matcher.config().match_threshold, irt::features::kDefaultShapeTemplateMatchThreshold);
 }
 
+/** @brief 版本工厂应只暴露共同接口，并可分别创建 v0、v1 的独立实例。 */
+TEST(ShapeTemplateMatcherVersionTest, FactoryCreatesV0AndV1)
+{
+    auto v0 = irt::features::createShapeTemplateMatcher(irt::features::ShapeTemplateMatcherVersion::V0, fastConfig());
+    auto v1 = irt::features::createShapeTemplateMatcher(irt::features::ShapeTemplateMatcherVersion::V1, fastConfig());
+
+    ASSERT_NE(v0, nullptr);
+    ASSERT_NE(v1, nullptr);
+    EXPECT_TRUE(v0->empty());
+    EXPECT_TRUE(v1->empty());
+    EXPECT_STREQ(irt::features::shapeTemplateMatcherVersionName(irt::features::ShapeTemplateMatcherVersion::V0), "v0");
+    EXPECT_STREQ(irt::features::shapeTemplateMatcherVersionName(irt::features::ShapeTemplateMatcherVersion::V1), "v1");
+}
+
 /**
  * @brief 构造函数应拒绝非法配置。
  */
@@ -161,27 +180,27 @@ TEST(ShapeTemplateMatcherTest, ConstructorRejectsInvalidConfig)
 {
     auto config          = fastConfig();
     config.num_features = 0;
-    expectIrtExceptionCode([&] { irt::features::ShapeTemplateMatcher matcher(config); },
+    expectIrtExceptionCode([&] { V1ShapeTemplateMatcher matcher(config); },
                            irt::Status::ERROR_INVALID_ARGUMENT);
 
     config              = fastConfig();
     config.min_features = config.num_features + 1;
-    expectIrtExceptionCode([&] { irt::features::ShapeTemplateMatcher matcher(config); },
+    expectIrtExceptionCode([&] { V1ShapeTemplateMatcher matcher(config); },
                            irt::Status::ERROR_INVALID_ARGUMENT);
 
     config                     = fastConfig();
     config.max_label_difference = 5;
-    expectIrtExceptionCode([&] { irt::features::ShapeTemplateMatcher matcher(config); },
+    expectIrtExceptionCode([&] { V1ShapeTemplateMatcher matcher(config); },
                            irt::Status::ERROR_INVALID_ARGUMENT);
 
     config                 = fastConfig();
     config.match_threshold = 101.0f;
-    expectIrtExceptionCode([&] { irt::features::ShapeTemplateMatcher matcher(config); },
+    expectIrtExceptionCode([&] { V1ShapeTemplateMatcher matcher(config); },
                            irt::Status::ERROR_INVALID_ARGUMENT);
 
     config           = fastConfig();
     config.scan_step = 0;
-    expectIrtExceptionCode([&] { irt::features::ShapeTemplateMatcher matcher(config); },
+    expectIrtExceptionCode([&] { V1ShapeTemplateMatcher matcher(config); },
                            irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
@@ -190,7 +209,7 @@ TEST(ShapeTemplateMatcherTest, ConstructorRejectsInvalidConfig)
  */
 TEST(ShapeTemplateMatcherTest, AddTemplateRejectsBadInputs)
 {
-    irt::features::ShapeTemplateMatcher matcher(fastConfig());
+    V1ShapeTemplateMatcher matcher(fastConfig());
     const auto                          object = makeLShape();
 
     expectIrtExceptionCode([&] { matcher.addTemplate(cv::Mat(), "part"); }, irt::Status::ERROR_INVALID_ARGUMENT);
@@ -206,7 +225,7 @@ TEST(ShapeTemplateMatcherTest, AddTemplateRejectsBadInputs)
  */
 TEST(ShapeTemplateMatcherTest, AddTemplateExtractsMetadataAndClassIds)
 {
-    irt::features::ShapeTemplateMatcher matcher(fastConfig());
+    V1ShapeTemplateMatcher matcher(fastConfig());
 
     const int id = matcher.addTemplate(makeLShape(), "bracket");
 
@@ -230,7 +249,7 @@ TEST(ShapeTemplateMatcherTest, AddTemplateExtractsMetadataAndClassIds)
  */
 TEST(ShapeTemplateMatcherTest, MatchBeforeTrainingThrowsInvalidOperation)
 {
-    irt::features::ShapeTemplateMatcher matcher(fastConfig());
+    V1ShapeTemplateMatcher matcher(fastConfig());
 
     expectIrtExceptionCode([&] { matcher.match(makeLShape()); }, irt::Status::ERROR_INVALID_OPERATION);
 }
@@ -240,7 +259,7 @@ TEST(ShapeTemplateMatcherTest, MatchBeforeTrainingThrowsInvalidOperation)
  */
 TEST(ShapeTemplateMatcherTest, MatchFindsTranslatedShape)
 {
-    irt::features::ShapeTemplateMatcher matcher(fastConfig());
+    V1ShapeTemplateMatcher matcher(fastConfig());
     const auto                          object = makeLShape();
     const int                           id     = matcher.addTemplate(object, "bracket");
     const auto                         &templ  = matcher.getTemplate("bracket", id);
@@ -264,7 +283,7 @@ TEST(ShapeTemplateMatcherTest, MatchFindsTranslatedShape)
  */
 TEST(ShapeTemplateMatcherTest, MatchesNonAlignedImageSizes)
 {
-    irt::features::ShapeTemplateMatcher matcher(fastConfig());
+    V1ShapeTemplateMatcher matcher(fastConfig());
     const auto                          object = makeLShape(50);
     const int                           id     = matcher.addTemplate(object, "bracket");
     const auto                         &templ  = matcher.getTemplate("bracket", id);
@@ -284,7 +303,7 @@ TEST(ShapeTemplateMatcherTest, MatchesNonAlignedImageSizes)
  */
 TEST(ShapeTemplateMatcherTest, ClassFilterLimitsMatches)
 {
-    irt::features::ShapeTemplateMatcher matcher(fastConfig());
+    V1ShapeTemplateMatcher matcher(fastConfig());
     const auto                          object = makeLShape();
     matcher.addTemplate(object, "bracket");
     matcher.addTemplate(makeTShape(), "tee");
@@ -302,7 +321,7 @@ TEST(ShapeTemplateMatcherTest, ClassFilterLimitsMatches)
  */
 TEST(ShapeTemplateMatcherTest, NmsSuppressesDuplicateTemplatesForSameClass)
 {
-    irt::features::ShapeTemplateMatcher matcher(fastConfig());
+    V1ShapeTemplateMatcher matcher(fastConfig());
     const auto                          object = makeLShape();
     matcher.addTemplate(object, "bracket");
     matcher.addTemplate(object, "bracket");
@@ -323,7 +342,7 @@ TEST(ShapeTemplateMatcherTest, MaxResultsLimitsSortedOutputWhenNmsDisabled)
     config.nms_threshold = -1.0f;
     config.max_results   = 1;
 
-    irt::features::ShapeTemplateMatcher matcher(config);
+    V1ShapeTemplateMatcher matcher(config);
     const auto                          object = makeLShape();
     matcher.addTemplate(object, "bracket");
     matcher.addTemplate(object, "bracket");
@@ -342,14 +361,14 @@ TEST(ShapeTemplateMatcherTest, VariantsDetectRotatedShape)
     auto config                   = fastConfig();
     config.match_threshold        = 80.0f;
     config.max_label_difference   = 1;
-    irt::features::ShapeTemplateMatcher matcher(config);
+    V1ShapeTemplateMatcher matcher(config);
 
     const auto object   = makeLShape();
-    const auto variants = irt::features::ShapeTemplateMatcher::makeAngleScaleVariants(0.0f, 90.0f, 90.0f);
+    const auto variants = irt::features::makeShapeTemplateAngleScaleVariants(0.0f, 90.0f, 90.0f);
     const auto ids      = matcher.addTemplateVariants(object, "bracket", cv::Mat(), variants);
     ASSERT_EQ(ids.size(), 2U);
 
-    const auto rotated = irt::features::ShapeTemplateMatcher::transform(
+    const auto rotated = irt::features::transformShapeTemplateImage(
         object, irt::features::ShapeTemplateVariant{90.0f, 1.0f});
     const auto matches = matcher.match(makeSceneWith(rotated, cv::Point(26, 24)), 85.0f, {"bracket"});
 
@@ -368,11 +387,11 @@ TEST(ShapeTemplateMatcherTest, SaveLoadRoundTripPreservesMatches)
     const auto object        = makeLShape();
     const auto scene         = makeSceneWith(object, cv::Point(30, 34));
 
-    irt::features::ShapeTemplateMatcher writer(fastConfig());
+    V1ShapeTemplateMatcher writer(fastConfig());
     writer.addTemplate(object, "bracket", cv::Mat(), irt::features::ShapeTemplateVariant{15.0f, 1.25f});
     writer.save(template_file);
 
-    irt::features::ShapeTemplateMatcher reader;
+    V1ShapeTemplateMatcher reader;
     reader.load(template_file);
     const auto matches = reader.match(scene, 95.0f, {"bracket"});
 
@@ -397,7 +416,7 @@ TEST(ShapeTemplateMatcherTest, FileApisTrainAndMatchImages)
     ASSERT_TRUE(cv::imwrite(object_file.string(), object));
     ASSERT_TRUE(cv::imwrite(scene_file.string(), scene));
 
-    irt::features::ShapeTemplateMatcher matcher(fastConfig());
+    V1ShapeTemplateMatcher matcher(fastConfig());
     const int id = matcher.addTemplateFile(object_file, "bracket");
     const auto matches = matcher.matchFile(scene_file, 95.0f, {"bracket"});
 
@@ -411,7 +430,7 @@ TEST(ShapeTemplateMatcherTest, FileApisTrainAndMatchImages)
  */
 TEST(ShapeTemplateMatcherTest, MakeAngleScaleVariantsValidatesRanges)
 {
-    const auto variants = irt::features::ShapeTemplateMatcher::makeAngleScaleVariants(0.0f, 90.0f, 45.0f, 1.0f,
+    const auto variants = irt::features::makeShapeTemplateAngleScaleVariants(0.0f, 90.0f, 45.0f, 1.0f,
                                                                                      1.5f, 0.5f);
     ASSERT_EQ(variants.size(), 6U);
     EXPECT_FLOAT_EQ(variants[0].angle_degrees, 0.0f);
@@ -420,13 +439,13 @@ TEST(ShapeTemplateMatcherTest, MakeAngleScaleVariantsValidatesRanges)
     EXPECT_FLOAT_EQ(variants[3].scale, 1.5f);
 
     expectIrtExceptionCode(
-        [&] { irt::features::ShapeTemplateMatcher::makeAngleScaleVariants(90.0f, 0.0f, 1.0f); },
+        [&] { irt::features::makeShapeTemplateAngleScaleVariants(90.0f, 0.0f, 1.0f); },
         irt::Status::ERROR_INVALID_ARGUMENT);
     expectIrtExceptionCode(
-        [&] { irt::features::ShapeTemplateMatcher::makeAngleScaleVariants(0.0f, 90.0f, 0.0f); },
+        [&] { irt::features::makeShapeTemplateAngleScaleVariants(0.0f, 90.0f, 0.0f); },
         irt::Status::ERROR_INVALID_ARGUMENT);
     expectIrtExceptionCode(
-        [&] { irt::features::ShapeTemplateMatcher::makeAngleScaleVariants(0.0f, 90.0f, 1.0f, 0.0f, 1.0f); },
+        [&] { irt::features::makeShapeTemplateAngleScaleVariants(0.0f, 90.0f, 1.0f, 0.0f, 1.0f); },
         irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
@@ -445,8 +464,8 @@ TEST(ShapeTemplateMatcherParityTest, Avx2AndScalarProduceIdenticalTemplatesAndMa
     cv::Mat search_mask(scene.size(), CV_8UC1, cv::Scalar(255));
     cv::rectangle(search_mask, cv::Rect(0, 0, 12, scene.rows), cv::Scalar(0), cv::FILLED);
 
-    irt::features::ShapeTemplateMatcher avx2(config);
-    irt::features::scalar::ShapeTemplateMatcher scalar(config);
+    V1ShapeTemplateMatcher avx2(config);
+    V0ShapeTemplateMatcher scalar(config);
     ASSERT_EQ(avx2.addTemplate(object, "bracket"), scalar.addTemplate(object, "bracket"));
     ASSERT_EQ(avx2.addTemplate(alternate, "tee"), scalar.addTemplate(alternate, "tee"));
     ASSERT_EQ(avx2.numTemplates(), scalar.numTemplates());
@@ -492,7 +511,7 @@ TEST(ShapeTemplateMatcherParityTest, Avx2AndScalarProduceIdenticalTemplatesAndMa
     TempDir temp;
     const auto template_file = temp.path() / "scalar_templates.yaml";
     scalar.save(template_file);
-    irt::features::ShapeTemplateMatcher loaded;
+    V1ShapeTemplateMatcher loaded;
     loaded.load(template_file);
     const auto loaded_matches = loaded.match(scene, 75.0f, {}, search_mask);
     ASSERT_EQ(avx2_matches.size(), loaded_matches.size());
@@ -524,7 +543,9 @@ void expectIdenticalMatches(const std::vector<irt::features::ShapeTemplateMatch>
 /** @brief 不同扫描参数、输入尺寸和方向容差下，AVX2 与标量路径必须逐结果一致。 */
 TEST(ShapeTemplateMatcherParityTest, Avx2AndScalarRemainIdenticalAcrossParameters)
 {
-    const std::array<int, 2> label_differences{0, 1};
+    // ``2 * 48 = 96`` 的上界之外还覆盖 ``8 * 48 = 384``，验证 v1 的 uint8 和
+    // uint16 累加路径都与固定的 v0 标量基线逐字段一致。
+    const std::array<int, 3> label_differences{0, 1, 4};
     const std::array<int, 2> scan_steps{1, 2};
     const std::array<cv::Size, 2> scene_sizes{cv::Size(119, 107), cv::Size(151, 137)};
 
@@ -542,8 +563,8 @@ TEST(ShapeTemplateMatcherParityTest, Avx2AndScalarRemainIdenticalAcrossParameter
                 const auto alternate = makeTShape(50);
                 const auto scene = makeSceneWith(object, cv::Point(31, 27), scene_size);
 
-                irt::features::ShapeTemplateMatcher avx2(config);
-                irt::features::scalar::ShapeTemplateMatcher scalar(config);
+                V1ShapeTemplateMatcher avx2(config);
+                V0ShapeTemplateMatcher scalar(config);
                 avx2.addTemplate(object, "bracket");
                 avx2.addTemplate(alternate, "tee");
                 scalar.addTemplate(object, "bracket");
@@ -567,8 +588,8 @@ TEST(ShapeTemplateMatcherParallelTest, SerialAndAutomaticParallelismProduceIdent
     const auto object = makeLShape(50);
     const auto alternate = makeTShape(50);
     const auto scene = makeSceneWith(object, cv::Point(37, 29), cv::Size(151, 137));
-    irt::features::ShapeTemplateMatcher serial(serial_config);
-    irt::features::ShapeTemplateMatcher parallel(parallel_config);
+    V1ShapeTemplateMatcher serial(serial_config);
+    V1ShapeTemplateMatcher parallel(parallel_config);
     for (const auto &item : std::array<std::pair<cv::Mat, std::string>, 4>{
              std::pair{object, "bracket_a"}, std::pair{object, "bracket_b"},
              std::pair{alternate, "tee_a"}, std::pair{alternate, "tee_b"}})

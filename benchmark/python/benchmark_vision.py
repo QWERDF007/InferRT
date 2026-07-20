@@ -309,7 +309,8 @@ def _source_files(spec: VisionSpec) -> list[Path]:
     files = [spec.checkpoint]
     files.extend(
         [
-            REPO_ROOT / "samples" / "model" / "python" / "classification_gen_wts.py",
+            REPO_ROOT / "samples" / "model" / "python" / "dino_gen_wts.py",
+            REPO_ROOT / "samples" / "model" / "python" / "dino_model_zoo.py",
             REPO_ROOT / "samples" / "model" / "python" / "classification_model_zoo.py",
         ]
     )
@@ -348,7 +349,7 @@ def _load_reference_model(spec: VisionSpec) -> Any:
     torch = _torch()
     _configure_import_paths()
     if spec.family == "dinov2":
-        from classification_model_zoo import create_model
+        from dino_model_zoo import create_model
 
         model = create_model(
             spec.name,
@@ -359,7 +360,7 @@ def _load_reference_model(spec: VisionSpec) -> Any:
             hub_weights=str(spec.checkpoint),
         )
     elif spec.family == "dinov3":
-        from classification_model_zoo import create_model
+        from dino_model_zoo import create_model
 
         model = create_model(
             spec.name,
@@ -396,7 +397,7 @@ def _ensure_wts(spec: VisionSpec, model: Any | None = None) -> Path:
         return output
 
     _configure_import_paths()
-    from classification_gen_wts import write_wts
+    from dino_gen_wts import write_wts
 
     owned_model = model is None
     model = model if model is not None else _load_reference_model(spec)

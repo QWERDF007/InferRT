@@ -1,9 +1,9 @@
 /**
  * @file ShapeTemplateMatcherImpl.cpp
- * @brief 形状模板匹配 PIMPL 实现。
+ * @brief 形状模板匹配的版本无关引擎实现。
  */
 
-#include "ShapeTemplateMatcherImpl.hpp"
+#include "ShapeTemplateMatcherEngine.hpp"
 
 #include <inferrt/core/Exception.hpp>
 
@@ -14,7 +14,6 @@
 #include <algorithm>
 #include <atomic>
 #include <array>
-#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -24,55 +23,21 @@
 #include <thread>
 #include <utility>
 
-#if !defined(_MSC_VER) && !defined(__AVX2__)
-#error "ShapeTemplateMatcher requires AVX2. Compile this target with -mavx2 or an equivalent option."
-#endif
-#include <immintrin.h>
-
 namespace fs = std::filesystem;
 
 namespace irt::features {
 namespace {
 
-constexpr unsigned char kInvalidLabel = 255;     ///< 无效方向标签，用于跳过弱梯度点。
-constexpr float         kEps          = 1.0e-6f; ///< 浮点区间比较容差。
-constexpr int           kOrientationBins = 8;    ///< 梯度方向量化 bin 数量。
+constexpr unsigned char kInvalidLabel = detail::kShapeTemplateInvalidLabel;     ///< 无效方向标签，用于跳过弱梯度点。
+constexpr float         kEps          = 1.0e-6f;                                ///< 浮点区间比较容差。
+constexpr int           kOrientationBins = detail::kShapeTemplateOrientationBins; ///< 梯度方向量化 bin 数量。
 
-/**
- * @brief 源图梯度量化结果。
- */
-struct QuantizedGradient
-{
-    cv::Mat labels;    ///< ``CV_8U`` 方向标签，255 表示无效点。
-    cv::Mat magnitude; ///< ``CV_32F`` 梯度幅值。
-    cv::Mat angle;     ///< ``CV_32F`` 梯度方向角，单位为度。
-};
+using QuantizedGradient = detail::ShapeTemplateQuantizedGradient;
+using Candidate          = detail::ShapeTemplateCandidate;
 
-/**
- * @brief 每个模板方向对应的源图响应图集合。
- *
- * ``maps[label]`` 中的像素值是该源图像素与模板方向 ``label`` 的匹配分子。分母由
- * ``denominator_per_feature`` 提供，因此匹配分数可保持与浮点公式完全一致。
- */
-struct ResponseMaps
-{
-    std::array<cv::Mat, kOrientationBins> maps; ///< 8 个方向的 ``CV_8U`` 响应图。
-    int denominator_per_feature{1};             ///< 单个特征点满分对应的分母。
-};
+using ResponseMaps = detail::ShapeTemplateResponseMaps;
 
-using ResponseTable = std::array<std::array<unsigned char, kOrientationBins>, kOrientationBins>;
-
-/**
- * @brief 模板训练阶段的候选特征点。
- */
-struct Candidate
-{
-    int   x{0};                 ///< 候选点 x 坐标。
-    int   y{0};                 ///< 候选点 y 坐标。
-    int   label{0};             ///< 量化方向标签。
-    float angle_degrees{0.0f};  ///< 原始梯度方向角，单位为度。
-    float score{0.0f};          ///< 候选点评分，当前使用梯度幅值。
-};
+using ResponseTable = detail::ShapeTemplateResponseTable;
 
 /**
  * @brief 校验分数阈值范围。
@@ -136,7 +101,8 @@ void validateConfig(const ShapeTemplateMatcherConfig &config)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "ShapeTemplateMatcher max_parallelism must be non-negative");
-    }    if (!std::isfinite(config.min_feature_distance) || config.min_feature_distance < 0.0f)
+    }
+    if (!std::isfinite(config.min_feature_distance) || config.min_feature_distance < 0.0f)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "ShapeTemplateMatcher min_feature_distance must be finite and non-negative");
@@ -302,91 +268,14 @@ int quantizeAngle(float angle_degrees) noexcept
 }
 
 /**
- * @brief 使用 AVX2 批量量化梯度方向标签。
- *
- * 每次读取 8 个 ``float`` 方向角，通过 8 个阈值比较得到方向 bin，避免训练阶段逐点调用
- * ``floor``。掩膜和幅值阈值仍以位掩码方式合并，保证无效点写为 ``kInvalidLabel``。
- */
-void fillQuantizedLabelsAvx2(const cv::Mat &magnitude, const cv::Mat &angle, const cv::Mat &mask, float threshold,
-                             cv::Mat &labels)
-{
-    const __m256 threshold_vec = _mm256_set1_ps(threshold);
-    const std::array<__m256, kOrientationBins> angle_thresholds{
-        _mm256_set1_ps(22.5f),  _mm256_set1_ps(67.5f),  _mm256_set1_ps(112.5f), _mm256_set1_ps(157.5f),
-        _mm256_set1_ps(202.5f), _mm256_set1_ps(247.5f), _mm256_set1_ps(292.5f), _mm256_set1_ps(337.5f),
-    };
-
-    for (int y = 0; y < labels.rows; ++y)
-    {
-        const auto *mag_row   = magnitude.ptr<float>(y);
-        const auto *angle_row = angle.ptr<float>(y);
-        const auto *mask_row  = mask.ptr<unsigned char>(y);
-        auto       *label_row = labels.ptr<unsigned char>(y);
-
-        int x = 0;
-        for (; x <= labels.cols - 8; x += 8)
-        {
-            const __m256 mag_values   = _mm256_loadu_ps(mag_row + x);
-            const int    valid_mag    = _mm256_movemask_ps(_mm256_cmp_ps(mag_values, threshold_vec, _CMP_GE_OQ));
-            const __m256 angle_values = _mm256_loadu_ps(angle_row + x);
-
-            int labels8[8]{0, 0, 0, 0, 0, 0, 0, 0};
-            for (int threshold_index = 0; threshold_index < kOrientationBins; ++threshold_index)
-            {
-                const int ge_mask = _mm256_movemask_ps(
-                    _mm256_cmp_ps(angle_values, angle_thresholds[threshold_index], _CMP_GE_OQ));
-                for (int lane = 0; lane < 8; ++lane)
-                {
-                    labels8[lane] += (ge_mask >> lane) & 1;
-                }
-            }
-
-            for (int lane = 0; lane < 8; ++lane)
-            {
-                if (((valid_mag >> lane) & 1) != 0 && mask_row[x + lane] != 0)
-                {
-                    label_row[x + lane]
-                        = static_cast<unsigned char>(labels8[lane] == kOrientationBins ? 0 : labels8[lane]);
-                }
-            }
-        }
-
-        for (; x < labels.cols; ++x)
-        {
-            if (mask_row[x] != 0 && mag_row[x] >= threshold)
-            {
-                label_row[x] = static_cast<unsigned char>(quantizeAngle(angle_row[x]));
-            }
-        }
-    }
-}
-
-/** @brief 标量实现：逐像素量化梯度方向标签，不使用 SIMD intrinsic。 */
-void fillQuantizedLabelsScalar(const cv::Mat &magnitude, const cv::Mat &angle, const cv::Mat &mask, float threshold,
-                               cv::Mat &labels)
-{
-    for (int y = 0; y < labels.rows; ++y)
-    {
-        const auto *mag_row = magnitude.ptr<float>(y);
-        const auto *angle_row = angle.ptr<float>(y);
-        const auto *mask_row = mask.ptr<unsigned char>(y);
-        auto *label_row = labels.ptr<unsigned char>(y);
-        #pragma loop(no_vector)
-        for (int x = 0; x < labels.cols; ++x)
-        {
-            if (mask_row[x] != 0 && mag_row[x] >= threshold)
-                label_row[x] = static_cast<unsigned char>(quantizeAngle(angle_row[x]));
-        }
-    }
-}
-/**
  * @brief 计算图像梯度幅值、方向角和量化方向标签。
  * @param image 输入图像。
  * @param mask 有效区域掩膜。
  * @param weak_threshold 弱梯度阈值。
  * @return 梯度量化结果。
  */
-QuantizedGradient computeQuantizedGradient(const cv::Mat &image, const cv::Mat &mask, float weak_threshold, bool use_avx2)
+QuantizedGradient computeQuantizedGradient(const cv::Mat &image, const cv::Mat &mask, float weak_threshold,
+                                           const detail::ShapeTemplateMatcherKernel &kernel)
 {
     const cv::Mat gray = toGray8(image);
     const cv::Mat mask8 = normalizeMask(mask, gray.size(), "mask");
@@ -400,10 +289,7 @@ QuantizedGradient computeQuantizedGradient(const cv::Mat &image, const cv::Mat &
     cv::cartToPolar(grad_x, grad_y, gradient.magnitude, gradient.angle, true);
     gradient.labels = cv::Mat(gray.size(), CV_8UC1, cv::Scalar(kInvalidLabel));
 
-    if (use_avx2)
-        fillQuantizedLabelsAvx2(gradient.magnitude, gradient.angle, mask8, weak_threshold, gradient.labels);
-    else
-        fillQuantizedLabelsScalar(gradient.magnitude, gradient.angle, mask8, weak_threshold, gradient.labels);
+    kernel.fillQuantizedLabels(gradient.magnitude, gradient.angle, mask8, weak_threshold, gradient.labels);
     return gradient;
 }
 
@@ -425,95 +311,6 @@ void sortCandidates(std::vector<Candidate> &candidates)
                   }
                   return a.x < b.x;
               });
-}
-
-/**
- * @brief 使用 AVX2 块级过滤收集模板训练候选点。
- *
- * 每 32 个像素先用 SIMD 合并 ``label != invalid``、``mask != 0`` 和 ``magnitude >= threshold`` 三个条件。
- * 对完全无候选的块直接跳过，只对有效 lane 读取角度和幅值并创建 ``Candidate``。
- */
-std::vector<Candidate> collectCandidatesAvx2(const QuantizedGradient &gradient, const cv::Mat &mask, float threshold)
-{
-    const cv::Mat mask8 = normalizeMask(mask, gradient.labels.size(), "mask");
-
-    std::vector<Candidate> candidates;
-    const __m256  threshold_vec = _mm256_set1_ps(threshold);
-    const __m256i invalid_vec   = _mm256_set1_epi8(static_cast<char>(kInvalidLabel));
-    const __m256i zero_vec      = _mm256_setzero_si256();
-
-    for (int y = 1; y < gradient.labels.rows - 1; ++y)
-    {
-        const auto *mag_row   = gradient.magnitude.ptr<float>(y);
-        const auto *angle_row = gradient.angle.ptr<float>(y);
-        const auto *mask_row  = mask8.ptr<unsigned char>(y);
-        const auto *label_row = gradient.labels.ptr<unsigned char>(y);
-
-        int x = 1;
-        for (; x <= gradient.labels.cols - 33; x += 32)
-        {
-            const __m256i label_values = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(label_row + x));
-            const __m256i mask_values  = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(mask_row + x));
-            const __m256i label_valid  = _mm256_andnot_si256(_mm256_cmpeq_epi8(label_values, invalid_vec),
-                                                            _mm256_set1_epi8(static_cast<char>(0xFF)));
-            const __m256i mask_valid
-                = _mm256_andnot_si256(_mm256_cmpeq_epi8(mask_values, zero_vec),
-                                      _mm256_set1_epi8(static_cast<char>(0xFF)));
-            const int byte_valid = _mm256_movemask_epi8(_mm256_and_si256(label_valid, mask_valid));
-            if (byte_valid == 0)
-            {
-                continue;
-            }
-
-            int mag_valid = 0;
-            for (int group = 0; group < 4; ++group)
-            {
-                const __m256 mag_values = _mm256_loadu_ps(mag_row + x + group * 8);
-                mag_valid |= _mm256_movemask_ps(_mm256_cmp_ps(mag_values, threshold_vec, _CMP_GE_OQ))
-                          << (group * 8);
-            }
-
-            uint32_t valid = static_cast<uint32_t>(byte_valid) & static_cast<uint32_t>(mag_valid);
-            if (valid == 0)
-            {
-                continue;
-            }
-
-            while (valid != 0)
-            {
-                const int lane = static_cast<int>(std::countr_zero(valid));
-                const int col = x + lane;
-                candidates.push_back(
-                    Candidate{col, y, static_cast<int>(label_row[col]), angle_row[col], std::max(mag_row[col], 0.0f)});
-                valid &= valid - 1;
-            }
-        }
-
-        for (; x < gradient.labels.cols - 1; ++x)
-        {
-            if (mask_row[x] == 0 || label_row[x] == kInvalidLabel || mag_row[x] < threshold)
-            {
-                continue;
-            }
-            candidates.push_back(
-                Candidate{x, y, static_cast<int>(label_row[x]), angle_row[x], std::max(mag_row[x], 0.0f)});
-        }
-    }
-
-    sortCandidates(candidates);
-    return candidates;
-}
-
-/**
- * @brief 从梯度量化图中收集模板训练候选点。
- * @param gradient 梯度量化结果。
- * @param mask 有效区域掩膜。
- * @param threshold 候选点梯度幅值阈值。
- * @return 按评分从高到低排序的候选点列表。
- */
-std::vector<Candidate> collectCandidates(const QuantizedGradient &gradient, const cv::Mat &mask, float threshold)
-{
-    return collectCandidatesAvx2(gradient, mask, threshold);
 }
 
 /**
@@ -702,104 +499,56 @@ int responseDenominatorPerFeature(int max_label_difference) noexcept
 }
 
 /**
- * @brief 使用 AVX2 字节查表生成单个模板方向的响应图。
- *
- * AVX2 的 ``vpshufb`` 以 128-bit lane 为单位做字节查表。源图有效标签只使用 ``[0, 7]``，
- * 无效标签为 ``255`` 且最高位为 1，查表时会自然写出 0。
- */
-void fillResponseMapAvx2(const cv::Mat &labels, cv::Mat &response, int template_label,
-                         const ResponseTable &table)
-{
-    alignas(32) std::array<unsigned char, 32> lookup_values{};
-    for (int label = 0; label < kOrientationBins; ++label)
-    {
-        lookup_values[static_cast<size_t>(label)]      = table[template_label][label];
-        lookup_values[static_cast<size_t>(label) + 16] = table[template_label][label];
-    }
-    const __m256i lookup = _mm256_load_si256(reinterpret_cast<const __m256i *>(lookup_values.data()));
-
-    for (int y = 0; y < labels.rows; ++y)
-    {
-        const auto *src = labels.ptr<unsigned char>(y);
-        auto       *dst = response.ptr<unsigned char>(y);
-
-        int x = 0;
-        for (; x <= labels.cols - 32; x += 32)
-        {
-            const __m256i source = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(src + x));
-            const __m256i out    = _mm256_shuffle_epi8(lookup, source);
-            _mm256_storeu_si256(reinterpret_cast<__m256i *>(dst + x), out);
-        }
-
-        for (; x < labels.cols; ++x)
-        {
-            const auto label = src[x];
-            dst[x] = label < kOrientationBins ? table[template_label][label] : 0;
-        }
-    }
-}
-
-/** @brief 标量实现：逐像素查询方向响应表。 */
-void fillResponseMapScalar(const cv::Mat &labels, cv::Mat &response, int template_label, const ResponseTable &table)
-{
-    for (int y = 0; y < labels.rows; ++y)
-    {
-        const auto *src = labels.ptr<unsigned char>(y);
-        auto *dst = response.ptr<unsigned char>(y);
-        #pragma loop(no_vector)
-        for (int x = 0; x < labels.cols; ++x)
-            dst[x] = src[x] < kOrientationBins ? table[template_label][src[x]] : 0;
-    }
-}
-/**
  * @brief 为源图方向标签预计算 8 张响应图。
  * @param labels 源图方向标签图。
  * @param max_label_difference 最大允许方向标签差。
  * @return 方向响应图集合。
  */
-ResponseMaps buildResponseMaps(const cv::Mat &labels, int max_label_difference, bool use_avx2,
+ResponseMaps buildResponseMaps(const cv::Mat &labels, int max_label_difference,
+                               const detail::ShapeTemplateMatcherKernel &kernel,
                                const std::array<bool, kOrientationBins> &required_labels)
 {
     ResponseMaps response_maps;
     response_maps.denominator_per_feature = responseDenominatorPerFeature(max_label_difference);
     const auto table = makeResponseTable(max_label_difference);
+    response_maps.quantized_labels = labels;
+    response_maps.response_table = table;
+    if (!kernel.needsMaterializedResponseMaps())
+    {
+        std::array<std::uint64_t, kOrientationBins> label_counts{};
+        for (int y = 0; y < labels.rows; ++y)
+        {
+            const auto *row = labels.ptr<unsigned char>(y);
+            for (int x = 0; x < labels.cols; ++x)
+            {
+                if (row[x] < kOrientationBins)
+                    ++label_counts[static_cast<size_t>(row[x])];
+            }
+        }
+        const auto pixel_count = static_cast<float>(labels.total());
+        for (int template_label = 0; template_label < kOrientationBins; ++template_label)
+        {
+            std::uint64_t response_sum = 0;
+            for (int source_label = 0; source_label < kOrientationBins; ++source_label)
+            {
+                response_sum += label_counts[static_cast<size_t>(source_label)]
+                              * table[static_cast<size_t>(template_label)][static_cast<size_t>(source_label)];
+            }
+            response_maps.average_responses[static_cast<size_t>(template_label)]
+                = pixel_count > 0.0f ? static_cast<float>(response_sum) / pixel_count : 0.0f;
+        }
+        return response_maps;
+    }
     for (int label = 0; label < kOrientationBins; ++label)
     {
         if (!required_labels[static_cast<size_t>(label)])
             continue;
         response_maps.maps[label].create(labels.size(), CV_8UC1);
-        if (use_avx2)
-            fillResponseMapAvx2(labels, response_maps.maps[label], label, table);
-        else
-            fillResponseMapScalar(labels, response_maps.maps[label], label, table);
+        kernel.fillResponseMap(labels, response_maps.maps[label], label, table);
+        response_maps.average_responses[static_cast<size_t>(label)]
+            = static_cast<float>(cv::mean(response_maps.maps[label])[0]);
     }
     return response_maps;
-}
-/**
- * @brief 计算滑窗相似度，并以理论最高剩余贡献提前淘汰低分窗口。
- *
- * 已累计贡献加上未访问特征的满分仍无法达到阈值时，立即停止读取响应图。
- * 通过过滤的窗口仍完整累加，因而返回分数与原始公式一致。
- */
-bool similarityAtLeast(const ResponseMaps &response_maps, const ShapeTemplateInfo &templ, int x, int y,
-                       float threshold, float &score)
-{
-    uint64_t sum = 0;
-    const uint64_t maximum_per_feature = static_cast<uint64_t>(response_maps.denominator_per_feature);
-    const size_t feature_count = templ.features.size();
-    for (size_t index = 0; index < feature_count; ++index)
-    {
-        const auto &feature = templ.features[index];
-        const auto &map = response_maps.maps[static_cast<size_t>(feature.label)];
-        sum += map.ptr<unsigned char>(y + feature.y)[x + feature.x];
-        const uint64_t remaining = static_cast<uint64_t>(feature_count - index - 1);
-        const float upper_bound = 100.0f * static_cast<float>(sum + remaining * maximum_per_feature)
-                                / static_cast<float>(maximum_per_feature * feature_count);
-        if (upper_bound < threshold)
-            return false;
-    }
-    score = 100.0f * static_cast<float>(sum) / static_cast<float>(maximum_per_feature * feature_count);
-    return score >= threshold;
 }
 /**
  * @brief 计算两个匹配框的 IoU。
@@ -951,20 +700,53 @@ void readIfPresent(const cv::FileNode &node, const char *key, T &value)
 
 } // namespace
 
+int detail::quantizeShapeTemplateAngle(float angle_degrees) noexcept
+{
+    return quantizeAngle(angle_degrees);
+}
+
+void detail::sortShapeTemplateCandidates(std::vector<ShapeTemplateCandidate> &candidates)
+{
+    sortCandidates(candidates);
+}
+
+std::unique_ptr<detail::ShapeTemplateMatcherKernel>
+detail::createShapeTemplateMatcherKernel(ShapeTemplateMatcherBackend backend)
+{
+    switch (backend)
+    {
+    case ShapeTemplateMatcherBackend::Scalar:
+        return createScalarShapeTemplateMatcherKernel();
+    case ShapeTemplateMatcherBackend::Avx2:
+        return createAvx2ShapeTemplateMatcherKernel();
+    }
+
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported shape template matcher backend");
+}
+
 /**
- * @brief 构造匹配器实现并完成配置校验。
+ * @brief 构造版本无关引擎并注入特定版本的热点内核。
  */
-ShapeTemplateMatcher::Impl::Impl(ShapeTemplateMatcherConfig config, bool use_avx2)
-    : config_(std::move(config)), use_avx2_(use_avx2)
+detail::ShapeTemplateMatcherEngine::ShapeTemplateMatcherEngine(
+    ShapeTemplateMatcherConfig config, std::unique_ptr<ShapeTemplateMatcherKernel> kernel)
+    : config_(std::move(config)), kernel_(std::move(kernel))
 {
     validateConfig(config_);
+    if (!kernel_)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ShapeTemplateMatcher kernel must not be null");
+    }
 }
+
+detail::ShapeTemplateMatcherEngine::~ShapeTemplateMatcherEngine() = default;
+detail::ShapeTemplateMatcherEngine::ShapeTemplateMatcherEngine(ShapeTemplateMatcherEngine &&) noexcept = default;
+detail::ShapeTemplateMatcherEngine &detail::ShapeTemplateMatcherEngine::operator=(ShapeTemplateMatcherEngine &&) noexcept = default;
 
 /**
  * @brief 提取模板图中的强梯度方向特征并写入模板库。
  */
-int ShapeTemplateMatcher::Impl::addTemplate(const cv::Mat &image, const std::string &class_id,
-                                            const cv::Mat &object_mask, ShapeTemplateVariant variant)
+int detail::ShapeTemplateMatcherEngine::addTemplate(const cv::Mat &image, const std::string &class_id,
+                                                     const cv::Mat &object_mask, ShapeTemplateVariant variant)
 {
     validateImage(image, "template image");
     if (class_id.empty())
@@ -976,12 +758,12 @@ int ShapeTemplateMatcher::Impl::addTemplate(const cv::Mat &image, const std::str
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Shape template variant is invalid");
     }
 
-    const cv::Mat mask = normalizeMask(object_mask, image.size(), "object_mask");
-    const auto    gradient = computeQuantizedGradient(image, mask, config_.weak_threshold, use_avx2_);
-    auto candidates = use_avx2_ ? collectCandidatesAvx2(gradient, mask, config_.strong_threshold) : collectCandidates(gradient, mask, config_.strong_threshold);
+    const cv::Mat mask      = normalizeMask(object_mask, image.size(), "object_mask");
+    const auto    gradient  = computeQuantizedGradient(image, mask, config_.weak_threshold, *kernel_);
+    auto candidates = kernel_->collectCandidates(gradient, mask, config_.strong_threshold);
     if (static_cast<int>(candidates.size()) < config_.min_features && config_.weak_threshold < config_.strong_threshold)
     {
-        candidates = use_avx2_ ? collectCandidatesAvx2(gradient, mask, config_.weak_threshold) : collectCandidates(gradient, mask, config_.weak_threshold);
+        candidates = kernel_->collectCandidates(gradient, mask, config_.weak_threshold);
     }
 
     const float distance = config_.min_feature_distance > 0.0f
@@ -1003,8 +785,8 @@ int ShapeTemplateMatcher::Impl::addTemplate(const cv::Mat &image, const std::str
 /**
  * @brief 从文件读取训练图和可选掩膜后训练模板。
  */
-int ShapeTemplateMatcher::Impl::addTemplateFile(const fs::path &image_file, const std::string &class_id,
-                                                const fs::path &mask_file, ShapeTemplateVariant variant)
+int detail::ShapeTemplateMatcherEngine::addTemplateFile(const fs::path &image_file, const std::string &class_id,
+                                                         const fs::path &mask_file, ShapeTemplateVariant variant)
 {
     const cv::Mat image = loadImage(image_file, cv::IMREAD_UNCHANGED, "template image");
     cv::Mat       mask;
@@ -1018,7 +800,7 @@ int ShapeTemplateMatcher::Impl::addTemplateFile(const fs::path &image_file, cons
 /**
  * @brief 对训练图和掩膜逐个执行中心旋转/缩放并训练模板。
  */
-std::vector<int> ShapeTemplateMatcher::Impl::addTemplateVariants(
+std::vector<int> detail::ShapeTemplateMatcherEngine::addTemplateVariants(
     const cv::Mat &image, const std::string &class_id, const cv::Mat &object_mask,
     const std::vector<ShapeTemplateVariant> &variants)
 {
@@ -1055,9 +837,9 @@ std::vector<int> ShapeTemplateMatcher::Impl::addTemplateVariants(
 /**
  * @brief 在源图中滑窗计算模板方向一致性并应用同类别 NMS。
  */
-std::vector<ShapeTemplateMatch> ShapeTemplateMatcher::Impl::match(const cv::Mat &image, float threshold,
-                                                                  const std::vector<std::string> &class_ids,
-                                                                  const cv::Mat &search_mask) const
+std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::match(
+    const cv::Mat &image, float threshold, const std::vector<std::string> &class_ids,
+    const cv::Mat &search_mask) const
 {
     validateImage(image, "source image");
     if (empty())
@@ -1069,7 +851,7 @@ std::vector<ShapeTemplateMatch> ShapeTemplateMatcher::Impl::match(const cv::Mat 
     validateScoreRange(effective_threshold, "ShapeTemplateMatcher match threshold");
 
     const cv::Mat mask = normalizeMask(search_mask, image.size(), "search_mask");
-    const auto    gradient = computeQuantizedGradient(image, mask, config_.weak_threshold, use_avx2_);
+    const auto gradient = computeQuantizedGradient(image, mask, config_.weak_threshold, *kernel_);
     std::array<bool, kOrientationBins> required_labels{};
     auto mark_required_labels = [&](const std::vector<ShapeTemplateInfo> &templates)
     {
@@ -1091,7 +873,8 @@ std::vector<ShapeTemplateMatch> ShapeTemplateMatcher::Impl::match(const cv::Mat 
                 mark_required_labels(it->second);
         }
     }
-    const auto response_maps = buildResponseMaps(gradient.labels, config_.max_label_difference, use_avx2_, required_labels);
+    const auto response_maps = buildResponseMaps(gradient.labels, config_.max_label_difference, *kernel_,
+                                                 required_labels);
 
     struct MatchWork
     {
@@ -1123,26 +906,14 @@ std::vector<ShapeTemplateMatch> ShapeTemplateMatcher::Impl::match(const cv::Mat 
     {
         std::vector<ShapeTemplateMatch> local_matches;
         const auto &templ = *work.templ;
-        if (templ.width > image.cols || templ.height > image.rows || templ.features.empty())
-            return local_matches;
-
-        const int max_y = image.rows - templ.height;
-        const int max_x = image.cols - templ.width;
-        for (int y = 0; y <= max_y; y += config_.scan_step)
+        const auto scored_positions = kernel_->scanTemplate(response_maps, templ, mask, image.size(),
+                                                            config_.scan_step, effective_threshold);
+        local_matches.reserve(scored_positions.size());
+        for (const auto &position : scored_positions)
         {
-            for (int x = 0; x <= max_x; x += config_.scan_step)
-            {
-                const int center_x = std::min(image.cols - 1, x + templ.width / 2);
-                const int center_y = std::min(image.rows - 1, y + templ.height / 2);
-                if (mask.ptr<unsigned char>(center_y)[center_x] == 0)
-                    continue;
-
-                float score = 0.0f;
-                if (similarityAtLeast(response_maps, templ, x, y, effective_threshold, score))
-                    local_matches.push_back(ShapeTemplateMatch{x, y, templ.width, templ.height, score,
-                                                               *work.class_id, templ.template_id,
-                                                               templ.angle_degrees, templ.scale});
-            }
+            local_matches.push_back(ShapeTemplateMatch{position.x, position.y, templ.width, templ.height,
+                                                       position.score, *work.class_id, templ.template_id,
+                                                       templ.angle_degrees, templ.scale});
         }
         return local_matches;
     };
@@ -1197,9 +968,9 @@ std::vector<ShapeTemplateMatch> ShapeTemplateMatcher::Impl::match(const cv::Mat 
 /**
  * @brief 从文件读取源图和可选搜索掩膜后执行匹配。
  */
-std::vector<ShapeTemplateMatch> ShapeTemplateMatcher::Impl::matchFile(const fs::path &image_file, float threshold,
-                                                                      const std::vector<std::string> &class_ids,
-                                                                      const fs::path &mask_file) const
+std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::matchFile(
+    const fs::path &image_file, float threshold, const std::vector<std::string> &class_ids,
+    const fs::path &mask_file) const
 {
     const cv::Mat image = loadImage(image_file, cv::IMREAD_UNCHANGED, "source image");
     cv::Mat       mask;
@@ -1210,22 +981,22 @@ std::vector<ShapeTemplateMatch> ShapeTemplateMatcher::Impl::matchFile(const fs::
     return match(image, threshold, class_ids, mask);
 }
 
-void ShapeTemplateMatcher::Impl::clear()
+void detail::ShapeTemplateMatcherEngine::clear()
 {
     templates_.clear();
 }
 
-bool ShapeTemplateMatcher::Impl::empty() const noexcept
+bool detail::ShapeTemplateMatcherEngine::empty() const noexcept
 {
     return templates_.empty();
 }
 
-int ShapeTemplateMatcher::Impl::numClasses() const noexcept
+int detail::ShapeTemplateMatcherEngine::numClasses() const noexcept
 {
     return static_cast<int>(templates_.size());
 }
 
-int ShapeTemplateMatcher::Impl::numTemplates() const noexcept
+int detail::ShapeTemplateMatcherEngine::numTemplates() const noexcept
 {
     int count = 0;
     for (const auto &item : templates_)
@@ -1235,13 +1006,13 @@ int ShapeTemplateMatcher::Impl::numTemplates() const noexcept
     return count;
 }
 
-int ShapeTemplateMatcher::Impl::numTemplates(const std::string &class_id) const noexcept
+int detail::ShapeTemplateMatcherEngine::numTemplates(const std::string &class_id) const noexcept
 {
     const auto it = templates_.find(class_id);
     return it == templates_.end() ? 0 : static_cast<int>(it->second.size());
 }
 
-std::vector<std::string> ShapeTemplateMatcher::Impl::classIds() const
+std::vector<std::string> detail::ShapeTemplateMatcherEngine::classIds() const
 {
     std::vector<std::string> ids;
     ids.reserve(templates_.size());
@@ -1252,7 +1023,8 @@ std::vector<std::string> ShapeTemplateMatcher::Impl::classIds() const
     return ids;
 }
 
-const ShapeTemplateInfo &ShapeTemplateMatcher::Impl::getTemplate(const std::string &class_id, int template_id) const
+const ShapeTemplateInfo &detail::ShapeTemplateMatcherEngine::getTemplate(const std::string &class_id,
+                                                                           int template_id) const
 {
     const auto it = templates_.find(class_id);
     if (it == templates_.end())
@@ -1267,7 +1039,7 @@ const ShapeTemplateInfo &ShapeTemplateMatcher::Impl::getTemplate(const std::stri
     return it->second[static_cast<size_t>(template_id)];
 }
 
-const ShapeTemplateMatcherConfig &ShapeTemplateMatcher::Impl::config() const noexcept
+const ShapeTemplateMatcherConfig &detail::ShapeTemplateMatcherEngine::config() const noexcept
 {
     return config_;
 }
@@ -1278,7 +1050,7 @@ const ShapeTemplateMatcherConfig &ShapeTemplateMatcher::Impl::config() const noe
  * 文件格式使用版本号保护，模板 ID 在加载时会按类别内顺序重新归一化，避免外部文件中的
  * 非连续 ID 破坏后续索引访问。
  */
-void ShapeTemplateMatcher::Impl::save(const fs::path &template_file) const
+void detail::ShapeTemplateMatcherEngine::save(const fs::path &template_file) const
 {
     if (template_file.empty())
     {
@@ -1348,7 +1120,7 @@ void ShapeTemplateMatcher::Impl::save(const fs::path &template_file) const
  * 加载流程先在临时容器中校验完整性，全部成功后再替换 ``config_`` 和 ``templates_``，
  * 避免部分加载失败时留下半初始化状态。
  */
-void ShapeTemplateMatcher::Impl::load(const fs::path &template_file)
+void detail::ShapeTemplateMatcherEngine::load(const fs::path &template_file)
 {
     if (template_file.empty())
     {
@@ -1437,6 +1209,59 @@ void ShapeTemplateMatcher::Impl::load(const fs::path &template_file)
 
     config_    = loaded_config;
     templates_ = std::move(loaded_templates);
+}
+
+std::vector<ShapeTemplateVariant>
+detail::makeShapeTemplateAngleScaleVariants(float angle_begin_degrees, float angle_end_degrees,
+                                            float angle_step_degrees, float scale_begin, float scale_end,
+                                            float scale_step)
+{
+    if (!std::isfinite(angle_begin_degrees) || !std::isfinite(angle_end_degrees)
+        || !std::isfinite(angle_step_degrees) || angle_step_degrees <= 0.0f)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "Angle range must be finite and angle_step_degrees must be positive");
+    }
+    if (!std::isfinite(scale_begin) || !std::isfinite(scale_end) || !std::isfinite(scale_step)
+        || scale_begin <= 0.0f || scale_end <= 0.0f || scale_step <= 0.0f)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "Scale range must be finite, positive, and scale_step must be positive");
+    }
+    if (angle_end_degrees + kEps < angle_begin_degrees)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Angle range end must be >= begin");
+    }
+    if (scale_end + kEps < scale_begin)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Scale range end must be >= begin");
+    }
+
+    std::vector<ShapeTemplateVariant> variants;
+    for (float scale = scale_begin; scale <= scale_end + kEps; scale += scale_step)
+    {
+        for (float angle = angle_begin_degrees; angle <= angle_end_degrees + kEps; angle += angle_step_degrees)
+        {
+            variants.push_back(ShapeTemplateVariant{angle, scale});
+        }
+    }
+    return variants;
+}
+
+cv::Mat detail::transformShapeTemplateImage(const cv::Mat &image, ShapeTemplateVariant variant,
+                                            const cv::Scalar &border_value)
+{
+    validateImage(image, "image");
+    if (!std::isfinite(variant.angle_degrees) || !std::isfinite(variant.scale) || variant.scale <= 0.0f)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Shape template variant is invalid");
+    }
+
+    const cv::Point2f center(static_cast<float>(image.cols) * 0.5f, static_cast<float>(image.rows) * 0.5f);
+    const cv::Mat transform = cv::getRotationMatrix2D(center, variant.angle_degrees, variant.scale);
+    cv::Mat output;
+    cv::warpAffine(image, output, transform, image.size(), cv::INTER_LINEAR, cv::BORDER_CONSTANT, border_value);
+    return output;
 }
 
 } // namespace irt::features
