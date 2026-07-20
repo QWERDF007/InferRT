@@ -56,11 +56,12 @@ scanTemplateScalarFallback(const ShapeTemplateResponseMaps &response_maps, const
                            const cv::Mat &search_mask, cv::Size image_size, int scan_step, float threshold)
 {
     std::vector<ShapeTemplateScoredPosition> positions;
-    if (templ.width > image_size.width || templ.height > image_size.height || templ.features.empty())
+    if (templ.features.empty() || templ.width > image_size.width || templ.height > image_size.height)
         return positions;
 
-    const int max_y = image_size.height - templ.height;
     const int max_x = image_size.width - templ.width;
+    const int max_y = image_size.height - templ.height;
+
     for (int y = 0; y <= max_y; y += scan_step)
     {
         const int center_y = std::min(image_size.height - 1, y + templ.height / 2);
@@ -91,21 +92,22 @@ std::vector<ShapeTemplateScoredPosition>
 scanTemplateAvx2(const ShapeTemplateResponseMaps &response_maps, const ShapeTemplateInfo &templ,
                  const cv::Mat &search_mask, cv::Size image_size, int scan_step, float threshold)
 {
-    if (templ.width > image_size.width || templ.height > image_size.height || templ.features.empty())
+    if (templ.features.empty() || templ.width > image_size.width || templ.height > image_size.height)
         return {};
+
+    const int max_x = image_size.width - templ.width;
+    const int max_y = image_size.height - templ.height;
 
     const size_t feature_count = templ.features.size();
     const std::uint64_t maximum_per_feature = static_cast<std::uint64_t>(response_maps.denominator_per_feature);
     const std::uint64_t maximum_sum = maximum_per_feature * static_cast<std::uint64_t>(feature_count);
     // 使用 signed 16-bit 比较实现寄存器内早停；较大配置保留原标量路径以避免改变语义。
-    if (scan_step != 1 || maximum_sum > std::numeric_limits<std::int16_t>::max())
+    if (maximum_sum > std::numeric_limits<std::int16_t>::max())
     {
         return scanTemplateScalarFallback(response_maps, templ, search_mask, image_size, scan_step, threshold);
     }
 
     std::vector<ShapeTemplateScoredPosition> positions;
-    const int max_y = image_size.height - templ.height;
-    const int max_x = image_size.width - templ.width;
     const float denominator = static_cast<float>(maximum_sum);
     const std::uint64_t conservative_required_sum = static_cast<std::uint64_t>(
         threshold * static_cast<float>(maximum_sum) / 100.0f);
@@ -141,6 +143,202 @@ scanTemplateAvx2(const ShapeTemplateResponseMaps &response_maps, const ShapeTemp
         }
         response_lookups[static_cast<size_t>(template_label)]
             = _mm_loadu_si128(reinterpret_cast<const __m128i *>(lookup_values.data()));
+    }
+
+    // step=2 是最常见的空间抽样配置。候选坐标在内存中相隔一个字节，因而可从连续
+    // 32-byte load 中用 shuffle 压缩出 16 个偶数位置，明显快于通用 gather。
+    if (scan_step == 2)
+    {
+        alignas(16) static constexpr std::array<unsigned char, 16> kEvenByteIndices{
+            0, 2, 4, 6, 8, 10, 12, 14, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80};
+        const __m128i even_byte_indices = _mm_load_si128(
+            reinterpret_cast<const __m128i *>(kEvenByteIndices.data()));
+        const __m128i zero128 = _mm_setzero_si128();
+        constexpr size_t kPruneFeatureInterval = 4;
+        int max_feature_x = 0;
+        for (const auto &feature : templ.features)
+            max_feature_x = std::max(max_feature_x, feature.x);
+        const int max_read_offset = std::max(max_feature_x, templ.width / 2);
+
+        // 每组读取 32 连续字节并产生 x, x+2, ..., x+30；末尾改由标量路径处理，避免跨行读取。
+        const int last_vector_start = std::min(max_x - 30, image_size.width - max_read_offset - 32);
+        const auto select_even_bytes = [&](const unsigned char *source)
+        {
+            const __m256i loaded = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(source));
+            const __m128i lower = _mm256_castsi256_si128(loaded);
+            const __m128i upper = _mm256_extracti128_si256(loaded, 1);
+            return _mm_unpacklo_epi64(_mm_shuffle_epi8(lower, even_byte_indices),
+                                      _mm_shuffle_epi8(upper, even_byte_indices));
+        };
+
+        for (int y = 0; y <= max_y; y += 2)
+        {
+            const int center_y = std::min(image_size.height - 1, y + templ.height / 2);
+            const auto *mask_row = search_mask.ptr<unsigned char>(center_y);
+            const size_t row_offset = static_cast<size_t>(y) * response_step;
+            int x = 0;
+            for (; x <= last_vector_start; x += 32)
+            {
+                const __m128i mask_values = select_even_bytes(mask_row + x + templ.width / 2);
+                const int valid_lanes = ~_mm_movemask_epi8(_mm_cmpeq_epi8(mask_values, zero128)) & 0xFFFF;
+                if (valid_lanes == 0)
+                    continue;
+
+                __m256i total = _mm256_setzero_si256();
+                bool any_lane_can_match = true;
+                for (size_t index = 0; index < feature_count; ++index)
+                {
+                    const auto *source = feature_bases[index].base + row_offset + x;
+                    const __m128i source_labels = select_even_bytes(source);
+                    const __m128i responses = _mm_shuffle_epi8(
+                        response_lookups[static_cast<size_t>(feature_bases[index].label)], source_labels);
+                    total = _mm256_add_epi16(total, _mm256_cvtepu8_epi16(responses));
+
+                    const bool should_prune = (index + 1) % kPruneFeatureInterval == 0
+                                           || index + 1 == feature_count;
+                    if (!should_prune)
+                        continue;
+
+                    const std::uint64_t remaining = static_cast<std::uint64_t>(feature_count - index - 1);
+                    const std::uint64_t maximum_remaining = remaining * maximum_per_feature;
+                    if (conservative_required_sum <= maximum_remaining)
+                        continue;
+
+                    const auto minimum_current_sum = static_cast<std::int16_t>(
+                        conservative_required_sum - maximum_remaining - 1);
+                    const __m256i possible = _mm256_cmpgt_epi16(total, _mm256_set1_epi16(minimum_current_sum));
+                    any_lane_can_match = _mm256_movemask_epi8(possible) != 0;
+                    if (!any_lane_can_match)
+                        break;
+                }
+                if (!any_lane_can_match)
+                    continue;
+
+                std::array<std::uint16_t, 16> lane_sums{};
+                _mm256_storeu_si256(reinterpret_cast<__m256i *>(lane_sums.data()), total);
+                for (int lane = 0; lane < 16; ++lane)
+                {
+                    if ((valid_lanes & (1 << lane)) == 0)
+                        continue;
+                    const float score = 100.0f * static_cast<float>(lane_sums[static_cast<size_t>(lane)]) / denominator;
+                    if (score >= threshold)
+                        positions.push_back(ShapeTemplateScoredPosition{x + lane * 2, y, score});
+                }
+            }
+            for (; x <= max_x; x += 2)
+            {
+                const int center_x = std::min(image_size.width - 1, x + templ.width / 2);
+                if (mask_row[center_x] == 0)
+                    continue;
+
+                float score = 0.0f;
+                if (similarityAtLeastScalar(response_maps, templ, x, y, threshold, score))
+                    positions.push_back(ShapeTemplateScoredPosition{x, y, score});
+            }
+        }
+        return positions;
+    }
+
+    // 对空间步长大于 1 的近似搜索，候选 x 不再连续，原 32-byte load 路径无法直接复用。
+    // 这里一次 gather 8 个按步长间隔的位置，随后仍使用相同的查表、16-bit 累加和早停规则。
+    // 因此它既保留 scan_step 语义，又避免退回 v0 风格的逐窗口标量评分。
+    if (scan_step != 1)
+    {
+        const __m128i zero128 = _mm_setzero_si128();
+        const __m256i low_byte_mask = _mm256_set1_epi32(0xFF);
+        const __m256i gather_offsets = _mm256_setr_epi32(0, scan_step, 2 * scan_step, 3 * scan_step,
+                                                          4 * scan_step, 5 * scan_step, 6 * scan_step,
+                                                          7 * scan_step);
+        constexpr size_t kPruneFeatureInterval = 4;
+        int max_feature_x = 0;
+        for (const auto &feature : templ.features)
+            max_feature_x = std::max(max_feature_x, feature.x);
+        const int max_read_offset = std::max(max_feature_x, templ.width / 2);
+
+        // i32 gather 读取四个字节；最后几个候选改走标量尾部，确保不会跨越图像行边界。
+        if (scan_step > image_size.width / 8)
+        {
+            return scanTemplateScalarFallback(response_maps, templ, search_mask, image_size, scan_step, threshold);
+        }
+        const int vector_span = 7 * scan_step;
+        const int last_vector_start = std::min(max_x - vector_span,
+                                               image_size.width - max_read_offset - 4 - vector_span);
+        const auto gather_low_bytes = [&](const unsigned char *source)
+        {
+            const __m256i gathered = _mm256_and_si256(
+                _mm256_i32gather_epi32(reinterpret_cast<const int *>(source), gather_offsets, 1), low_byte_mask);
+            const __m128i lower = _mm256_castsi256_si128(gathered);
+            const __m128i upper = _mm256_extracti128_si256(gathered, 1);
+            const __m128i packed16 = _mm_packus_epi32(lower, upper);
+            return _mm_packus_epi16(packed16, zero128);
+        };
+
+        for (int y = 0; y <= max_y; y += scan_step)
+        {
+            const int center_y = std::min(image_size.height - 1, y + templ.height / 2);
+            const auto *mask_row = search_mask.ptr<unsigned char>(center_y);
+            const size_t row_offset = static_cast<size_t>(y) * response_step;
+            int x = 0;
+            for (; x <= last_vector_start; x += 8 * scan_step)
+            {
+                const __m128i mask_values = gather_low_bytes(mask_row + x + templ.width / 2);
+                const int valid_lanes = ~_mm_movemask_epi8(_mm_cmpeq_epi8(mask_values, zero128)) & 0xFF;
+                if (valid_lanes == 0)
+                    continue;
+
+                __m128i total = zero128;
+                bool any_lane_can_match = true;
+                for (size_t index = 0; index < feature_count; ++index)
+                {
+                    const auto *source = feature_bases[index].base + row_offset + x;
+                    const __m128i source_labels = gather_low_bytes(source);
+                    const __m128i responses = _mm_shuffle_epi8(
+                        response_lookups[static_cast<size_t>(feature_bases[index].label)], source_labels);
+                    total = _mm_add_epi16(total, _mm_cvtepu8_epi16(responses));
+
+                    const bool should_prune = (index + 1) % kPruneFeatureInterval == 0
+                                           || index + 1 == feature_count;
+                    if (!should_prune)
+                        continue;
+
+                    const std::uint64_t remaining = static_cast<std::uint64_t>(feature_count - index - 1);
+                    const std::uint64_t maximum_remaining = remaining * maximum_per_feature;
+                    if (conservative_required_sum <= maximum_remaining)
+                        continue;
+
+                    const auto minimum_current_sum = static_cast<std::int16_t>(
+                        conservative_required_sum - maximum_remaining - 1);
+                    const __m128i possible = _mm_cmpgt_epi16(total, _mm_set1_epi16(minimum_current_sum));
+                    any_lane_can_match = _mm_movemask_epi8(possible) != 0;
+                    if (!any_lane_can_match)
+                        break;
+                }
+                if (!any_lane_can_match)
+                    continue;
+
+                std::array<std::uint16_t, 8> lane_sums{};
+                _mm_storeu_si128(reinterpret_cast<__m128i *>(lane_sums.data()), total);
+                for (int lane = 0; lane < 8; ++lane)
+                {
+                    if ((valid_lanes & (1 << lane)) == 0)
+                        continue;
+                    const float score = 100.0f * static_cast<float>(lane_sums[static_cast<size_t>(lane)]) / denominator;
+                    if (score >= threshold)
+                        positions.push_back(ShapeTemplateScoredPosition{x + lane * scan_step, y, score});
+                }
+            }
+            for (; x <= max_x; x += scan_step)
+            {
+                const int center_x = std::min(image_size.width - 1, x + templ.width / 2);
+                if (mask_row[center_x] == 0)
+                    continue;
+
+                float score = 0.0f;
+                if (similarityAtLeastScalar(response_maps, templ, x, y, threshold, score))
+                    positions.push_back(ShapeTemplateScoredPosition{x, y, score});
+            }
+        }
+        return positions;
     }
 
     constexpr size_t kPruneFeatureInterval = 4;

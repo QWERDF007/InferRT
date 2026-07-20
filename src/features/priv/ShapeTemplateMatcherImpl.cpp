@@ -738,6 +738,21 @@ detail::ShapeTemplateMatcherEngine::ShapeTemplateMatcherEngine(
     }
 }
 
+/** @brief 校验仅影响本次调用的近似匹配策略。 */
+void validateMatchOptions(const ShapeTemplateMatchOptions &options)
+{
+    if (options.template_stride <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "ShapeTemplateMatchOptions template_stride must be positive");
+    }
+    if (options.scan_step < 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "ShapeTemplateMatchOptions scan_step must be non-negative");
+    }
+}
+
 detail::ShapeTemplateMatcherEngine::~ShapeTemplateMatcherEngine() = default;
 detail::ShapeTemplateMatcherEngine::ShapeTemplateMatcherEngine(ShapeTemplateMatcherEngine &&) noexcept = default;
 detail::ShapeTemplateMatcherEngine &detail::ShapeTemplateMatcherEngine::operator=(ShapeTemplateMatcherEngine &&) noexcept = default;
@@ -839,7 +854,7 @@ std::vector<int> detail::ShapeTemplateMatcherEngine::addTemplateVariants(
  */
 std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::match(
     const cv::Mat &image, float threshold, const std::vector<std::string> &class_ids,
-    const cv::Mat &search_mask) const
+    const cv::Mat &search_mask, ShapeTemplateMatchOptions options) const
 {
     validateImage(image, "source image");
     if (empty())
@@ -849,32 +864,10 @@ std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::match(
 
     const float effective_threshold = threshold < 0.0f ? config_.match_threshold : threshold;
     validateScoreRange(effective_threshold, "ShapeTemplateMatcher match threshold");
+    validateMatchOptions(options);
+    const int effective_scan_step = options.scan_step > 0 ? options.scan_step : config_.scan_step;
 
     const cv::Mat mask = normalizeMask(search_mask, image.size(), "search_mask");
-    const auto gradient = computeQuantizedGradient(image, mask, config_.weak_threshold, *kernel_);
-    std::array<bool, kOrientationBins> required_labels{};
-    auto mark_required_labels = [&](const std::vector<ShapeTemplateInfo> &templates)
-    {
-        for (const auto &templ : templates)
-            for (const auto &feature : templ.features)
-                required_labels[static_cast<size_t>(feature.label)] = true;
-    };
-    if (class_ids.empty())
-    {
-        for (const auto &item : templates_)
-            mark_required_labels(item.second);
-    }
-    else
-    {
-        for (const auto &class_id : class_ids)
-        {
-            const auto it = templates_.find(class_id);
-            if (it != templates_.end())
-                mark_required_labels(it->second);
-        }
-    }
-    const auto response_maps = buildResponseMaps(gradient.labels, config_.max_label_difference, *kernel_,
-                                                 required_labels);
 
     struct MatchWork
     {
@@ -885,7 +878,10 @@ std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::match(
     auto append_work = [&](const std::string &class_id, const std::vector<ShapeTemplateInfo> &templates)
     {
         for (const auto &templ : templates)
-            work_items.push_back(MatchWork{&class_id, &templ});
+        {
+            if (templ.template_id % options.template_stride == 0)
+                work_items.push_back(MatchWork{&class_id, &templ});
+        }
     };
     if (class_ids.empty())
     {
@@ -901,13 +897,29 @@ std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::match(
                 append_work(it->first, it->second);
         }
     }
+    if (work_items.empty())
+    {
+        return {};
+    }
+
+    // 仅物化实际会扫描的方向响应图。stride=1 时集合与原实现完全相同；近似模式还能避免
+    // 为已跳过的模板变体做无用工作。
+    std::array<bool, kOrientationBins> required_labels{};
+    for (const auto &work : work_items)
+    {
+        for (const auto &feature : work.templ->features)
+            required_labels[static_cast<size_t>(feature.label)] = true;
+    }
+    const auto gradient = computeQuantizedGradient(image, mask, config_.weak_threshold, *kernel_);
+    const auto response_maps = buildResponseMaps(gradient.labels, config_.max_label_difference, *kernel_,
+                                                 required_labels);
 
     auto scan_template = [&](const MatchWork &work)
     {
         std::vector<ShapeTemplateMatch> local_matches;
         const auto &templ = *work.templ;
         const auto scored_positions = kernel_->scanTemplate(response_maps, templ, mask, image.size(),
-                                                            config_.scan_step, effective_threshold);
+                                                            effective_scan_step, effective_threshold);
         local_matches.reserve(scored_positions.size());
         for (const auto &position : scored_positions)
         {
@@ -970,7 +982,7 @@ std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::match(
  */
 std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::matchFile(
     const fs::path &image_file, float threshold, const std::vector<std::string> &class_ids,
-    const fs::path &mask_file) const
+    const fs::path &mask_file, ShapeTemplateMatchOptions options) const
 {
     const cv::Mat image = loadImage(image_file, cv::IMREAD_UNCHANGED, "source image");
     cv::Mat       mask;
@@ -978,7 +990,7 @@ std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::matchFile(
     {
         mask = loadImage(mask_file, cv::IMREAD_GRAYSCALE, "search mask");
     }
-    return match(image, threshold, class_ids, mask);
+    return match(image, threshold, class_ids, mask, options);
 }
 
 void detail::ShapeTemplateMatcherEngine::clear()

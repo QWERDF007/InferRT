@@ -57,12 +57,14 @@ struct TrainingArguments
 /** @brief 匹配阶段命令行参数。 */
 struct MatchingArguments
 {
-    fs::path    load_templates; ///< 训练阶段生成的 YAML/XML 文件。
-    fs::path    source_image;   ///< 待搜索大图。
-    fs::path    search_mask;    ///< 可选搜索区域掩膜。
-    fs::path    output_image{"shape_template_matching_result.png"};
-    std::string class_filter;     ///< 为空时搜索所有类别。
-    float       threshold{-1.0f}; ///< 负数时使用模板文件中保存的阈值。
+    fs::path                load_templates; ///< 训练阶段生成的 YAML/XML 文件。
+    fs::path                source_image;   ///< 待搜索大图。
+    fs::path                search_mask;    ///< 可选搜索区域掩膜。
+    fs::path                output_image{"shape_template_matching_result.png"};
+    std::string             class_filter;     ///< 为空时搜索所有类别。
+    float                   threshold{-1.0f}; ///< 负数时使用模板文件中保存的阈值。
+    int                     template_stride{1}; ///< 近似模式：每隔多少个模板变体扫描一次。
+    int                     scan_step{0};       ///< 近似模式：0 使用模板文件配置，正数覆盖空间扫描步长。
 };
 
 /** @brief 计时控制参数。 */
@@ -232,6 +234,10 @@ cxxopts::Options makeOptions(const char *program_name)
         cxxopts::value<std::string>()->default_value(""))(
         "threshold,t", "Match threshold in [0, 100]; negative uses the value saved in the template file",
         cxxopts::value<float>()->default_value("-1"))(
+        "template-stride", "Approximate mode: search every Nth template variant; 1 scans all variants exactly",
+        cxxopts::value<int>()->default_value("1"))(
+        "scan-step", "Approximate mode: override spatial scan step; 0 uses the template-file setting",
+        cxxopts::value<int>()->default_value("0"))(
         "output,o", "Output visualization image",
         cxxopts::value<std::string>()->default_value("shape_template_matching_result.png"));
     return options;
@@ -315,6 +321,8 @@ Arguments parseArguments(int argc, char *argv[])
         matching.class_filter   = result["class-filter"].as<std::string>();
         matching.threshold      = result["threshold"].as<float>();
         matching.output_image   = result["output"].as<std::string>();
+        matching.template_stride = result["template-stride"].as<int>();
+        matching.scan_step       = result["scan-step"].as<int>();
         if (matching.load_templates.empty())
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--load-templates is required in match mode");
@@ -327,6 +335,14 @@ Arguments parseArguments(int argc, char *argv[])
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                                  "--threshold must be finite and no greater than 100");
+        }
+        if (matching.template_stride <= 0)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--template-stride must be positive");
+        }
+        if (matching.scan_step < 0)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--scan-step must be non-negative");
         }
     }
     else
@@ -443,10 +459,13 @@ void runMatching(const MatchingArguments &args, const TimingArguments &timing,
     {
         class_ids.push_back(args.class_filter);
     }
+    irt::features::ShapeTemplateMatchOptions match_options;
+    match_options.template_stride = args.template_stride;
+    match_options.scan_step       = args.scan_step;
 
     for (int iteration = 0; iteration < timing.warmup; ++iteration)
     {
-        (void)matcher->match(source, args.threshold, class_ids, search_mask);
+        (void)matcher->match(source, args.threshold, class_ids, search_mask, match_options);
     }
 
     std::vector<irt::features::ShapeTemplateMatch> matches;
@@ -455,7 +474,7 @@ void runMatching(const MatchingArguments &args, const TimingArguments &timing,
     for (int iteration = 0; iteration < timing.repeat; ++iteration)
     {
         const auto start           = std::chrono::steady_clock::now();
-        auto current_matches = matcher->match(source, args.threshold, class_ids, search_mask);
+        auto current_matches = matcher->match(source, args.threshold, class_ids, search_mask, match_options);
         const auto stop            = std::chrono::steady_clock::now();
         samples_ms.push_back(std::chrono::duration<double, std::milli>(stop - start).count());
         if (iteration == timing.repeat - 1)
@@ -475,6 +494,9 @@ void runMatching(const MatchingArguments &args, const TimingArguments &timing,
     std::cout << "stage: match" << std::endl;
     std::cout << "version: " << irt::features::shapeTemplateMatcherVersionName(version) << std::endl;
     std::cout << "templates: " << matcher->numTemplates() << std::endl;
+    std::cout << "template stride: " << match_options.template_stride << std::endl;
+    std::cout << "scan step: " << (match_options.scan_step > 0 ? match_options.scan_step : matcher->config().scan_step)
+              << (match_options.scan_step > 0 ? " (override)" : " (template config)") << std::endl;
     std::cout << "matches: " << matches.size() << std::endl;
     for (size_t i = 0; i < matches.size(); ++i)
     {

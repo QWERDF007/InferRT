@@ -176,13 +176,15 @@ matcher.load("shape_templates.yaml");
 内存入口：
 
 ```cpp
-const auto matches = matcher.match(source_image, 85.0f, {"part"}, search_mask);
+irt::features::ShapeTemplateMatchOptions options; // 默认：template_stride=1，scan_step=0
+const auto matches = matcher.match(source_image, 85.0f, {"part"}, search_mask, options);
 ```
 
 文件入口：
 
 ```cpp
-const auto matches = matcher.matchFile("scene.png", 85.0f, {"part"}, "search_mask.png");
+irt::features::ShapeTemplateMatchOptions options;
+const auto matches = matcher.matchFile("scene.png", 85.0f, {"part"}, "search_mask.png", options);
 ```
 
 匹配流程如下：
@@ -197,12 +199,12 @@ const auto matches = matcher.matchFile("scene.png", 85.0f, {"part"}, "search_mas
    - 每张响应图对应一个模板方向标签。
    - 响应值表示源图该像素方向对该模板方向的整数贡献。
    - 方向完全不匹配时贡献为 `0`。
-6. 根据 `class_ids` 决定参与匹配的类别：
+6. 根据 `class_ids` 与运行时 `ShapeTemplateMatchOptions::template_stride` 决定参与匹配的模板：
    - `class_ids` 为空时扫描全部类别。
    - `class_ids` 非空时只扫描存在于模板库中的指定类别。
+   - `template_stride=1` 时扫描全部变体；大于 1 时只扫描 `template_id % template_stride == 0` 的变体，这是显式近似模式。
 7. 对每个模板做滑窗扫描：
-   - 滑窗范围为 `[0, image.width - template.width] x [0, image.height - template.height]`。
-   - 步长为 `config.scan_step`。
+   - 步长为 `options.scan_step > 0 ? options.scan_step : config.scan_step`。
    - 滑窗中心点在 `search_mask` 中为零时跳过。
 8. 对每个滑窗位置，根据模板特征点访问对应方向响应图并累加贡献。
 9. 将累加贡献归一化为 `[0, 100]` 分数：
@@ -244,7 +246,7 @@ IShapeTemplateMatcher / createShapeTemplateMatcher(version)
 - v0 注入 `Scalar` kernel，不使用显式 SIMD intrinsic，并保持 `shape_based_matching` 风格的标量响应图/逐窗口基线；v1 注入 `Avx2` kernel，并在创建时检查 CPU 是否支持 AVX2。两个公开类不会相互包含、相互继承或相互调用。
 - 两条路径产生相同的 `ShapeTemplateInfo`、`ShapeTemplateMatch` 和 YAML/XML 模板格式，因此可交叉加载与对照测试。
 
-v1 的 AVX2 内核覆盖四段热点：每次处理 8 个 `float` 的方向量化、每次处理 32 个像素的候选点过滤、方向标签字节 shuffle 查表，以及批量滑窗打分。评分时按当前源图的方向响应均值重排特征；每累计 4 个特征即以理论上界淘汰不可能达标的整组候选。常见的分子上界不超过 255 时，v1 用 8-bit 累加一次处理 32 个相邻候选；较大但仍安全的配置使用 16-bit/16-lane 路径，`scan_step != 1` 或更大累计范围会精确回退到标量评分。v1 正常路径直接读取量化标签并查表，不再物化 8 张响应图；v0 保持物化响应图的标量基线。CMake 只为该内核源文件开启 AVX2，不会把 CPU 指令集要求扩散到 v0 或其他模块。OpenCV 的 `Sobel`、`cartToPolar`、`warpAffine` 仍会按其构建配置使用优化。
+v1 的 AVX2 内核覆盖四段热点：每次处理 8 个 `float` 的方向量化、每次处理 32 个像素的候选点过滤、方向标签字节 shuffle 查表，以及批量滑窗打分。评分时按当前源图的方向响应均值重排特征；每累计 4 个特征即以理论上界淘汰不可能达标的整组候选。常见的分子上界不超过 255 时，v1 用 8-bit 累加一次处理 32 个相邻候选；较大但仍安全的配置使用 16-bit/16-lane 路径。`scan_step=2` 时，内核从连续 32-byte 读取中 shuffle 压缩出 16 个间隔候选；其他正步长使用 AVX2 gather，累计范围过大才精确回退到标量评分。v1 正常路径直接读取量化标签并查表，不再物化 8 张响应图；v0 保持物化响应图的标量基线。CMake 只为该内核源文件开启 AVX2，不会把 CPU 指令集要求扩散到 v0 或其他模块。OpenCV 的 `Sobel`、`cartToPolar`、`warpAffine` 仍会按其构建配置使用优化。
 
 后续扩展 AVX512 时无需修改引擎流程：
 
@@ -302,7 +304,9 @@ inferrt_sample_shape_template_matching
   --output D:\data\shape_template_matching_result.png
 ```
 
-匹配区域可通过与源图同尺寸的 `--search-mask` 限制；该参数不同于训练阶段的 `--template-mask`。
+匹配区域可通过与源图同尺寸的 `--search-mask` 限制；该参数与训练阶段的 `--template-mask` 用途不同。若上游已知目标区域，建议由上游先裁剪源图，再将裁剪图传入匹配器。
+
+默认匹配保持精确：`--template-stride 1 --scan-step 0`。需要以召回、最佳变体或像素级定位精度换取延迟时，可显式设置更大的 `--template-stride` 或 `--scan-step`；它们不会写回模板文件。
 
 `--version` 支持 `v0` 和 `v1`，默认 `v1`。模板文件不绑定实现版本，因此可用 v0 训练、v1 匹配，或将两种版本作为结果与性能对照。
 
@@ -314,10 +318,10 @@ inferrt_sample_shape_template_matching
 - 背景边缘很复杂：提供精确 `object_mask`，并提高 `strong_threshold` 或减小 `num_features`。
 - 旋转变化明显：用 `addTemplateVariants()` 训练角度模板；角度步长越小，召回越好，但模板数量和匹配时间线性增加。
 - 尺度变化明显：训练多个 `scale`；尺度步长越小，召回越好，但模板数量线性增加。
-- 定位结果有 1 到数个像素偏差：保持 `scan_step = 1`；如果只需要粗定位，可以增大 `scan_step`。
+- 定位结果有 1 到数个像素偏差：保持 `scan_step = 1`；如果只需要粗定位，可以在本次匹配设置更大的 `ShapeTemplateMatchOptions::scan_step`（示例为 `--scan-step`）。
 - 误检较多：提高 `match_threshold`，减小 `max_label_difference`，或提高 `nms_threshold` 后再观察候选框分布。
 - 同一目标返回多个重叠框：保持 `nms_threshold >= 0`，常用范围为 `0.2` 到 `0.5`。
-- 匹配太慢：减少模板变体数量、减少 `num_features`、增大 `scan_step`、缩小 `search_mask` 或先用 ROI 限定搜索区域。
+- 匹配太慢：若上游已知目标区域，应由上游先裁剪图像并单独评估整个流水线；若必须全图匹配且可接受近似，再提高 `template_stride`、增大 `scan_step`、减少模板变体数量或减少 `num_features`。
 - 只关心某些类别：调用 `match()` 时传入 `class_ids`，避免扫描无关类别模板。
 
 ## 11. 注意事项和限制

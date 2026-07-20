@@ -43,11 +43,12 @@ scanTemplateScalar(const ShapeTemplateResponseMaps &response_maps, const ShapeTe
                    const cv::Mat &search_mask, cv::Size image_size, int scan_step, float threshold)
 {
     std::vector<ShapeTemplateScoredPosition> positions;
-    if (templ.width > image_size.width || templ.height > image_size.height || templ.features.empty())
+    if (templ.features.empty() || templ.width > image_size.width || templ.height > image_size.height)
         return positions;
 
-    const int max_y = image_size.height - templ.height;
     const int max_x = image_size.width - templ.width;
+    const int max_y = image_size.height - templ.height;
+
     for (int y = 0; y <= max_y; y += scan_step)
     {
         const int center_y = std::min(image_size.height - 1, y + templ.height / 2);

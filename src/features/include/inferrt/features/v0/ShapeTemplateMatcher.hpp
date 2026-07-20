@@ -34,10 +34,12 @@ public:
                                          const std::vector<ShapeTemplateVariant> &) override;
     std::vector<ShapeTemplateMatch> match(const cv::Mat &, float = -1.0f,
                                           const std::vector<std::string> & = {},
-                                          const cv::Mat & = cv::Mat()) const override;
+                                          const cv::Mat & = cv::Mat(),
+                                          ShapeTemplateMatchOptions = {}) const override;
     std::vector<ShapeTemplateMatch> matchFile(const std::filesystem::path &, float = -1.0f,
                                               const std::vector<std::string> & = {},
-                                              const std::filesystem::path & = {}) const override;
+                                              const std::filesystem::path & = {},
+                                              ShapeTemplateMatchOptions = {}) const override;
     void clear() override;
     bool empty() const noexcept override;
     int numClasses() const noexcept override;

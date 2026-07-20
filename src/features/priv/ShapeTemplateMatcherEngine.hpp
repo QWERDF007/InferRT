@@ -91,7 +91,7 @@ public:
      * v0 保持参考 ``shape_based_matching`` 的标量逐位置累加语义；v1 可将同一语义替换为
      * 批量 SIMD 累加与早停。引擎仍统一负责模板调度、类别信息、排序和 NMS，因此未来 v2/AVX512
      * 只需实现该热点接口。
-     */
+    */
     virtual std::vector<ShapeTemplateScoredPosition>
     scanTemplate(const ShapeTemplateResponseMaps &response_maps, const ShapeTemplateInfo &templ,
                  const cv::Mat &search_mask, cv::Size image_size, int scan_step, float threshold) const = 0;
@@ -135,10 +135,12 @@ public:
                                          const std::vector<ShapeTemplateVariant> &variants);
     std::vector<ShapeTemplateMatch> match(const cv::Mat &image, float threshold,
                                           const std::vector<std::string> &class_ids,
-                                          const cv::Mat &search_mask) const;
+                                          const cv::Mat &search_mask,
+                                          ShapeTemplateMatchOptions options) const;
     std::vector<ShapeTemplateMatch> matchFile(const std::filesystem::path &image_file, float threshold,
                                               const std::vector<std::string> &class_ids,
-                                              const std::filesystem::path &mask_file) const;
+                                              const std::filesystem::path &mask_file,
+                                              ShapeTemplateMatchOptions options) const;
     void clear();
     bool empty() const noexcept;
     int numClasses() const noexcept;

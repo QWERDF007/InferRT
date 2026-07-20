@@ -39,6 +39,18 @@ struct ShapeTemplateMatcherConfig
     float min_feature_distance{0.0f};                            ///< 贪心选点最小间距；0 表示按模板面积自动估计。
 };
 
+/**
+ * @brief 单次匹配的运行时策略。
+ *
+ * 默认值会完整扫描模板和保存的空间扫描网格，因此与未传入该对象时的结果严格一致。
+ * 非默认值用于在已知场景可接受召回率或定位精度损失时缩短匹配时间；它们不会写入模板文件。
+ */
+struct ShapeTemplateMatchOptions
+{
+    int template_stride{1}; ///< 每隔多少个模板变体扫描一次；1 表示扫描全部模板，``> 1`` 为近似模式。
+    int scan_step{0};       ///< 0 表示使用模板配置中的 ``scan_step``；正数覆盖它，较大值为近似空间搜索。
+};
+
 /** @brief 生成旋转/缩放模板变体时使用的元数据。 */
 struct ShapeTemplateVariant
 {

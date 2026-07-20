@@ -44,17 +44,19 @@ std::vector<int> ShapeTemplateMatcher::addTemplateVariants(const cv::Mat &image,
 
 std::vector<ShapeTemplateMatch> ShapeTemplateMatcher::match(const cv::Mat &image, float threshold,
                                                             const std::vector<std::string> &class_ids,
-                                                            const cv::Mat &search_mask) const
+                                                            const cv::Mat &search_mask,
+                                                            ShapeTemplateMatchOptions options) const
 {
-    return impl_->match(image, threshold, class_ids, search_mask);
+    return impl_->match(image, threshold, class_ids, search_mask, options);
 }
 
 std::vector<ShapeTemplateMatch> ShapeTemplateMatcher::matchFile(const std::filesystem::path &image_file,
                                                                 float threshold,
                                                                 const std::vector<std::string> &class_ids,
-                                                                const std::filesystem::path &mask_file) const
+                                                                const std::filesystem::path &mask_file,
+                                                                ShapeTemplateMatchOptions options) const
 {
-    return impl_->matchFile(image_file, threshold, class_ids, mask_file);
+    return impl_->matchFile(image_file, threshold, class_ids, mask_file, options);
 }
 
 void ShapeTemplateMatcher::clear()

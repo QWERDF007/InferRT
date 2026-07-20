@@ -33,11 +33,13 @@ public:
                                                  const std::vector<ShapeTemplateVariant> &variants) = 0;
     virtual std::vector<ShapeTemplateMatch> match(const cv::Mat &image, float threshold = -1.0f,
                                                   const std::vector<std::string> &class_ids = {},
-                                                  const cv::Mat &search_mask = cv::Mat()) const = 0;
+                                                  const cv::Mat &search_mask = cv::Mat(),
+                                                  ShapeTemplateMatchOptions options = {}) const = 0;
     virtual std::vector<ShapeTemplateMatch> matchFile(const std::filesystem::path &image_file,
                                                       float threshold = -1.0f,
                                                       const std::vector<std::string> &class_ids = {},
-                                                      const std::filesystem::path &mask_file = {}) const = 0;
+                                                      const std::filesystem::path &mask_file = {},
+                                                      ShapeTemplateMatchOptions options = {}) const = 0;
     virtual void clear() = 0;
     virtual bool empty() const noexcept = 0;
     virtual int numClasses() const noexcept = 0;

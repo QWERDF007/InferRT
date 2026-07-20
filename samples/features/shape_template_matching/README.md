@@ -74,7 +74,48 @@ build\bin\inferrt_sample_shape_template_matching.exe
 
 两个看似合理但在该真实场景中更慢的方案没有保留：完整得分图累加超过 180,000 ms 后超时；在少量存活 lane 时改回标量收尾为 13,845.349 ms（比阶段 2 慢 2.26×）。
 
-最终同条件真实图对照为：v0 `97,209.074 ms`，v1 `2,643.169 ms`，v1 为 **36.78×** 更快（耗时降低 **97.28%**），且匹配字段一致。v2/AVX512 本轮未加入；当前评分内核已抽象为独立策略，后续可在不改动 v0、模板格式、训练流程或 NMS 的前提下单独实现。
+最终同条件全图真实图对照为：v0 `100,158.746 ms`，v1 `2,675.392 ms`，v1 为 **37.44×** 更快（耗时降低 **97.33%**），且匹配字段一致。v2/AVX512 本轮未加入；当前评分内核已抽象为独立策略，后续可在不改动 v0、模板格式、训练流程或 NMS 的前提下单独实现。
+
+## 本轮：精确优化与可选近似加速
+
+本节也使用 `F:\data\shape_match\51661.png`、`part_templates.yaml` 和 2,000 个模板；所有数据都严格使用一次运行：
+
+```powershell
+--warmup 0 --repeat 1
+```
+
+因此数据用于功能与量级验证，不应替代多次重复的稳定性能基准。
+
+### 以默认 v1 为 baseline 的整体耗时
+
+这里的“默认 v1 baseline”指当前正常的全图精确调用：不传 `--search-mask`、`--template-stride 1`、`--scan-step 0`（模板文件实际为 `scan_step=1`）。其 `match()` 耗时为 **2,675.392 ms**。下表中的“相对 baseline”全部直接用这个数相除，不是相对上一行：
+
+| 场景 / 开关 | 搜索范围 | `template-stride` | 有效 `scan-step` | 整体单次 match | 相对默认 v1 | 结果影响 |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| 默认 v1 baseline | 全图 | 1 | 1 | 2,675.392 ms | 1.00× | 精确：`1000` / `100` / `(1289,247,437,442)` |
+| 仅模板抽样 | 全图 | 7 | 1 | 563.922 ms | 4.74× | ID 变为 `1001`，分数 91.6667，IoU 0.9776 |
+| 仅空间抽样 | 全图 | 1 | 2 | 1,640.056 ms | 1.63× | 同 ID、同分数，框偏移 1 px，IoU 0.9909 |
+| 两项近似同时开 | 全图 | 7 | 2 | **404.547 ms** | **6.61×** | ID `1001`，分数 91.6667，IoU 0.9776 |
+
+表中只统计全图匹配；不把外部先验 ROI、裁剪或搜索范围限制计为算法优化。若上游能够确定目标所在区域，应由上游裁剪图像后再调用匹配器，并单独评估整个流水线的耗时与召回。
+
+### 可能影响精度：运行时匹配选项
+
+`ShapeTemplateMatchOptions` 不写入 YAML/XML，只影响本次 `match()` / `matchFile()` 调用。示例把它们暴露为以下默认关闭的参数：
+
+- `--template-stride N`：只扫描模板 ID 可被 `N` 整除的变体。默认 `1`，扫描全部模板；`N > 1` 可能跳过最佳角度/尺度变体，从而影响召回、分数和框大小。
+- `--scan-step N`：`0` 表示使用模板文件中的 `scan_step`；正数覆盖空间扫描步长。当前模板文件为 `scan_step=1`；增大到 `2` 会减少候选位置，可能产生像素级定位偏差或漏检。
+
+上表中的 IoU 为当前 top-1 框相对精确 top-1 框的 IoU；所有配置均返回 1 个匹配。相对精确基线，三种近似配置的耗时分别降低 **78.92%**、**38.70%** 和 **84.88%**。真实图上 `template-stride=7` 仍检测到目标，但最佳变体从 ID 1000 变为 1001，分数降至 91.6667；这正是该选项的预期精度代价。`scan-step=2` 保持相同模板和分数，但定位偏移 1 像素。不同图像、阈值和角度/尺度采样密度下，近似配置也可能直接漏检，因此生产使用前应按目标数据集验证。
+
+对应 API 用法：
+
+```cpp
+irt::features::ShapeTemplateMatchOptions options;
+options.template_stride = 7; // 默认 1：精确
+options.scan_step = 2;       // 默认 0：沿用模板文件配置
+const auto matches = matcher.match(source, 85.0f, {"part"}, cv::Mat(), options);
+```
 
 ## 第一阶段：训练模板
 
@@ -162,6 +203,21 @@ build\bin\inferrt_sample_shape_template_matching.exe
 
 `--search-mask` 非零区域允许搜索，零值区域会跳过；它与训练阶段的 `--template-mask` 用途不同。
 
+需要更短的延迟、且允许量化的召回或定位损失时，可显式开启近似匹配选项，例如：
+
+```powershell
+.\build\bin\inferrt_sample_shape_template_matching.exe `
+  --mode match `
+  --version v1 `
+  --load-templates "D:\data\part_templates.yaml" `
+  --source "D:\data\scene.png" `
+  --template-stride 7 `
+  --scan-step 2 `
+  --output "D:\data\result.png"
+```
+
+省略上述两个参数等价于 `--template-stride 1 --scan-step 0`，保持完整模板集合和模板文件保存的空间扫描步长。
+
 ## 时间统计
 
 `--warmup` 和 `--repeat` 对当前 `--mode` 指定的阶段生效，默认分别为 `3` 和 `10`：
@@ -208,6 +264,8 @@ build\bin\inferrt_sample_shape_template_matching.exe
 - `--search-mask`：可选源图搜索区域掩码，必须与源图同尺寸。
 - `--class-filter`：可选类别过滤；省略时搜索模板文件中的全部类别。
 - `--threshold`：本次匹配的分数阈值，范围 `[0,100]`；传负数或省略时使用模板文件中保存的默认值。
+- `--template-stride`：本次匹配每隔多少个模板变体扫描一次，默认 `1`（精确）；大于 `1` 为可能影响召回和角度/尺度精度的近似模式。
+- `--scan-step`：本次匹配覆盖空间扫描步长；默认 `0`，表示使用模板文件配置。大于保存值时通常更快，但可能产生定位偏差或漏检。
 - `--output`：带匹配框的输出图，默认 `shape_template_matching_result.png`。
 
 角度/尺度步长越小，模板数量和匹配耗时越高，但对相应变化的召回率通常更好。误检较多时提高 `--threshold`；漏检较多时适当降低它。
