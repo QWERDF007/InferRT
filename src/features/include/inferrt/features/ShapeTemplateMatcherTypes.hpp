@@ -11,7 +11,6 @@
 #include <opencv2/core/types.hpp>
 
 #include <filesystem>
-#include <string>
 #include <vector>
 
 namespace irt::features {
@@ -21,7 +20,7 @@ inline constexpr int   kDefaultShapeTemplateMinFeatures     = 4;     ///< 默认
 inline constexpr float kDefaultShapeTemplateWeakThreshold   = 30.0f; ///< 默认源图梯度弱阈值。
 inline constexpr float kDefaultShapeTemplateStrongThreshold = 60.0f; ///< 默认模板候选特征强阈值。
 inline constexpr float kDefaultShapeTemplateMatchThreshold  = 80.0f; ///< 默认匹配分数阈值。
-inline constexpr float kDefaultShapeTemplateNmsThreshold    = 0.3f;  ///< 默认同类别 NMS IoU 阈值。
+inline constexpr float kDefaultShapeTemplateNmsThreshold    = 0.3f;  ///< 默认 NMS IoU 阈值。
 
 /** @brief 形状模板匹配器配置。 */
 struct ShapeTemplateMatcherConfig
@@ -32,7 +31,7 @@ struct ShapeTemplateMatcherConfig
     float strong_threshold{kDefaultShapeTemplateStrongThreshold}; ///< 模板候选特征点的梯度幅值阈值。
     int   max_label_difference{1};                               ///< 环形方向 bin 容差，合法范围为 ``[0, 4]``。
     float match_threshold{kDefaultShapeTemplateMatchThreshold};   ///< 默认匹配分数阈值，合法范围为 ``[0, 100]``。
-    float nms_threshold{kDefaultShapeTemplateNmsThreshold};       ///< 同类别 NMS 的 IoU 阈值；小于 0 时关闭 NMS。
+    float nms_threshold{kDefaultShapeTemplateNmsThreshold};       ///< NMS 的 IoU 阈值；小于 0 时关闭 NMS。
     int   max_results{0};                                        ///< 最多返回的匹配数量；0 表示不限制。
     int   scan_step{1};                                          ///< 滑窗扫描步长，单位为像素。
     int   max_parallelism{0};                                    ///< 模板扫描工作线程数；0 表示自动，1 表示串行。
@@ -62,15 +61,14 @@ struct ShapeTemplateVariant
 /**
  * @brief 多模板变体训练中的一个输入项。
  *
- * @details 每个输入项可使用不同的图像、目标掩膜和类别，但同一次
+ * @details 每个输入项可使用不同的图像和目标掩膜，但同一次
  * ``addTemplateVariantsBatch()`` 调用中的所有输入项共用一组角度/尺度变体。图像和掩膜只在
  * 调用期间被只读访问；非空掩膜必须与图像尺寸一致。
  */
 struct ShapeTemplateTrainingInput
 {
-    cv::Mat      image;       ///< 待训练的模板图像或从大图裁剪出的 ROI。
-    std::string  class_id;    ///< 写入模板库的类别 ID。
-    cv::Mat      object_mask; ///< 可选目标掩膜；为空时整张输入图有效。
+    cv::Mat image;       ///< 待训练的模板图像或从大图裁剪出的 ROI。
+    cv::Mat object_mask; ///< 可选目标掩膜；为空时整张输入图有效。
 };
 
 /** @brief 模板中的一个量化梯度方向特征点。 */
@@ -85,14 +83,13 @@ struct ShapeTemplateFeature
 /** @brief 已训练模板的元数据和选中的特征点集合。 */
 struct ShapeTemplateInfo
 {
-    std::string class_id;            ///< 调用方提供的类别 ID。
-    int         template_id{-1};     ///< 当前类别内的模板 ID。
-    int         width{0};            ///< 裁剪后的模板特征包围盒宽度。
-    int         height{0};           ///< 裁剪后的模板特征包围盒高度。
-    int         tl_x{0};             ///< 特征点包围盒在训练图像中的左上角 x 坐标。
-    int         tl_y{0};             ///< 特征点包围盒在训练图像中的左上角 y 坐标。
-    float       angle_degrees{0.0f}; ///< 模板变体对应的旋转角度元数据。
-    float       scale{1.0f};         ///< 模板变体对应的缩放倍率元数据。
+    int   template_id{-1};     ///< 模板文件内的全局模板 ID。
+    int   width{0};            ///< 裁剪后的模板特征包围盒宽度。
+    int   height{0};           ///< 裁剪后的模板特征包围盒高度。
+    int   tl_x{0};             ///< 特征点包围盒在训练图像中的左上角 x 坐标。
+    int   tl_y{0};             ///< 特征点包围盒在训练图像中的左上角 y 坐标。
+    float angle_degrees{0.0f}; ///< 模板变体对应的旋转角度元数据。
+    float scale{1.0f};         ///< 模板变体对应的缩放倍率元数据。
 
     std::vector<ShapeTemplateFeature> features; ///< 模板保留的稀疏梯度方向特征点。
 };
@@ -100,15 +97,14 @@ struct ShapeTemplateInfo
 /** @brief 一个形状模板匹配结果。 */
 struct ShapeTemplateMatch
 {
-    int         x{0};                ///< 源图坐标系下匹配框左上角 x 坐标。
-    int         y{0};                ///< 源图坐标系下匹配框左上角 y 坐标。
-    int         width{0};            ///< 匹配模板宽度。
-    int         height{0};           ///< 匹配模板高度。
-    float       similarity{0.0f};    ///< 梯度方向一致性分数，范围为 ``[0, 100]``。
-    std::string class_id;            ///< 命中的类别 ID。
-    int         template_id{-1};     ///< 命中的类别内模板 ID。
-    float       angle_degrees{0.0f}; ///< 命中模板的训练变体元数据。
-    float       scale{1.0f};         ///< 命中模板的训练变体元数据。
+    int   x{0};                ///< 源图坐标系下匹配框左上角 x 坐标。
+    int   y{0};                ///< 源图坐标系下匹配框左上角 y 坐标。
+    int   width{0};            ///< 匹配模板宽度。
+    int   height{0};           ///< 匹配模板高度。
+    float similarity{0.0f};    ///< 梯度方向一致性分数，范围为 ``[0, 100]``。
+    int   template_id{-1};     ///< 模板文件内的全局模板 ID。
+    float angle_degrees{0.0f}; ///< 命中模板的训练变体元数据。
+    float scale{1.0f};         ///< 命中模板的训练变体元数据。
 };
 
 /** @brief 内置形状模板匹配实现版本。 */

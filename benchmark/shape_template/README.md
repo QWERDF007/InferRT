@@ -15,7 +15,7 @@
 
 执行基准后，重点比较 `AVX512`、`AVX2` 与 `Scalar` 的 `real_time`。对应加速比分别为 `Scalar real_time / AVX512 real_time` 与 `Scalar real_time / AVX2 real_time`。没有 AVX512F/BW 的机器会将 AVX512 条目标记为不可执行，而不会用 AVX2 冒充 v2 数据。
 
-四模板场景将同一模板注册为四个不同类别，以覆盖模板级并行扫描。结果会受 CPU 型号、编译优化级别、OpenCV 构建、睿频和内存带宽影响，应在同一机器、同一构建配置内比较。真实 2,000 模板单次验证与逐步优化收益见 [示例 README](../../samples/features/shape_template_matching/README.md#v1-真实图优化验证)。
+四模板场景将同一模板加入同一个模板库四次，以覆盖模板级并行扫描。结果会受 CPU 型号、编译优化级别、OpenCV 构建、睿频和内存带宽影响，应在同一机器、同一构建配置内比较。真实 2,000 模板单次验证与逐步优化收益见 [示例 README](../../samples/features/shape_template_matching/README.md#v1-真实图优化验证)。
 
 ### 本轮优化
 

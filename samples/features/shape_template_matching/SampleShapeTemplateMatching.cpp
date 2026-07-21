@@ -42,8 +42,7 @@ struct TrainingArguments
     fs::path              template_image; ///< 模板输入图像；可以是大图。
     fs::path              template_mask;  ///< 可选目标掩膜。
     std::vector<cv::Rect> template_rois;  ///< 可重复指定的大图裁剪区域；为空时训练整图。
-    fs::path              save_templates; ///< 训练后写入的 YAML/XML 文件。
-    std::string           class_id{"part"};
+    fs::path              save_templates; ///< 训练后写入的标准 YAML 文件。
     float                                     angle_begin{0.0f};
     float                                     angle_end{90.0f};
     float                                     angle_step{15.0f};
@@ -56,11 +55,10 @@ struct TrainingArguments
 /** @brief 匹配阶段命令行参数。 */
 struct MatchingArguments
 {
-    fs::path                load_templates; ///< 训练阶段生成的 YAML/XML 文件。
+    fs::path                load_templates; ///< 训练阶段生成的标准 YAML 文件。
     fs::path                source_image;   ///< 待搜索大图。
     fs::path                search_mask;    ///< 可选搜索区域掩膜。
     fs::path                output_image{"shape_template_matching_result.png"};
-    std::string             class_filter;     ///< 为空时搜索所有类别。
     float                   threshold{-1.0f}; ///< 负数时使用模板文件中保存的阈值。
     int                     template_stride{1}; ///< 近似模式：每隔多少个模板变体扫描一次。
     int                     scan_step{0};       ///< 近似模式：0 使用模板文件配置，正数覆盖空间扫描步长。
@@ -215,9 +213,8 @@ cxxopts::Options makeOptions(const char *program_name)
         cxxopts::value<std::string>()->default_value(""))(
         "template-mask", "Optional object mask; cropped-template size is allowed only with one template-roi",
         cxxopts::value<std::string>()->default_value(""))("save-templates",
-                                                          "Output YAML/XML path for the trained templates",
+                                                          "Output standard YAML path for the trained templates",
                                                           cxxopts::value<std::string>()->default_value(""))(
-        "class-id,c", "Class id written to the template file", cxxopts::value<std::string>()->default_value("part"))(
         "angle-begin", "First training angle in degrees", cxxopts::value<float>()->default_value("0"))(
         "angle-end", "Last training angle in degrees", cxxopts::value<float>()->default_value("90"))(
         "angle-step", "Training angle step in degrees", cxxopts::value<float>()->default_value("15"))(
@@ -231,12 +228,10 @@ cxxopts::Options makeOptions(const char *program_name)
         "nms", "Matching NMS IoU threshold saved in the template file; negative disables NMS",
         cxxopts::value<float>()->default_value("0.3"));
 
-    options.add_options("Matching")("load-templates", "Input YAML/XML template file",
+    options.add_options("Matching")("load-templates", "Input standard YAML template file",
                                     cxxopts::value<std::string>()->default_value(""))(
         "source", "Source image to search", cxxopts::value<std::string>()->default_value(""))(
         "search-mask", "Optional source-image search mask", cxxopts::value<std::string>()->default_value(""))(
-        "class-filter", "Only search this class id; empty searches every class",
-        cxxopts::value<std::string>()->default_value(""))(
         "threshold,t", "Match threshold in [0, 100]; negative uses the value saved in the template file",
         cxxopts::value<float>()->default_value("-1"))(
         "template-stride", "Approximate mode: search every Nth template variant; 1 scans all variants exactly",
@@ -282,7 +277,6 @@ Arguments parseArguments(int argc, char *argv[])
         training.template_image              = result["template"].as<std::string>();
         training.template_mask               = result["template-mask"].as<std::string>();
         training.save_templates              = result["save-templates"].as<std::string>();
-        training.class_id                    = result["class-id"].as<std::string>();
         training.angle_begin                 = result["angle-begin"].as<float>();
         training.angle_end                   = result["angle-end"].as<float>();
         training.angle_step                  = result["angle-step"].as<float>();
@@ -316,10 +310,6 @@ Arguments parseArguments(int argc, char *argv[])
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--save-templates is required in train mode");
         }
-        if (training.class_id.empty())
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--class-id must not be empty");
-        }
         if (training.config.max_training_parallelism < 0)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
@@ -333,7 +323,6 @@ Arguments parseArguments(int argc, char *argv[])
         matching.load_templates = result["load-templates"].as<std::string>();
         matching.source_image   = result["source"].as<std::string>();
         matching.search_mask    = result["search-mask"].as<std::string>();
-        matching.class_filter   = result["class-filter"].as<std::string>();
         matching.threshold      = result["threshold"].as<float>();
         matching.output_image   = result["output"].as<std::string>();
         matching.template_stride = result["template-stride"].as<int>();
@@ -380,8 +369,9 @@ void drawMatches(cv::Mat &image, const std::vector<irt::features::ShapeTemplateM
     {
         const cv::Rect box(match.x, match.y, match.width, match.height);
         cv::rectangle(image, box, cv::Scalar(0, 255, 0), 2);
-        const std::string label = match.class_id + " " + std::to_string(static_cast<int>(std::round(match.similarity)))
-                                + "% a=" + std::to_string(static_cast<int>(std::round(match.angle_degrees)));
+        const std::string label = "t=" + std::to_string(match.template_id) + " "
+                                + std::to_string(static_cast<int>(std::round(match.similarity))) + "% a="
+                                + std::to_string(static_cast<int>(std::round(match.angle_degrees)));
         cv::putText(image, label, cv::Point(match.x, std::max(12, match.y - 4)), cv::FONT_HERSHEY_SIMPLEX, 0.45,
                     cv::Scalar(0, 0, 255), 1, cv::LINE_AA);
     }
@@ -442,8 +432,7 @@ void runTraining(const TrainingArguments &args, const TimingArguments &timing,
     training_inputs.reserve(templates.size());
     for (const auto &input : templates)
     {
-        training_inputs.push_back(irt::features::ShapeTemplateTrainingInput{
-            input.image, args.class_id, input.mask});
+        training_inputs.push_back(irt::features::ShapeTemplateTrainingInput{input.image, input.mask});
     }
     const bool use_batch_training = training_inputs.size() > 1;
 
@@ -453,7 +442,7 @@ void runTraining(const TrainingArguments &args, const TimingArguments &timing,
         if (!use_batch_training)
         {
             const auto &input = training_inputs.front();
-            return matcher.addTemplateVariants(input.image, input.class_id, input.object_mask, variants);
+            return matcher.addTemplateVariants(input.image, input.object_mask, variants);
         }
 
         const auto ids_by_input = matcher.addTemplateVariantsBatch(training_inputs, variants);
@@ -544,18 +533,13 @@ void runMatching(const MatchingArguments &args, const TimingArguments &timing,
         search_mask = loadImage(args.search_mask, cv::IMREAD_GRAYSCALE, "search mask");
     }
 
-    std::vector<std::string> class_ids;
-    if (!args.class_filter.empty())
-    {
-        class_ids.push_back(args.class_filter);
-    }
     irt::features::ShapeTemplateMatchOptions match_options;
     match_options.template_stride = args.template_stride;
     match_options.scan_step       = args.scan_step;
 
     for (int iteration = 0; iteration < timing.warmup; ++iteration)
     {
-        (void)matcher->match(source, args.threshold, class_ids, search_mask, match_options);
+        (void)matcher->match(source, args.threshold, search_mask, match_options);
     }
 
     std::vector<irt::features::ShapeTemplateMatch> matches;
@@ -564,7 +548,7 @@ void runMatching(const MatchingArguments &args, const TimingArguments &timing,
     for (int iteration = 0; iteration < timing.repeat; ++iteration)
     {
         const auto start           = std::chrono::steady_clock::now();
-        auto current_matches = matcher->match(source, args.threshold, class_ids, search_mask, match_options);
+        auto current_matches = matcher->match(source, args.threshold, search_mask, match_options);
         const auto stop            = std::chrono::steady_clock::now();
         samples_ms.push_back(std::chrono::duration<double, std::milli>(stop - start).count());
         if (iteration == timing.repeat - 1)
@@ -591,9 +575,9 @@ void runMatching(const MatchingArguments &args, const TimingArguments &timing,
     for (size_t i = 0; i < matches.size(); ++i)
     {
         const auto &match = matches[i];
-        std::cout << (i + 1) << ". class=" << match.class_id << " template=" << match.template_id
-                  << " score=" << match.similarity << " box=(" << match.x << "," << match.y << "," << match.width << ","
-                  << match.height << ") angle=" << match.angle_degrees << " scale=" << match.scale << std::endl;
+        std::cout << (i + 1) << ". template=" << match.template_id << " score=" << match.similarity << " box=("
+                  << match.x << "," << match.y << "," << match.width << "," << match.height << ") angle="
+                  << match.angle_degrees << " scale=" << match.scale << std::endl;
     }
     std::cout << "output: " << fs::absolute(args.output_image).string() << std::endl;
     printTimingStats("match/IShapeTemplateMatcher::match", timing.warmup, samples_ms);

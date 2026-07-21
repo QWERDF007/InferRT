@@ -9,7 +9,6 @@
 
 #include <array>
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <vector>
 
@@ -129,55 +128,42 @@ public:
     ShapeTemplateMatcherEngine &operator=(ShapeTemplateMatcherEngine &&) noexcept;
 
     /** @brief 添加单个模板。 */
-    int addTemplate(const cv::Mat &image, const std::string &class_id, const cv::Mat &object_mask,
-                    ShapeTemplateVariant variant) override;
+    int addTemplate(const cv::Mat &image, const cv::Mat &object_mask, ShapeTemplateVariant variant) override;
     /** @brief 从文件添加单个模板。 */
-    int addTemplateFile(const std::filesystem::path &image_file, const std::string &class_id,
-                        const std::filesystem::path &mask_file, ShapeTemplateVariant variant) override;
+    int addTemplateFile(const std::filesystem::path &image_file, const std::filesystem::path &mask_file,
+                        ShapeTemplateVariant variant) override;
     /** @brief 批量训练角度/尺度模板变体。 */
-    std::vector<int> addTemplateVariants(const cv::Mat &image, const std::string &class_id,
-                                         const cv::Mat &object_mask,
+    std::vector<int> addTemplateVariants(const cv::Mat &image, const cv::Mat &object_mask,
                                          const std::vector<ShapeTemplateVariant> &variants) override;
     /** @brief 对多个输入统一执行同一组角度/尺度变体训练。 */
     std::vector<std::vector<int>>
     addTemplateVariantsBatch(const std::vector<ShapeTemplateTrainingInput> &inputs,
                              const std::vector<ShapeTemplateVariant> &variants) override;
     /** @brief 在内存图像中执行匹配。 */
-    std::vector<ShapeTemplateMatch> match(const cv::Mat &image, float threshold,
-                                          const std::vector<std::string> &class_ids,
-                                          const cv::Mat &search_mask,
+    std::vector<ShapeTemplateMatch> match(const cv::Mat &image, float threshold, const cv::Mat &search_mask,
                                           ShapeTemplateMatchOptions options) const override;
     /** @brief 从文件执行匹配。 */
     std::vector<ShapeTemplateMatch> matchFile(const std::filesystem::path &image_file, float threshold,
-                                              const std::vector<std::string> &class_ids,
                                               const std::filesystem::path &mask_file,
                                               ShapeTemplateMatchOptions options) const override;
     /** @brief 清空模板库。 */
     void clear() override;
     /** @brief 判断模板库是否为空。 */
     bool empty() const noexcept override;
-    /** @brief 获取类别数量。 */
-    int numClasses() const noexcept override;
     /** @brief 获取全部模板数量。 */
     int numTemplates() const noexcept override;
-    /** @brief 获取指定类别的模板数量。 */
-    int numTemplates(const std::string &class_id) const noexcept override;
-    /** @brief 获取所有类别 ID。 */
-    std::vector<std::string> classIds() const override;
     /** @brief 获取指定模板信息。 */
-    const ShapeTemplateInfo &getTemplate(const std::string &class_id, int template_id) const override;
+    const ShapeTemplateInfo &getTemplate(int template_id) const override;
     /** @brief 获取配置。 */
     const ShapeTemplateMatcherConfig &config() const noexcept override;
-    /** @brief 保存紧凑 v2 模板。 */
+    /** @brief 保存紧凑 v3 模板。 */
     void save(const std::filesystem::path &template_file) const override;
-    /** @brief 加载紧凑 v2 模板。 */
+    /** @brief 加载紧凑 v3 模板。 */
     void load(const std::filesystem::path &template_file) override;
 
 private:
-    using TemplateMap = std::map<std::string, std::vector<ShapeTemplateInfo>>;
-
     ShapeTemplateMatcherConfig                 config_{};
-    TemplateMap                                templates_;
+    std::vector<ShapeTemplateInfo>             templates_;
     std::unique_ptr<ShapeTemplateMatcherKernel> kernel_;
 };
 

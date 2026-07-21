@@ -24,12 +24,11 @@ public:
     IShapeTemplateMatcher(IShapeTemplateMatcher &&) noexcept               = default;
     IShapeTemplateMatcher &operator=(IShapeTemplateMatcher &&) noexcept = default;
 
-    virtual int addTemplate(const cv::Mat &image, const std::string &class_id,
-                            const cv::Mat &object_mask = cv::Mat(), ShapeTemplateVariant variant = {}) = 0;
-    virtual int addTemplateFile(const std::filesystem::path &image_file, const std::string &class_id,
+    virtual int addTemplate(const cv::Mat &image, const cv::Mat &object_mask = cv::Mat(),
+                            ShapeTemplateVariant variant = {}) = 0;
+    virtual int addTemplateFile(const std::filesystem::path &image_file,
                                 const std::filesystem::path &mask_file = {}, ShapeTemplateVariant variant = {}) = 0;
-    virtual std::vector<int> addTemplateVariants(const cv::Mat &image, const std::string &class_id,
-                                                 const cv::Mat &object_mask,
+    virtual std::vector<int> addTemplateVariants(const cv::Mat &image, const cv::Mat &object_mask,
                                                  const std::vector<ShapeTemplateVariant> &variants) = 0;
     /**
      * @brief 对多个训练输入应用同一组角度/尺度变体。
@@ -40,21 +39,16 @@ public:
     addTemplateVariantsBatch(const std::vector<ShapeTemplateTrainingInput> &inputs,
                              const std::vector<ShapeTemplateVariant> &variants) = 0;
     virtual std::vector<ShapeTemplateMatch> match(const cv::Mat &image, float threshold = -1.0f,
-                                                  const std::vector<std::string> &class_ids = {},
                                                   const cv::Mat &search_mask = cv::Mat(),
                                                   ShapeTemplateMatchOptions options = {}) const = 0;
     virtual std::vector<ShapeTemplateMatch> matchFile(const std::filesystem::path &image_file,
                                                       float threshold = -1.0f,
-                                                      const std::vector<std::string> &class_ids = {},
                                                       const std::filesystem::path &mask_file = {},
                                                       ShapeTemplateMatchOptions options = {}) const = 0;
     virtual void clear() = 0;
     virtual bool empty() const noexcept = 0;
-    virtual int numClasses() const noexcept = 0;
     virtual int numTemplates() const noexcept = 0;
-    virtual int numTemplates(const std::string &class_id) const noexcept = 0;
-    virtual std::vector<std::string> classIds() const = 0;
-    virtual const ShapeTemplateInfo &getTemplate(const std::string &class_id, int template_id) const = 0;
+    virtual const ShapeTemplateInfo &getTemplate(int template_id) const = 0;
     virtual const ShapeTemplateMatcherConfig &config() const noexcept = 0;
     virtual void save(const std::filesystem::path &template_file) const = 0;
     virtual void load(const std::filesystem::path &template_file) = 0;

@@ -28,47 +28,37 @@ public:
     ShapeTemplateMatcherBase &operator=(ShapeTemplateMatcherBase &&) noexcept;
 
     /** @brief 向当前版本实现添加一个模板。 */
-    int addTemplate(const cv::Mat &, const std::string &, const cv::Mat & = cv::Mat(),
-                    ShapeTemplateVariant = {}) final;
+    int addTemplate(const cv::Mat &, const cv::Mat & = cv::Mat(), ShapeTemplateVariant = {}) final;
     /** @brief 从图像文件添加一个模板。 */
-    int addTemplateFile(const std::filesystem::path &, const std::string &,
-                        const std::filesystem::path & = {}, ShapeTemplateVariant = {}) final;
+    int addTemplateFile(const std::filesystem::path &, const std::filesystem::path & = {},
+                        ShapeTemplateVariant = {}) final;
     /** @brief 按给定角度和尺度变体批量训练模板。 */
-    std::vector<int> addTemplateVariants(const cv::Mat &, const std::string &, const cv::Mat &,
+    std::vector<int> addTemplateVariants(const cv::Mat &, const cv::Mat &,
                                          const std::vector<ShapeTemplateVariant> &) final;
     /** @brief 对多个训练输入统一调度同一组角度和尺度变体。 */
     std::vector<std::vector<int>>
     addTemplateVariantsBatch(const std::vector<ShapeTemplateTrainingInput> &,
                              const std::vector<ShapeTemplateVariant> &) final;
     /** @brief 在内存图像中执行模板匹配。 */
-    std::vector<ShapeTemplateMatch> match(const cv::Mat &, float = -1.0f,
-                                          const std::vector<std::string> & = {},
-                                          const cv::Mat & = cv::Mat(),
+    std::vector<ShapeTemplateMatch> match(const cv::Mat &, float = -1.0f, const cv::Mat & = cv::Mat(),
                                           ShapeTemplateMatchOptions = {}) const final;
     /** @brief 从图像文件执行模板匹配。 */
     std::vector<ShapeTemplateMatch> matchFile(const std::filesystem::path &, float = -1.0f,
-                                              const std::vector<std::string> & = {},
                                               const std::filesystem::path & = {},
                                               ShapeTemplateMatchOptions = {}) const final;
     /** @brief 清空当前模板库。 */
     void clear() final;
     /** @brief 判断当前模板库是否为空。 */
     bool empty() const noexcept final;
-    /** @brief 获取模板类别数量。 */
-    int numClasses() const noexcept final;
     /** @brief 获取全部模板数量。 */
     int numTemplates() const noexcept final;
-    /** @brief 获取指定类别的模板数量。 */
-    int numTemplates(const std::string &) const noexcept final;
-    /** @brief 获取所有模板类别 ID。 */
-    std::vector<std::string> classIds() const final;
     /** @brief 获取指定模板的元数据和特征。 */
-    const ShapeTemplateInfo &getTemplate(const std::string &, int) const final;
+    const ShapeTemplateInfo &getTemplate(int) const final;
     /** @brief 获取当前配置。 */
     const ShapeTemplateMatcherConfig &config() const noexcept final;
-    /** @brief 保存紧凑 v2 模板文件。 */
+    /** @brief 保存紧凑 v3 模板文件。 */
     void save(const std::filesystem::path &) const final;
-    /** @brief 加载紧凑 v2 模板文件。 */
+    /** @brief 加载紧凑 v3 模板文件。 */
     void load(const std::filesystem::path &) final;
 
     /** @brief 生成闭区间角度/尺度模板变体。 */

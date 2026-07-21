@@ -10,6 +10,7 @@
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
+#include <yaml-cpp/yaml.h>
 
 #include <algorithm>
 #include <atomic>
@@ -18,6 +19,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <limits>
 #include <string>
@@ -32,7 +34,7 @@ namespace {
 constexpr unsigned char kInvalidLabel = detail::kShapeTemplateInvalidLabel;     ///< 无效方向标签，用于跳过弱梯度点。
 constexpr float         kEps          = 1.0e-6f;                                ///< 浮点区间比较容差。
 constexpr int           kOrientationBins = detail::kShapeTemplateOrientationBins; ///< 梯度方向量化 bin 数量。
-constexpr int           kShapeTemplateFileFormatVersion = 2; ///< 紧凑二维特征数组模板文件格式版本。
+constexpr int           kShapeTemplateFileFormatVersion = 3; ///< 无类别紧凑二维特征数组模板文件格式版本。
 
 using QuantizedGradient = detail::ShapeTemplateQuantizedGradient;
 using Candidate          = detail::ShapeTemplateCandidate;
@@ -509,14 +511,13 @@ std::vector<Candidate> extractTemplateCandidates(const cv::Mat &image, const cv:
 
 /**
  * @brief 根据选中特征点构造可持久化的模板信息。
- * @param class_id 模板类别 ID。
- * @param template_id 类别内模板 ID。
+ * @param template_id 模板文件内的全局模板 ID。
  * @param features 已选中的训练特征点。
  * @param variant 旋转/缩放变体元数据。
  * @return 裁剪到特征包围盒后的模板信息。
  */
-ShapeTemplateInfo makeTemplateInfo(const std::string &class_id, int template_id,
-                                   const std::vector<Candidate> &features, ShapeTemplateVariant variant)
+ShapeTemplateInfo makeTemplateInfo(int template_id, const std::vector<Candidate> &features,
+                                   ShapeTemplateVariant variant)
 {
     int min_x = std::numeric_limits<int>::max();
     int min_y = std::numeric_limits<int>::max();
@@ -532,7 +533,6 @@ ShapeTemplateInfo makeTemplateInfo(const std::string &class_id, int template_id,
     }
 
     ShapeTemplateInfo info;
-    info.class_id      = class_id;
     info.template_id   = template_id;
     info.width         = max_x - min_x + 1;
     info.height        = max_y - min_y + 1;
@@ -682,7 +682,7 @@ float intersectionOverUnion(const ShapeTemplateMatch &a, const ShapeTemplateMatc
 }
 
 /**
- * @brief 按相似度、类别、模板 ID 和坐标稳定排序匹配结果。
+ * @brief 按相似度、模板 ID 和坐标稳定排序匹配结果。
  */
 void sortMatches(std::vector<ShapeTemplateMatch> &matches)
 {
@@ -692,10 +692,6 @@ void sortMatches(std::vector<ShapeTemplateMatch> &matches)
                   if (a.similarity != b.similarity)
                   {
                       return a.similarity > b.similarity;
-                  }
-                  if (a.class_id != b.class_id)
-                  {
-                      return a.class_id < b.class_id;
                   }
                   if (a.template_id != b.template_id)
                   {
@@ -710,7 +706,7 @@ void sortMatches(std::vector<ShapeTemplateMatch> &matches)
 }
 
 /**
- * @brief 对匹配结果执行同类别 NMS 和最大数量限制。
+ * @brief 对匹配结果执行 NMS 和最大数量限制。
  * @param matches 待处理匹配结果。
  * @param nms_threshold NMS IoU 阈值；小于 0 表示关闭 NMS。
  * @param max_results 最大返回数量；0 表示不限制。
@@ -736,7 +732,7 @@ std::vector<ShapeTemplateMatch> applyNms(std::vector<ShapeTemplateMatch> matches
         bool keep = true;
         for (const auto &existing : kept)
         {
-            if (match.class_id == existing.class_id && intersectionOverUnion(match, existing) > nms_threshold)
+            if (intersectionOverUnion(match, existing) > nms_threshold)
             {
                 keep = false;
                 break;
@@ -761,10 +757,6 @@ std::vector<ShapeTemplateMatch> applyNms(std::vector<ShapeTemplateMatch> matches
  */
 void validateTemplateInfo(const ShapeTemplateInfo &info, int min_features)
 {
-    if (info.class_id.empty())
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Loaded template class_id must not be empty");
-    }
     if (info.width <= 0 || info.height <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Loaded template has invalid size");
@@ -791,20 +783,39 @@ void validateTemplateInfo(const ShapeTemplateInfo &info, int min_features)
 }
 
 /**
- * @brief 从 OpenCV 文件节点读取可选字段。
+ * @brief 从 YAML 映射读取可选字段。
  * @tparam T 字段类型。
  * @param node 父节点。
  * @param key 字段名称。
  * @param value 字段存在时写入的目标变量。
  */
 template<typename T>
-void readIfPresent(const cv::FileNode &node, const char *key, T &value)
+void readYamlIfPresent(const YAML::Node &node, const char *key, T &value)
 {
-    const cv::FileNode child = node[key];
-    if (!child.empty())
+    const YAML::Node child = node[key];
+    if (child && !child.IsNull())
     {
-        child >> value;
+        value = child.as<T>();
     }
+}
+
+/**
+ * @brief 从 YAML 映射读取必填字段。
+ * @tparam T 字段类型。
+ * @param node 父节点。
+ * @param key 字段名称。
+ * @return 解析后的字段值。
+ */
+template<typename T>
+T readRequiredYamlValue(const YAML::Node &node, const char *key)
+{
+    const YAML::Node child = node[key];
+    if (!child || child.IsNull())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Shape template YAML is missing required field: %s",
+                             key);
+    }
+    return child.as<T>();
 }
 
 } // namespace
@@ -855,14 +866,10 @@ detail::ShapeTemplateMatcherEngine &detail::ShapeTemplateMatcherEngine::operator
 /**
  * @brief 提取模板图中的强梯度方向特征并写入模板库。
  */
-int detail::ShapeTemplateMatcherEngine::addTemplate(const cv::Mat &image, const std::string &class_id,
-                                                     const cv::Mat &object_mask, ShapeTemplateVariant variant)
+int detail::ShapeTemplateMatcherEngine::addTemplate(const cv::Mat &image, const cv::Mat &object_mask,
+                                                     ShapeTemplateVariant variant)
 {
     validateImage(image, "template image");
-    if (class_id.empty())
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Shape template class_id must not be empty");
-    }
     if (!std::isfinite(variant.angle_degrees) || !std::isfinite(variant.scale) || variant.scale <= 0.0f)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Shape template variant is invalid");
@@ -898,17 +905,16 @@ int detail::ShapeTemplateMatcherEngine::addTemplate(const cv::Mat &image, const 
         }
     }
 
-    auto &class_templates = templates_[class_id];
-    const int template_id = static_cast<int>(class_templates.size());
-    class_templates.push_back(makeTemplateInfo(class_id, template_id, selected, variant));
+    const int template_id = static_cast<int>(templates_.size());
+    templates_.push_back(makeTemplateInfo(template_id, selected, variant));
     return template_id;
 }
 
 /**
  * @brief 从文件读取训练图和可选掩膜后训练模板。
  */
-int detail::ShapeTemplateMatcherEngine::addTemplateFile(const fs::path &image_file, const std::string &class_id,
-                                                         const fs::path &mask_file, ShapeTemplateVariant variant)
+int detail::ShapeTemplateMatcherEngine::addTemplateFile(const fs::path &image_file, const fs::path &mask_file,
+                                                         ShapeTemplateVariant variant)
 {
     const cv::Mat image = loadImage(image_file, cv::IMREAD_UNCHANGED, "template image");
     cv::Mat       mask;
@@ -916,7 +922,7 @@ int detail::ShapeTemplateMatcherEngine::addTemplateFile(const fs::path &image_fi
     {
         mask = loadImage(mask_file, cv::IMREAD_GRAYSCALE, "template mask");
     }
-    return addTemplate(image, class_id, mask, variant);
+    return addTemplate(image, mask, variant);
 }
 
 /**
@@ -926,8 +932,7 @@ int detail::ShapeTemplateMatcherEngine::addTemplateFile(const fs::path &image_fi
  * 使用完全相同的优化训练语义。
  */
 std::vector<int> detail::ShapeTemplateMatcherEngine::addTemplateVariants(
-    const cv::Mat &image, const std::string &class_id, const cv::Mat &object_mask,
-    const std::vector<ShapeTemplateVariant> &variants)
+    const cv::Mat &image, const cv::Mat &object_mask, const std::vector<ShapeTemplateVariant> &variants)
 {
     validateImage(image, "template image");
     if (variants.empty())
@@ -958,12 +963,12 @@ std::vector<int> detail::ShapeTemplateMatcherEngine::addTemplateVariants(
                            cv::Scalar());
             cv::warpAffine(mask, transformed_mask, transform, mask.size(), cv::INTER_NEAREST, cv::BORDER_CONSTANT,
                            cv::Scalar(0));
-            ids.push_back(addTemplate(transformed_image, class_id, transformed_mask, variant));
+            ids.push_back(addTemplate(transformed_image, transformed_mask, variant));
         }
         return ids;
     }
 
-    ShapeTemplateTrainingInput input{image, class_id, object_mask};
+    ShapeTemplateTrainingInput input{image, object_mask};
     auto ids = addTemplateVariantsBatch({input}, variants);
     return std::move(ids.front());
 }
@@ -995,7 +1000,7 @@ std::vector<std::vector<int>> detail::ShapeTemplateMatcherEngine::addTemplateVar
         ids.reserve(inputs.size());
         for (const auto &input : inputs)
         {
-            ids.push_back(addTemplateVariants(input.image, input.class_id, input.object_mask, variants));
+            ids.push_back(addTemplateVariants(input.image, input.object_mask, variants));
         }
         return ids;
     }
@@ -1033,11 +1038,6 @@ std::vector<std::vector<int>> detail::ShapeTemplateMatcherEngine::addTemplateVar
     {
         const auto &input = inputs[input_index];
         validateImage(input.image, "template image");
-        if (input.class_id.empty())
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Shape template class_id must not be empty");
-        }
-
         PreparedInput prepared;
         prepared.input = &input;
         prepared.mask = normalizeMask(input.object_mask, input.image.size(), "object_mask");
@@ -1131,18 +1131,16 @@ std::vector<std::vector<int>> detail::ShapeTemplateMatcherEngine::addTemplateVar
     for (size_t input_index = 0; input_index < prepared_inputs.size(); ++input_index)
     {
         const auto &prepared_input = prepared_inputs[input_index];
-        const auto &class_id = prepared_input.input->class_id;
-        auto &class_templates = templates_[class_id];
-        const int first_template_id = static_cast<int>(class_templates.size());
-        class_templates.reserve(class_templates.size() + prepared_input.templates.size());
+        const int first_template_id = static_cast<int>(templates_.size());
+        templates_.reserve(templates_.size() + prepared_input.templates.size());
         auto &input_ids = ids[input_index];
         input_ids.reserve(variants.size());
         for (size_t variant_index = 0; variant_index < variants.size(); ++variant_index)
         {
             const int template_id = first_template_id + static_cast<int>(variant_index);
-            class_templates.push_back(makeTemplateInfo(
-                class_id, template_id, prepared_input.templates[variant_index].selected_features,
-                variants[variant_index]));
+            templates_.push_back(makeTemplateInfo(template_id,
+                                                  prepared_input.templates[variant_index].selected_features,
+                                                  variants[variant_index]));
             input_ids.push_back(template_id);
         }
     }
@@ -1150,11 +1148,10 @@ std::vector<std::vector<int>> detail::ShapeTemplateMatcherEngine::addTemplateVar
 }
 
 /**
- * @brief 在源图中滑窗计算模板方向一致性并应用同类别 NMS。
+ * @brief 在源图中滑窗计算模板方向一致性并应用 NMS。
  */
 std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::match(
-    const cv::Mat &image, float threshold, const std::vector<std::string> &class_ids,
-    const cv::Mat &search_mask, ShapeTemplateMatchOptions options) const
+    const cv::Mat &image, float threshold, const cv::Mat &search_mask, ShapeTemplateMatchOptions options) const
 {
     validateImage(image, "source image");
     if (empty())
@@ -1175,31 +1172,14 @@ std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::match(
 
     struct MatchWork
     {
-        const std::string *class_id;
         const ShapeTemplateInfo *templ;
     };
     std::vector<MatchWork> work_items;
-    auto append_work = [&](const std::string &class_id, const std::vector<ShapeTemplateInfo> &templates)
+    work_items.reserve(templates_.size());
+    for (const auto &templ : templates_)
     {
-        for (const auto &templ : templates)
-        {
-            if (templ.template_id % options.template_stride == 0)
-                work_items.push_back(MatchWork{&class_id, &templ});
-        }
-    };
-    if (class_ids.empty())
-    {
-        for (const auto &item : templates_)
-            append_work(item.first, item.second);
-    }
-    else
-    {
-        for (const auto &class_id : class_ids)
-        {
-            const auto it = templates_.find(class_id);
-            if (it != templates_.end())
-                append_work(it->first, it->second);
-        }
+        if (templ.template_id % options.template_stride == 0)
+            work_items.push_back(MatchWork{&templ});
     }
     if (work_items.empty())
     {
@@ -1228,8 +1208,8 @@ std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::match(
         for (const auto &position : scored_positions)
         {
             local_matches.push_back(ShapeTemplateMatch{position.x, position.y, templ.width, templ.height,
-                                                       position.score, *work.class_id, templ.template_id,
-                                                       templ.angle_degrees, templ.scale});
+                                                       position.score, templ.template_id, templ.angle_degrees,
+                                                       templ.scale});
         }
         return local_matches;
     };
@@ -1285,8 +1265,7 @@ std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::match(
  * @brief 从文件读取源图和可选搜索掩膜后执行匹配。
  */
 std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::matchFile(
-    const fs::path &image_file, float threshold, const std::vector<std::string> &class_ids,
-    const fs::path &mask_file, ShapeTemplateMatchOptions options) const
+    const fs::path &image_file, float threshold, const fs::path &mask_file, ShapeTemplateMatchOptions options) const
 {
     const cv::Mat image = loadImage(image_file, cv::IMREAD_UNCHANGED, "source image");
     cv::Mat       mask;
@@ -1294,7 +1273,7 @@ std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::matchFile(
     {
         mask = loadImage(mask_file, cv::IMREAD_GRAYSCALE, "search mask");
     }
-    return match(image, threshold, class_ids, mask, options);
+    return match(image, threshold, mask, options);
 }
 
 void detail::ShapeTemplateMatcherEngine::clear()
@@ -1307,52 +1286,18 @@ bool detail::ShapeTemplateMatcherEngine::empty() const noexcept
     return templates_.empty();
 }
 
-int detail::ShapeTemplateMatcherEngine::numClasses() const noexcept
+int detail::ShapeTemplateMatcherEngine::numTemplates() const noexcept
 {
     return static_cast<int>(templates_.size());
 }
 
-int detail::ShapeTemplateMatcherEngine::numTemplates() const noexcept
+const ShapeTemplateInfo &detail::ShapeTemplateMatcherEngine::getTemplate(int template_id) const
 {
-    int count = 0;
-    for (const auto &item : templates_)
-    {
-        count += static_cast<int>(item.second.size());
-    }
-    return count;
-}
-
-int detail::ShapeTemplateMatcherEngine::numTemplates(const std::string &class_id) const noexcept
-{
-    const auto it = templates_.find(class_id);
-    return it == templates_.end() ? 0 : static_cast<int>(it->second.size());
-}
-
-std::vector<std::string> detail::ShapeTemplateMatcherEngine::classIds() const
-{
-    std::vector<std::string> ids;
-    ids.reserve(templates_.size());
-    for (const auto &item : templates_)
-    {
-        ids.push_back(item.first);
-    }
-    return ids;
-}
-
-const ShapeTemplateInfo &detail::ShapeTemplateMatcherEngine::getTemplate(const std::string &class_id,
-                                                                           int template_id) const
-{
-    const auto it = templates_.find(class_id);
-    if (it == templates_.end())
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unknown shape template class_id: %s",
-                             class_id.c_str());
-    }
-    if (template_id < 0 || template_id >= static_cast<int>(it->second.size()))
+    if (template_id < 0 || template_id >= static_cast<int>(templates_.size()))
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Invalid shape template id: %d", template_id);
     }
-    return it->second[static_cast<size_t>(template_id)];
+    return templates_[static_cast<size_t>(template_id)];
 }
 
 const ShapeTemplateMatcherConfig &detail::ShapeTemplateMatcherEngine::config() const noexcept
@@ -1361,11 +1306,11 @@ const ShapeTemplateMatcherConfig &detail::ShapeTemplateMatcherEngine::config() c
 }
 
 /**
- * @brief 将配置、模板元数据和特征点写入 OpenCV FileStorage。
+ * @brief 将配置、模板元数据和特征点写入标准 YAML。
  *
- * 文件格式使用版本号保护。v2 将每个特征存为 ``[x, y, label, angle_degrees]``，避免
- * 对每个特征重复写入字段名；模板 ID 在加载时会按类别内顺序重新归一化，避免外部文件中的
- * 非连续 ID 破坏后续索引访问。
+ * 使用 yaml-cpp 发射器输出。v3 将每个特征存为 flow 风格的
+ * ``[x, y, label, angle_degrees]``，避免对每个特征重复写入字段名；模板 ID 在加载时会按
+ * 文件内顺序重新归一化，避免外部文件中的非连续 ID 破坏后续索引访问。
  */
 void detail::ShapeTemplateMatcherEngine::save(const fs::path &template_file) const
 {
@@ -1378,61 +1323,69 @@ void detail::ShapeTemplateMatcherEngine::save(const fs::path &template_file) con
         fs::create_directories(template_file.parent_path());
     }
 
-    cv::FileStorage storage(template_file.string(), cv::FileStorage::WRITE);
-    if (!storage.isOpened())
+    std::ofstream output(template_file);
+    if (!output)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to open shape template file for write: %s",
                              template_file.string().c_str());
     }
 
-    storage << "version" << kShapeTemplateFileFormatVersion;
-    storage << "config" << "{";
-    storage << "num_features" << config_.num_features;
-    storage << "min_features" << config_.min_features;
-    storage << "weak_threshold" << config_.weak_threshold;
-    storage << "strong_threshold" << config_.strong_threshold;
-    storage << "max_label_difference" << config_.max_label_difference;
-    storage << "match_threshold" << config_.match_threshold;
-    storage << "nms_threshold" << config_.nms_threshold;
-    storage << "max_results" << config_.max_results;
-    storage << "scan_step" << config_.scan_step;
-    storage << "max_parallelism" << config_.max_parallelism;
-    storage << "min_feature_distance" << config_.min_feature_distance;
-    storage << "}";
+    YAML::Emitter emitter;
+    emitter.SetFloatPrecision(std::numeric_limits<float>::max_digits10);
+    emitter << YAML::BeginMap;
+    emitter << YAML::Key << "version" << YAML::Value << kShapeTemplateFileFormatVersion;
+    emitter << YAML::Key << "config" << YAML::Value << YAML::BeginMap;
+    emitter << YAML::Key << "num_features" << YAML::Value << config_.num_features;
+    emitter << YAML::Key << "min_features" << YAML::Value << config_.min_features;
+    emitter << YAML::Key << "weak_threshold" << YAML::Value << config_.weak_threshold;
+    emitter << YAML::Key << "strong_threshold" << YAML::Value << config_.strong_threshold;
+    emitter << YAML::Key << "max_label_difference" << YAML::Value << config_.max_label_difference;
+    emitter << YAML::Key << "match_threshold" << YAML::Value << config_.match_threshold;
+    emitter << YAML::Key << "nms_threshold" << YAML::Value << config_.nms_threshold;
+    emitter << YAML::Key << "max_results" << YAML::Value << config_.max_results;
+    emitter << YAML::Key << "scan_step" << YAML::Value << config_.scan_step;
+    emitter << YAML::Key << "max_parallelism" << YAML::Value << config_.max_parallelism;
+    emitter << YAML::Key << "min_feature_distance" << YAML::Value << config_.min_feature_distance;
+    emitter << YAML::EndMap;
 
-    storage << "templates" << "[";
-    for (const auto &item : templates_)
+    emitter << YAML::Key << "templates" << YAML::Value << YAML::BeginSeq;
+    for (const auto &templ : templates_)
     {
-        for (const auto &templ : item.second)
+        emitter << YAML::BeginMap;
+        emitter << YAML::Key << "template_id" << YAML::Value << templ.template_id;
+        emitter << YAML::Key << "width" << YAML::Value << templ.width;
+        emitter << YAML::Key << "height" << YAML::Value << templ.height;
+        emitter << YAML::Key << "tl_x" << YAML::Value << templ.tl_x;
+        emitter << YAML::Key << "tl_y" << YAML::Value << templ.tl_y;
+        emitter << YAML::Key << "angle_degrees" << YAML::Value << templ.angle_degrees;
+        emitter << YAML::Key << "scale" << YAML::Value << templ.scale;
+        emitter << YAML::Key << "features" << YAML::Value << YAML::BeginSeq;
+        for (const auto &feature : templ.features)
         {
-            storage << "{";
-            storage << "class_id" << templ.class_id;
-            storage << "template_id" << templ.template_id;
-            storage << "width" << templ.width;
-            storage << "height" << templ.height;
-            storage << "tl_x" << templ.tl_x;
-            storage << "tl_y" << templ.tl_y;
-            storage << "angle_degrees" << templ.angle_degrees;
-            storage << "scale" << templ.scale;
-            storage << "features" << "[";
-            for (const auto &feature : templ.features)
-            {
-                storage << "[";
-                storage << feature.x;
-                storage << feature.y;
-                storage << feature.label;
-                storage << feature.angle_degrees;
-                storage << "]";
-            }
-            storage << "]";
-            storage << "}";
+            emitter << YAML::Flow << YAML::BeginSeq << feature.x << feature.y << feature.label
+                    << feature.angle_degrees << YAML::EndSeq;
         }
+        emitter << YAML::EndSeq;
+        emitter << YAML::EndMap;
     }
-    storage << "]";
+    emitter << YAML::EndSeq;
+    emitter << YAML::EndMap;
+
+    if (!emitter.good())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to serialize shape template YAML: %s",
+                             emitter.GetLastError().c_str());
+    }
+    output << emitter.c_str() << '\n';
+    if (!output)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to write shape template file: %s",
+                             template_file.string().c_str());
+    }
 }
 
 /**
- * @brief 从 OpenCV FileStorage 读取模板库并替换当前状态。
+ * @brief 从标准 YAML 读取模板库并替换当前状态。
  *
  * 加载流程先在临时容器中校验完整性，全部成功后再替换 ``config_`` 和 ``templates_``，
  * 避免部分加载失败时留下半初始化状态。
@@ -1450,89 +1403,111 @@ void detail::ShapeTemplateMatcherEngine::load(const fs::path &template_file)
                              template_file.string().c_str());
     }
 
-    cv::FileStorage storage(template_file.string(), cv::FileStorage::READ);
-    if (!storage.isOpened())
+    try
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to open shape template file for read: %s",
-                             template_file.string().c_str());
-    }
-
-    int version = 0;
-    storage["version"] >> version;
-    if (version != kShapeTemplateFileFormatVersion)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "Unsupported shape template file version: %d; only v%d compact feature arrays are supported",
-                             version, kShapeTemplateFileFormatVersion);
-    }
-
-    ShapeTemplateMatcherConfig loaded_config = config_;
-    const cv::FileNode         config_node   = storage["config"];
-    if (!config_node.empty())
-    {
-        readIfPresent(config_node, "num_features", loaded_config.num_features);
-        readIfPresent(config_node, "min_features", loaded_config.min_features);
-        readIfPresent(config_node, "weak_threshold", loaded_config.weak_threshold);
-        readIfPresent(config_node, "strong_threshold", loaded_config.strong_threshold);
-        readIfPresent(config_node, "max_label_difference", loaded_config.max_label_difference);
-        readIfPresent(config_node, "match_threshold", loaded_config.match_threshold);
-        readIfPresent(config_node, "nms_threshold", loaded_config.nms_threshold);
-        readIfPresent(config_node, "max_results", loaded_config.max_results);
-        readIfPresent(config_node, "scan_step", loaded_config.scan_step);
-        readIfPresent(config_node, "max_parallelism", loaded_config.max_parallelism);
-        readIfPresent(config_node, "min_feature_distance", loaded_config.min_feature_distance);
-    }
-    validateConfig(loaded_config);
-
-    TemplateMap loaded_templates;
-    const auto  templates_node = storage["templates"];
-    if (!templates_node.empty() && !templates_node.isSeq())
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Shape template file templates node must be a list");
-    }
-
-    for (const auto &node : templates_node)
-    {
-        ShapeTemplateInfo info;
-        node["class_id"] >> info.class_id;
-        readIfPresent(node, "template_id", info.template_id);
-        node["width"] >> info.width;
-        node["height"] >> info.height;
-        node["tl_x"] >> info.tl_x;
-        node["tl_y"] >> info.tl_y;
-        node["angle_degrees"] >> info.angle_degrees;
-        node["scale"] >> info.scale;
-
-        const cv::FileNode features_node = node["features"];
-        if (features_node.empty() || !features_node.isSeq())
+        const YAML::Node root = YAML::LoadFile(template_file.string());
+        if (!root || root.IsNull() || !root.IsMap())
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "Shape template features must be a list of [x, y, label, angle_degrees] arrays");
+                                 "Shape template YAML root must be a mapping");
         }
 
-        for (const auto &feature_node : features_node)
+        const int version = readRequiredYamlValue<int>(root, "version");
+        if (version != kShapeTemplateFileFormatVersion)
         {
-            if (!feature_node.isSeq() || feature_node.size() != 4U)
+            throw irt::Exception(
+                irt::Status::ERROR_INVALID_ARGUMENT,
+                "Unsupported shape template file version: %d; only v%d compact feature arrays are supported", version,
+                kShapeTemplateFileFormatVersion);
+        }
+
+        ShapeTemplateMatcherConfig loaded_config = config_;
+        const YAML::Node           config_node   = root["config"];
+        if (config_node && !config_node.IsNull())
+        {
+            if (!config_node.IsMap())
             {
                 throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                     "Each shape template feature must contain exactly [x, y, label, angle_degrees]");
+                                     "Shape template YAML config node must be a mapping");
             }
-            ShapeTemplateFeature feature;
-            feature_node[0] >> feature.x;
-            feature_node[1] >> feature.y;
-            feature_node[2] >> feature.label;
-            feature_node[3] >> feature.angle_degrees;
-            info.features.push_back(feature);
+            readYamlIfPresent(config_node, "num_features", loaded_config.num_features);
+            readYamlIfPresent(config_node, "min_features", loaded_config.min_features);
+            readYamlIfPresent(config_node, "weak_threshold", loaded_config.weak_threshold);
+            readYamlIfPresent(config_node, "strong_threshold", loaded_config.strong_threshold);
+            readYamlIfPresent(config_node, "max_label_difference", loaded_config.max_label_difference);
+            readYamlIfPresent(config_node, "match_threshold", loaded_config.match_threshold);
+            readYamlIfPresent(config_node, "nms_threshold", loaded_config.nms_threshold);
+            readYamlIfPresent(config_node, "max_results", loaded_config.max_results);
+            readYamlIfPresent(config_node, "scan_step", loaded_config.scan_step);
+            readYamlIfPresent(config_node, "max_parallelism", loaded_config.max_parallelism);
+            readYamlIfPresent(config_node, "min_feature_distance", loaded_config.min_feature_distance);
+        }
+        validateConfig(loaded_config);
+
+        std::vector<ShapeTemplateInfo> loaded_templates;
+        const YAML::Node templates_node = root["templates"];
+        if (templates_node && !templates_node.IsNull() && !templates_node.IsSequence())
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "Shape template YAML templates node must be a list");
         }
 
-        auto &class_templates = loaded_templates[info.class_id];
-        info.template_id      = static_cast<int>(class_templates.size());
-        validateTemplateInfo(info, loaded_config.min_features);
-        class_templates.push_back(std::move(info));
-    }
+        if (templates_node && !templates_node.IsNull())
+        {
+            for (const auto &node : templates_node)
+            {
+                if (!node.IsMap())
+                {
+                    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                         "Each shape template YAML entry must be a mapping");
+                }
 
-    config_    = loaded_config;
-    templates_ = std::move(loaded_templates);
+                ShapeTemplateInfo info;
+                readYamlIfPresent(node, "template_id", info.template_id);
+                info.width         = readRequiredYamlValue<int>(node, "width");
+                info.height        = readRequiredYamlValue<int>(node, "height");
+                info.tl_x          = readRequiredYamlValue<int>(node, "tl_x");
+                info.tl_y          = readRequiredYamlValue<int>(node, "tl_y");
+                info.angle_degrees = readRequiredYamlValue<float>(node, "angle_degrees");
+                info.scale         = readRequiredYamlValue<float>(node, "scale");
+
+                const YAML::Node features_node = node["features"];
+                if (!features_node || features_node.IsNull() || !features_node.IsSequence())
+                {
+                    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                         "Shape template features must be a list of [x, y, label, angle_degrees] arrays");
+                }
+
+                for (const auto &feature_node : features_node)
+                {
+                    if (!feature_node.IsSequence() || feature_node.size() != 4U)
+                    {
+                        throw irt::Exception(
+                            irt::Status::ERROR_INVALID_ARGUMENT,
+                            "Each shape template feature must contain exactly [x, y, label, angle_degrees]");
+                    }
+                    ShapeTemplateFeature feature;
+                    feature.x             = feature_node[0].as<int>();
+                    feature.y             = feature_node[1].as<int>();
+                    feature.label         = feature_node[2].as<int>();
+                    feature.angle_degrees = feature_node[3].as<float>();
+                    info.features.push_back(feature);
+                }
+
+                info.template_id = static_cast<int>(loaded_templates.size());
+                validateTemplateInfo(info, loaded_config.min_features);
+                loaded_templates.push_back(std::move(info));
+            }
+        }
+
+        config_    = loaded_config;
+        templates_ = std::move(loaded_templates);
+    }
+    catch (const YAML::Exception &exception)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to parse shape template YAML '%s': %s",
+                             template_file.string().c_str(), exception.what());
+    }
 }
 
 std::vector<ShapeTemplateVariant>

@@ -41,8 +41,8 @@ void VerifyParity()
         const cv::Mat source = MakeSource();
         irt::features::v1::ShapeTemplateMatcherFast avx2(Config());
         irt::features::v0::ShapeTemplateMatcher scalar(Config());
-        avx2.addTemplate(templ, "shape");
-        scalar.addTemplate(templ, "shape");
+        avx2.addTemplate(templ);
+        scalar.addTemplate(templ);
         const auto avx2_matches = avx2.match(source);
         const auto scalar_matches = scalar.match(source);
         if (avx2_matches.size() != scalar_matches.size())
@@ -52,14 +52,14 @@ void VerifyParity()
             const auto &a = avx2_matches[i];
             const auto &b = scalar_matches[i];
             if (a.x != b.x || a.y != b.y || a.width != b.width || a.height != b.height
-                || a.similarity != b.similarity || a.class_id != b.class_id || a.template_id != b.template_id
+                || a.similarity != b.similarity || a.template_id != b.template_id
                 || a.angle_degrees != b.angle_degrees || a.scale != b.scale)
                 throw std::logic_error("AVX2 and scalar shape-template match contents differ");
         }
         if (SupportsAvx512())
         {
             irt::features::v2::ShapeTemplateMatcherAvx512 avx512(Config());
-            avx512.addTemplate(templ, "shape");
+            avx512.addTemplate(templ);
             const auto avx512_matches = avx512.match(source);
             if (avx512_matches.size() != avx2_matches.size())
                 throw std::logic_error("AVX512 and AVX2 shape-template matches differ");
@@ -68,7 +68,7 @@ void VerifyParity()
                 const auto &a = avx512_matches[i];
                 const auto &b = avx2_matches[i];
                 if (a.x != b.x || a.y != b.y || a.width != b.width || a.height != b.height
-                    || a.similarity != b.similarity || a.class_id != b.class_id || a.template_id != b.template_id
+                    || a.similarity != b.similarity || a.template_id != b.template_id
                     || a.angle_degrees != b.angle_degrees || a.scale != b.scale)
                     throw std::logic_error("AVX512 and AVX2 shape-template match contents differ");
             }
@@ -82,7 +82,7 @@ template <class Matcher> void BenchmarkMatch(benchmark::State &state, int templa
     VerifyParity();
     const cv::Mat templ = MakeTemplate(); const cv::Mat source = MakeSource(); Matcher matcher(Config());
     for (int i = 0; i < template_count; ++i)
-        matcher.addTemplate(templ, "shape_" + std::to_string(i));
+        matcher.addTemplate(templ);
     for (auto _ : state) { auto matches = matcher.match(source); benchmark::DoNotOptimize(matches.data()); benchmark::ClobberMemory(); }
     state.SetLabel("640x480, 96 features, scan_step=1, templates=" + std::to_string(template_count));
 }

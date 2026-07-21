@@ -28,6 +28,7 @@ add_plugin_library(features
         ${Faiss_INCLUDE_DIRS}
 
     PRIVATE_LIBS
+        yaml-cpp::yaml-cpp
 
     PUBLIC_LIBS
         opencv_core opencv_imgcodecs opencv_imgproc

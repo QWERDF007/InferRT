@@ -6,7 +6,7 @@
 `irt::features::v1::ShapeTemplateMatcherFast`（AVX2 快速实现）以及
 `irt::features::v2::ShapeTemplateMatcherAvx512`（AVX512F/BW 快速实现）。它参考 `shape_based_matching`/LINEMOD 的思路：
 训练阶段把目标轮廓表示为稀疏的梯度方向特征点，匹配阶段在源图中滑窗统计这些特征点平移后的方向一致性，
-最后通过阈值、类别过滤、同类别 NMS 和最大数量限制返回匹配框。
+最后通过阈值、全模板库 NMS 和最大数量限制返回匹配框。
 
 该模块不依赖深度模型和 Faiss，适合边缘清晰、纹理不稳定、形状结构稳定的零件、标记、工件定位场景。
 
@@ -26,7 +26,7 @@
 - `priv/ShapeTemplateMatcherEngine.hpp/.cpp`：版本无关流程核心，负责图像校验、训练选点、持久化、匹配调度和 NMS。
 - `priv/ShapeTemplateMatcherImpl.hpp/.cpp` / `priv/ShapeTemplateMatcherFastImpl.hpp/.cpp` / `priv/ShapeTemplateMatcherAvx512Impl.hpp/.cpp`：v0、v1、v2 的私有具体实现和各自热点内核。
 - `samples/features/shape_template_matching/SampleShapeTemplateMatching.cpp`：训练、保存、加载、匹配和结果可视化示例。
-- `tests/features/TestShapeTemplateMatcher.cpp`：配置校验、训练失败、平移匹配、非 SIMD 对齐尺寸、类别过滤、NMS、旋转变体、保存加载和文件 API 测试。
+- `tests/features/TestShapeTemplateMatcher.cpp`：配置校验、训练失败、平移匹配、非 SIMD 对齐尺寸、NMS、旋转变体、保存加载和文件 API 测试。
 
 ## 2. 配置入口
 
@@ -38,7 +38,7 @@
 - `strong_threshold`：训练模板候选点的强梯度阈值，默认 `60.0f`。
 - `max_label_difference`：方向 bin 容差，合法范围为 `[0, 4]`。`0` 表示方向必须完全一致，`1` 允许相邻 45 度方向有部分贡献。
 - `match_threshold`：默认匹配分数阈值，范围为 `[0, 100]`，默认 `80.0f`。
-- `nms_threshold`：同类别 NMS 的 IoU 阈值，默认 `0.3f`；小于 `0` 时关闭 NMS。
+- `nms_threshold`：全模板库 NMS 的 IoU 阈值，默认 `0.3f`；小于 `0` 时关闭 NMS。
 - `max_results`：最多返回的匹配数量；`0` 表示不限制。
 - `scan_step`：滑窗扫描步长，单位为像素，默认 `1`。增大后速度更快，但位置精度降低。
 - `min_feature_distance`：训练时贪心选点的最小间距；`0` 表示按模板面积和 `num_features` 自动估计。
@@ -73,21 +73,22 @@ irt::features::v1::ShapeTemplateMatcherFast matcher(config);
 - 模板掩膜建议只覆盖目标本体，避免背景边缘被训练进模板。
 - 搜索掩膜当前以滑窗中心点为过滤依据：滑窗中心落在零值区域时跳过该位置。
 
-类别由调用方通过 `class_id` 提供。一个类别可以包含多个模板，例如同一个零件的不同旋转角度和尺度。`template_id`
-是当前类别内从 `0` 开始递增的模板 ID。
+模板库不保存类别信息。一个 YAML 模板文件由调用方在外部定义为一类目标，文件内部可包含同一目标的多个
+ROI、旋转和尺度变体。`template_id` 是该模板文件内从 `0` 开始递增的全局模板 ID；需要识别多类目标时，
+应由外部为每类维护独立模板文件，并分别加载和匹配。
 
 ## 4. 单模板训练流程
 
 单模板训练入口：
 
 ```cpp
-const int template_id = matcher.addTemplate(template_image, "part", object_mask);
+const int template_id = matcher.addTemplate(template_image, object_mask);
 ```
 
 文件入口：
 
 ```cpp
-const int template_id = matcher.addTemplateFile("part.png", "part", "part_mask.png");
+const int template_id = matcher.addTemplateFile("part.png", "part_mask.png");
 ```
 
 ### 4.1 v0 / v1 / v2 训练流程图
@@ -96,7 +97,7 @@ const int template_id = matcher.addTemplateFile("part.png", "part", "part_mask.p
 graph TB
     TrainStart["addTemplate addTemplateVariants 或 addTemplateVariantsBatch"];
     TrainApi["公共 API 转发 ShapeTemplateMatcherBase"];
-    TrainEngine["公共引擎 校验图像 类别 变体和掩膜"];
+    TrainEngine["公共引擎 校验图像 变体和掩膜"];
     TrainVersion{"训练版本"};
     TrainStart --> TrainApi;
     TrainApi --> TrainEngine;
@@ -145,7 +146,7 @@ graph TB
 
 内部流程如下：
 
-1. 校验训练图不能为空，`class_id` 不能为空，模板变体元数据中的角度必须有限，尺度必须大于 `0`。
+1. 校验训练图不能为空，模板变体元数据中的角度必须有限，尺度必须大于 `0`。
 2. 将训练图转成灰度图，并把 `object_mask` 规范化为同尺寸 `CV_8U` 掩膜。
 3. 使用 OpenCV `Sobel` 计算 `grad_x` 和 `grad_y`。
 4. 使用 `cartToPolar` 计算梯度幅值和角度。
@@ -162,14 +163,14 @@ graph TB
 9. 如果初始距离导致特征不足，会逐步降低距离，直到满足 `min_features` 或退化到 1 像素间距。
 10. 如果最终特征点数量仍小于 `min_features`，训练失败并抛出 `ERROR_INVALID_ARGUMENT`。
 11. 计算选中特征点的最小包围盒，把特征坐标转为相对模板左上角的坐标。
-12. 生成 `ShapeTemplateInfo`，写入 `class_id` 对应的模板列表，并返回类别内 `template_id`。
+12. 生成 `ShapeTemplateInfo`，写入模板库，并返回文件内全局 `template_id`。
 
 训练后的模板只保存稀疏特征点，不保存原始模板图。单个模板的核心数据包括：
 
 - `width` / `height`：特征点包围盒尺寸。
 - `tl_x` / `tl_y`：特征点包围盒在训练图中的左上角。
 - `angle_degrees` / `scale`：模板变体元数据。
-- `features`：相对模板包围盒的 `(x, y, label, angle_degrees)` 列表；v2 文件中每个特征编码为固定四列的 `[x, y, label, angle_degrees]` 数组。
+- `features`：相对模板包围盒的 `(x, y, label, angle_degrees)` 列表；v3 文件中每个特征编码为固定四列的 `[x, y, label, angle_degrees]` 数组。
 
 ## 5. 旋转和尺度模板训练流程
 
@@ -179,7 +180,7 @@ graph TB
 const auto variants = irt::features::makeShapeTemplateAngleScaleVariants(
     0.0f, 180.0f, 15.0f, 0.9f, 1.1f, 0.1f);
 
-const auto ids = matcher.addTemplateVariants(template_image, "part", object_mask, variants);
+const auto ids = matcher.addTemplateVariants(template_image, object_mask, variants);
 ```
 
 `makeAngleScaleVariants()` 使用闭区间生成参数，展开顺序是先尺度、再角度。上例会生成：
@@ -207,8 +208,8 @@ scale = 1.1: angle = 0, 15, ..., 180
 
 ```cpp
 std::vector<irt::features::ShapeTemplateTrainingInput> inputs{
-    {first_roi, "part", first_mask},
-    {second_roi, "part", second_mask},
+    {first_roi, first_mask},
+    {second_roi, second_mask},
 };
 const auto ids_by_input = matcher.addTemplateVariantsBatch(inputs, variants);
 ```
@@ -217,7 +218,7 @@ v0 对批量输入仍按输入顺序复用原始的串行训练流程。v1/v2 �
 
 ## 6. 模板保存和加载流程
 
-训练完成后可以把模板库保存为 OpenCV YAML/XML 文件：
+训练完成后可以把模板库保存为 yaml-cpp 读写的标准 YAML 文件：
 
 ```cpp
 matcher.save("shape_templates.yaml");
@@ -232,14 +233,14 @@ matcher.load("shape_templates.yaml");
 
 保存内容包括：
 
-- `version`：模板文件版本；当前为破坏性的 `2`，不接受旧 `1`。
+- `version`：模板文件版本；当前为破坏性的 `3`，不接受旧 `1` 和 `2`。
 - `config`：训练/匹配配置，包括阈值、方向容差、NMS、扫描步长等。
-- `templates`：所有类别下的模板信息和特征点列表。每个模板的 `features` 是二维数组，每行严格为 `[x, y, label, angle_degrees]`，不再为每个特征重复写字段名。
+- `templates`：模板文件内全部模板的信息和特征点列表。每个模板的 `features` 是二维数组，每行严格为 `[x, y, label, angle_degrees]`，并以 `- [x, y, label, angle_degrees]` 的紧凑 flow 形式写入，不再为每个特征重复写字段名。
 
 加载流程会先读入临时配置和临时模板库，完成配置校验、模板尺寸校验、特征数量校验、方向标签校验和变体元数据校验后，
 再替换当前对象状态。这样可以避免加载失败时留下半初始化模板库。
 
-模板文件格式 v2 是破坏性升级：已有 `version: 1` 模板文件不能加载，必须以当前版本重新训练。v0、v1 与 v2 实现都共享该模板格式，因而新生成的模板仍可在三个实现之间交叉加载。
+模板文件格式 v3 是破坏性升级：已有 `version: 1` 或 `version: 2` 模板文件不能加载，必须以当前版本重新训练。v0、v1 与 v2 实现都共享 yaml-cpp 的标准 YAML 格式，因而新生成的模板仍可在三个实现之间交叉加载。
 
 ## 7. 匹配流程
 
@@ -247,14 +248,14 @@ matcher.load("shape_templates.yaml");
 
 ```cpp
 irt::features::ShapeTemplateMatchOptions options; // 默认：template_stride=1，scan_step=0
-const auto matches = matcher.match(source_image, 85.0f, {"part"}, search_mask, options);
+const auto matches = matcher.match(source_image, 85.0f, search_mask, options);
 ```
 
 文件入口：
 
 ```cpp
 irt::features::ShapeTemplateMatchOptions options;
-const auto matches = matcher.matchFile("scene.png", 85.0f, {"part"}, "search_mask.png", options);
+const auto matches = matcher.matchFile("scene.png", 85.0f, "search_mask.png", options);
 ```
 
 ### 7.1 v0 / v1 / v2 匹配流程图
@@ -263,7 +264,7 @@ const auto matches = matcher.matchFile("scene.png", 85.0f, {"part"}, "search_mas
 graph TB
     MatchStart["match 或 matchFile"];
     MatchApi["公共 API 转发 ShapeTemplateMatcherBase"];
-    MatchPrepare["公共引擎 校验源图和模板库 解析阈值 搜索掩膜 类别过滤和扫描选项"];
+    MatchPrepare["公共引擎 校验源图和模板库 解析阈值 搜索掩膜和扫描选项"];
     MatchWork["构建本次参与扫描的模板工作项"];
     MatchVersion{"匹配版本"};
     MatchStart --> MatchApi;
@@ -299,7 +300,7 @@ graph TB
     MatchVersion -->|v1| V1Labels;
     MatchVersion -->|v2| V2Labels;
     MatchCollect["公共引擎按 max parallelism 调度模板扫描并收集候选框"];
-    MatchPost["稳定排序 同类别 NMS 和 max results 截断"];
+    MatchPost["稳定排序 全模板库 NMS 和 max results 截断"];
     MatchResult["ShapeTemplateMatch 列表"];
     V0Scan --> MatchCollect;
     V1Scan --> MatchCollect;
@@ -319,10 +320,8 @@ graph TB
 5. 根据 `max_label_difference` 构建源图方向响应数据：
    - v0 为实际参与匹配的模板方向标签物化响应图；响应值表示源图该像素方向对该模板方向的整数贡献，方向完全不匹配时贡献为 `0`。
    - v1/v2 保留量化方向标签和同一份响应查表，匹配时直接 SIMD 查表，不物化方向响应图。
-6. 根据 `class_ids` 与运行时 `ShapeTemplateMatchOptions::template_stride` 决定参与匹配的模板：
-   - `class_ids` 为空时扫描全部类别。
-   - `class_ids` 非空时只扫描存在于模板库中的指定类别。
-   - `template_stride=1` 时扫描全部变体；大于 1 时只扫描 `template_id % template_stride == 0` 的变体，这是显式近似模式。
+6. 根据运行时 `ShapeTemplateMatchOptions::template_stride` 决定参与匹配的模板：
+   - `template_stride=1` 时扫描模板文件中的全部变体；大于 1 时只扫描 `template_id % template_stride == 0` 的变体，这是显式近似模式。
 7. 对每个模板做滑窗扫描：
    - 步长为 `options.scan_step > 0 ? options.scan_step : config.scan_step`。
    - 滑窗中心点在 `search_mask` 中为零时跳过。
@@ -334,8 +333,8 @@ similarity = 100 * sum(response(feature_i)) / (denominator_per_feature * feature
 ```
 
 10. 分数大于等于有效阈值时生成 `ShapeTemplateMatch`。
-11. 对所有候选结果按分数从高到低排序，分数相同则按类别、模板 ID 和坐标稳定排序。
-12. 如果 `nms_threshold >= 0`，执行同类别 NMS；不同类别之间不会互相压制。
+11. 对所有候选结果按分数从高到低排序，分数相同则按模板 ID 和坐标稳定排序。
+12. 如果 `nms_threshold >= 0`，在整个模板库的候选结果上执行 NMS。
 13. 如果 `max_results > 0`，截断到最多 `max_results` 个结果。
 
 返回的 `ShapeTemplateMatch` 包含：
@@ -343,7 +342,7 @@ similarity = 100 * sum(response(feature_i)) / (denominator_per_feature * feature
 - `x` / `y`：源图坐标系下的匹配框左上角。
 - `width` / `height`：命中模板的包围盒尺寸。
 - `similarity`：方向一致性分数，范围 `[0, 100]`。
-- `class_id` / `template_id`：命中的类别和模板。
+- `template_id`：命中的模板文件内全局模板 ID。
 - `angle_degrees` / `scale`：命中模板的训练变体元数据。
 
 ## 8. 版本与指令集抽象
@@ -371,7 +370,7 @@ v0::detail::ShapeTemplateMatcherKernelImpl  v1::detail::ShapeTemplateMatcherFast
 - `ShapeTemplateMatcherKernel` 定义可替换热点：是否物化响应图、方向标签量化、训练候选点收集、单方向响应图构建及单模板滑窗评分。
 - `v0::detail::ShapeTemplateMatcherImpl` 只注入同一命名空间内的参考热点内核；`v1::detail::ShapeTemplateMatcherFastImpl` 只注入同一命名空间内的 AVX2 快速热点内核；`v2::detail::ShapeTemplateMatcherAvx512Impl` 只注入同一命名空间内的 AVX512F/BW 热点内核，并在创建时检查 CPU 指令集。
 - 命名空间严格隔离：v0、v1、v2 的公开类、私有 `Impl`、热点内核和辅助函数均位于各自的 `v0::detail` / `v1::detail` / `v2::detail`，不互相包含或调用。`irt::features::detail` 只承载版本无关的公共转发基类、流程核心和内核协议；版本实现仅通过局部 `common` 别名访问这些协议。
-- 三条路径产生相同的 `ShapeTemplateInfo`、`ShapeTemplateMatch` 和 YAML/XML 模板格式，因此可交叉加载与对照测试。
+- 三条路径产生相同的 `ShapeTemplateInfo`、`ShapeTemplateMatch` 和标准 YAML 模板格式，因此可交叉加载与对照测试。
 
 v1 的 AVX2 内核覆盖四段热点：每次处理 8 个 `float` 的方向量化、每次处理 32 个像素的候选点过滤、方向标签字节 shuffle 查表，以及批量滑窗打分。评分时按当前源图的方向响应均值重排特征；每累计 4 个特征即以理论上界淘汰不可能达标的整组候选。常见的分子上界不超过 255 时，v1 用 8-bit 累加一次处理 32 个相邻候选；较大但仍安全的配置使用 16-bit/16-lane 路径。`scan_step=2` 时，内核从连续 32-byte 读取中 shuffle 压缩出 16 个间隔候选，其他正步长使用 AVX2 gather。
 
@@ -395,7 +394,6 @@ inferrt_sample_shape_template_matching
   --version v1 `
   --template D:\data\part.png `
   --template-mask D:\data\part_mask.png `
-  --class-id part `
   --angle-begin 0 `
   --angle-end 180 `
   --angle-step 15 `
@@ -419,7 +417,6 @@ inferrt_sample_shape_template_matching
   --version v1 `
   --source D:\data\scene.png `
   --load-templates D:\data\shape_templates.yaml `
-  --class-filter part `
   --threshold 85 `
   --warmup 3 `
   --repeat 10 `
@@ -444,7 +441,7 @@ inferrt_sample_shape_template_matching
 - 误检较多：提高 `match_threshold`，减小 `max_label_difference`，或提高 `nms_threshold` 后再观察候选框分布。
 - 同一目标返回多个重叠框：保持 `nms_threshold >= 0`，常用范围为 `0.2` 到 `0.5`。
 - 匹配太慢：若上游已知目标区域，应由上游先裁剪图像并单独评估整个流水线；若必须全图匹配且可接受近似，再提高 `template_stride`、增大 `scan_step`、减少模板变体数量或减少 `num_features`。
-- 只关心某些类别：调用 `match()` 时传入 `class_ids`，避免扫描无关类别模板。
+- 需要识别多类目标：由外部为每类维护独立模板文件，按业务需要选择要加载和匹配的模板文件。
 
 ## 11. 注意事项和限制
 

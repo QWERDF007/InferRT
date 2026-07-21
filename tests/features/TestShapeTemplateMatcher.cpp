@@ -12,7 +12,6 @@
 #include <inferrt/features/v2/ShapeTemplateMatcherAvx512.hpp>
 
 #include <opencv2/core.hpp>
-#include <opencv2/core/persistence.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -20,6 +19,8 @@
 #include <array>
 #include <atomic>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -119,7 +120,7 @@ cv::Mat makeLShape(int size = 48)
 }
 
 /**
- * @brief 生成 T 形合成模板，用于类别过滤负例。
+ * @brief 生成 T 形合成模板，用于不同形状的负例。
  */
 cv::Mat makeTShape(int size = 48)
 {
@@ -176,9 +177,7 @@ TEST(ShapeTemplateMatcherTest, DefaultConstructsEmptyMatcher)
     const V1ShapeTemplateMatcher matcher;
 
     EXPECT_TRUE(matcher.empty());
-    EXPECT_EQ(matcher.numClasses(), 0);
     EXPECT_EQ(matcher.numTemplates(), 0);
-    EXPECT_TRUE(matcher.classIds().empty());
     EXPECT_EQ(matcher.config().num_features, irt::features::kDefaultShapeTemplateNumFeatures);
     EXPECT_EQ(matcher.config().min_features, irt::features::kDefaultShapeTemplateMinFeatures);
     EXPECT_FLOAT_EQ(matcher.config().match_threshold, irt::features::kDefaultShapeTemplateMatchThreshold);
@@ -254,39 +253,34 @@ TEST(ShapeTemplateMatcherTest, ConstructorRejectsInvalidConfig)
 }
 
 /**
- * @brief 训练阶段应拒绝空图、空类别、错误掩膜尺寸和无梯度模板。
+ * @brief 训练阶段应拒绝空图、错误掩膜尺寸和无梯度模板。
  */
 TEST(ShapeTemplateMatcherTest, AddTemplateRejectsBadInputs)
 {
     V1ShapeTemplateMatcher matcher(fastConfig());
     const auto                          object = makeLShape();
 
-    expectIrtExceptionCode([&] { matcher.addTemplate(cv::Mat(), "part"); }, irt::Status::ERROR_INVALID_ARGUMENT);
-    expectIrtExceptionCode([&] { matcher.addTemplate(object, ""); }, irt::Status::ERROR_INVALID_ARGUMENT);
-    expectIrtExceptionCode([&] { matcher.addTemplate(object, "part", cv::Mat(8, 8, CV_8UC1)); },
+    expectIrtExceptionCode([&] { matcher.addTemplate(cv::Mat()); }, irt::Status::ERROR_INVALID_ARGUMENT);
+    expectIrtExceptionCode([&] { matcher.addTemplate(object, cv::Mat(8, 8, CV_8UC1)); },
                            irt::Status::ERROR_INVALID_ARGUMENT);
-    expectIrtExceptionCode([&] { matcher.addTemplate(cv::Mat(48, 48, CV_8UC1, cv::Scalar(0)), "flat"); },
+    expectIrtExceptionCode([&] { matcher.addTemplate(cv::Mat(48, 48, CV_8UC1, cv::Scalar(0))); },
                            irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
- * @brief 训练单模板后应能读取类别、模板数量和特征元数据。
+ * @brief 训练单模板后应能读取全局模板 ID、数量和特征元数据。
  */
-TEST(ShapeTemplateMatcherTest, AddTemplateExtractsMetadataAndClassIds)
+TEST(ShapeTemplateMatcherTest, AddTemplateExtractsMetadata)
 {
     V1ShapeTemplateMatcher matcher(fastConfig());
 
-    const int id = matcher.addTemplate(makeLShape(), "bracket");
+    const int id = matcher.addTemplate(makeLShape());
 
     ASSERT_EQ(id, 0);
     EXPECT_FALSE(matcher.empty());
-    EXPECT_EQ(matcher.numClasses(), 1);
     EXPECT_EQ(matcher.numTemplates(), 1);
-    EXPECT_EQ(matcher.numTemplates("bracket"), 1);
-    EXPECT_EQ(matcher.classIds(), (std::vector<std::string>{"bracket"}));
 
-    const auto &templ = matcher.getTemplate("bracket", id);
-    EXPECT_EQ(templ.class_id, "bracket");
+    const auto &templ = matcher.getTemplate(id);
     EXPECT_EQ(templ.template_id, 0);
     EXPECT_GT(templ.width, 0);
     EXPECT_GT(templ.height, 0);
@@ -310,19 +304,18 @@ TEST(ShapeTemplateMatcherTest, MatchFindsTranslatedShape)
 {
     V1ShapeTemplateMatcher matcher(fastConfig());
     const auto                          object = makeLShape();
-    const int                           id     = matcher.addTemplate(object, "bracket");
-    const auto                         &templ  = matcher.getTemplate("bracket", id);
+    const int                           id     = matcher.addTemplate(object);
+    const auto                         &templ  = matcher.getTemplate(id);
     const cv::Point                     paste_at(34, 42);
     const auto                          scene = makeSceneWith(object, paste_at);
 
-    const auto matches = matcher.match(scene, 95.0f, {"bracket"});
+    const auto matches = matcher.match(scene, 95.0f);
 
     ASSERT_FALSE(matches.empty());
     const int expected_x = paste_at.x + templ.tl_x;
     const int expected_y = paste_at.y + templ.tl_y;
     const auto *exact    = findExactMatch(matches, expected_x, expected_y);
     ASSERT_NE(exact, nullptr);
-    EXPECT_EQ(exact->class_id, "bracket");
     EXPECT_EQ(exact->template_id, id);
     EXPECT_NEAR(exact->similarity, 100.0f, 1.0e-4f);
 }
@@ -334,12 +327,12 @@ TEST(ShapeTemplateMatcherTest, MatchesNonAlignedImageSizes)
 {
     V1ShapeTemplateMatcher matcher(fastConfig());
     const auto                          object = makeLShape(50);
-    const int                           id     = matcher.addTemplate(object, "bracket");
-    const auto                         &templ  = matcher.getTemplate("bracket", id);
+    const int                           id     = matcher.addTemplate(object);
+    const auto                         &templ  = matcher.getTemplate(id);
     const cv::Point                     paste_at(31, 27);
     const auto                          scene = makeSceneWith(object, paste_at, cv::Size(119, 107));
 
-    const auto matches = matcher.match(scene, 95.0f, {"bracket"});
+    const auto matches = matcher.match(scene, 95.0f);
 
     ASSERT_FALSE(matches.empty());
     const auto *exact = findExactMatch(matches, paste_at.x + templ.tl_x, paste_at.y + templ.tl_y);
@@ -348,34 +341,16 @@ TEST(ShapeTemplateMatcherTest, MatchesNonAlignedImageSizes)
 }
 
 /**
- * @brief 类别过滤应只返回指定类别的模板命中。
+ * @brief 重复模板命中应被 NMS 压制。
  */
-TEST(ShapeTemplateMatcherTest, ClassFilterLimitsMatches)
+TEST(ShapeTemplateMatcherTest, NmsSuppressesDuplicateTemplates)
 {
     V1ShapeTemplateMatcher matcher(fastConfig());
     const auto                          object = makeLShape();
-    matcher.addTemplate(object, "bracket");
-    matcher.addTemplate(makeTShape(), "tee");
-    const auto scene = makeSceneWith(object, cv::Point(20, 30));
+    matcher.addTemplate(object);
+    matcher.addTemplate(object);
 
-    const auto bracket_matches = matcher.match(scene, 95.0f, {"bracket"});
-    const auto tee_matches     = matcher.match(scene, 95.0f, {"tee"});
-
-    EXPECT_FALSE(bracket_matches.empty());
-    EXPECT_TRUE(tee_matches.empty());
-}
-
-/**
- * @brief 同类别重复模板命中应被 NMS 压制。
- */
-TEST(ShapeTemplateMatcherTest, NmsSuppressesDuplicateTemplatesForSameClass)
-{
-    V1ShapeTemplateMatcher matcher(fastConfig());
-    const auto                          object = makeLShape();
-    matcher.addTemplate(object, "bracket");
-    matcher.addTemplate(object, "bracket");
-
-    const auto matches = matcher.match(makeSceneWith(object, cv::Point(28, 26)), 99.0f, {"bracket"});
+    const auto matches = matcher.match(makeSceneWith(object, cv::Point(28, 26)), 99.0f);
 
     ASSERT_EQ(matches.size(), 1U);
     EXPECT_EQ(matches[0].template_id, 0);
@@ -393,10 +368,10 @@ TEST(ShapeTemplateMatcherTest, MaxResultsLimitsSortedOutputWhenNmsDisabled)
 
     V1ShapeTemplateMatcher matcher(config);
     const auto                          object = makeLShape();
-    matcher.addTemplate(object, "bracket");
-    matcher.addTemplate(object, "bracket");
+    matcher.addTemplate(object);
+    matcher.addTemplate(object);
 
-    const auto matches = matcher.match(makeSceneWith(object, cv::Point(28, 26)), 99.0f, {"bracket"});
+    const auto matches = matcher.match(makeSceneWith(object, cv::Point(28, 26)), 99.0f);
 
     ASSERT_EQ(matches.size(), 1U);
     EXPECT_EQ(matches[0].template_id, 0);
@@ -414,12 +389,12 @@ TEST(ShapeTemplateMatcherTest, VariantsDetectRotatedShape)
 
     const auto object   = makeLShape();
     const auto variants = irt::features::makeShapeTemplateAngleScaleVariants(0.0f, 90.0f, 90.0f);
-    const auto ids      = matcher.addTemplateVariants(object, "bracket", cv::Mat(), variants);
+    const auto ids      = matcher.addTemplateVariants(object, cv::Mat(), variants);
     ASSERT_EQ(ids.size(), 2U);
 
     const auto rotated = irt::features::transformShapeTemplateImage(
         object, irt::features::ShapeTemplateVariant{90.0f, 1.0f});
-    const auto matches = matcher.match(makeSceneWith(rotated, cv::Point(26, 24)), 85.0f, {"bracket"});
+    const auto matches = matcher.match(makeSceneWith(rotated, cv::Point(26, 24)), 85.0f);
 
     ASSERT_FALSE(matches.empty());
     EXPECT_NEAR(matches.front().angle_degrees, 90.0f, 1.0e-4f);
@@ -437,91 +412,73 @@ TEST(ShapeTemplateMatcherTest, SaveLoadRoundTripPreservesMatches)
     const auto scene         = makeSceneWith(object, cv::Point(30, 34));
 
     V1ShapeTemplateMatcher writer(fastConfig());
-    writer.addTemplate(object, "bracket", cv::Mat(), irt::features::ShapeTemplateVariant{15.0f, 1.25f});
+    writer.addTemplate(object, cv::Mat(), irt::features::ShapeTemplateVariant{15.0f, 1.25f});
     writer.save(template_file);
 
-    {
-        cv::FileStorage storage(template_file.string(), cv::FileStorage::READ);
-        ASSERT_TRUE(storage.isOpened());
-        int version = 0;
-        storage["version"] >> version;
-        EXPECT_EQ(version, 2);
-
-        const cv::FileNode templates_node = storage["templates"];
-        ASSERT_TRUE(templates_node.isSeq());
-        ASSERT_EQ(templates_node.size(), 1U);
-        const cv::FileNode features_node = templates_node[0]["features"];
-        ASSERT_TRUE(features_node.isSeq());
-        ASSERT_EQ(features_node.size(), writer.getTemplate("bracket", 0).features.size());
-        ASSERT_FALSE(features_node.empty());
-        const cv::FileNode feature_node = features_node[0];
-        ASSERT_TRUE(feature_node.isSeq());
-        ASSERT_EQ(feature_node.size(), 4U);
-        const auto &expected_feature = writer.getTemplate("bracket", 0).features.front();
-        int          x                = 0;
-        int          y                = 0;
-        int          label            = 0;
-        float        angle_degrees    = 0.0f;
-        feature_node[0] >> x;
-        feature_node[1] >> y;
-        feature_node[2] >> label;
-        feature_node[3] >> angle_degrees;
-        EXPECT_EQ(x, expected_feature.x);
-        EXPECT_EQ(y, expected_feature.y);
-        EXPECT_EQ(label, expected_feature.label);
-        EXPECT_FLOAT_EQ(angle_degrees, expected_feature.angle_degrees);
-    }
+    std::ifstream input(template_file, std::ios::binary);
+    ASSERT_TRUE(input.is_open());
+    const std::string serialized{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    EXPECT_NE(serialized.find("version: 3"), std::string::npos);
+    EXPECT_EQ(serialized.find("class_id:"), std::string::npos);
+    const auto features_position = serialized.find("features:");
+    ASSERT_NE(features_position, std::string::npos);
+    EXPECT_NE(serialized.find("- [", features_position), std::string::npos);
 
     V1ShapeTemplateMatcher reader;
     reader.load(template_file);
-    const auto matches = reader.match(scene, 95.0f, {"bracket"});
+    const auto matches = reader.match(scene, 95.0f);
 
     ASSERT_FALSE(matches.empty());
-    EXPECT_EQ(reader.numTemplates("bracket"), 1);
-    EXPECT_EQ(reader.getTemplate("bracket", 0).features.size(), writer.getTemplate("bracket", 0).features.size());
-    EXPECT_NEAR(reader.getTemplate("bracket", 0).angle_degrees, 15.0f, 1.0e-4f);
-    EXPECT_NEAR(reader.getTemplate("bracket", 0).scale, 1.25f, 1.0e-4f);
+    EXPECT_EQ(reader.numTemplates(), 1);
+    EXPECT_EQ(reader.getTemplate(0).features.size(), writer.getTemplate(0).features.size());
+    EXPECT_NEAR(reader.getTemplate(0).angle_degrees, 15.0f, 1.0e-4f);
+    EXPECT_NEAR(reader.getTemplate(0).scale, 1.25f, 1.0e-4f);
+    const auto &expected_feature = writer.getTemplate(0).features.front();
+    const auto &loaded_feature   = reader.getTemplate(0).features.front();
+    EXPECT_EQ(loaded_feature.x, expected_feature.x);
+    EXPECT_EQ(loaded_feature.y, expected_feature.y);
+    EXPECT_EQ(loaded_feature.label, expected_feature.label);
+    EXPECT_FLOAT_EQ(loaded_feature.angle_degrees, expected_feature.angle_degrees);
     EXPECT_NEAR(matches.front().similarity, 100.0f, 1.0e-4f);
 }
 
-/** @brief v2 持久化格式是破坏性升级，不再接收旧版字段对象格式。 */
-TEST(ShapeTemplateMatcherTest, LegacyV1TemplateFilesAreRejectedAfterFormatUpgrade)
+/** @brief 标准 YAML v3 持久化格式是破坏性升级，不再接收带类别字段的 v2 文件。 */
+TEST(ShapeTemplateMatcherTest, LegacyV2TemplateFilesAreRejectedAfterFormatUpgrade)
 {
     TempDir temp;
-    const auto legacy_file = temp.path() / "legacy_v1_templates.yaml";
-    cv::FileStorage storage(legacy_file.string(), cv::FileStorage::WRITE);
-    ASSERT_TRUE(storage.isOpened());
-    storage << "version" << 1;
-    storage.release();
+    const auto legacy_file = temp.path() / "legacy_v2_templates.yaml";
+    std::ofstream output(legacy_file);
+    ASSERT_TRUE(output.is_open());
+    output << "version: 2\n"
+              "templates: []\n";
+    ASSERT_TRUE(output.good());
+    output.close();
 
     V1ShapeTemplateMatcher matcher;
     expectIrtExceptionCode([&] { matcher.load(legacy_file); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
-/** @brief v2 的每个特征必须严格包含四个按位置约定的字段。 */
+/** @brief v3 的每个特征必须严格包含四个按位置约定的字段。 */
 TEST(ShapeTemplateMatcherTest, CompactFeatureRowsRequireExactlyFourValues)
 {
     TempDir temp;
     const auto malformed_file = temp.path() / "malformed_compact_templates.yaml";
-    cv::FileStorage storage(malformed_file.string(), cv::FileStorage::WRITE);
-    ASSERT_TRUE(storage.isOpened());
-    storage << "version" << 2;
-    storage << "templates" << "[";
-    storage << "{";
-    storage << "class_id" << "part";
-    storage << "template_id" << 0;
-    storage << "width" << 8;
-    storage << "height" << 8;
-    storage << "tl_x" << 0;
-    storage << "tl_y" << 0;
-    storage << "angle_degrees" << 0.0f;
-    storage << "scale" << 1.0f;
-    storage << "features" << "[";
-    storage << "[" << 1 << 2 << 3 << "]";
-    storage << "]";
-    storage << "}";
-    storage << "]";
-    storage.release();
+    std::ofstream output(malformed_file);
+    ASSERT_TRUE(output.is_open());
+    output << R"(version: 3
+templates:
+  - template_id: 0
+    width: 8
+    height: 8
+    tl_x: 0
+    tl_y: 0
+    angle_degrees: 0
+    scale: 1
+    features:
+      - [1, 2, 3]
+)";
+    ASSERT_TRUE(output.good());
+    output.close();
 
     V1ShapeTemplateMatcher matcher;
     expectIrtExceptionCode([&] { matcher.load(malformed_file); }, irt::Status::ERROR_INVALID_ARGUMENT);
@@ -541,8 +498,8 @@ TEST(ShapeTemplateMatcherTest, FileApisTrainAndMatchImages)
     ASSERT_TRUE(cv::imwrite(scene_file.string(), scene));
 
     V1ShapeTemplateMatcher matcher(fastConfig());
-    const int id = matcher.addTemplateFile(object_file, "bracket");
-    const auto matches = matcher.matchFile(scene_file, 95.0f, {"bracket"});
+    const int id = matcher.addTemplateFile(object_file);
+    const auto matches = matcher.matchFile(scene_file, 95.0f);
 
     ASSERT_FALSE(matches.empty());
     EXPECT_EQ(matches.front().template_id, id);
@@ -590,32 +547,28 @@ TEST(ShapeTemplateMatcherParityTest, Avx2AndScalarProduceIdenticalTemplatesAndMa
 
     V1ShapeTemplateMatcher avx2(config);
     V0ShapeTemplateMatcher scalar(config);
-    ASSERT_EQ(avx2.addTemplate(object, "bracket"), scalar.addTemplate(object, "bracket"));
-    ASSERT_EQ(avx2.addTemplate(alternate, "tee"), scalar.addTemplate(alternate, "tee"));
+    ASSERT_EQ(avx2.addTemplate(object), scalar.addTemplate(object));
+    ASSERT_EQ(avx2.addTemplate(alternate), scalar.addTemplate(alternate));
     ASSERT_EQ(avx2.numTemplates(), scalar.numTemplates());
 
-    for (const auto &class_id : avx2.classIds())
+    for (int id = 0; id < avx2.numTemplates(); ++id)
     {
-        ASSERT_EQ(avx2.numTemplates(class_id), scalar.numTemplates(class_id));
-        for (int id = 0; id < avx2.numTemplates(class_id); ++id)
+        const auto &a = avx2.getTemplate(id);
+        const auto &b = scalar.getTemplate(id);
+        ASSERT_EQ(a.features.size(), b.features.size());
+        EXPECT_EQ(a.width, b.width);
+        EXPECT_EQ(a.height, b.height);
+        for (size_t i = 0; i < a.features.size(); ++i)
         {
-            const auto &a = avx2.getTemplate(class_id, id);
-            const auto &b = scalar.getTemplate(class_id, id);
-            ASSERT_EQ(a.features.size(), b.features.size());
-            EXPECT_EQ(a.width, b.width);
-            EXPECT_EQ(a.height, b.height);
-            for (size_t i = 0; i < a.features.size(); ++i)
-            {
-                EXPECT_EQ(a.features[i].x, b.features[i].x);
-                EXPECT_EQ(a.features[i].y, b.features[i].y);
-                EXPECT_EQ(a.features[i].label, b.features[i].label);
-                EXPECT_FLOAT_EQ(a.features[i].angle_degrees, b.features[i].angle_degrees);
-            }
+            EXPECT_EQ(a.features[i].x, b.features[i].x);
+            EXPECT_EQ(a.features[i].y, b.features[i].y);
+            EXPECT_EQ(a.features[i].label, b.features[i].label);
+            EXPECT_FLOAT_EQ(a.features[i].angle_degrees, b.features[i].angle_degrees);
         }
     }
 
-    const auto avx2_matches = avx2.match(scene, 75.0f, {}, search_mask);
-    const auto scalar_matches = scalar.match(scene, 75.0f, {}, search_mask);
+    const auto avx2_matches = avx2.match(scene, 75.0f, search_mask);
+    const auto scalar_matches = scalar.match(scene, 75.0f, search_mask);
     ASSERT_EQ(avx2_matches.size(), scalar_matches.size());
     for (size_t i = 0; i < avx2_matches.size(); ++i)
     {
@@ -626,7 +579,6 @@ TEST(ShapeTemplateMatcherParityTest, Avx2AndScalarProduceIdenticalTemplatesAndMa
         EXPECT_EQ(a.width, b.width);
         EXPECT_EQ(a.height, b.height);
         EXPECT_FLOAT_EQ(a.similarity, b.similarity);
-        EXPECT_EQ(a.class_id, b.class_id);
         EXPECT_EQ(a.template_id, b.template_id);
         EXPECT_FLOAT_EQ(a.angle_degrees, b.angle_degrees);
         EXPECT_FLOAT_EQ(a.scale, b.scale);
@@ -637,7 +589,7 @@ TEST(ShapeTemplateMatcherParityTest, Avx2AndScalarProduceIdenticalTemplatesAndMa
     scalar.save(template_file);
     V1ShapeTemplateMatcher loaded;
     loaded.load(template_file);
-    const auto loaded_matches = loaded.match(scene, 75.0f, {}, search_mask);
+    const auto loaded_matches = loaded.match(scene, 75.0f, search_mask);
     ASSERT_EQ(avx2_matches.size(), loaded_matches.size());
     for (size_t i = 0; i < avx2_matches.size(); ++i)
         EXPECT_FLOAT_EQ(avx2_matches[i].similarity, loaded_matches[i].similarity);
@@ -655,7 +607,6 @@ void expectIdenticalMatches(const std::vector<irt::features::ShapeTemplateMatch>
         EXPECT_EQ(expected[i].width, actual[i].width);
         EXPECT_EQ(expected[i].height, actual[i].height);
         EXPECT_FLOAT_EQ(expected[i].similarity, actual[i].similarity);
-        EXPECT_EQ(expected[i].class_id, actual[i].class_id);
         EXPECT_EQ(expected[i].template_id, actual[i].template_id);
         EXPECT_FLOAT_EQ(expected[i].angle_degrees, actual[i].angle_degrees);
         EXPECT_FLOAT_EQ(expected[i].scale, actual[i].scale);
@@ -665,7 +616,6 @@ void expectIdenticalMatches(const std::vector<irt::features::ShapeTemplateMatch>
 void expectIdenticalTemplate(const irt::features::ShapeTemplateInfo &expected,
                              const irt::features::ShapeTemplateInfo &actual)
 {
-    EXPECT_EQ(expected.class_id, actual.class_id);
     EXPECT_EQ(expected.template_id, actual.template_id);
     EXPECT_EQ(expected.width, actual.width);
     EXPECT_EQ(expected.height, actual.height);
@@ -707,17 +657,16 @@ TEST(ShapeTemplateMatcherParityTest, Avx512AndAvx2ProduceIdenticalTemplatesAndMa
 
     V1ShapeTemplateMatcher avx2(config);
     V2ShapeTemplateMatcher avx512(config);
-    EXPECT_EQ(avx2.addTemplateVariants(object, "part", cv::Mat(), variants),
-              avx512.addTemplateVariants(object, "part", cv::Mat(), variants));
-    ASSERT_EQ(avx2.numTemplates("part"), avx512.numTemplates("part"));
-    for (int template_id = 0; template_id < avx2.numTemplates("part"); ++template_id)
+    EXPECT_EQ(avx2.addTemplateVariants(object, cv::Mat(), variants),
+              avx512.addTemplateVariants(object, cv::Mat(), variants));
+    ASSERT_EQ(avx2.numTemplates(), avx512.numTemplates());
+    for (int template_id = 0; template_id < avx2.numTemplates(); ++template_id)
     {
-        expectIdenticalTemplate(avx2.getTemplate("part", template_id),
-                                avx512.getTemplate("part", template_id));
+        expectIdenticalTemplate(avx2.getTemplate(template_id), avx512.getTemplate(template_id));
     }
 
-    avx2.addTemplate(alternate, "alternate");
-    avx512.addTemplate(alternate, "alternate");
+    avx2.addTemplate(alternate);
+    avx512.addTemplate(alternate);
     expectIdenticalMatches(avx2.match(scene, 70.0f), avx512.match(scene, 70.0f));
 }
 
@@ -735,14 +684,14 @@ TEST(ShapeTemplateMatcherParityTest, FullSearchMaskMatchesUnmaskedResults)
 
     V1ShapeTemplateMatcher avx2(config);
     V0ShapeTemplateMatcher scalar(config);
-    avx2.addTemplate(object, "bracket");
-    avx2.addTemplate(alternate, "tee");
-    scalar.addTemplate(object, "bracket");
-    scalar.addTemplate(alternate, "tee");
+    avx2.addTemplate(object);
+    avx2.addTemplate(alternate);
+    scalar.addTemplate(object);
+    scalar.addTemplate(alternate);
 
     const auto unmasked_matches = avx2.match(scene);
-    const auto full_mask_matches = avx2.match(scene, -1.0f, {}, full_search_mask);
-    const auto scalar_matches = scalar.match(scene, -1.0f, {}, full_search_mask);
+    const auto full_mask_matches = avx2.match(scene, -1.0f, full_search_mask);
+    const auto scalar_matches = scalar.match(scene, -1.0f, full_search_mask);
     expectIdenticalMatches(unmasked_matches, full_mask_matches);
     expectIdenticalMatches(unmasked_matches, scalar_matches);
 }
@@ -771,32 +720,29 @@ TEST(ShapeTemplateMatcherTrainingParallelTest, V1ParallelVariantTrainingPreserve
     V1ShapeTemplateMatcher v1_serial(v1_serial_config);
     V1ShapeTemplateMatcher v1_parallel(v1_parallel_config);
     V1ShapeTemplateMatcher v1_auto(v1_auto_config);
-    const auto v0_ids = v0.addTemplateVariants(object, "part", cv::Mat(), variants);
-    const auto serial_ids = v1_serial.addTemplateVariants(object, "part", cv::Mat(), variants);
-    const auto parallel_ids = v1_parallel.addTemplateVariants(object, "part", cv::Mat(), variants);
-    const auto auto_ids = v1_auto.addTemplateVariants(object, "part", cv::Mat(), variants);
+    const auto v0_ids = v0.addTemplateVariants(object, cv::Mat(), variants);
+    const auto serial_ids = v1_serial.addTemplateVariants(object, cv::Mat(), variants);
+    const auto parallel_ids = v1_parallel.addTemplateVariants(object, cv::Mat(), variants);
+    const auto auto_ids = v1_auto.addTemplateVariants(object, cv::Mat(), variants);
     EXPECT_EQ(v0_ids, serial_ids);
     EXPECT_EQ(serial_ids, parallel_ids);
     EXPECT_EQ(parallel_ids, auto_ids);
 
-    ASSERT_EQ(v0.numTemplates("part"), static_cast<int>(variants.size()));
-    ASSERT_EQ(v0.numTemplates("part"), v1_serial.numTemplates("part"));
-    ASSERT_EQ(v0.numTemplates("part"), v1_parallel.numTemplates("part"));
-    ASSERT_EQ(v0.numTemplates("part"), v1_auto.numTemplates("part"));
-    for (int template_id = 0; template_id < v0.numTemplates("part"); ++template_id)
+    ASSERT_EQ(v0.numTemplates(), static_cast<int>(variants.size()));
+    ASSERT_EQ(v0.numTemplates(), v1_serial.numTemplates());
+    ASSERT_EQ(v0.numTemplates(), v1_parallel.numTemplates());
+    ASSERT_EQ(v0.numTemplates(), v1_auto.numTemplates());
+    for (int template_id = 0; template_id < v0.numTemplates(); ++template_id)
     {
-        expectIdenticalTemplate(v0.getTemplate("part", template_id),
-                                v1_serial.getTemplate("part", template_id));
-        expectIdenticalTemplate(v0.getTemplate("part", template_id),
-                                v1_parallel.getTemplate("part", template_id));
-        expectIdenticalTemplate(v0.getTemplate("part", template_id),
-                                v1_auto.getTemplate("part", template_id));
+        expectIdenticalTemplate(v0.getTemplate(template_id), v1_serial.getTemplate(template_id));
+        expectIdenticalTemplate(v0.getTemplate(template_id), v1_parallel.getTemplate(template_id));
+        expectIdenticalTemplate(v0.getTemplate(template_id), v1_auto.getTemplate(template_id));
     }
 
-    const auto v0_matches = v0.match(scene, 70.0f, {"part"});
-    expectIdenticalMatches(v0_matches, v1_serial.match(scene, 70.0f, {"part"}));
-    expectIdenticalMatches(v0_matches, v1_parallel.match(scene, 70.0f, {"part"}));
-    expectIdenticalMatches(v0_matches, v1_auto.match(scene, 70.0f, {"part"}));
+    const auto v0_matches = v0.match(scene, 70.0f);
+    expectIdenticalMatches(v0_matches, v1_serial.match(scene, 70.0f));
+    expectIdenticalMatches(v0_matches, v1_parallel.match(scene, 70.0f));
+    expectIdenticalMatches(v0_matches, v1_auto.match(scene, 70.0f));
 }
 
 /** @brief 多输入全局训练队列必须保持 v0/v1 的模板顺序、内容和匹配结果。 */
@@ -814,8 +760,8 @@ TEST(ShapeTemplateMatcherTrainingParallelTest, BatchTrainingPreservesSequentialM
     const auto variants = irt::features::makeShapeTemplateAngleScaleVariants(-10.0f, 10.0f, 10.0f,
                                                                                0.9f, 1.1f, 0.1f);
     const std::vector<irt::features::ShapeTemplateTrainingInput> inputs{
-        {object, "part", cv::Mat()},
-        {alternate, "part", cv::Mat()},
+        {object, cv::Mat()},
+        {alternate, cv::Mat()},
     };
 
     V0ShapeTemplateMatcher v0_sequential(config);
@@ -823,10 +769,10 @@ TEST(ShapeTemplateMatcherTrainingParallelTest, BatchTrainingPreservesSequentialM
     V1ShapeTemplateMatcher v1_sequential(config);
     V1ShapeTemplateMatcher v1_batch(config);
 
-    const auto v0_first = v0_sequential.addTemplateVariants(object, "part", cv::Mat(), variants);
-    const auto v0_second = v0_sequential.addTemplateVariants(alternate, "part", cv::Mat(), variants);
-    const auto v1_first = v1_sequential.addTemplateVariants(object, "part", cv::Mat(), variants);
-    const auto v1_second = v1_sequential.addTemplateVariants(alternate, "part", cv::Mat(), variants);
+    const auto v0_first = v0_sequential.addTemplateVariants(object, cv::Mat(), variants);
+    const auto v0_second = v0_sequential.addTemplateVariants(alternate, cv::Mat(), variants);
+    const auto v1_first = v1_sequential.addTemplateVariants(object, cv::Mat(), variants);
+    const auto v1_second = v1_sequential.addTemplateVariants(alternate, cv::Mat(), variants);
     const auto v0_batch_ids = v0_batch.addTemplateVariantsBatch(inputs, variants);
     const auto v1_batch_ids = v1_batch.addTemplateVariantsBatch(inputs, variants);
 
@@ -838,22 +784,22 @@ TEST(ShapeTemplateMatcherTrainingParallelTest, BatchTrainingPreservesSequentialM
     EXPECT_EQ(v1_batch_ids[1], v1_second);
     EXPECT_EQ(v0_batch_ids, v1_batch_ids);
 
-    ASSERT_EQ(v0_sequential.numTemplates("part"), static_cast<int>(inputs.size() * variants.size()));
-    ASSERT_EQ(v0_batch.numTemplates("part"), v0_sequential.numTemplates("part"));
-    ASSERT_EQ(v1_sequential.numTemplates("part"), v0_sequential.numTemplates("part"));
-    ASSERT_EQ(v1_batch.numTemplates("part"), v0_sequential.numTemplates("part"));
-    for (int template_id = 0; template_id < v0_sequential.numTemplates("part"); ++template_id)
+    ASSERT_EQ(v0_sequential.numTemplates(), static_cast<int>(inputs.size() * variants.size()));
+    ASSERT_EQ(v0_batch.numTemplates(), v0_sequential.numTemplates());
+    ASSERT_EQ(v1_sequential.numTemplates(), v0_sequential.numTemplates());
+    ASSERT_EQ(v1_batch.numTemplates(), v0_sequential.numTemplates());
+    for (int template_id = 0; template_id < v0_sequential.numTemplates(); ++template_id)
     {
-        const auto &expected = v0_sequential.getTemplate("part", template_id);
-        expectIdenticalTemplate(expected, v0_batch.getTemplate("part", template_id));
-        expectIdenticalTemplate(expected, v1_sequential.getTemplate("part", template_id));
-        expectIdenticalTemplate(expected, v1_batch.getTemplate("part", template_id));
+        const auto &expected = v0_sequential.getTemplate(template_id);
+        expectIdenticalTemplate(expected, v0_batch.getTemplate(template_id));
+        expectIdenticalTemplate(expected, v1_sequential.getTemplate(template_id));
+        expectIdenticalTemplate(expected, v1_batch.getTemplate(template_id));
     }
 
-    const auto expected_matches = v0_sequential.match(scene, 70.0f, {"part"});
-    expectIdenticalMatches(expected_matches, v0_batch.match(scene, 70.0f, {"part"}));
-    expectIdenticalMatches(expected_matches, v1_sequential.match(scene, 70.0f, {"part"}));
-    expectIdenticalMatches(expected_matches, v1_batch.match(scene, 70.0f, {"part"}));
+    const auto expected_matches = v0_sequential.match(scene, 70.0f);
+    expectIdenticalMatches(expected_matches, v0_batch.match(scene, 70.0f));
+    expectIdenticalMatches(expected_matches, v1_sequential.match(scene, 70.0f));
+    expectIdenticalMatches(expected_matches, v1_batch.match(scene, 70.0f));
 }
 
 /** @brief v1 复用候选缓冲的高密度候选训练应与 v0 逐字段一致。 */
@@ -873,13 +819,13 @@ TEST(ShapeTemplateMatcherTrainingOptimizationTest, ReusedCandidateBufferPreserve
 
     V0ShapeTemplateMatcher v0(config);
     V1ShapeTemplateMatcher v1(config);
-    EXPECT_EQ(v0.addTemplateVariants(image, "dense", cv::Mat(), variants),
-              v1.addTemplateVariants(image, "dense", cv::Mat(), variants));
-    ASSERT_EQ(v0.numTemplates("dense"), static_cast<int>(variants.size()));
-    ASSERT_EQ(v1.numTemplates("dense"), v0.numTemplates("dense"));
-    for (int template_id = 0; template_id < v0.numTemplates("dense"); ++template_id)
+    EXPECT_EQ(v0.addTemplateVariants(image, cv::Mat(), variants),
+              v1.addTemplateVariants(image, cv::Mat(), variants));
+    ASSERT_EQ(v0.numTemplates(), static_cast<int>(variants.size()));
+    ASSERT_EQ(v1.numTemplates(), v0.numTemplates());
+    for (int template_id = 0; template_id < v0.numTemplates(); ++template_id)
     {
-        expectIdenticalTemplate(v0.getTemplate("dense", template_id), v1.getTemplate("dense", template_id));
+        expectIdenticalTemplate(v0.getTemplate(template_id), v1.getTemplate(template_id));
     }
 }
 
@@ -893,14 +839,14 @@ TEST(ShapeTemplateMatcherTest, MatchOptionsDefaultIsExactAndTemplateStrideIsExpl
     const auto object = makeLShape(50);
     const auto scene = makeSceneWith(object, cv::Point(31, 27), cv::Size(151, 137));
     V1ShapeTemplateMatcher matcher(config);
-    matcher.addTemplate(makeTShape(50), "shape");
-    matcher.addTemplate(object, "shape");
+    matcher.addTemplate(makeTShape(50));
+    matcher.addTemplate(object);
 
-    const auto default_matches = matcher.match(scene, 90.0f, {"shape"});
+    const auto default_matches = matcher.match(scene, 90.0f);
     irt::features::ShapeTemplateMatchOptions exact_options;
-    expectIdenticalMatches(default_matches, matcher.match(scene, 90.0f, {"shape"}, cv::Mat(), exact_options));
+    expectIdenticalMatches(default_matches, matcher.match(scene, 90.0f, cv::Mat(), exact_options));
     exact_options.scan_step = 1;
-    expectIdenticalMatches(default_matches, matcher.match(scene, 90.0f, {"shape"}, cv::Mat(), exact_options));
+    expectIdenticalMatches(default_matches, matcher.match(scene, 90.0f, cv::Mat(), exact_options));
 
     const auto exact_target = std::find_if(default_matches.begin(), default_matches.end(),
                                            [](const auto &match) { return match.template_id == 1; });
@@ -908,7 +854,7 @@ TEST(ShapeTemplateMatcherTest, MatchOptionsDefaultIsExactAndTemplateStrideIsExpl
 
     irt::features::ShapeTemplateMatchOptions approximate_options;
     approximate_options.template_stride = 2;
-    const auto approximate_matches = matcher.match(scene, 90.0f, {"shape"}, cv::Mat(), approximate_options);
+    const auto approximate_matches = matcher.match(scene, 90.0f, cv::Mat(), approximate_options);
     EXPECT_EQ(std::find_if(approximate_matches.begin(), approximate_matches.end(),
                            [](const auto &match) { return match.template_id == 1; }),
               approximate_matches.end());
@@ -916,12 +862,12 @@ TEST(ShapeTemplateMatcherTest, MatchOptionsDefaultIsExactAndTemplateStrideIsExpl
     approximate_options = {};
     approximate_options.template_stride = 0;
     expectIrtExceptionCode([&]
-                           { (void)matcher.match(scene, 90.0f, {"shape"}, cv::Mat(), approximate_options); },
+                           { (void)matcher.match(scene, 90.0f, cv::Mat(), approximate_options); },
                            irt::Status::ERROR_INVALID_ARGUMENT);
     approximate_options = {};
     approximate_options.scan_step = -1;
     expectIrtExceptionCode([&]
-                           { (void)matcher.match(scene, 90.0f, {"shape"}, cv::Mat(), approximate_options); },
+                           { (void)matcher.match(scene, 90.0f, cv::Mat(), approximate_options); },
                            irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
@@ -950,10 +896,10 @@ TEST(ShapeTemplateMatcherParityTest, Avx2AndScalarRemainIdenticalAcrossParameter
 
                 V1ShapeTemplateMatcher avx2(config);
                 V0ShapeTemplateMatcher scalar(config);
-                avx2.addTemplate(object, "bracket");
-                avx2.addTemplate(alternate, "tee");
-                scalar.addTemplate(object, "bracket");
-                scalar.addTemplate(alternate, "tee");
+                avx2.addTemplate(object);
+                avx2.addTemplate(alternate);
+                scalar.addTemplate(object);
+                scalar.addTemplate(alternate);
                 expectIdenticalMatches(avx2.match(scene), scalar.match(scene));
             }
         }
@@ -975,12 +921,10 @@ TEST(ShapeTemplateMatcherParallelTest, SerialAndAutomaticParallelismProduceIdent
     const auto scene = makeSceneWith(object, cv::Point(37, 29), cv::Size(151, 137));
     V1ShapeTemplateMatcher serial(serial_config);
     V1ShapeTemplateMatcher parallel(parallel_config);
-    for (const auto &item : std::array<std::pair<cv::Mat, std::string>, 4>{
-             std::pair{object, "bracket_a"}, std::pair{object, "bracket_b"},
-             std::pair{alternate, "tee_a"}, std::pair{alternate, "tee_b"}})
+    for (const auto &image : std::array<cv::Mat, 4>{object, object, alternate, alternate})
     {
-        serial.addTemplate(item.first, item.second);
-        parallel.addTemplate(item.first, item.second);
+        serial.addTemplate(image);
+        parallel.addTemplate(image);
     }
     expectIdenticalMatches(serial.match(scene), parallel.match(scene));
 }

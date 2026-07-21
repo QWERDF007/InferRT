@@ -19,23 +19,22 @@ ShapeTemplateMatcherBase::~ShapeTemplateMatcherBase() = default;
 ShapeTemplateMatcherBase::ShapeTemplateMatcherBase(ShapeTemplateMatcherBase &&) noexcept = default;
 ShapeTemplateMatcherBase &ShapeTemplateMatcherBase::operator=(ShapeTemplateMatcherBase &&) noexcept = default;
 
-int ShapeTemplateMatcherBase::addTemplate(const cv::Mat &image, const std::string &class_id,
-                                          const cv::Mat &object_mask, ShapeTemplateVariant variant)
+int ShapeTemplateMatcherBase::addTemplate(const cv::Mat &image, const cv::Mat &object_mask,
+                                          ShapeTemplateVariant variant)
 {
-    return implementation_->addTemplate(image, class_id, object_mask, variant);
+    return implementation_->addTemplate(image, object_mask, variant);
 }
 
-int ShapeTemplateMatcherBase::addTemplateFile(const std::filesystem::path &image_file, const std::string &class_id,
+int ShapeTemplateMatcherBase::addTemplateFile(const std::filesystem::path &image_file,
                                               const std::filesystem::path &mask_file, ShapeTemplateVariant variant)
 {
-    return implementation_->addTemplateFile(image_file, class_id, mask_file, variant);
+    return implementation_->addTemplateFile(image_file, mask_file, variant);
 }
 
 std::vector<int> ShapeTemplateMatcherBase::addTemplateVariants(
-    const cv::Mat &image, const std::string &class_id, const cv::Mat &object_mask,
-    const std::vector<ShapeTemplateVariant> &variants)
+    const cv::Mat &image, const cv::Mat &object_mask, const std::vector<ShapeTemplateVariant> &variants)
 {
-    return implementation_->addTemplateVariants(image, class_id, object_mask, variants);
+    return implementation_->addTemplateVariants(image, object_mask, variants);
 }
 
 std::vector<std::vector<int>> ShapeTemplateMatcherBase::addTemplateVariantsBatch(
@@ -46,17 +45,16 @@ std::vector<std::vector<int>> ShapeTemplateMatcherBase::addTemplateVariantsBatch
 }
 
 std::vector<ShapeTemplateMatch> ShapeTemplateMatcherBase::match(
-    const cv::Mat &image, float threshold, const std::vector<std::string> &class_ids,
-    const cv::Mat &search_mask, ShapeTemplateMatchOptions options) const
+    const cv::Mat &image, float threshold, const cv::Mat &search_mask, ShapeTemplateMatchOptions options) const
 {
-    return implementation_->match(image, threshold, class_ids, search_mask, options);
+    return implementation_->match(image, threshold, search_mask, options);
 }
 
 std::vector<ShapeTemplateMatch> ShapeTemplateMatcherBase::matchFile(
-    const std::filesystem::path &image_file, float threshold, const std::vector<std::string> &class_ids,
-    const std::filesystem::path &mask_file, ShapeTemplateMatchOptions options) const
+    const std::filesystem::path &image_file, float threshold, const std::filesystem::path &mask_file,
+    ShapeTemplateMatchOptions options) const
 {
-    return implementation_->matchFile(image_file, threshold, class_ids, mask_file, options);
+    return implementation_->matchFile(image_file, threshold, mask_file, options);
 }
 
 void ShapeTemplateMatcherBase::clear()
@@ -69,29 +67,14 @@ bool ShapeTemplateMatcherBase::empty() const noexcept
     return implementation_ == nullptr || implementation_->empty();
 }
 
-int ShapeTemplateMatcherBase::numClasses() const noexcept
-{
-    return implementation_ == nullptr ? 0 : implementation_->numClasses();
-}
-
 int ShapeTemplateMatcherBase::numTemplates() const noexcept
 {
     return implementation_ == nullptr ? 0 : implementation_->numTemplates();
 }
 
-int ShapeTemplateMatcherBase::numTemplates(const std::string &class_id) const noexcept
+const ShapeTemplateInfo &ShapeTemplateMatcherBase::getTemplate(int template_id) const
 {
-    return implementation_ == nullptr ? 0 : implementation_->numTemplates(class_id);
-}
-
-std::vector<std::string> ShapeTemplateMatcherBase::classIds() const
-{
-    return implementation_->classIds();
-}
-
-const ShapeTemplateInfo &ShapeTemplateMatcherBase::getTemplate(const std::string &class_id, int template_id) const
-{
-    return implementation_->getTemplate(class_id, template_id);
+    return implementation_->getTemplate(template_id);
 }
 
 const ShapeTemplateMatcherConfig &ShapeTemplateMatcherBase::config() const noexcept
