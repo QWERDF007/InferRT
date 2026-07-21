@@ -1,9 +1,9 @@
 /**
- * @file ShapeTemplateMatcherAvx2Kernel.cpp
- * @brief v1 的 AVX2 热点内核。
+ * @file ShapeTemplateMatcherFastImpl.cpp
+ * @brief v1 快速形状模板匹配器的具体实现与 AVX2 热点内核。
  */
 
-#include "ShapeTemplateMatcherEngine.hpp"
+#include "ShapeTemplateMatcherFastImpl.hpp"
 
 #include <inferrt/core/Exception.hpp>
 
@@ -15,19 +15,33 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #if defined(_M_AVX2) || defined(__AVX2__)
 #include <immintrin.h>
 #endif
 
-namespace irt::features::detail {
+// v1 的 AVX2 实现不进入共享 detail 命名空间，避免与 v0 或未来 v2 的热点符号混用。
+namespace irt::features::v1::detail {
+namespace common = ::irt::features::detail;
+
+using common::ShapeTemplateCandidate;
+using common::ShapeTemplateMatcherKernel;
+using common::ShapeTemplateQuantizedGradient;
+using common::ShapeTemplateResponseMaps;
+using common::ShapeTemplateResponseTable;
+using common::ShapeTemplateScoredPosition;
+using common::kShapeTemplateInvalidLabel;
+using common::kShapeTemplateOrientationBins;
+using common::quantizeShapeTemplateAngle;
+using common::sortShapeTemplateCandidates;
 
 #if defined(_M_AVX2) || defined(__AVX2__)
 namespace {
 
-bool similarityAtLeastScalar(const ShapeTemplateResponseMaps &response_maps, const ShapeTemplateInfo &templ,
-                             int x, int y, float threshold, float &score)
+bool similarityAtLeastFallback(const ShapeTemplateResponseMaps &response_maps, const ShapeTemplateInfo &templ,
+                               int x, int y, float threshold, float &score)
 {
     std::uint64_t sum = 0;
     const std::uint64_t maximum_per_feature = static_cast<std::uint64_t>(response_maps.denominator_per_feature);
@@ -52,9 +66,9 @@ bool similarityAtLeastScalar(const ShapeTemplateResponseMaps &response_maps, con
 }
 
 std::vector<ShapeTemplateScoredPosition>
-scanTemplateScalarFallback(const ShapeTemplateResponseMaps &response_maps, const ShapeTemplateInfo &templ,
-                           const cv::Mat &search_mask, bool full_search_mask, cv::Size image_size,
-                           int scan_step, float threshold)
+scanTemplateFallback(const ShapeTemplateResponseMaps &response_maps, const ShapeTemplateInfo &templ,
+                     const cv::Mat &search_mask, bool full_search_mask, cv::Size image_size,
+                     int scan_step, float threshold)
 {
     std::vector<ShapeTemplateScoredPosition> positions;
     if (templ.features.empty() || templ.width > image_size.width || templ.height > image_size.height)
@@ -77,7 +91,7 @@ scanTemplateScalarFallback(const ShapeTemplateResponseMaps &response_maps, const
             }
 
             float score = 0.0f;
-            if (similarityAtLeastScalar(response_maps, templ, x, y, threshold, score))
+            if (similarityAtLeastFallback(response_maps, templ, x, y, threshold, score))
                 positions.push_back(ShapeTemplateScoredPosition{x, y, score});
         }
     }
@@ -93,7 +107,7 @@ scanTemplateScalarFallback(const ShapeTemplateResponseMaps &response_maps, const
  * 剪枝收益。
  */
 std::vector<ShapeTemplateScoredPosition>
-scanTemplateAvx2(const ShapeTemplateResponseMaps &response_maps, const ShapeTemplateInfo &templ,
+scanTemplateFast(const ShapeTemplateResponseMaps &response_maps, const ShapeTemplateInfo &templ,
                  const cv::Mat &search_mask, bool full_search_mask, cv::Size image_size, int scan_step,
                  float threshold)
 {
@@ -109,8 +123,8 @@ scanTemplateAvx2(const ShapeTemplateResponseMaps &response_maps, const ShapeTemp
     // 使用 signed 16-bit 比较实现寄存器内早停；较大配置保留原标量路径以避免改变语义。
     if (maximum_sum > std::numeric_limits<std::int16_t>::max())
     {
-        return scanTemplateScalarFallback(response_maps, templ, search_mask, full_search_mask, image_size,
-                                          scan_step, threshold);
+        return scanTemplateFallback(response_maps, templ, search_mask, full_search_mask, image_size,
+                                    scan_step, threshold);
     }
 
     std::vector<ShapeTemplateScoredPosition> positions;
@@ -243,7 +257,7 @@ scanTemplateAvx2(const ShapeTemplateResponseMaps &response_maps, const ShapeTemp
                 }
 
                 float score = 0.0f;
-                if (similarityAtLeastScalar(response_maps, templ, x, y, threshold, score))
+                if (similarityAtLeastFallback(response_maps, templ, x, y, threshold, score))
                     positions.push_back(ShapeTemplateScoredPosition{x, y, score});
             }
         }
@@ -268,8 +282,8 @@ scanTemplateAvx2(const ShapeTemplateResponseMaps &response_maps, const ShapeTemp
         // i32 gather 读取四个字节；最后几个候选改走标量尾部，确保不会跨越图像行边界。
         if (scan_step > image_size.width / 8)
         {
-            return scanTemplateScalarFallback(response_maps, templ, search_mask, full_search_mask, image_size,
-                                              scan_step, threshold);
+            return scanTemplateFallback(response_maps, templ, search_mask, full_search_mask, image_size,
+                                        scan_step, threshold);
         }
         const int vector_span = 7 * scan_step;
         const int last_vector_start = std::min(max_x - vector_span,
@@ -350,7 +364,7 @@ scanTemplateAvx2(const ShapeTemplateResponseMaps &response_maps, const ShapeTemp
                 }
 
                 float score = 0.0f;
-                if (similarityAtLeastScalar(response_maps, templ, x, y, threshold, score))
+                if (similarityAtLeastFallback(response_maps, templ, x, y, threshold, score))
                     positions.push_back(ShapeTemplateScoredPosition{x, y, score});
             }
         }
@@ -442,7 +456,7 @@ scanTemplateAvx2(const ShapeTemplateResponseMaps &response_maps, const ShapeTemp
                 }
 
                 float score = 0.0f;
-                if (similarityAtLeastScalar(response_maps, templ, x, y, threshold, score))
+                if (similarityAtLeastFallback(response_maps, templ, x, y, threshold, score))
                     positions.push_back(ShapeTemplateScoredPosition{x, y, score});
             }
         }
@@ -517,7 +531,7 @@ scanTemplateAvx2(const ShapeTemplateResponseMaps &response_maps, const ShapeTemp
             }
 
             float score = 0.0f;
-            if (similarityAtLeastScalar(response_maps, templ, x, y, threshold, score))
+            if (similarityAtLeastFallback(response_maps, templ, x, y, threshold, score))
                 positions.push_back(ShapeTemplateScoredPosition{x, y, score});
         }
     }
@@ -671,7 +685,8 @@ void fillResponseMapAvx2(const cv::Mat &labels, cv::Mat &response, int template_
     }
 }
 
-class Avx2ShapeTemplateMatcherKernel final : public ShapeTemplateMatcherKernel
+/** @brief v1 快速热点内核，使用 AVX2 批量量化、筛选和评分。 */
+class ShapeTemplateMatcherFastKernelImpl final : public ShapeTemplateMatcherKernel
 {
 public:
     bool needsMaterializedResponseMaps() const noexcept override
@@ -707,26 +722,28 @@ public:
                  const cv::Mat &search_mask, bool full_search_mask, cv::Size image_size, int scan_step,
                  float threshold) const override
     {
-        return scanTemplateAvx2(response_maps, templ, search_mask, full_search_mask, image_size, scan_step,
+        return scanTemplateFast(response_maps, templ, search_mask, full_search_mask, image_size, scan_step,
                                 threshold);
     }
 };
 
 } // namespace
 
-std::unique_ptr<ShapeTemplateMatcherKernel> createAvx2ShapeTemplateMatcherKernel()
+/** @brief 创建只属于 v1 的 AVX2 热点内核，并在运行时验证 CPU 指令集。 */
+static std::unique_ptr<ShapeTemplateMatcherKernel> makeV1Kernel()
 {
     if (!cv::checkHardwareSupport(CV_CPU_AVX2))
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION,
                              "The v1 shape template matcher requires an AVX2-capable CPU");
     }
-    return std::make_unique<Avx2ShapeTemplateMatcherKernel>();
+    return std::make_unique<ShapeTemplateMatcherFastKernelImpl>();
 }
 
 #else
 
-std::unique_ptr<ShapeTemplateMatcherKernel> createAvx2ShapeTemplateMatcherKernel()
+/** @brief 未编译 AVX2 时保留明确的 v1 构造错误。 */
+static std::unique_ptr<ShapeTemplateMatcherKernel> makeV1Kernel()
 {
     throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION,
                          "The v1 shape template matcher was built without AVX2 support");
@@ -734,4 +751,9 @@ std::unique_ptr<ShapeTemplateMatcherKernel> createAvx2ShapeTemplateMatcherKernel
 
 #endif
 
-} // namespace irt::features::detail
+ShapeTemplateMatcherFastImpl::ShapeTemplateMatcherFastImpl(ShapeTemplateMatcherConfig config)
+    : common::ShapeTemplateMatcherEngine(std::move(config), makeV1Kernel())
+{
+}
+
+} // namespace irt::features::v1::detail

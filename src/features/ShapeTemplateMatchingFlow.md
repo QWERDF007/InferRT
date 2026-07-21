@@ -2,8 +2,8 @@
 
 本文档说明 `src/features` 中形状模板匹配模块的端到端流程。公共入口是
 `IShapeTemplateMatcher` 和版本工厂；具体实现为
-`irt::features::v0::ShapeTemplateMatcher`（原始标量）与
-`irt::features::v1::ShapeTemplateMatcher`（AVX2）。它参考 `shape_based_matching`/LINEMOD 的思路：
+`irt::features::v0::ShapeTemplateMatcher`（原始参考实现）与
+`irt::features::v1::ShapeTemplateMatcherFast`（AVX2 快速实现）。它参考 `shape_based_matching`/LINEMOD 的思路：
 训练阶段把目标轮廓表示为稀疏的梯度方向特征点，匹配阶段在源图中滑窗统计这些特征点平移后的方向一致性，
 最后通过阈值、类别过滤、同类别 NMS 和最大数量限制返回匹配框。
 
@@ -14,14 +14,15 @@
 - `include/inferrt/features/ShapeTemplateMatcherTypes.hpp`：配置、模板信息、匹配结果和版本枚举。
 - `include/inferrt/features/IShapeTemplateMatcher.hpp`：版本无关的公共接口。
 - `include/inferrt/features/ShapeTemplateMatcher.hpp`：版本工厂和公共工具函数。
-- `include/inferrt/features/v0/ShapeTemplateMatcher.hpp`：原始标量版本的具体 API。
-- `include/inferrt/features/v1/ShapeTemplateMatcher.hpp`：AVX2 版本的具体 API。
+- `include/inferrt/features/ShapeTemplateMatcherBase.hpp`：v0/v1 共用的 API 转发基类，保证外层流程一致。
+- `include/inferrt/features/v0/ShapeTemplateMatcher.hpp`：v0 原始版本的具体 API。
+- `include/inferrt/features/v1/ShapeTemplateMatcherFast.hpp`：v1 快速版本的具体 API。
 - `include/inferrt/features/ShapeTemplateMatcher.h`：C 风格头文件转发，便于统一 include 入口。
-- `ShapeTemplateMatcher.cpp`：版本工厂，以及角度/尺度变体与中心仿射变换工具的公共转发。
-- `ScalarShapeTemplateMatcher.cpp` / `Avx2ShapeTemplateMatcher.cpp`：v0、v1 独立包装器；两者不会相互包含或调用。
-- `priv/ShapeTemplateMatcherEngine.hpp`：版本无关调度引擎和可替换热点内核接口。
-- `priv/ShapeTemplateMatcherImpl.cpp`：图像校验、掩膜规范化、训练选点、响应图构建、滑窗匹配、NMS 和序列化引擎。
-- `priv/ShapeTemplateMatcherScalarKernel.cpp` / `priv/ShapeTemplateMatcherAvx2Kernel.cpp`：各版本独立的标量、AVX2 内核。
+- `ShapeTemplateMatcherFactory.cpp`：版本工厂，以及角度/尺度变体与中心仿射变换工具的公共转发。
+- `ShapeTemplateMatcher.cpp` / `ShapeTemplateMatcherFast.cpp`：v0、v1 公开入口；只构造各自私有实现，不复制公共 API 逻辑。
+- `ShapeTemplateMatcherBase.cpp`：公共 API 的唯一转发实现。
+- `priv/ShapeTemplateMatcherEngine.hpp/.cpp`：版本无关流程核心，负责图像校验、训练选点、持久化、匹配调度和 NMS。
+- `priv/ShapeTemplateMatcherImpl.hpp/.cpp` / `priv/ShapeTemplateMatcherFastImpl.hpp/.cpp`：v0、v1 的私有具体实现和各自热点内核。
 - `samples/features/shape_template_matching/SampleShapeTemplateMatching.cpp`：训练、保存、加载、匹配和结果可视化示例。
 - `tests/features/TestShapeTemplateMatcher.cpp`：配置校验、训练失败、平移匹配、非 SIMD 对齐尺寸、类别过滤、NMS、旋转变体、保存加载和文件 API 测试。
 
@@ -53,7 +54,7 @@ config.match_threshold      = 85.0f;
 config.nms_threshold        = 0.3f;
 config.max_results          = 20;
 
-irt::features::v1::ShapeTemplateMatcher matcher(config);
+irt::features::v1::ShapeTemplateMatcherFast matcher(config);
 ```
 
 ## 3. 输入数据要求
@@ -85,6 +86,47 @@ const int template_id = matcher.addTemplate(template_image, "part", object_mask)
 
 ```cpp
 const int template_id = matcher.addTemplateFile("part.png", "part", "part_mask.png");
+```
+
+### 4.1 v0 / v1 训练流程图
+
+```mermaid
+graph TB
+    TrainStart["addTemplate 或 addTemplateVariants"];
+    TrainApi["公共 API 转发 ShapeTemplateMatcherBase"];
+    TrainEngine["公共引擎 校验图像 类别 变体和掩膜"];
+    TrainVersion{"训练版本"};
+    TrainStart --> TrainApi;
+    TrainApi --> TrainEngine;
+    TrainEngine --> TrainVersion;
+
+    subgraph V0Train["v0 detail 原始参考训练路径"]
+        V0Transform["单模板直接处理 多变体按输入顺序串行 warpAffine"];
+        V0Gradient["标量 Sobel cartToPolar 和 8 方向量化"];
+        V0Candidates["标量收集候选点 强阈值不足时回退弱阈值"];
+        V0Select["标量稳定排序和贪心选点"];
+        V0Transform --> V0Gradient;
+        V0Gradient --> V0Candidates;
+        V0Candidates --> V0Select;
+    end
+
+    subgraph V1Train["v1 detail AVX2 优化训练路径"]
+        V1Workspace["单模板复用工作区 多变体按 max training parallelism 并行准备"];
+        V1Candidates["AVX2 量化标签和候选筛选"];
+        V1Buffers["每个工作线程复用变换和梯度缓冲区"];
+        V1Select["稳定排序和贪心选点 保持与 v0 一致的模板内容"];
+        V1Workspace --> V1Candidates;
+        V1Candidates --> V1Buffers;
+        V1Buffers --> V1Select;
+    end
+
+    TrainVersion -->|v0| V0Transform;
+    TrainVersion -->|v1| V1Workspace;
+    TrainInfo["公共引擎 计算特征包围盒并生成 ShapeTemplateInfo"];
+    TrainStore["按输入变体顺序写入 templates 并返回 template id 列表"];
+    V0Select --> TrainInfo;
+    V1Select --> TrainInfo;
+    TrainInfo --> TrainStore;
 ```
 
 内部流程如下：
@@ -158,7 +200,7 @@ matcher.save("shape_templates.yaml");
 下次直接加载：
 
 ```cpp
-irt::features::v1::ShapeTemplateMatcher matcher;
+irt::features::v1::ShapeTemplateMatcherFast matcher;
 matcher.load("shape_templates.yaml");
 ```
 
@@ -189,6 +231,47 @@ irt::features::ShapeTemplateMatchOptions options;
 const auto matches = matcher.matchFile("scene.png", 85.0f, {"part"}, "search_mask.png", options);
 ```
 
+### 7.1 v0 / v1 匹配流程图
+
+```mermaid
+graph TB
+    MatchStart["match 或 matchFile"];
+    MatchApi["公共 API 转发 ShapeTemplateMatcherBase"];
+    MatchPrepare["公共引擎 校验源图和模板库 解析阈值 搜索掩膜 类别过滤和扫描选项"];
+    MatchWork["构建本次参与扫描的模板工作项"];
+    MatchVersion{"匹配版本"};
+    MatchStart --> MatchApi;
+    MatchApi --> MatchPrepare;
+    MatchPrepare --> MatchWork;
+    MatchWork --> MatchVersion;
+
+    subgraph V0Match["v0 detail 标量参考匹配路径"]
+        V0Labels["标量量化源图梯度标签"];
+        V0Maps["物化所需方向的响应图"];
+        V0Scan["逐模板 逐滑窗 逐特征 标量累加和理论上界早停"];
+        V0Labels --> V0Maps;
+        V0Maps --> V0Scan;
+    end
+
+    subgraph V1Match["v1 detail AVX2 快速匹配路径"]
+        V1Labels["AVX2 量化源图梯度标签"];
+        V1Lookup["保留量化标签和响应查表 不物化方向响应图"];
+        V1Scan["按低响应特征优先排序 AVX2 批量滑窗累加和早停剪枝"];
+        V1Labels --> V1Lookup;
+        V1Lookup --> V1Scan;
+    end
+
+    MatchVersion -->|v0| V0Labels;
+    MatchVersion -->|v1| V1Labels;
+    MatchCollect["公共引擎按 max parallelism 调度模板扫描并收集候选框"];
+    MatchPost["稳定排序 同类别 NMS 和 max results 截断"];
+    MatchResult["ShapeTemplateMatch 列表"];
+    V0Scan --> MatchCollect;
+    V1Scan --> MatchCollect;
+    MatchCollect --> MatchPost;
+    MatchPost --> MatchResult;
+```
+
 匹配流程如下：
 
 1. 校验源图不能为空，模板库不能为空。
@@ -197,10 +280,9 @@ const auto matches = matcher.matchFile("scene.png", 85.0f, {"part"}, "search_mas
    - `threshold < 0` 时使用 `config.match_threshold`。
 3. 规范化 `search_mask`。
 4. 对源图执行与训练阶段一致的灰度转换、`Sobel`、`cartToPolar` 和 8 方向量化。
-5. 根据 `max_label_difference` 为源图方向标签预计算 8 张响应图：
-   - 每张响应图对应一个模板方向标签。
-   - 响应值表示源图该像素方向对该模板方向的整数贡献。
-   - 方向完全不匹配时贡献为 `0`。
+5. 根据 `max_label_difference` 构建源图方向响应数据：
+   - v0 为实际参与匹配的模板方向标签物化响应图；响应值表示源图该像素方向对该模板方向的整数贡献，方向完全不匹配时贡献为 `0`。
+   - v1 保留量化方向标签和同一份响应查表，匹配时直接 AVX2 查表，不物化方向响应图。
 6. 根据 `class_ids` 与运行时 `ShapeTemplateMatchOptions::template_stride` 决定参与匹配的模板：
    - `class_ids` 为空时扫描全部类别。
    - `class_ids` 非空时只扫描存在于模板库中的指定类别。
@@ -208,7 +290,7 @@ const auto matches = matcher.matchFile("scene.png", 85.0f, {"part"}, "search_mas
 7. 对每个模板做滑窗扫描：
    - 步长为 `options.scan_step > 0 ? options.scan_step : config.scan_step`。
    - 滑窗中心点在 `search_mask` 中为零时跳过。
-8. 对每个滑窗位置，根据模板特征点访问对应方向响应图并累加贡献。
+8. 对每个滑窗位置累计模板特征点的方向贡献：v0 访问对应响应图并标量累加；v1 直接对量化标签进行 AVX2 查表与批量累加。
 9. 将累加贡献归一化为 `[0, 100]` 分数：
 
 ```text
@@ -234,27 +316,34 @@ similarity = 100 * sum(response(feature_i)) / (denominator_per_feature * feature
 
 ```text
 IShapeTemplateMatcher / createShapeTemplateMatcher(version)
-                  │
-        v0 wrapper          v1 wrapper
-        (Scalar)             (AVX2)
-                  │            │
-                  └──── ShapeTemplateMatcherEngine ────┘
+                         │
+  v0::ShapeTemplateMatcher      v1::ShapeTemplateMatcherFast
+                         │
+          ShapeTemplateMatcherBase（公共 API 转发）
+                    │                         │
+ v0::detail::ShapeTemplateMatcherImpl   v1::detail::ShapeTemplateMatcherFastImpl
+                    └─────────────┬───────────┘
+                  ShapeTemplateMatcherEngine（公共流程核心）
                                   │
-                   ShapeTemplateMatcherKernel 策略接口
+               ShapeTemplateMatcherKernel（公共策略协议）
+                    │                         │
+v0::detail::ShapeTemplateMatcherKernelImpl   v1::detail::ShapeTemplateMatcherFastKernelImpl
 ```
 
+- `ShapeTemplateMatcherBase` 是唯一的公共 API 转发层，所有接口方法在此处固定为最终实现；v0/v1 不再复制一组相同的委托函数。
 - `ShapeTemplateMatcherEngine` 是版本无关核心，只负责输入校验、模板管理、变体训练、序列化、响应数据调度、并行、NMS 和结果排序。
 - `ShapeTemplateMatcherKernel` 定义可替换热点：是否物化响应图、方向标签量化、训练候选点收集、单方向响应图构建及单模板滑窗评分。
-- v0 注入 `Scalar` kernel，不使用显式 SIMD intrinsic，并保持 `shape_based_matching` 风格的标量响应图/逐窗口基线；v1 注入 `Avx2` kernel，并在创建时检查 CPU 是否支持 AVX2。两个公开类不会相互包含、相互继承或相互调用。
+- `v0::detail::ShapeTemplateMatcherImpl` 只注入同一命名空间内的参考热点内核；`v1::detail::ShapeTemplateMatcherFastImpl` 只注入同一命名空间内的 AVX2 快速热点内核，并在创建时检查 CPU 是否支持 AVX2。
+- 命名空间严格隔离：v0 和 v1 的公开类、私有 `Impl`、热点内核和辅助函数均位于各自的 `v0::detail` / `v1::detail`，不互相包含或调用。`irt::features::detail` 只承载版本无关的公共转发基类、流程核心和内核协议；版本实现仅通过局部 `common` 别名访问这些协议。
 - 两条路径产生相同的 `ShapeTemplateInfo`、`ShapeTemplateMatch` 和 YAML/XML 模板格式，因此可交叉加载与对照测试。
 
 v1 的 AVX2 内核覆盖四段热点：每次处理 8 个 `float` 的方向量化、每次处理 32 个像素的候选点过滤、方向标签字节 shuffle 查表，以及批量滑窗打分。评分时按当前源图的方向响应均值重排特征；每累计 4 个特征即以理论上界淘汰不可能达标的整组候选。常见的分子上界不超过 255 时，v1 用 8-bit 累加一次处理 32 个相邻候选；较大但仍安全的配置使用 16-bit/16-lane 路径。`scan_step=2` 时，内核从连续 32-byte 读取中 shuffle 压缩出 16 个间隔候选；其他正步长使用 AVX2 gather，累计范围过大才精确回退到标量评分。v1 正常路径直接读取量化标签并查表，不再物化 8 张响应图；v0 保持物化响应图的标量基线。CMake 只为该内核源文件开启 AVX2，不会把 CPU 指令集要求扩散到 v0 或其他模块。OpenCV 的 `Sobel`、`cartToPolar`、`warpAffine` 仍会按其构建配置使用优化。
 
 后续扩展 AVX512 时无需修改引擎流程：
 
-1. 新增 `ShapeTemplateMatcherAvx512Kernel.cpp`，实现同一个 `ShapeTemplateMatcherKernel` 的全部热点方法，尤其是批量评分。
-2. 在内部 `ShapeTemplateMatcherBackend` 增加 `Avx512`，并在 kernel 工厂注册它。
-3. 新增 `v2::ShapeTemplateMatcher` 与公共 `ShapeTemplateMatcherVersion::V2`，由该包装器选择 `Avx512` 后端。
+1. 新增独立的 `ShapeTemplateMatcherAvx512Impl.hpp/.cpp`，实现同一个 `ShapeTemplateMatcherKernel` 的全部热点方法，尤其是批量评分。
+2. 在独立 `v2` 命名空间新增公开快速匹配器和对应私有 `Impl`，由构造函数注入 AVX512 内核。
+3. 按需要新增公共 `ShapeTemplateMatcherVersion::V2` 和工厂分支。
 4. 复用现有 v0/v1 奇偶测试，验证模板内容、序列化文件和匹配结果逐字段一致。
 
 这样 AVX512 的工作局限于新的 ISA 内核和版本包装器，不会污染 v0/v1，也不需要复制训练、保存加载或 NMS 逻辑。本轮明确不新增 v2/AVX512。

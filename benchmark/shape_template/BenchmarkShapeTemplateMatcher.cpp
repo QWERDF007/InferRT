@@ -1,7 +1,7 @@
 #include <benchmark/benchmark.h>
 #include <inferrt/features/ShapeTemplateMatcher.hpp>
 #include <inferrt/features/v0/ShapeTemplateMatcher.hpp>
-#include <inferrt/features/v1/ShapeTemplateMatcher.hpp>
+#include <inferrt/features/v1/ShapeTemplateMatcherFast.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <stdexcept>
@@ -33,7 +33,7 @@ void VerifyParity()
     {
         const cv::Mat templ = MakeTemplate();
         const cv::Mat source = MakeSource();
-        irt::features::v1::ShapeTemplateMatcher avx2(Config());
+        irt::features::v1::ShapeTemplateMatcherFast avx2(Config());
         irt::features::v0::ShapeTemplateMatcher scalar(Config());
         avx2.addTemplate(templ, "shape");
         scalar.addTemplate(templ, "shape");
@@ -62,8 +62,8 @@ template <class Matcher> void BenchmarkMatch(benchmark::State &state, int templa
     for (auto _ : state) { auto matches = matcher.match(source); benchmark::DoNotOptimize(matches.data()); benchmark::ClobberMemory(); }
     state.SetLabel("640x480, 96 features, scan_step=1, templates=" + std::to_string(template_count));
 }
-void AVX2(benchmark::State &state) { BenchmarkMatch<irt::features::v1::ShapeTemplateMatcher>(state); }
-void AVX2MultiTemplate(benchmark::State &state) { BenchmarkMatch<irt::features::v1::ShapeTemplateMatcher>(state, 4); }
+void AVX2(benchmark::State &state) { BenchmarkMatch<irt::features::v1::ShapeTemplateMatcherFast>(state); }
+void AVX2MultiTemplate(benchmark::State &state) { BenchmarkMatch<irt::features::v1::ShapeTemplateMatcherFast>(state, 4); }
 void Scalar(benchmark::State &state) { BenchmarkMatch<irt::features::v0::ShapeTemplateMatcher>(state); }
 void ScalarMultiTemplate(benchmark::State &state) { BenchmarkMatch<irt::features::v0::ShapeTemplateMatcher>(state, 4); }
 BENCHMARK(AVX2)->Unit(benchmark::kMillisecond);

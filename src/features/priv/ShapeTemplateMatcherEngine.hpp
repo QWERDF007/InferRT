@@ -5,7 +5,7 @@
  * @brief 形状模板匹配的版本无关引擎与可替换 SIMD 内核。
  */
 
-#include <inferrt/features/ShapeTemplateMatcherTypes.hpp>
+#include <inferrt/features/IShapeTemplateMatcher.hpp>
 
 #include <array>
 #include <cstdint>
@@ -57,19 +57,11 @@ struct ShapeTemplateScoredPosition
     float score{0.0f};
 };
 
-/** @brief 内部热点实现类型；新增 AVX512 时仅需添加一个枚举值和对应 kernel。 */
-enum class ShapeTemplateMatcherBackend
-{
-    Scalar,
-    Avx2,
-};
-
 /**
  * @brief SIMD 相关热点的策略接口。
  *
- * 引擎负责模板管理、序列化、NMS 和滑窗调度；不同版本仅替换这些热点。未来 AVX512
- * 实现只需新增一个 kernel、一个 ``ShapeTemplateMatcherBackend`` 枚举值和一个版本包装器，
- * 无需修改训练、匹配、持久化或 NMS 流程。
+ * @details 引擎负责模板管理、序列化、NMS 和滑窗调度；不同版本只注入各自的热点内核。
+ * 后续新增 AVX512 时无需修改公共流程。
  */
 class ShapeTemplateMatcherKernel
 {
@@ -101,60 +93,68 @@ public:
                  float threshold) const = 0;
 };
 
-/** @brief 根据内部后端创建热点内核。 */
-std::unique_ptr<ShapeTemplateMatcherKernel>
-createShapeTemplateMatcherKernel(ShapeTemplateMatcherBackend backend);
-
-/** @brief 由标量 kernel 翻译单元提供。 */
-std::unique_ptr<ShapeTemplateMatcherKernel> createScalarShapeTemplateMatcherKernel();
-
-/** @brief 由 AVX2 kernel 翻译单元提供。 */
-std::unique_ptr<ShapeTemplateMatcherKernel> createAvx2ShapeTemplateMatcherKernel();
-
 /** @brief 供各 kernel 共享的稳定方向量化和候选排序规则。 */
 int  quantizeShapeTemplateAngle(float angle_degrees) noexcept;
 void sortShapeTemplateCandidates(std::vector<ShapeTemplateCandidate> &candidates);
 
 /**
- * @brief 与实现版本无关的模板管理与匹配引擎。
+ * @brief 与版本无关的模板流程核心。
+ *
+ * @details 具体 v0/v1 实现只在构造时传入不同内核；本类统一执行训练、持久化、匹配和 NMS，
+ * 从而保证两个版本的流程和结果数据结构一致。
  */
-class ShapeTemplateMatcherEngine
+class ShapeTemplateMatcherEngine : public IShapeTemplateMatcher
 {
 public:
     ShapeTemplateMatcherEngine(ShapeTemplateMatcherConfig config,
                                std::unique_ptr<ShapeTemplateMatcherKernel> kernel);
-    ~ShapeTemplateMatcherEngine();
+    ~ShapeTemplateMatcherEngine() override;
 
     ShapeTemplateMatcherEngine(const ShapeTemplateMatcherEngine &)            = delete;
     ShapeTemplateMatcherEngine &operator=(const ShapeTemplateMatcherEngine &) = delete;
     ShapeTemplateMatcherEngine(ShapeTemplateMatcherEngine &&) noexcept;
     ShapeTemplateMatcherEngine &operator=(ShapeTemplateMatcherEngine &&) noexcept;
 
+    /** @brief 添加单个模板。 */
     int addTemplate(const cv::Mat &image, const std::string &class_id, const cv::Mat &object_mask,
-                    ShapeTemplateVariant variant);
+                    ShapeTemplateVariant variant) override;
+    /** @brief 从文件添加单个模板。 */
     int addTemplateFile(const std::filesystem::path &image_file, const std::string &class_id,
-                        const std::filesystem::path &mask_file, ShapeTemplateVariant variant);
+                        const std::filesystem::path &mask_file, ShapeTemplateVariant variant) override;
+    /** @brief 批量训练角度/尺度模板变体。 */
     std::vector<int> addTemplateVariants(const cv::Mat &image, const std::string &class_id,
                                          const cv::Mat &object_mask,
-                                         const std::vector<ShapeTemplateVariant> &variants);
+                                         const std::vector<ShapeTemplateVariant> &variants) override;
+    /** @brief 在内存图像中执行匹配。 */
     std::vector<ShapeTemplateMatch> match(const cv::Mat &image, float threshold,
                                           const std::vector<std::string> &class_ids,
                                           const cv::Mat &search_mask,
-                                          ShapeTemplateMatchOptions options) const;
+                                          ShapeTemplateMatchOptions options) const override;
+    /** @brief 从文件执行匹配。 */
     std::vector<ShapeTemplateMatch> matchFile(const std::filesystem::path &image_file, float threshold,
                                               const std::vector<std::string> &class_ids,
                                               const std::filesystem::path &mask_file,
-                                              ShapeTemplateMatchOptions options) const;
-    void clear();
-    bool empty() const noexcept;
-    int numClasses() const noexcept;
-    int numTemplates() const noexcept;
-    int numTemplates(const std::string &class_id) const noexcept;
-    std::vector<std::string> classIds() const;
-    const ShapeTemplateInfo &getTemplate(const std::string &class_id, int template_id) const;
-    const ShapeTemplateMatcherConfig &config() const noexcept;
-    void save(const std::filesystem::path &template_file) const;
-    void load(const std::filesystem::path &template_file);
+                                              ShapeTemplateMatchOptions options) const override;
+    /** @brief 清空模板库。 */
+    void clear() override;
+    /** @brief 判断模板库是否为空。 */
+    bool empty() const noexcept override;
+    /** @brief 获取类别数量。 */
+    int numClasses() const noexcept override;
+    /** @brief 获取全部模板数量。 */
+    int numTemplates() const noexcept override;
+    /** @brief 获取指定类别的模板数量。 */
+    int numTemplates(const std::string &class_id) const noexcept override;
+    /** @brief 获取所有类别 ID。 */
+    std::vector<std::string> classIds() const override;
+    /** @brief 获取指定模板信息。 */
+    const ShapeTemplateInfo &getTemplate(const std::string &class_id, int template_id) const override;
+    /** @brief 获取配置。 */
+    const ShapeTemplateMatcherConfig &config() const noexcept override;
+    /** @brief 保存紧凑 v2 模板。 */
+    void save(const std::filesystem::path &template_file) const override;
+    /** @brief 加载紧凑 v2 模板。 */
+    void load(const std::filesystem::path &template_file) override;
 
 private:
     using TemplateMap = std::map<std::string, std::vector<ShapeTemplateInfo>>;

@@ -1,7 +1,7 @@
 # 形状模板匹配示例
 
 `shape_template_matching` 使用 `irt::features::v0::ShapeTemplateMatcher` 或
-`irt::features::v1::ShapeTemplateMatcher` 在源图中查找相同边缘形状的目标。它不依赖深度学习模型，适合轮廓稳定、边缘清晰的零件、工件或标记定位。
+`irt::features::v1::ShapeTemplateMatcherFast` 在源图中查找相同边缘形状的目标。它不依赖深度学习模型，适合轮廓稳定、边缘清晰的零件、工件或标记定位。
 
 示例按两个独立阶段运行：
 

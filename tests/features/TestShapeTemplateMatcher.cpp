@@ -8,7 +8,7 @@
 #include <inferrt/core/Status.h>
 #include <inferrt/features/ShapeTemplateMatcher.hpp>
 #include <inferrt/features/v0/ShapeTemplateMatcher.hpp>
-#include <inferrt/features/v1/ShapeTemplateMatcher.hpp>
+#include <inferrt/features/v1/ShapeTemplateMatcherFast.hpp>
 
 #include <opencv2/core/persistence.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -27,7 +27,7 @@ namespace fs = std::filesystem;
 namespace {
 
 using V0ShapeTemplateMatcher = irt::features::v0::ShapeTemplateMatcher;
-using V1ShapeTemplateMatcher = irt::features::v1::ShapeTemplateMatcher;
+using V1ShapeTemplateMatcher = irt::features::v1::ShapeTemplateMatcherFast;
 
 /**
  * @brief 自动清理的临时目录。

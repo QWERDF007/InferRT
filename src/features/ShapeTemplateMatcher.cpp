@@ -1,58 +1,25 @@
 /**
  * @file ShapeTemplateMatcher.cpp
- * @brief 形状模板匹配的版本无关工厂和公共工具函数。
+ * @brief v0 原始形状模板匹配器的公开入口。
  */
 
-#include "priv/ShapeTemplateMatcherEngine.hpp"
+#include "priv/ShapeTemplateMatcherImpl.hpp"
 
-#include <inferrt/core/Exception.hpp>
-#include <inferrt/features/ShapeTemplateMatcher.hpp>
 #include <inferrt/features/v0/ShapeTemplateMatcher.hpp>
-#include <inferrt/features/v1/ShapeTemplateMatcher.hpp>
 
 #include <memory>
 #include <utility>
 
-namespace irt::features {
+namespace irt::features::v0 {
 
-std::unique_ptr<IShapeTemplateMatcher>
-createShapeTemplateMatcher(ShapeTemplateMatcherVersion version, ShapeTemplateMatcherConfig config)
+ShapeTemplateMatcher::ShapeTemplateMatcher(ShapeTemplateMatcherConfig config)
+    : ::irt::features::detail::ShapeTemplateMatcherBase(
+          std::make_unique<detail::ShapeTemplateMatcherImpl>(std::move(config)))
 {
-    switch (version)
-    {
-    case ShapeTemplateMatcherVersion::V0:
-        return std::make_unique<v0::ShapeTemplateMatcher>(std::move(config));
-    case ShapeTemplateMatcherVersion::V1:
-        return std::make_unique<v1::ShapeTemplateMatcher>(std::move(config));
-    }
-
-    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported shape template matcher version");
 }
 
-const char *shapeTemplateMatcherVersionName(ShapeTemplateMatcherVersion version) noexcept
-{
-    switch (version)
-    {
-    case ShapeTemplateMatcherVersion::V0:
-        return "v0";
-    case ShapeTemplateMatcherVersion::V1:
-        return "v1";
-    }
-    return "unknown";
-}
+ShapeTemplateMatcher::~ShapeTemplateMatcher() = default;
+ShapeTemplateMatcher::ShapeTemplateMatcher(ShapeTemplateMatcher &&) noexcept = default;
+ShapeTemplateMatcher &ShapeTemplateMatcher::operator=(ShapeTemplateMatcher &&) noexcept = default;
 
-std::vector<ShapeTemplateVariant>
-makeShapeTemplateAngleScaleVariants(float angle_begin_degrees, float angle_end_degrees, float angle_step_degrees,
-                                    float scale_begin, float scale_end, float scale_step)
-{
-    return detail::makeShapeTemplateAngleScaleVariants(angle_begin_degrees, angle_end_degrees, angle_step_degrees,
-                                                        scale_begin, scale_end, scale_step);
-}
-
-cv::Mat transformShapeTemplateImage(const cv::Mat &image, ShapeTemplateVariant variant,
-                                    const cv::Scalar &border_value)
-{
-    return detail::transformShapeTemplateImage(image, variant, border_value);
-}
-
-} // namespace irt::features
+} // namespace irt::features::v0

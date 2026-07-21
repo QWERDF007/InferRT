@@ -2,62 +2,29 @@
 
 /**
  * @file v0/ShapeTemplateMatcher.hpp
- * @brief 原始标量形状模板匹配器。
+ * @brief v0 原始形状模板匹配器。
  */
 
-#include <inferrt/features/IShapeTemplateMatcher.hpp>
-
-#include <memory>
-
-namespace irt::features::detail {
-class ShapeTemplateMatcherEngine;
-}
+#include <inferrt/features/ShapeTemplateMatcherBase.hpp>
 
 namespace irt::features::v0 {
 
-/** @brief 原始标量实现；不使用 SIMD intrinsic。 */
-class INFERRT_FEATURES_API ShapeTemplateMatcher final : public IShapeTemplateMatcher
+/**
+ * @brief v0 原始形状模板匹配器。
+ *
+ * @details 该类固定使用参考实现，训练保持原始串行流程，匹配不使用 v1 的快速热点。
+ * 公共 API 由共用基类实现，保证与 v1 的调用顺序、持久化和结果访问流程一致。
+ */
+class INFERRT_FEATURES_API ShapeTemplateMatcher final : public ::irt::features::detail::ShapeTemplateMatcherBase
 {
 public:
+    /** @brief 使用给定配置构造 v0 匹配器。 */
     explicit ShapeTemplateMatcher(ShapeTemplateMatcherConfig config = {});
     ~ShapeTemplateMatcher() override;
     ShapeTemplateMatcher(const ShapeTemplateMatcher &)            = delete;
     ShapeTemplateMatcher &operator=(const ShapeTemplateMatcher &) = delete;
     ShapeTemplateMatcher(ShapeTemplateMatcher &&) noexcept;
     ShapeTemplateMatcher &operator=(ShapeTemplateMatcher &&) noexcept;
-
-    int addTemplate(const cv::Mat &, const std::string &, const cv::Mat & = cv::Mat(),
-                    ShapeTemplateVariant = {}) override;
-    int addTemplateFile(const std::filesystem::path &, const std::string &,
-                        const std::filesystem::path & = {}, ShapeTemplateVariant = {}) override;
-    std::vector<int> addTemplateVariants(const cv::Mat &, const std::string &, const cv::Mat &,
-                                         const std::vector<ShapeTemplateVariant> &) override;
-    std::vector<ShapeTemplateMatch> match(const cv::Mat &, float = -1.0f,
-                                          const std::vector<std::string> & = {},
-                                          const cv::Mat & = cv::Mat(),
-                                          ShapeTemplateMatchOptions = {}) const override;
-    std::vector<ShapeTemplateMatch> matchFile(const std::filesystem::path &, float = -1.0f,
-                                              const std::vector<std::string> & = {},
-                                              const std::filesystem::path & = {},
-                                              ShapeTemplateMatchOptions = {}) const override;
-    void clear() override;
-    bool empty() const noexcept override;
-    int numClasses() const noexcept override;
-    int numTemplates() const noexcept override;
-    int numTemplates(const std::string &) const noexcept override;
-    std::vector<std::string> classIds() const override;
-    const ShapeTemplateInfo &getTemplate(const std::string &, int) const override;
-    const ShapeTemplateMatcherConfig &config() const noexcept override;
-    void save(const std::filesystem::path &) const override;
-    void load(const std::filesystem::path &) override;
-
-    static std::vector<ShapeTemplateVariant> makeAngleScaleVariants(float, float, float,
-                                                                     float = 1.0f, float = 1.0f,
-                                                                     float = 1.0f);
-    static cv::Mat transform(const cv::Mat &, ShapeTemplateVariant, const cv::Scalar & = cv::Scalar());
-
-private:
-    std::unique_ptr<detail::ShapeTemplateMatcherEngine> impl_;
 };
 
 } // namespace irt::features::v0

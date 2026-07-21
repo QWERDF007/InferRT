@@ -7,7 +7,7 @@
  * 该头文件只提供版本无关的接口、工厂和工具函数，不在 ``irt::features`` 根命名空间
  * 提供具体实现。请显式包含并使用
  * ``irt::features::v0::ShapeTemplateMatcher`` 或
- * ``irt::features::v1::ShapeTemplateMatcher``；也可通过工厂获取版本无关接口。
+ * ``irt::features::v1::ShapeTemplateMatcherFast``；也可通过工厂获取版本无关接口。
  */
 
 #include <inferrt/features/IShapeTemplateMatcher.hpp>

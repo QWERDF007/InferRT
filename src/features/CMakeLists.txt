@@ -3,13 +3,13 @@ if(NOT Faiss_LIBS)
     message(FATAL "Faiss not found, can't build features module")
 endif()
 
-# v0 保持可在非 AVX2 CPU 上运行；只为 v1 的 intrinsic 内核启用 AVX2，避免把该 ISA
-# 要求扩散到整个库、示例和其他模块。未来 AVX512 版本可按同样方式增加单独的源文件选项。
+# v0 保持可在非 AVX2 CPU 上运行；只为 v1 快速实现启用 AVX2，避免把该 ISA
+# 要求扩散到公共流程、示例和其他模块。未来 AVX512 版本可按同样方式增加独立快速实现。
 if(MSVC)
-    set_source_files_properties(priv/ShapeTemplateMatcherAvx2Kernel.cpp
+    set_source_files_properties(priv/ShapeTemplateMatcherFastImpl.cpp
         PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
 else()
-    set_source_files_properties(priv/ShapeTemplateMatcherAvx2Kernel.cpp
+    set_source_files_properties(priv/ShapeTemplateMatcherFastImpl.cpp
         PROPERTIES COMPILE_OPTIONS "-mavx2")
 endif()
 
