@@ -10,6 +10,7 @@
 #include <inferrt/features/v0/ShapeTemplateMatcher.hpp>
 #include <inferrt/features/v1/ShapeTemplateMatcher.hpp>
 
+#include <opencv2/core/persistence.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -195,6 +196,11 @@ TEST(ShapeTemplateMatcherTest, ConstructorRejectsInvalidConfig)
 
     config                 = fastConfig();
     config.match_threshold = 101.0f;
+    expectIrtExceptionCode([&] { V1ShapeTemplateMatcher matcher(config); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
+
+    config                          = fastConfig();
+    config.max_training_parallelism = -1;
     expectIrtExceptionCode([&] { V1ShapeTemplateMatcher matcher(config); },
                            irt::Status::ERROR_INVALID_ARGUMENT);
 
@@ -391,6 +397,38 @@ TEST(ShapeTemplateMatcherTest, SaveLoadRoundTripPreservesMatches)
     writer.addTemplate(object, "bracket", cv::Mat(), irt::features::ShapeTemplateVariant{15.0f, 1.25f});
     writer.save(template_file);
 
+    {
+        cv::FileStorage storage(template_file.string(), cv::FileStorage::READ);
+        ASSERT_TRUE(storage.isOpened());
+        int version = 0;
+        storage["version"] >> version;
+        EXPECT_EQ(version, 2);
+
+        const cv::FileNode templates_node = storage["templates"];
+        ASSERT_TRUE(templates_node.isSeq());
+        ASSERT_EQ(templates_node.size(), 1U);
+        const cv::FileNode features_node = templates_node[0]["features"];
+        ASSERT_TRUE(features_node.isSeq());
+        ASSERT_EQ(features_node.size(), writer.getTemplate("bracket", 0).features.size());
+        ASSERT_FALSE(features_node.empty());
+        const cv::FileNode feature_node = features_node[0];
+        ASSERT_TRUE(feature_node.isSeq());
+        ASSERT_EQ(feature_node.size(), 4U);
+        const auto &expected_feature = writer.getTemplate("bracket", 0).features.front();
+        int          x                = 0;
+        int          y                = 0;
+        int          label            = 0;
+        float        angle_degrees    = 0.0f;
+        feature_node[0] >> x;
+        feature_node[1] >> y;
+        feature_node[2] >> label;
+        feature_node[3] >> angle_degrees;
+        EXPECT_EQ(x, expected_feature.x);
+        EXPECT_EQ(y, expected_feature.y);
+        EXPECT_EQ(label, expected_feature.label);
+        EXPECT_FLOAT_EQ(angle_degrees, expected_feature.angle_degrees);
+    }
+
     V1ShapeTemplateMatcher reader;
     reader.load(template_file);
     const auto matches = reader.match(scene, 95.0f, {"bracket"});
@@ -401,6 +439,49 @@ TEST(ShapeTemplateMatcherTest, SaveLoadRoundTripPreservesMatches)
     EXPECT_NEAR(reader.getTemplate("bracket", 0).angle_degrees, 15.0f, 1.0e-4f);
     EXPECT_NEAR(reader.getTemplate("bracket", 0).scale, 1.25f, 1.0e-4f);
     EXPECT_NEAR(matches.front().similarity, 100.0f, 1.0e-4f);
+}
+
+/** @brief v2 持久化格式是破坏性升级，不再接收旧版字段对象格式。 */
+TEST(ShapeTemplateMatcherTest, LegacyV1TemplateFilesAreRejectedAfterFormatUpgrade)
+{
+    TempDir temp;
+    const auto legacy_file = temp.path() / "legacy_v1_templates.yaml";
+    cv::FileStorage storage(legacy_file.string(), cv::FileStorage::WRITE);
+    ASSERT_TRUE(storage.isOpened());
+    storage << "version" << 1;
+    storage.release();
+
+    V1ShapeTemplateMatcher matcher;
+    expectIrtExceptionCode([&] { matcher.load(legacy_file); }, irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+/** @brief v2 的每个特征必须严格包含四个按位置约定的字段。 */
+TEST(ShapeTemplateMatcherTest, CompactFeatureRowsRequireExactlyFourValues)
+{
+    TempDir temp;
+    const auto malformed_file = temp.path() / "malformed_compact_templates.yaml";
+    cv::FileStorage storage(malformed_file.string(), cv::FileStorage::WRITE);
+    ASSERT_TRUE(storage.isOpened());
+    storage << "version" << 2;
+    storage << "templates" << "[";
+    storage << "{";
+    storage << "class_id" << "part";
+    storage << "template_id" << 0;
+    storage << "width" << 8;
+    storage << "height" << 8;
+    storage << "tl_x" << 0;
+    storage << "tl_y" << 0;
+    storage << "angle_degrees" << 0.0f;
+    storage << "scale" << 1.0f;
+    storage << "features" << "[";
+    storage << "[" << 1 << 2 << 3 << "]";
+    storage << "]";
+    storage << "}";
+    storage << "]";
+    storage.release();
+
+    V1ShapeTemplateMatcher matcher;
+    expectIrtExceptionCode([&] { matcher.load(malformed_file); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**
@@ -538,7 +619,150 @@ void expectIdenticalMatches(const std::vector<irt::features::ShapeTemplateMatch>
     }
 }
 
+void expectIdenticalTemplate(const irt::features::ShapeTemplateInfo &expected,
+                             const irt::features::ShapeTemplateInfo &actual)
+{
+    EXPECT_EQ(expected.class_id, actual.class_id);
+    EXPECT_EQ(expected.template_id, actual.template_id);
+    EXPECT_EQ(expected.width, actual.width);
+    EXPECT_EQ(expected.height, actual.height);
+    EXPECT_EQ(expected.tl_x, actual.tl_x);
+    EXPECT_EQ(expected.tl_y, actual.tl_y);
+    EXPECT_FLOAT_EQ(expected.angle_degrees, actual.angle_degrees);
+    EXPECT_FLOAT_EQ(expected.scale, actual.scale);
+    ASSERT_EQ(expected.features.size(), actual.features.size());
+    for (size_t index = 0; index < expected.features.size(); ++index)
+    {
+        const auto &a = expected.features[index];
+        const auto &b = actual.features[index];
+        EXPECT_EQ(a.x, b.x);
+        EXPECT_EQ(a.y, b.y);
+        EXPECT_EQ(a.label, b.label);
+        EXPECT_FLOAT_EQ(a.angle_degrees, b.angle_degrees);
+    }
+}
+
 } // namespace
+
+/** @brief 全非零搜索掩膜应与无掩膜的全图精确结果完全相同。 */
+TEST(ShapeTemplateMatcherParityTest, FullSearchMaskMatchesUnmaskedResults)
+{
+    auto config = fastConfig();
+    config.max_label_difference = 1;
+    config.match_threshold = 75.0f;
+
+    const auto object = makeLShape(50);
+    const auto alternate = makeTShape(50);
+    const auto scene = makeSceneWith(object, cv::Point(31, 27), cv::Size(151, 137));
+    cv::Mat full_search_mask(scene.size(), CV_8UC1, cv::Scalar(255));
+
+    V1ShapeTemplateMatcher avx2(config);
+    V0ShapeTemplateMatcher scalar(config);
+    avx2.addTemplate(object, "bracket");
+    avx2.addTemplate(alternate, "tee");
+    scalar.addTemplate(object, "bracket");
+    scalar.addTemplate(alternate, "tee");
+
+    const auto unmasked_matches = avx2.match(scene);
+    const auto full_mask_matches = avx2.match(scene, -1.0f, {}, full_search_mask);
+    const auto scalar_matches = scalar.match(scene, -1.0f, {}, full_search_mask);
+    expectIdenticalMatches(unmasked_matches, full_mask_matches);
+    expectIdenticalMatches(unmasked_matches, scalar_matches);
+}
+
+/** @brief v0 串行训练与 v1 串行/并行训练必须生成逐字段一致的变体模板。 */
+TEST(ShapeTemplateMatcherTrainingParallelTest, V1ParallelVariantTrainingPreservesTemplatesAndMatches)
+{
+    auto v0_config = fastConfig();
+    v0_config.max_label_difference = 1;
+    v0_config.match_threshold = 70.0f;
+    v0_config.max_parallelism = 1;
+    v0_config.max_training_parallelism = 3;
+    auto v1_serial_config = v0_config;
+    v1_serial_config.max_training_parallelism = 1;
+    auto v1_parallel_config = v0_config;
+    v1_parallel_config.max_training_parallelism = 3;
+    auto v1_auto_config = v0_config;
+    v1_auto_config.max_training_parallelism = 0;
+
+    const auto object = makeLShape(56);
+    const auto scene = makeSceneWith(object, cv::Point(37, 29), cv::Size(151, 137));
+    const auto variants = irt::features::makeShapeTemplateAngleScaleVariants(-10.0f, 10.0f, 10.0f,
+                                                                               0.9f, 1.1f, 0.1f);
+
+    V0ShapeTemplateMatcher v0(v0_config);
+    V1ShapeTemplateMatcher v1_serial(v1_serial_config);
+    V1ShapeTemplateMatcher v1_parallel(v1_parallel_config);
+    V1ShapeTemplateMatcher v1_auto(v1_auto_config);
+    const auto v0_ids = v0.addTemplateVariants(object, "part", cv::Mat(), variants);
+    const auto serial_ids = v1_serial.addTemplateVariants(object, "part", cv::Mat(), variants);
+    const auto parallel_ids = v1_parallel.addTemplateVariants(object, "part", cv::Mat(), variants);
+    const auto auto_ids = v1_auto.addTemplateVariants(object, "part", cv::Mat(), variants);
+    EXPECT_EQ(v0_ids, serial_ids);
+    EXPECT_EQ(serial_ids, parallel_ids);
+    EXPECT_EQ(parallel_ids, auto_ids);
+
+    ASSERT_EQ(v0.numTemplates("part"), static_cast<int>(variants.size()));
+    ASSERT_EQ(v0.numTemplates("part"), v1_serial.numTemplates("part"));
+    ASSERT_EQ(v0.numTemplates("part"), v1_parallel.numTemplates("part"));
+    ASSERT_EQ(v0.numTemplates("part"), v1_auto.numTemplates("part"));
+    for (int template_id = 0; template_id < v0.numTemplates("part"); ++template_id)
+    {
+        expectIdenticalTemplate(v0.getTemplate("part", template_id),
+                                v1_serial.getTemplate("part", template_id));
+        expectIdenticalTemplate(v0.getTemplate("part", template_id),
+                                v1_parallel.getTemplate("part", template_id));
+        expectIdenticalTemplate(v0.getTemplate("part", template_id),
+                                v1_auto.getTemplate("part", template_id));
+    }
+
+    const auto v0_matches = v0.match(scene, 70.0f, {"part"});
+    expectIdenticalMatches(v0_matches, v1_serial.match(scene, 70.0f, {"part"}));
+    expectIdenticalMatches(v0_matches, v1_parallel.match(scene, 70.0f, {"part"}));
+    expectIdenticalMatches(v0_matches, v1_auto.match(scene, 70.0f, {"part"}));
+}
+
+/** @brief 默认运行时选项必须保持精确路径；非默认模板步长只能作为显式近似策略生效。 */
+TEST(ShapeTemplateMatcherTest, MatchOptionsDefaultIsExactAndTemplateStrideIsExplicit)
+{
+    auto config = fastConfig();
+    config.max_label_difference = 1;
+    config.match_threshold = 90.0f;
+
+    const auto object = makeLShape(50);
+    const auto scene = makeSceneWith(object, cv::Point(31, 27), cv::Size(151, 137));
+    V1ShapeTemplateMatcher matcher(config);
+    matcher.addTemplate(makeTShape(50), "shape");
+    matcher.addTemplate(object, "shape");
+
+    const auto default_matches = matcher.match(scene, 90.0f, {"shape"});
+    irt::features::ShapeTemplateMatchOptions exact_options;
+    expectIdenticalMatches(default_matches, matcher.match(scene, 90.0f, {"shape"}, cv::Mat(), exact_options));
+    exact_options.scan_step = 1;
+    expectIdenticalMatches(default_matches, matcher.match(scene, 90.0f, {"shape"}, cv::Mat(), exact_options));
+
+    const auto exact_target = std::find_if(default_matches.begin(), default_matches.end(),
+                                           [](const auto &match) { return match.template_id == 1; });
+    ASSERT_NE(exact_target, default_matches.end());
+
+    irt::features::ShapeTemplateMatchOptions approximate_options;
+    approximate_options.template_stride = 2;
+    const auto approximate_matches = matcher.match(scene, 90.0f, {"shape"}, cv::Mat(), approximate_options);
+    EXPECT_EQ(std::find_if(approximate_matches.begin(), approximate_matches.end(),
+                           [](const auto &match) { return match.template_id == 1; }),
+              approximate_matches.end());
+
+    approximate_options = {};
+    approximate_options.template_stride = 0;
+    expectIrtExceptionCode([&]
+                           { (void)matcher.match(scene, 90.0f, {"shape"}, cv::Mat(), approximate_options); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
+    approximate_options = {};
+    approximate_options.scan_step = -1;
+    expectIrtExceptionCode([&]
+                           { (void)matcher.match(scene, 90.0f, {"shape"}, cv::Mat(), approximate_options); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
+}
 
 /** @brief 不同扫描参数、输入尺寸和方向容差下，AVX2 与标量路径必须逐结果一致。 */
 TEST(ShapeTemplateMatcherParityTest, Avx2AndScalarRemainIdenticalAcrossParameters)
@@ -546,7 +770,7 @@ TEST(ShapeTemplateMatcherParityTest, Avx2AndScalarRemainIdenticalAcrossParameter
     // ``2 * 48 = 96`` 的上界之外还覆盖 ``8 * 48 = 384``，验证 v1 的 uint8 和
     // uint16 累加路径都与固定的 v0 标量基线逐字段一致。
     const std::array<int, 3> label_differences{0, 1, 4};
-    const std::array<int, 2> scan_steps{1, 2};
+    const std::array<int, 4> scan_steps{1, 2, 3, 4};
     const std::array<cv::Size, 2> scene_sizes{cv::Size(119, 107), cv::Size(151, 137)};
 
     for (const int label_difference : label_differences)

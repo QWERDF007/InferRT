@@ -222,6 +222,8 @@ cxxopts::Options makeOptions(const char *program_name)
         "scale-end", "Last training scale", cxxopts::value<float>()->default_value("1"))(
         "scale-step", "Training scale step", cxxopts::value<float>()->default_value("1"))(
         "features", "Maximum feature points per template", cxxopts::value<int>()->default_value("96"))(
+        "train-parallelism", "v1 training worker count; 0 chooses automatically, v0 always stays original serial",
+        cxxopts::value<int>()->default_value("0"))(
         "max-results", "Matching result limit saved in the template file", cxxopts::value<int>()->default_value("20"))(
         "nms", "Matching NMS IoU threshold saved in the template file; negative disables NMS",
         cxxopts::value<float>()->default_value("0.3"));
@@ -292,6 +294,7 @@ Arguments parseArguments(int argc, char *argv[])
         training.config.max_results          = result["max-results"].as<int>();
         training.config.nms_threshold        = result["nms"].as<float>();
         training.config.max_label_difference = 1;
+        training.config.max_training_parallelism = result["train-parallelism"].as<int>();
 
         const auto roi = result["template-roi"].as<std::string>();
         if (!roi.empty())
@@ -309,6 +312,11 @@ Arguments parseArguments(int argc, char *argv[])
         if (training.class_id.empty())
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--class-id must not be empty");
+        }
+        if (training.config.max_training_parallelism < 0)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "--train-parallelism must be non-negative");
         }
     }
     else if (mode == "match")
@@ -435,6 +443,19 @@ void runTraining(const TrainingArguments &args, const TimingArguments &timing,
     std::cout << "template input: " << fs::absolute(args.template_image).string() << std::endl;
     std::cout << "template roi: (" << roi.x << "," << roi.y << "," << roi.width << "," << roi.height << ")"
               << std::endl;
+    if (version == irt::features::ShapeTemplateMatcherVersion::V0)
+    {
+        std::cout << "training parallelism: 1 (v0 original serial path)" << std::endl;
+    }
+    else if (args.config.max_training_parallelism == 0)
+    {
+        std::cout << "training parallelism: auto (v1 optimized path)" << std::endl;
+    }
+    else
+    {
+        std::cout << "training parallelism: " << args.config.max_training_parallelism
+                  << " (v1 optimized path)" << std::endl;
+    }
     std::cout << "templates: " << template_ids.size() << std::endl;
     std::cout << "template file: " << fs::absolute(args.save_templates).string() << std::endl;
     printTimingStats("train/addTemplateVariants", timing.warmup, samples_ms);

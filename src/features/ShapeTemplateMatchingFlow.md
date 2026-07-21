@@ -113,7 +113,7 @@ const int template_id = matcher.addTemplateFile("part.png", "part", "part_mask.p
 - `width` / `height`：特征点包围盒尺寸。
 - `tl_x` / `tl_y`：特征点包围盒在训练图中的左上角。
 - `angle_degrees` / `scale`：模板变体元数据。
-- `features`：相对模板包围盒的 `(x, y, label, angle_degrees)` 列表。
+- `features`：相对模板包围盒的 `(x, y, label, angle_degrees)` 列表；v2 文件中每个特征编码为固定四列的 `[x, y, label, angle_degrees]` 数组。
 
 ## 5. 旋转和尺度模板训练流程
 
@@ -164,12 +164,14 @@ matcher.load("shape_templates.yaml");
 
 保存内容包括：
 
-- `version`：模板文件版本。
+- `version`：模板文件版本；当前为破坏性的 `2`，不接受旧 `1`。
 - `config`：训练/匹配配置，包括阈值、方向容差、NMS、扫描步长等。
-- `templates`：所有类别下的模板信息和特征点列表。
+- `templates`：所有类别下的模板信息和特征点列表。每个模板的 `features` 是二维数组，每行严格为 `[x, y, label, angle_degrees]`，不再为每个特征重复写字段名。
 
 加载流程会先读入临时配置和临时模板库，完成配置校验、模板尺寸校验、特征数量校验、方向标签校验和变体元数据校验后，
 再替换当前对象状态。这样可以避免加载失败时留下半初始化模板库。
+
+v2 是破坏性格式升级：已有 `version: 1` 模板文件不能加载，必须以当前版本重新训练。v0 与 v1 都共享 v2 格式，因而新生成的模板仍可在两个实现之间交叉加载。
 
 ## 7. 匹配流程
 

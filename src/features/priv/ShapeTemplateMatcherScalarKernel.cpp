@@ -40,7 +40,8 @@ bool similarityAtLeastScalar(const ShapeTemplateResponseMaps &response_maps, con
 
 std::vector<ShapeTemplateScoredPosition>
 scanTemplateScalar(const ShapeTemplateResponseMaps &response_maps, const ShapeTemplateInfo &templ,
-                   const cv::Mat &search_mask, cv::Size image_size, int scan_step, float threshold)
+                   const cv::Mat &search_mask, bool /* full_search_mask */, cv::Size image_size,
+                   int scan_step, float threshold)
 {
     std::vector<ShapeTemplateScoredPosition> positions;
     if (templ.features.empty() || templ.width > image_size.width || templ.height > image_size.height)
@@ -136,6 +137,11 @@ public:
         return true;
     }
 
+    bool usesOptimizedTemplateTraining() const noexcept override
+    {
+        return false;
+    }
+
     void fillQuantizedLabels(const cv::Mat &magnitude, const cv::Mat &angle, const cv::Mat &mask,
                              float threshold, cv::Mat &labels) const override
     {
@@ -156,9 +162,11 @@ public:
 
     std::vector<ShapeTemplateScoredPosition>
     scanTemplate(const ShapeTemplateResponseMaps &response_maps, const ShapeTemplateInfo &templ,
-                 const cv::Mat &search_mask, cv::Size image_size, int scan_step, float threshold) const override
+                 const cv::Mat &search_mask, bool full_search_mask, cv::Size image_size, int scan_step,
+                 float threshold) const override
     {
-        return scanTemplateScalar(response_maps, templ, search_mask, image_size, scan_step, threshold);
+        return scanTemplateScalar(response_maps, templ, search_mask, full_search_mask, image_size, scan_step,
+                                  threshold);
     }
 };
 

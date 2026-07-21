@@ -16,6 +16,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <filesystem>
 #include <iterator>
 #include <limits>
@@ -31,6 +32,7 @@ namespace {
 constexpr unsigned char kInvalidLabel = detail::kShapeTemplateInvalidLabel;     ///< 无效方向标签，用于跳过弱梯度点。
 constexpr float         kEps          = 1.0e-6f;                                ///< 浮点区间比较容差。
 constexpr int           kOrientationBins = detail::kShapeTemplateOrientationBins; ///< 梯度方向量化 bin 数量。
+constexpr int           kShapeTemplateFileFormatVersion = 2; ///< 紧凑二维特征数组模板文件格式版本。
 
 using QuantizedGradient = detail::ShapeTemplateQuantizedGradient;
 using Candidate          = detail::ShapeTemplateCandidate;
@@ -102,6 +104,11 @@ void validateConfig(const ShapeTemplateMatcherConfig &config)
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "ShapeTemplateMatcher max_parallelism must be non-negative");
     }
+    if (config.max_training_parallelism < 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "ShapeTemplateMatcher max_training_parallelism must be non-negative");
+    }
     if (!std::isfinite(config.min_feature_distance) || config.min_feature_distance < 0.0f)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
@@ -162,24 +169,33 @@ cv::Mat loadImage(const fs::path &image_file, int flags, const char *name)
 /**
  * @brief 将输入图像规范化为 8 位灰度图。
  * @param image 输入图像，支持灰度、BGR 或 BGRA。
- * @return ``CV_8UC1`` 灰度图。
+ * @param gray8 可复用的 ``CV_8UC1`` 输出缓冲区。
  */
-cv::Mat toGray8(const cv::Mat &image)
+void toGray8(const cv::Mat &image, cv::Mat &gray8)
 {
     validateImage(image, "image");
 
-    cv::Mat gray;
     if (image.channels() == 1)
     {
-        gray = image;
+        if (image.depth() == CV_8U)
+        {
+            gray8 = image;
+        }
+        else
+        {
+            image.convertTo(gray8, CV_8U);
+        }
+        return;
     }
-    else if (image.channels() == 3)
+
+    int conversion_code = 0;
+    if (image.channels() == 3)
     {
-        cv::cvtColor(image, gray, cv::COLOR_BGR2GRAY);
+        conversion_code = cv::COLOR_BGR2GRAY;
     }
     else if (image.channels() == 4)
     {
-        cv::cvtColor(image, gray, cv::COLOR_BGRA2GRAY);
+        conversion_code = cv::COLOR_BGRA2GRAY;
     }
     else
     {
@@ -187,15 +203,27 @@ cv::Mat toGray8(const cv::Mat &image)
                              image.channels());
     }
 
-    cv::Mat gray8;
-    if (gray.depth() == CV_8U)
+    if (image.depth() == CV_8U)
     {
-        gray8 = gray;
+        cv::cvtColor(image, gray8, conversion_code);
     }
     else
     {
+        cv::Mat gray;
+        cv::cvtColor(image, gray, conversion_code);
         gray.convertTo(gray8, CV_8U);
     }
+}
+
+/**
+ * @brief 返回 8 位灰度图的便捷包装。
+ * @param image 输入图像。
+ * @return ``CV_8UC1`` 灰度图。
+ */
+cv::Mat toGray8(const cv::Mat &image)
+{
+    cv::Mat gray8;
+    toGray8(image, gray8);
     return gray8;
 }
 
@@ -396,6 +424,68 @@ std::vector<Candidate> greedySelectCandidates(const std::vector<Candidate> &cand
         best.resize(static_cast<size_t>(num_features));
     }
     return best;
+}
+
+/** @brief 单个训练工作线程复用的图像与梯度缓冲区。 */
+struct ShapeTemplateTrainingWorkspace
+{
+    cv::Mat transformed_image;
+    cv::Mat transformed_mask;
+    cv::Mat grad_x;
+    cv::Mat grad_y;
+    QuantizedGradient gradient;
+};
+
+/**
+ * @brief 基于已规范化掩膜计算模板训练所需的量化梯度，并复用工作缓冲区。
+ *
+ * 调用方保证 ``normalized_mask`` 为同尺寸的二值 ``CV_8UC1`` 图。训练变体的掩膜
+ * 由最近邻仿射变换生成，跳过重复的 ``normalizeMask()`` 不改变任一像素值。
+ */
+void computeTemplateQuantizedGradient(const cv::Mat &image, const cv::Mat &normalized_mask,
+                                      float weak_threshold, const detail::ShapeTemplateMatcherKernel &kernel,
+                                      ShapeTemplateTrainingWorkspace &workspace)
+{
+    const cv::Mat gray = toGray8(image);
+    cv::Sobel(gray, workspace.grad_x, CV_32F, 1, 0, 3);
+    cv::Sobel(gray, workspace.grad_y, CV_32F, 0, 1, 3);
+
+    cv::cartToPolar(workspace.grad_x, workspace.grad_y, workspace.gradient.magnitude, workspace.gradient.angle,
+                    true);
+    workspace.gradient.labels.create(gray.size(), CV_8UC1);
+    workspace.gradient.labels.setTo(cv::Scalar(kInvalidLabel));
+    kernel.fillQuantizedLabels(workspace.gradient.magnitude, workspace.gradient.angle, normalized_mask,
+                               weak_threshold, workspace.gradient.labels);
+}
+
+/**
+ * @brief 提取一个已完成仿射变换的模板变体的特征点。
+ *
+ * 此函数无引擎状态写入，因而多个变体可并行调用；候选排序和特征选择规则与
+ * ``addTemplate()`` 的原实现完全相同。
+ */
+std::vector<Candidate> extractTemplateCandidates(const cv::Mat &image, const cv::Mat &normalized_mask,
+                                                 const ShapeTemplateMatcherConfig &config,
+                                                 const detail::ShapeTemplateMatcherKernel &kernel,
+                                                 ShapeTemplateTrainingWorkspace &workspace)
+{
+    computeTemplateQuantizedGradient(image, normalized_mask, config.weak_threshold, kernel, workspace);
+    auto candidates = kernel.collectCandidates(workspace.gradient, normalized_mask, config.strong_threshold);
+    if (static_cast<int>(candidates.size()) < config.min_features && config.weak_threshold < config.strong_threshold)
+    {
+        candidates = kernel.collectCandidates(workspace.gradient, normalized_mask, config.weak_threshold);
+    }
+
+    const float distance = config.min_feature_distance > 0.0f
+                             ? config.min_feature_distance
+                             : autoFeatureDistance(image.size(), config.num_features);
+    auto selected = greedySelectCandidates(candidates, config.num_features, config.min_features, distance);
+    if (static_cast<int>(selected.size()) < config.min_features)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "Not enough gradient features to build a shape template");
+    }
+    return selected;
 }
 
 /**
@@ -773,22 +863,34 @@ int detail::ShapeTemplateMatcherEngine::addTemplate(const cv::Mat &image, const 
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Shape template variant is invalid");
     }
 
-    const cv::Mat mask      = normalizeMask(object_mask, image.size(), "object_mask");
-    const auto    gradient  = computeQuantizedGradient(image, mask, config_.weak_threshold, *kernel_);
-    auto candidates = kernel_->collectCandidates(gradient, mask, config_.strong_threshold);
-    if (static_cast<int>(candidates.size()) < config_.min_features && config_.weak_threshold < config_.strong_threshold)
+    std::vector<Candidate> selected;
+    if (kernel_->usesOptimizedTemplateTraining())
     {
-        candidates = kernel_->collectCandidates(gradient, mask, config_.weak_threshold);
+        const cv::Mat mask = normalizeMask(object_mask, image.size(), "object_mask");
+        ShapeTemplateTrainingWorkspace workspace;
+        selected = extractTemplateCandidates(image, mask, config_, *kernel_, workspace);
     }
-
-    const float distance = config_.min_feature_distance > 0.0f
-                             ? config_.min_feature_distance
-                             : autoFeatureDistance(image.size(), config_.num_features);
-    auto selected = greedySelectCandidates(candidates, config_.num_features, config_.min_features, distance);
-    if (static_cast<int>(selected.size()) < config_.min_features)
+    else
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "Not enough gradient features to build a shape template");
+        // v0 保持原始标量训练流程：保留掩膜的完整规范化、梯度提取与候选选择顺序。
+        const cv::Mat mask = normalizeMask(object_mask, image.size(), "object_mask");
+        const auto gradient = computeQuantizedGradient(image, mask, config_.weak_threshold, *kernel_);
+        auto candidates = kernel_->collectCandidates(gradient, mask, config_.strong_threshold);
+        if (static_cast<int>(candidates.size()) < config_.min_features
+            && config_.weak_threshold < config_.strong_threshold)
+        {
+            candidates = kernel_->collectCandidates(gradient, mask, config_.weak_threshold);
+        }
+
+        const float distance = config_.min_feature_distance > 0.0f
+                                 ? config_.min_feature_distance
+                                 : autoFeatureDistance(image.size(), config_.num_features);
+        selected = greedySelectCandidates(candidates, config_.num_features, config_.min_features, distance);
+        if (static_cast<int>(selected.size()) < config_.min_features)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "Not enough gradient features to build a shape template");
+        }
     }
 
     auto &class_templates = templates_[class_id];
@@ -825,26 +927,139 @@ std::vector<int> detail::ShapeTemplateMatcherEngine::addTemplateVariants(
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Shape template variants must not be empty");
     }
 
-    const cv::Mat mask = normalizeMask(object_mask, image.size(), "object_mask");
-    std::vector<int> ids;
-    ids.reserve(variants.size());
+    if (!kernel_->usesOptimizedTemplateTraining())
+    {
+        // v0 保持与原始实现一致的串行训练过程，不复用缓冲区且逐变体立即提交模板。
+        const cv::Mat mask = normalizeMask(object_mask, image.size(), "object_mask");
+        std::vector<int> ids;
+        ids.reserve(variants.size());
 
-    const cv::Point2f center(static_cast<float>(image.cols) * 0.5f, static_cast<float>(image.rows) * 0.5f);
+        const cv::Point2f center(static_cast<float>(image.cols) * 0.5f,
+                                 static_cast<float>(image.rows) * 0.5f);
+        for (const auto &variant : variants)
+        {
+            if (!std::isfinite(variant.angle_degrees) || !std::isfinite(variant.scale) || variant.scale <= 0.0f)
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Shape template variant is invalid");
+            }
+
+            const cv::Mat transform = cv::getRotationMatrix2D(center, variant.angle_degrees, variant.scale);
+            cv::Mat       transformed_image;
+            cv::Mat       transformed_mask;
+            cv::warpAffine(image, transformed_image, transform, image.size(), cv::INTER_LINEAR, cv::BORDER_CONSTANT,
+                           cv::Scalar());
+            cv::warpAffine(mask, transformed_mask, transform, mask.size(), cv::INTER_NEAREST, cv::BORDER_CONSTANT,
+                           cv::Scalar(0));
+            ids.push_back(addTemplate(transformed_image, class_id, transformed_mask, variant));
+        }
+        return ids;
+    }
+
+    if (class_id.empty())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Shape template class_id must not be empty");
+    }
     for (const auto &variant : variants)
     {
         if (!std::isfinite(variant.angle_degrees) || !std::isfinite(variant.scale) || variant.scale <= 0.0f)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Shape template variant is invalid");
         }
+    }
 
+    const cv::Mat mask = normalizeMask(object_mask, image.size(), "object_mask");
+    const cv::Point2f center(static_cast<float>(image.cols) * 0.5f, static_cast<float>(image.rows) * 0.5f);
+
+    struct PreparedTemplate
+    {
+        std::vector<Candidate> selected_features;
+    };
+    std::vector<PreparedTemplate> prepared_templates(variants.size());
+    std::vector<std::exception_ptr> errors(variants.size());
+
+    // 每个变体的图像变换、梯度提取、候选排序和特征选择互不依赖。并行阶段绝不写入
+    // templates_；所有结果会在下方按输入变体顺序提交，从而保持模板 ID、YAML 和匹配结果。
+    auto prepare_variant = [&](size_t index, ShapeTemplateTrainingWorkspace &workspace)
+    {
+        const auto &variant = variants[index];
         const cv::Mat transform = cv::getRotationMatrix2D(center, variant.angle_degrees, variant.scale);
-        cv::Mat       transformed_image;
-        cv::Mat       transformed_mask;
-        cv::warpAffine(image, transformed_image, transform, image.size(), cv::INTER_LINEAR, cv::BORDER_CONSTANT,
-                       cv::Scalar());
-        cv::warpAffine(mask, transformed_mask, transform, mask.size(), cv::INTER_NEAREST, cv::BORDER_CONSTANT,
-                       cv::Scalar(0));
-        ids.push_back(addTemplate(transformed_image, class_id, transformed_mask, variant));
+        cv::warpAffine(image, workspace.transformed_image, transform, image.size(), cv::INTER_LINEAR,
+                       cv::BORDER_CONSTANT, cv::Scalar());
+        cv::warpAffine(mask, workspace.transformed_mask, transform, mask.size(), cv::INTER_NEAREST,
+                       cv::BORDER_CONSTANT, cv::Scalar(0));
+        prepared_templates[index].selected_features = extractTemplateCandidates(
+            workspace.transformed_image, workspace.transformed_mask, config_, *kernel_, workspace);
+    };
+
+    unsigned int worker_count = config_.max_training_parallelism > 0
+                                  ? static_cast<unsigned int>(config_.max_training_parallelism)
+                                  : std::thread::hardware_concurrency();
+    worker_count = std::max(1U, worker_count);
+    worker_count = std::min(worker_count, static_cast<unsigned int>(variants.size()));
+
+    if (worker_count == 1)
+    {
+        ShapeTemplateTrainingWorkspace workspace;
+        for (size_t index = 0; index < variants.size(); ++index)
+        {
+            try
+            {
+                prepare_variant(index, workspace);
+            }
+            catch (...)
+            {
+                errors[index] = std::current_exception();
+                break;
+            }
+        }
+    }
+    else
+    {
+        std::atomic<size_t> next_variant{0};
+        std::vector<std::thread> workers;
+        workers.reserve(worker_count);
+        for (unsigned int worker = 0; worker < worker_count; ++worker)
+        {
+            workers.emplace_back([&]
+            {
+                ShapeTemplateTrainingWorkspace workspace;
+                for (;;)
+                {
+                    const size_t index = next_variant.fetch_add(1, std::memory_order_relaxed);
+                    if (index >= variants.size())
+                        break;
+                    try
+                    {
+                        prepare_variant(index, workspace);
+                    }
+                    catch (...)
+                    {
+                        errors[index] = std::current_exception();
+                    }
+                }
+            });
+        }
+        for (auto &worker : workers)
+            worker.join();
+    }
+
+    for (const auto &error : errors)
+    {
+        if (error)
+            std::rethrow_exception(error);
+    }
+
+    auto &class_templates = templates_[class_id];
+    const int first_template_id = static_cast<int>(class_templates.size());
+    class_templates.reserve(class_templates.size() + prepared_templates.size());
+    std::vector<int> ids;
+    ids.reserve(variants.size());
+    for (size_t index = 0; index < variants.size(); ++index)
+    {
+        const int template_id = first_template_id + static_cast<int>(index);
+        class_templates.push_back(makeTemplateInfo(class_id, template_id,
+                                                    prepared_templates[index].selected_features, variants[index]));
+        ids.push_back(template_id);
     }
     return ids;
 }
@@ -868,6 +1083,10 @@ std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::match(
     const int effective_scan_step = options.scan_step > 0 ? options.scan_step : config_.scan_step;
 
     const cv::Mat mask = normalizeMask(search_mask, image.size(), "search_mask");
+    // 空掩膜是常见的全图匹配入口。显式传入的全非零掩膜也等价于全图匹配，后端可跳过
+    // 每个候选位置的掩膜读取和判断；这不会改变任一候选的评分或扫描范围。
+    const bool full_search_mask = search_mask.empty()
+                               || static_cast<size_t>(cv::countNonZero(mask)) == mask.total();
 
     struct MatchWork
     {
@@ -918,8 +1137,8 @@ std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::match(
     {
         std::vector<ShapeTemplateMatch> local_matches;
         const auto &templ = *work.templ;
-        const auto scored_positions = kernel_->scanTemplate(response_maps, templ, mask, image.size(),
-                                                            effective_scan_step, effective_threshold);
+        const auto scored_positions = kernel_->scanTemplate(response_maps, templ, mask, full_search_mask,
+                                                            image.size(), effective_scan_step, effective_threshold);
         local_matches.reserve(scored_positions.size());
         for (const auto &position : scored_positions)
         {
@@ -1059,7 +1278,8 @@ const ShapeTemplateMatcherConfig &detail::ShapeTemplateMatcherEngine::config() c
 /**
  * @brief 将配置、模板元数据和特征点写入 OpenCV FileStorage。
  *
- * 文件格式使用版本号保护，模板 ID 在加载时会按类别内顺序重新归一化，避免外部文件中的
+ * 文件格式使用版本号保护。v2 将每个特征存为 ``[x, y, label, angle_degrees]``，避免
+ * 对每个特征重复写入字段名；模板 ID 在加载时会按类别内顺序重新归一化，避免外部文件中的
  * 非连续 ID 破坏后续索引访问。
  */
 void detail::ShapeTemplateMatcherEngine::save(const fs::path &template_file) const
@@ -1080,7 +1300,7 @@ void detail::ShapeTemplateMatcherEngine::save(const fs::path &template_file) con
                              template_file.string().c_str());
     }
 
-    storage << "version" << 1;
+    storage << "version" << kShapeTemplateFileFormatVersion;
     storage << "config" << "{";
     storage << "num_features" << config_.num_features;
     storage << "min_features" << config_.min_features;
@@ -1112,12 +1332,12 @@ void detail::ShapeTemplateMatcherEngine::save(const fs::path &template_file) con
             storage << "features" << "[";
             for (const auto &feature : templ.features)
             {
-                storage << "{";
-                storage << "x" << feature.x;
-                storage << "y" << feature.y;
-                storage << "label" << feature.label;
-                storage << "angle_degrees" << feature.angle_degrees;
-                storage << "}";
+                storage << "[";
+                storage << feature.x;
+                storage << feature.y;
+                storage << feature.label;
+                storage << feature.angle_degrees;
+                storage << "]";
             }
             storage << "]";
             storage << "}";
@@ -1154,10 +1374,11 @@ void detail::ShapeTemplateMatcherEngine::load(const fs::path &template_file)
 
     int version = 0;
     storage["version"] >> version;
-    if (version != 1)
+    if (version != kShapeTemplateFileFormatVersion)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported shape template file version: %d",
-                             version);
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "Unsupported shape template file version: %d; only v%d compact feature arrays are supported",
+                             version, kShapeTemplateFileFormatVersion);
     }
 
     ShapeTemplateMatcherConfig loaded_config = config_;
@@ -1200,16 +1421,22 @@ void detail::ShapeTemplateMatcherEngine::load(const fs::path &template_file)
         const cv::FileNode features_node = node["features"];
         if (features_node.empty() || !features_node.isSeq())
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Shape template features must be a list");
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "Shape template features must be a list of [x, y, label, angle_degrees] arrays");
         }
 
         for (const auto &feature_node : features_node)
         {
+            if (!feature_node.isSeq() || feature_node.size() != 4U)
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                     "Each shape template feature must contain exactly [x, y, label, angle_degrees]");
+            }
             ShapeTemplateFeature feature;
-            feature_node["x"] >> feature.x;
-            feature_node["y"] >> feature.y;
-            feature_node["label"] >> feature.label;
-            feature_node["angle_degrees"] >> feature.angle_degrees;
+            feature_node[0] >> feature.x;
+            feature_node[1] >> feature.y;
+            feature_node[2] >> feature.label;
+            feature_node[3] >> feature.angle_degrees;
             info.features.push_back(feature);
         }
 

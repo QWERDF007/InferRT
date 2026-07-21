@@ -78,6 +78,8 @@ public:
 
     /** @brief 当前版本是否需要引擎物化 8 张响应图。 */
     virtual bool needsMaterializedResponseMaps() const noexcept = 0;
+    /** @brief 当前版本是否使用 v1 专属的并行模板训练路径。 */
+    virtual bool usesOptimizedTemplateTraining() const noexcept = 0;
     virtual void fillQuantizedLabels(const cv::Mat &magnitude, const cv::Mat &angle, const cv::Mat &mask,
                                      float threshold, cv::Mat &labels) const = 0;
     virtual std::vector<ShapeTemplateCandidate>
@@ -91,10 +93,12 @@ public:
      * v0 保持参考 ``shape_based_matching`` 的标量逐位置累加语义；v1 可将同一语义替换为
      * 批量 SIMD 累加与早停。引擎仍统一负责模板调度、类别信息、排序和 NMS，因此未来 v2/AVX512
      * 只需实现该热点接口。
+     * @param full_search_mask ``true`` 表示搜索掩膜没有零值；v1 可据此跳过候选掩膜判断。
     */
     virtual std::vector<ShapeTemplateScoredPosition>
     scanTemplate(const ShapeTemplateResponseMaps &response_maps, const ShapeTemplateInfo &templ,
-                 const cv::Mat &search_mask, cv::Size image_size, int scan_step, float threshold) const = 0;
+                 const cv::Mat &search_mask, bool full_search_mask, cv::Size image_size, int scan_step,
+                 float threshold) const = 0;
 };
 
 /** @brief 根据内部后端创建热点内核。 */
