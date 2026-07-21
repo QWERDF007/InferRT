@@ -12,7 +12,7 @@
 namespace irt::features::detail {
 
 /**
- * @brief 为 v0 与 v1 公开匹配器提供完全一致的接口流程。
+ * @brief 为 v0、v1 与 v2 公开匹配器提供完全一致的接口流程。
  *
  * @details 该类只负责把公共 API 转发给版本私有的具体实现，不包含标量或 SIMD 算法，
  * 也不选择、包含或调用任一版本的代码。各版本仅在构造时注入自己的实现，因此训练、
@@ -76,7 +76,7 @@ public:
                              const cv::Scalar & = cv::Scalar());
 
 protected:
-    /** @brief 接管版本私有实现；仅供 v0/v1 公开匹配器构造函数调用。 */
+    /** @brief 接管版本私有实现；仅供 v0/v1/v2 公开匹配器构造函数调用。 */
     explicit ShapeTemplateMatcherBase(std::unique_ptr<IShapeTemplateMatcher> implementation);
 
 private:

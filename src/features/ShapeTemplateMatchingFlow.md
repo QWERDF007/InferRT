@@ -3,7 +3,8 @@
 本文档说明 `src/features` 中形状模板匹配模块的端到端流程。公共入口是
 `IShapeTemplateMatcher` 和版本工厂；具体实现为
 `irt::features::v0::ShapeTemplateMatcher`（原始参考实现）与
-`irt::features::v1::ShapeTemplateMatcherFast`（AVX2 快速实现）。它参考 `shape_based_matching`/LINEMOD 的思路：
+`irt::features::v1::ShapeTemplateMatcherFast`（AVX2 快速实现）以及
+`irt::features::v2::ShapeTemplateMatcherAvx512`（AVX512F/BW 快速实现）。它参考 `shape_based_matching`/LINEMOD 的思路：
 训练阶段把目标轮廓表示为稀疏的梯度方向特征点，匹配阶段在源图中滑窗统计这些特征点平移后的方向一致性，
 最后通过阈值、类别过滤、同类别 NMS 和最大数量限制返回匹配框。
 
@@ -14,15 +15,16 @@
 - `include/inferrt/features/ShapeTemplateMatcherTypes.hpp`：配置、模板信息、匹配结果和版本枚举。
 - `include/inferrt/features/IShapeTemplateMatcher.hpp`：版本无关的公共接口。
 - `include/inferrt/features/ShapeTemplateMatcher.hpp`：版本工厂和公共工具函数。
-- `include/inferrt/features/ShapeTemplateMatcherBase.hpp`：v0/v1 共用的 API 转发基类，保证外层流程一致。
+- `include/inferrt/features/ShapeTemplateMatcherBase.hpp`：v0/v1/v2 共用的 API 转发基类，保证外层流程一致。
 - `include/inferrt/features/v0/ShapeTemplateMatcher.hpp`：v0 原始版本的具体 API。
 - `include/inferrt/features/v1/ShapeTemplateMatcherFast.hpp`：v1 快速版本的具体 API。
+- `include/inferrt/features/v2/ShapeTemplateMatcherAvx512.hpp`：v2 AVX512 快速版本的具体 API。
 - `include/inferrt/features/ShapeTemplateMatcher.h`：C 风格头文件转发，便于统一 include 入口。
 - `ShapeTemplateMatcherFactory.cpp`：版本工厂，以及角度/尺度变体与中心仿射变换工具的公共转发。
-- `ShapeTemplateMatcher.cpp` / `ShapeTemplateMatcherFast.cpp`：v0、v1 公开入口；只构造各自私有实现，不复制公共 API 逻辑。
+- `ShapeTemplateMatcher.cpp` / `ShapeTemplateMatcherFast.cpp` / `ShapeTemplateMatcherAvx512.cpp`：v0、v1、v2 公开入口；只构造各自私有实现，不复制公共 API 逻辑。
 - `ShapeTemplateMatcherBase.cpp`：公共 API 的唯一转发实现。
 - `priv/ShapeTemplateMatcherEngine.hpp/.cpp`：版本无关流程核心，负责图像校验、训练选点、持久化、匹配调度和 NMS。
-- `priv/ShapeTemplateMatcherImpl.hpp/.cpp` / `priv/ShapeTemplateMatcherFastImpl.hpp/.cpp`：v0、v1 的私有具体实现和各自热点内核。
+- `priv/ShapeTemplateMatcherImpl.hpp/.cpp` / `priv/ShapeTemplateMatcherFastImpl.hpp/.cpp` / `priv/ShapeTemplateMatcherAvx512Impl.hpp/.cpp`：v0、v1、v2 的私有具体实现和各自热点内核。
 - `samples/features/shape_template_matching/SampleShapeTemplateMatching.cpp`：训练、保存、加载、匹配和结果可视化示例。
 - `tests/features/TestShapeTemplateMatcher.cpp`：配置校验、训练失败、平移匹配、非 SIMD 对齐尺寸、类别过滤、NMS、旋转变体、保存加载和文件 API 测试。
 
@@ -88,7 +90,7 @@ const int template_id = matcher.addTemplate(template_image, "part", object_mask)
 const int template_id = matcher.addTemplateFile("part.png", "part", "part_mask.png");
 ```
 
-### 4.1 v0 / v1 训练流程图
+### 4.1 v0 / v1 / v2 训练流程图
 
 ```mermaid
 graph TB
@@ -120,12 +122,24 @@ graph TB
         V1Buffers --> V1Select;
     end
 
+    subgraph V2Train["v2 detail AVX512F BW 优化训练路径"]
+        V2Workspace["单模板复用工作区 多变体按 max training parallelism 并行准备"];
+        V2Candidates["AVX512 16 lane 量化和 64 lane 候选筛选"];
+        V2Buffers["每个工作线程复用变换和梯度缓冲区"];
+        V2Select["稳定排序和贪心选点 保持与 v0 v1 一致的模板内容"];
+        V2Workspace --> V2Candidates;
+        V2Candidates --> V2Buffers;
+        V2Buffers --> V2Select;
+    end
+
     TrainVersion -->|v0| V0Transform;
     TrainVersion -->|v1| V1Workspace;
+    TrainVersion -->|v2| V2Workspace;
     TrainInfo["公共引擎 计算特征包围盒并生成 ShapeTemplateInfo"];
     TrainStore["按输入变体顺序写入 templates 并返回 template id 列表"];
     V0Select --> TrainInfo;
     V1Select --> TrainInfo;
+    V2Select --> TrainInfo;
     TrainInfo --> TrainStore;
 ```
 
@@ -213,7 +227,7 @@ matcher.load("shape_templates.yaml");
 加载流程会先读入临时配置和临时模板库，完成配置校验、模板尺寸校验、特征数量校验、方向标签校验和变体元数据校验后，
 再替换当前对象状态。这样可以避免加载失败时留下半初始化模板库。
 
-v2 是破坏性格式升级：已有 `version: 1` 模板文件不能加载，必须以当前版本重新训练。v0 与 v1 都共享 v2 格式，因而新生成的模板仍可在两个实现之间交叉加载。
+模板文件格式 v2 是破坏性升级：已有 `version: 1` 模板文件不能加载，必须以当前版本重新训练。v0、v1 与 v2 实现都共享该模板格式，因而新生成的模板仍可在三个实现之间交叉加载。
 
 ## 7. 匹配流程
 
@@ -231,7 +245,7 @@ irt::features::ShapeTemplateMatchOptions options;
 const auto matches = matcher.matchFile("scene.png", 85.0f, {"part"}, "search_mask.png", options);
 ```
 
-### 7.1 v0 / v1 匹配流程图
+### 7.1 v0 / v1 / v2 匹配流程图
 
 ```mermaid
 graph TB
@@ -261,13 +275,23 @@ graph TB
         V1Lookup --> V1Scan;
     end
 
+    subgraph V2Match["v2 detail AVX512F BW 快速匹配路径"]
+        V2Labels["AVX512 16 lane 量化源图梯度标签"];
+        V2Lookup["保留量化标签和响应查表 不物化方向响应图"];
+        V2Scan["64 lane 8 bit 或 32 lane 16 bit 累加和早停剪枝"];
+        V2Labels --> V2Lookup;
+        V2Lookup --> V2Scan;
+    end
+
     MatchVersion -->|v0| V0Labels;
     MatchVersion -->|v1| V1Labels;
+    MatchVersion -->|v2| V2Labels;
     MatchCollect["公共引擎按 max parallelism 调度模板扫描并收集候选框"];
     MatchPost["稳定排序 同类别 NMS 和 max results 截断"];
     MatchResult["ShapeTemplateMatch 列表"];
     V0Scan --> MatchCollect;
     V1Scan --> MatchCollect;
+    V2Scan --> MatchCollect;
     MatchCollect --> MatchPost;
     MatchPost --> MatchResult;
 ```
@@ -282,7 +306,7 @@ graph TB
 4. 对源图执行与训练阶段一致的灰度转换、`Sobel`、`cartToPolar` 和 8 方向量化。
 5. 根据 `max_label_difference` 构建源图方向响应数据：
    - v0 为实际参与匹配的模板方向标签物化响应图；响应值表示源图该像素方向对该模板方向的整数贡献，方向完全不匹配时贡献为 `0`。
-   - v1 保留量化方向标签和同一份响应查表，匹配时直接 AVX2 查表，不物化方向响应图。
+   - v1/v2 保留量化方向标签和同一份响应查表，匹配时直接 SIMD 查表，不物化方向响应图。
 6. 根据 `class_ids` 与运行时 `ShapeTemplateMatchOptions::template_stride` 决定参与匹配的模板：
    - `class_ids` 为空时扫描全部类别。
    - `class_ids` 非空时只扫描存在于模板库中的指定类别。
@@ -290,7 +314,7 @@ graph TB
 7. 对每个模板做滑窗扫描：
    - 步长为 `options.scan_step > 0 ? options.scan_step : config.scan_step`。
    - 滑窗中心点在 `search_mask` 中为零时跳过。
-8. 对每个滑窗位置累计模板特征点的方向贡献：v0 访问对应响应图并标量累加；v1 直接对量化标签进行 AVX2 查表与批量累加。
+8. 对每个滑窗位置累计模板特征点的方向贡献：v0 访问对应响应图并标量累加；v1 直接对量化标签进行 AVX2 查表与批量累加；v2 使用 AVX512 64-lane 8-bit 或 32-lane 16-bit 累加，非连续扫描时精确回退到标量路径。
 9. 将累加贡献归一化为 `[0, 100]` 分数：
 
 ```text
@@ -317,36 +341,31 @@ similarity = 100 * sum(response(feature_i)) / (denominator_per_feature * feature
 ```text
 IShapeTemplateMatcher / createShapeTemplateMatcher(version)
                          │
-  v0::ShapeTemplateMatcher      v1::ShapeTemplateMatcherFast
+  v0::ShapeTemplateMatcher   v1::ShapeTemplateMatcherFast   v2::ShapeTemplateMatcherAvx512
                          │
-          ShapeTemplateMatcherBase（公共 API 转发）
-                    │                         │
- v0::detail::ShapeTemplateMatcherImpl   v1::detail::ShapeTemplateMatcherFastImpl
-                    └─────────────┬───────────┘
-                  ShapeTemplateMatcherEngine（公共流程核心）
-                                  │
-               ShapeTemplateMatcherKernel（公共策略协议）
-                    │                         │
-v0::detail::ShapeTemplateMatcherKernelImpl   v1::detail::ShapeTemplateMatcherFastKernelImpl
+             ShapeTemplateMatcherBase（公共 API 转发）
+                    │              │              │
+ v0::detail::ShapeTemplateMatcherImpl  v1::detail::ShapeTemplateMatcherFastImpl  v2::detail::ShapeTemplateMatcherAvx512Impl
+                    └──────────────┬─┴──────────────┘
+                     ShapeTemplateMatcherEngine（公共流程核心）
+                                      │
+                    ShapeTemplateMatcherKernel（公共策略协议）
+                    │                │                 │
+v0::detail::ShapeTemplateMatcherKernelImpl  v1::detail::ShapeTemplateMatcherFastKernelImpl  v2::detail::ShapeTemplateMatcherAvx512KernelImpl
 ```
 
-- `ShapeTemplateMatcherBase` 是唯一的公共 API 转发层，所有接口方法在此处固定为最终实现；v0/v1 不再复制一组相同的委托函数。
+- `ShapeTemplateMatcherBase` 是唯一的公共 API 转发层，所有接口方法在此处固定为最终实现；v0/v1/v2 不再复制一组相同的委托函数。
 - `ShapeTemplateMatcherEngine` 是版本无关核心，只负责输入校验、模板管理、变体训练、序列化、响应数据调度、并行、NMS 和结果排序。
 - `ShapeTemplateMatcherKernel` 定义可替换热点：是否物化响应图、方向标签量化、训练候选点收集、单方向响应图构建及单模板滑窗评分。
-- `v0::detail::ShapeTemplateMatcherImpl` 只注入同一命名空间内的参考热点内核；`v1::detail::ShapeTemplateMatcherFastImpl` 只注入同一命名空间内的 AVX2 快速热点内核，并在创建时检查 CPU 是否支持 AVX2。
-- 命名空间严格隔离：v0 和 v1 的公开类、私有 `Impl`、热点内核和辅助函数均位于各自的 `v0::detail` / `v1::detail`，不互相包含或调用。`irt::features::detail` 只承载版本无关的公共转发基类、流程核心和内核协议；版本实现仅通过局部 `common` 别名访问这些协议。
-- 两条路径产生相同的 `ShapeTemplateInfo`、`ShapeTemplateMatch` 和 YAML/XML 模板格式，因此可交叉加载与对照测试。
+- `v0::detail::ShapeTemplateMatcherImpl` 只注入同一命名空间内的参考热点内核；`v1::detail::ShapeTemplateMatcherFastImpl` 只注入同一命名空间内的 AVX2 快速热点内核；`v2::detail::ShapeTemplateMatcherAvx512Impl` 只注入同一命名空间内的 AVX512F/BW 热点内核，并在创建时检查 CPU 指令集。
+- 命名空间严格隔离：v0、v1、v2 的公开类、私有 `Impl`、热点内核和辅助函数均位于各自的 `v0::detail` / `v1::detail` / `v2::detail`，不互相包含或调用。`irt::features::detail` 只承载版本无关的公共转发基类、流程核心和内核协议；版本实现仅通过局部 `common` 别名访问这些协议。
+- 三条路径产生相同的 `ShapeTemplateInfo`、`ShapeTemplateMatch` 和 YAML/XML 模板格式，因此可交叉加载与对照测试。
 
-v1 的 AVX2 内核覆盖四段热点：每次处理 8 个 `float` 的方向量化、每次处理 32 个像素的候选点过滤、方向标签字节 shuffle 查表，以及批量滑窗打分。评分时按当前源图的方向响应均值重排特征；每累计 4 个特征即以理论上界淘汰不可能达标的整组候选。常见的分子上界不超过 255 时，v1 用 8-bit 累加一次处理 32 个相邻候选；较大但仍安全的配置使用 16-bit/16-lane 路径。`scan_step=2` 时，内核从连续 32-byte 读取中 shuffle 压缩出 16 个间隔候选；其他正步长使用 AVX2 gather，累计范围过大才精确回退到标量评分。v1 正常路径直接读取量化标签并查表，不再物化 8 张响应图；v0 保持物化响应图的标量基线。CMake 只为该内核源文件开启 AVX2，不会把 CPU 指令集要求扩散到 v0 或其他模块。OpenCV 的 `Sobel`、`cartToPolar`、`warpAffine` 仍会按其构建配置使用优化。
+v1 的 AVX2 内核覆盖四段热点：每次处理 8 个 `float` 的方向量化、每次处理 32 个像素的候选点过滤、方向标签字节 shuffle 查表，以及批量滑窗打分。评分时按当前源图的方向响应均值重排特征；每累计 4 个特征即以理论上界淘汰不可能达标的整组候选。常见的分子上界不超过 255 时，v1 用 8-bit 累加一次处理 32 个相邻候选；较大但仍安全的配置使用 16-bit/16-lane 路径。`scan_step=2` 时，内核从连续 32-byte 读取中 shuffle 压缩出 16 个间隔候选，其他正步长使用 AVX2 gather。
 
-后续扩展 AVX512 时无需修改引擎流程：
+v2 使用独立的 AVX512F/BW 内核：训练时每次量化 16 个 `float`、候选筛选 64 个像素；全图 `scan_step=1` 的精确匹配在上界不超过 255 时一次处理 64 个相邻候选，较大但仍安全的配置使用 32 个 16-bit lane。v2 与 v1 一样直接读取量化标签并查表，不物化方向响应图；`scan_step != 1` 或累计范围超过 16-bit 安全范围时会精确回退到标量路径。构造时同时检查 AVX512F 和 AVX512BW，以避免在不支持的 CPU 上执行非法指令。
 
-1. 新增独立的 `ShapeTemplateMatcherAvx512Impl.hpp/.cpp`，实现同一个 `ShapeTemplateMatcherKernel` 的全部热点方法，尤其是批量评分。
-2. 在独立 `v2` 命名空间新增公开快速匹配器和对应私有 `Impl`，由构造函数注入 AVX512 内核。
-3. 按需要新增公共 `ShapeTemplateMatcherVersion::V2` 和工厂分支。
-4. 复用现有 v0/v1 奇偶测试，验证模板内容、序列化文件和匹配结果逐字段一致。
-
-这样 AVX512 的工作局限于新的 ISA 内核和版本包装器，不会污染 v0/v1，也不需要复制训练、保存加载或 NMS 逻辑。本轮明确不新增 v2/AVX512。
+CMake 只为 v1 内核源文件开启 AVX2、只为 v2 内核源文件开启 AVX512F/BW，不会把 CPU 指令集要求扩散到 v0、公共流程、示例或其他模块。OpenCV 的 `Sobel`、`cartToPolar`、`warpAffine` 仍会按其构建配置使用优化。
 
 ## 9. 示例程序
 
@@ -399,7 +418,7 @@ inferrt_sample_shape_template_matching
 
 默认匹配保持精确：`--template-stride 1 --scan-step 0`。需要以召回、最佳变体或像素级定位精度换取延迟时，可显式设置更大的 `--template-stride` 或 `--scan-step`；它们不会写回模板文件。
 
-`--version` 支持 `v0` 和 `v1`，默认 `v1`。模板文件不绑定实现版本，因此可用 v0 训练、v1 匹配，或将两种版本作为结果与性能对照。
+`--version` 支持 `v0`、`v1` 和 `v2`，默认 `v1`。模板文件不绑定实现版本，因此可用 v0 训练、v1 或 v2 匹配，或将三个版本作为结果与性能对照。v2 需要运行 CPU 同时支持 AVX512F 与 AVX512BW。
 
 示例默认预热 `3` 次并采样 `10` 次。`--warmup` 指定不计入统计的预热次数，`--repeat` 指定计时重复次数；输出会给出总耗时、均值、中位数、最小/最大值和标准差。训练计时只覆盖 `addTemplateVariants()`，匹配计时只覆盖 `match()`，不包括图像/YAML 读写、ROI 裁剪、绘制与结果写入。
 

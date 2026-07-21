@@ -95,7 +95,11 @@ irt::features::ShapeTemplateMatcherVersion parseMatcherVersion(const std::string
     {
         return irt::features::ShapeTemplateMatcherVersion::V1;
     }
-    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--version must be either v0 or v1");
+    if (text == "v2")
+    {
+        return irt::features::ShapeTemplateMatcherVersion::V2;
+    }
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--version must be v0, v1, or v2");
 }
 
 /**
@@ -199,7 +203,7 @@ cxxopts::Options makeOptions(const char *program_name)
                                  cxxopts::value<std::string>()->default_value(""))("h,help", "Show help");
 
     options.add_options("Implementation")(
-        "version", "Matcher implementation: v0 (original scalar) or v1 (AVX2 accelerated)",
+        "version", "Matcher implementation: v0 (scalar), v1 (AVX2), or v2 (AVX512F/BW)",
         cxxopts::value<std::string>()->default_value("v1"));
 
     options.add_options("Timing")("warmup", "Warmup iterations for the selected stage; excluded from timing",
@@ -222,7 +226,7 @@ cxxopts::Options makeOptions(const char *program_name)
         "scale-end", "Last training scale", cxxopts::value<float>()->default_value("1"))(
         "scale-step", "Training scale step", cxxopts::value<float>()->default_value("1"))(
         "features", "Maximum feature points per template", cxxopts::value<int>()->default_value("96"))(
-        "train-parallelism", "v1 training worker count; 0 chooses automatically, v0 always stays original serial",
+        "train-parallelism", "v1/v2 training worker count; 0 chooses automatically, v0 always stays original serial",
         cxxopts::value<int>()->default_value("0"))(
         "max-results", "Matching result limit saved in the template file", cxxopts::value<int>()->default_value("20"))(
         "nms", "Matching NMS IoU threshold saved in the template file; negative disables NMS",
@@ -449,12 +453,12 @@ void runTraining(const TrainingArguments &args, const TimingArguments &timing,
     }
     else if (args.config.max_training_parallelism == 0)
     {
-        std::cout << "training parallelism: auto (v1 optimized path)" << std::endl;
+        std::cout << "training parallelism: auto (v1/v2 optimized path)" << std::endl;
     }
     else
     {
         std::cout << "training parallelism: " << args.config.max_training_parallelism
-                  << " (v1 optimized path)" << std::endl;
+                  << " (v1/v2 optimized path)" << std::endl;
     }
     std::cout << "templates: " << template_ids.size() << std::endl;
     std::cout << "template file: " << fs::absolute(args.save_templates).string() << std::endl;

@@ -2,6 +2,8 @@
 #include <inferrt/features/ShapeTemplateMatcher.hpp>
 #include <inferrt/features/v0/ShapeTemplateMatcher.hpp>
 #include <inferrt/features/v1/ShapeTemplateMatcherFast.hpp>
+#include <inferrt/features/v2/ShapeTemplateMatcherAvx512.hpp>
+#include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <stdexcept>
@@ -27,6 +29,10 @@ irt::features::ShapeTemplateMatcherConfig Config()
 {
     irt::features::ShapeTemplateMatcherConfig c; c.num_features = 96; c.scan_step = 1; c.match_threshold = 80.0f; c.nms_threshold = 0.3f; return c;
 }
+bool SupportsAvx512()
+{
+    return cv::checkHardwareSupport(CV_CPU_AVX_512F) && cv::checkHardwareSupport(CV_CPU_AVX_512BW);
+}
 void VerifyParity()
 {
     static const bool verified = []
@@ -50,12 +56,30 @@ void VerifyParity()
                 || a.angle_degrees != b.angle_degrees || a.scale != b.scale)
                 throw std::logic_error("AVX2 and scalar shape-template match contents differ");
         }
+        if (SupportsAvx512())
+        {
+            irt::features::v2::ShapeTemplateMatcherAvx512 avx512(Config());
+            avx512.addTemplate(templ, "shape");
+            const auto avx512_matches = avx512.match(source);
+            if (avx512_matches.size() != avx2_matches.size())
+                throw std::logic_error("AVX512 and AVX2 shape-template matches differ");
+            for (size_t i = 0; i < avx512_matches.size(); ++i)
+            {
+                const auto &a = avx512_matches[i];
+                const auto &b = avx2_matches[i];
+                if (a.x != b.x || a.y != b.y || a.width != b.width || a.height != b.height
+                    || a.similarity != b.similarity || a.class_id != b.class_id || a.template_id != b.template_id
+                    || a.angle_degrees != b.angle_degrees || a.scale != b.scale)
+                    throw std::logic_error("AVX512 and AVX2 shape-template match contents differ");
+            }
+        }
         return true;
     }();
     (void)verified;
 }
 template <class Matcher> void BenchmarkMatch(benchmark::State &state, int template_count = 1)
 {
+    VerifyParity();
     const cv::Mat templ = MakeTemplate(); const cv::Mat source = MakeSource(); Matcher matcher(Config());
     for (int i = 0; i < template_count; ++i)
         matcher.addTemplate(templ, "shape_" + std::to_string(i));
@@ -64,10 +88,22 @@ template <class Matcher> void BenchmarkMatch(benchmark::State &state, int templa
 }
 void AVX2(benchmark::State &state) { BenchmarkMatch<irt::features::v1::ShapeTemplateMatcherFast>(state); }
 void AVX2MultiTemplate(benchmark::State &state) { BenchmarkMatch<irt::features::v1::ShapeTemplateMatcherFast>(state, 4); }
+void AVX512(benchmark::State &state)
+{
+    if (!SupportsAvx512()) { state.SkipWithError("AVX512F/BW is not available on this CPU"); return; }
+    BenchmarkMatch<irt::features::v2::ShapeTemplateMatcherAvx512>(state);
+}
+void AVX512MultiTemplate(benchmark::State &state)
+{
+    if (!SupportsAvx512()) { state.SkipWithError("AVX512F/BW is not available on this CPU"); return; }
+    BenchmarkMatch<irt::features::v2::ShapeTemplateMatcherAvx512>(state, 4);
+}
 void Scalar(benchmark::State &state) { BenchmarkMatch<irt::features::v0::ShapeTemplateMatcher>(state); }
 void ScalarMultiTemplate(benchmark::State &state) { BenchmarkMatch<irt::features::v0::ShapeTemplateMatcher>(state, 4); }
 BENCHMARK(AVX2)->Unit(benchmark::kMillisecond);
 BENCHMARK(AVX2MultiTemplate)->Unit(benchmark::kMillisecond);
+BENCHMARK(AVX512)->Unit(benchmark::kMillisecond);
+BENCHMARK(AVX512MultiTemplate)->Unit(benchmark::kMillisecond);
 BENCHMARK(Scalar)->Unit(benchmark::kMillisecond);
 BENCHMARK(ScalarMultiTemplate)->Unit(benchmark::kMillisecond);
 } // namespace

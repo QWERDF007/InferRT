@@ -1,7 +1,8 @@
 # 形状模板匹配示例
 
 `shape_template_matching` 使用 `irt::features::v0::ShapeTemplateMatcher` 或
-`irt::features::v1::ShapeTemplateMatcherFast` 在源图中查找相同边缘形状的目标。它不依赖深度学习模型，适合轮廓稳定、边缘清晰的零件、工件或标记定位。
+`irt::features::v1::ShapeTemplateMatcherFast` 或
+`irt::features::v2::ShapeTemplateMatcherAvx512` 在源图中查找相同边缘形状的目标。它不依赖深度学习模型，适合轮廓稳定、边缘清晰的零件、工件或标记定位。
 
 示例按两个独立阶段运行：
 
@@ -28,19 +29,22 @@ build\bin\inferrt_sample_shape_template_matching.exe
 
 ## 实现版本
 
-两个版本实现相同的 `IShapeTemplateMatcher` 接口，模板 YAML/XML 格式和匹配结果完全兼容：
+三个版本实现相同的 `IShapeTemplateMatcher` 接口，模板 YAML/XML 格式和匹配结果完全兼容：
 
 - `--version v0`：固定的 `shape_based_matching` 风格标量基线路径。训练时保留原始串行流程：逐变体变换、逐变体提取特征并立即写入模板库；不使用线程并行、工作缓冲复用或跳过掩膜规范化等 v1 优化。适合结果对照和基准比较。
 - `--version v1`：AVX2 加速实现，默认值。匹配时会批量评分相邻滑窗、保留阈值早停，并直接从量化标签查表；训练时会并行处理相互独立的旋转/缩放变体、复用每个工作线程的中间缓冲，并按输入顺序统一提交模板。运行 v1 需要 AVX2 CPU；不支持时请选择 v0。
+- `--version v2`：AVX512F/BW 加速实现。训练阶段以 16-lane 量化和 64-lane 候选筛选处理梯度；全图精确匹配在分子上界不超过 `255` 时使用 64-lane 8-bit 累加，较大但安全的上界使用 32-lane 16-bit 累加。`scan_step != 1` 或累计范围过大时回退到同语义的标量路径，不改变结果。运行 v2 必须同时支持 AVX512F 和 AVX512BW；不支持时构造会明确报错，不会隐式退回 v1。
 
-训练和匹配可以选择不同版本。例如可用 `v0` 训练、`v1` 匹配，或用 `v0` 对照验证结果：
+训练和匹配可以选择不同版本。例如可用 `v0` 训练、`v1` 或 `v2` 匹配，或用 `v0` 对照验证结果：
 
 ```powershell
 .\build\bin\inferrt_sample_shape_template_matching.exe --mode train --version v0 --template "D:\data\part.png" --save-templates "D:\data\part_templates.yaml"
 .\build\bin\inferrt_sample_shape_template_matching.exe --mode match --version v1 --load-templates "D:\data\part_templates.yaml" --source "D:\data\scene.png"
 ```
 
-两种训练路径产生的模板格式和内容严格兼容。v1 的并行阶段不写模板库，最终按变体输入顺序提交，因此模板 ID、YAML 顺序和精确匹配结果均与 v0 保持一致。
+三种训练路径产生的模板格式和内容严格兼容。v1 的并行阶段不写模板库，最终按变体输入顺序提交，因此模板 ID、YAML 顺序和精确匹配结果均与 v0 保持一致。
+
+v2 也按输入变体顺序统一提交模板，且其训练、匹配结果与 v0/v1 保持逐字段一致。注意：这里的“实现版本 v2”和下文“模板文件格式 v2”是两个独立概念；v0、v1、v2 实现都读写同一模板文件格式。
 
 ## 模板文件格式：破坏性 v2 升级
 
@@ -60,7 +64,7 @@ features:
   - [16, 8, 2, 90.0]
 ```
 
-这是破坏性修改：旧版 `version: 1`、每个特征为 `{x: ..., y: ..., label: ..., angle_degrees: ...}` 的模板文件将被拒绝加载，必须重新执行 `train` 生成 v2 模板。当前 v0 和 v1 都读写同一 v2 格式，四列数量不是恰好 4 的文件也会被拒绝。
+这是破坏性修改：旧版 `version: 1`、每个特征为 `{x: ..., y: ..., label: ..., angle_degrees: ...}` 的模板文件将被拒绝加载，必须重新执行 `train` 生成 v2 模板。当前 v0、v1 和 v2 都读写同一 v2 格式，四列数量不是恰好 4 的文件也会被拒绝。
 
 ## 第一阶段：训练模板
 
@@ -149,6 +153,36 @@ features:
 
 `--search-mask` 非零区域允许搜索，零值区域会跳过；它与训练阶段的 `--template-mask` 用途不同。
 
+### 使用 v2 AVX512
+
+在支持 AVX512F 和 AVX512BW 的机器上，将同一套训练、匹配命令中的 `--version` 改为 `v2` 即可：
+
+```powershell
+.\build\bin\inferrt_sample_shape_template_matching.exe `
+  --mode train `
+  --version v2 `
+  --template "D:\data\part.png" `
+  --class-id part `
+  --angle-begin -20 `
+  --angle-end 20 `
+  --angle-step 0.1 `
+  --scale-begin 0.8 `
+  --scale-end 1.2 `
+  --scale-step 0.1 `
+  --train-parallelism 0 `
+  --save-templates "D:\data\part_templates_v2.yaml"
+
+.\build\bin\inferrt_sample_shape_template_matching.exe `
+  --mode match `
+  --version v2 `
+  --load-templates "D:\data\part_templates_v2.yaml" `
+  --source "D:\data\scene.png" `
+  --threshold 85 `
+  --output "D:\data\result_v2.png"
+```
+
+`v2` 不适合 AVX512 被禁用或不具备 AVX512BW 的 CPU。例如第 12 代桌面 Intel Core i7-12700K 没有可用的 AVX512F/BW，示例会返回 `IRT_ERROR_INVALID_OPERATION`；请在该机器上使用 v1。
+
 需要更短的延迟、且允许量化的召回或定位损失时，可显式开启近似匹配选项，例如：
 
 ```powershell
@@ -189,7 +223,7 @@ features:
 
 ### 实现版本（两个阶段通用）
 
-- `--version`：选择 `v0` 或 `v1`，默认 `v1`。两者可以读写同一 v2 模板文件；需要验证 SIMD 路径时，可在同一输入上分别运行两个版本并比较结果。
+- `--version`：选择 `v0`、`v1` 或 `v2`，默认 `v1`。三者可以读写同一模板文件格式 v2；需要验证 SIMD 路径时，可在同一输入上分别运行各版本并比较结果。v2 需要 AVX512F/BW。
 
 ### 训练参数（`--mode train`）
 
@@ -201,7 +235,7 @@ features:
 - `--angle-begin`、`--angle-end`、`--angle-step`：离散训练旋转角度；端点包含在内。
 - `--scale-begin`、`--scale-end`、`--scale-step`：离散训练缩放尺度。
 - `--features`：每个模板最多保留的边缘特征点数，常用 `64` 到 `128`；更多特征通常更精细但更慢。
-- `--train-parallelism`：仅影响 v1 的训练工作线程数；`0`（默认）自动选择，`1` 强制 v1 串行。v0 忽略该项，始终保持原始串行训练。此运行时参数不写入模板文件，也不会改变后续匹配的线程设置。
+- `--train-parallelism`：影响 v1/v2 的训练工作线程数；`0`（默认）自动选择，`1` 强制 SIMD 版本串行。v0 忽略该项，始终保持原始串行训练。此运行时参数不写入模板文件，也不会改变后续匹配的线程设置。
 - `--max-results`、`--nms`：保存到模板文件的匹配默认配置。`--nms` 为同类别 NMS 的 IoU 阈值，负数表示关闭；`--max-results` 为最多输出的结果数。
 
 ### 匹配参数（`--mode match`）
@@ -234,6 +268,22 @@ F:\Projects\InferRT\build\bin\inferrt_sample_shape_template_matching.exe --mode 
 
 
 
+## v2 AVX512 真实图验证
+
+本轮在真实图 `F:\data\shape_match\51661.png` 上重新训练并验证了当前模板文件格式。训练使用 ROI
+`(1285,245,445,448)`、96 features、`angle=-20..20 / step=0.1`、`scale=0.8..1.2 / step=0.1`，共 2,000 个模板；
+匹配使用全图精确搜索、`threshold=85`、`--warmup 0 --repeat 1`。计时仅覆盖 `addTemplateVariants()` 或 `match()`。
+
+| 实现 | 本机指令集状态 | 单次训练 | 单次全图 match | 结果 |
+| --- | --- | ---: | ---: | --- |
+| v1 AVX2 | 可用 | 1,945.296 ms | 2,392.368 ms | `part / 1000 / 100 / (1289,247,437,442)` |
+| v2 AVX512F/BW | 不可用 | — | — | `IRT_ERROR_INVALID_OPERATION`：CPU 缺少 AVX512F/BW |
+
+本机 CPU 为 **12th Gen Intel Core i7-12700K**。该型号没有可用 AVX512F/BW，因此不能提供伪造的 v2 性能数据；v2 不会回退到 v1，以保证 `--version v2` 始终代表真实 AVX512 路径。已构建 v2、并加入与 v1 的条件奇偶测试；在具有 AVX512F/BW 的机器上该测试会自动执行训练和匹配逐字段对比。请使用上文的 v2 命令在支持的机器上重新测量，并将 v1/v2 的 `--warmup 0 --repeat 1` 输出按相同输入进行比较。
+
+本次复核生成的 v1 训练产物为 `build\part_templates_v2_reverified.yaml`，它采用当前紧凑模板文件格式；旧的
+`F:\data\shape_match\part_templates.yaml` 仍为 `version: 1`，会被当前程序按设计拒绝加载。
+
 ## v1 真实图优化验证
 
 以下结果使用真实输入 `F:\data\shape_match\51661.png` 和已有的 2,000 个模板
@@ -263,7 +313,7 @@ F:\Projects\InferRT\build\bin\inferrt_sample_shape_template_matching.exe --mode 
 
 两个看似合理但在该真实场景中更慢的方案没有保留：完整得分图累加超过 180,000 ms 后超时；在少量存活 lane 时改回标量收尾为 13,845.349 ms（比阶段 2 慢 2.26×）。
 
-截至上述阶段 7 的同条件全图真实图对照为：v0 `100,158.746 ms`，v1 `2,451.975 ms`，v1 为 **40.85×** 更快（耗时降低 **97.55%**），且匹配字段一致。匹配器 v2/AVX512 本轮未加入；当前评分内核已抽象为独立策略，后续可在不改动 v0、当前模板文件格式、训练流程或 NMS 的前提下单独实现。
+截至上述阶段 7 的同条件全图真实图对照为：v0 `100,158.746 ms`，v1 `2,451.975 ms`，v1 为 **40.85×** 更快（耗时降低 **97.55%**），且匹配字段一致。这是 v0/v1 的历史优化对照；独立 v2 AVX512 实现及本机可用性见上方 [v2 AVX512 真实图验证](#v2-avx512-真实图验证)。
 
 ### 可选近似配置的整体耗时
 
@@ -300,7 +350,7 @@ const auto matches = matcher.match(source, 85.0f, {"part"}, cv::Mat(), options);
 
 v1 新增了严格等价的“全图无掩膜”快路径：当调用方未传 `search_mask`，或传入全非零掩膜时，匹配器不再为每一个滑窗候选重复读取和判断掩膜像素。扫描范围、候选顺序、评分、NMS 和返回结果均不变；带有零值的搜索掩膜仍走原有精确路径。v0 保持 `shape_based_matching` 风格的标量参考实现，不使用这项 v1 优化。
 
-在已有 `part_templates.yaml`、2,000 个模板、全图精确匹配和一次运行（`--warmup 0 --repeat 1`）下，这项优化将 v1 从 `2,675.392 ms` 降至 `2,451.975 ms`，即 **1.09×**（耗时降低 **8.35%**），匹配字段完全相同。`ShapeTemplateMatcher*` 的 23 项测试也全部通过，其中包括 v2 紧凑特征格式、旧 v1 模板拒绝加载、特征四列校验、v0/v1 参数组合、全非零搜索掩膜，以及 v0 与 v1 串行/并行训练结果一致性测试。
+在已有 `part_templates.yaml`、2,000 个模板、全图精确匹配和一次运行（`--warmup 0 --repeat 1`）下，这项优化将 v1 从 `2,675.392 ms` 降至 `2,451.975 ms`，即 **1.09×**（耗时降低 **8.35%**），匹配字段完全相同。`ShapeTemplateMatcher*` 的 24 项测试中 23 项通过；`v1/v2` 条件奇偶测试会在具备 AVX512F/BW 时执行，本机因缺少该指令集跳过。其余测试覆盖紧凑特征格式、旧 v1 模板拒绝加载、特征四列校验、v0/v1 参数组合、全非零搜索掩膜，以及 v0 与 v1 串行/并行训练结果一致性。
 
 随后以 `F:\data\shape_match\51661.png` 为训练图和待匹配图，按以下统一训练参数生成了 5 个相互独立的模板库：96 个特征、`angle=-20..20` / `step=0.1`、`scale=0.8..1.2` / `step=0.1`，每组均为 2,000 个变体。所有训练与匹配均只执行一次（`--warmup 0 --repeat 1`）；计时只覆盖 `addTemplateVariants()` 或 `match()`，不包含图像/YAML 读写、ROI 裁剪和结果图绘制。
 

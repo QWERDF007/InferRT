@@ -9,7 +9,9 @@
 #include <inferrt/features/ShapeTemplateMatcher.hpp>
 #include <inferrt/features/v0/ShapeTemplateMatcher.hpp>
 #include <inferrt/features/v1/ShapeTemplateMatcherFast.hpp>
+#include <inferrt/features/v2/ShapeTemplateMatcherAvx512.hpp>
 
+#include <opencv2/core.hpp>
 #include <opencv2/core/persistence.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -28,6 +30,13 @@ namespace {
 
 using V0ShapeTemplateMatcher = irt::features::v0::ShapeTemplateMatcher;
 using V1ShapeTemplateMatcher = irt::features::v1::ShapeTemplateMatcherFast;
+using V2ShapeTemplateMatcher = irt::features::v2::ShapeTemplateMatcherAvx512;
+
+/** @brief 当前 CPU 是否具备 v2 执行所需的 AVX512F/BW 指令集。 */
+bool supportsAvx512() noexcept
+{
+    return cv::checkHardwareSupport(CV_CPU_AVX_512F) && cv::checkHardwareSupport(CV_CPU_AVX_512BW);
+}
 
 /**
  * @brief 自动清理的临时目录。
@@ -160,8 +169,8 @@ TEST(ShapeTemplateMatcherTest, DefaultConstructsEmptyMatcher)
     EXPECT_FLOAT_EQ(matcher.config().match_threshold, irt::features::kDefaultShapeTemplateMatchThreshold);
 }
 
-/** @brief 版本工厂应只暴露共同接口，并可分别创建 v0、v1 的独立实例。 */
-TEST(ShapeTemplateMatcherVersionTest, FactoryCreatesV0AndV1)
+/** @brief 版本工厂应创建所有运行环境支持的独立实现。 */
+TEST(ShapeTemplateMatcherVersionTest, FactoryCreatesSupportedVersions)
 {
     auto v0 = irt::features::createShapeTemplateMatcher(irt::features::ShapeTemplateMatcherVersion::V0, fastConfig());
     auto v1 = irt::features::createShapeTemplateMatcher(irt::features::ShapeTemplateMatcherVersion::V1, fastConfig());
@@ -172,6 +181,25 @@ TEST(ShapeTemplateMatcherVersionTest, FactoryCreatesV0AndV1)
     EXPECT_TRUE(v1->empty());
     EXPECT_STREQ(irt::features::shapeTemplateMatcherVersionName(irt::features::ShapeTemplateMatcherVersion::V0), "v0");
     EXPECT_STREQ(irt::features::shapeTemplateMatcherVersionName(irt::features::ShapeTemplateMatcherVersion::V1), "v1");
+    EXPECT_STREQ(irt::features::shapeTemplateMatcherVersionName(irt::features::ShapeTemplateMatcherVersion::V2), "v2");
+
+    if (supportsAvx512())
+    {
+        auto v2 = irt::features::createShapeTemplateMatcher(irt::features::ShapeTemplateMatcherVersion::V2,
+                                                             fastConfig());
+        ASSERT_NE(v2, nullptr);
+        EXPECT_TRUE(v2->empty());
+    }
+    else
+    {
+        expectIrtExceptionCode(
+            []
+            {
+                (void)irt::features::createShapeTemplateMatcher(irt::features::ShapeTemplateMatcherVersion::V2,
+                                                                 fastConfig());
+            },
+            irt::Status::ERROR_INVALID_OPERATION);
+    }
 }
 
 /**
@@ -643,6 +671,40 @@ void expectIdenticalTemplate(const irt::features::ShapeTemplateInfo &expected,
 }
 
 } // namespace
+
+/** @brief 有 AVX512F/BW 的机器上，v2 训练和匹配必须与 v1 完全一致。 */
+TEST(ShapeTemplateMatcherParityTest, Avx512AndAvx2ProduceIdenticalTemplatesAndMatches)
+{
+    if (!supportsAvx512())
+    {
+        GTEST_SKIP() << "AVX512F/BW is not available on this CPU";
+    }
+
+    auto config = fastConfig();
+    config.max_label_difference = 1;
+    config.match_threshold = 70.0f;
+    config.max_training_parallelism = 1;
+    const auto object = makeLShape(56);
+    const auto alternate = makeTShape(56);
+    const auto scene = makeSceneWith(object, cv::Point(37, 29), cv::Size(151, 137));
+    const auto variants = irt::features::makeShapeTemplateAngleScaleVariants(-10.0f, 10.0f, 10.0f,
+                                                                               0.9f, 1.1f, 0.1f);
+
+    V1ShapeTemplateMatcher avx2(config);
+    V2ShapeTemplateMatcher avx512(config);
+    EXPECT_EQ(avx2.addTemplateVariants(object, "part", cv::Mat(), variants),
+              avx512.addTemplateVariants(object, "part", cv::Mat(), variants));
+    ASSERT_EQ(avx2.numTemplates("part"), avx512.numTemplates("part"));
+    for (int template_id = 0; template_id < avx2.numTemplates("part"); ++template_id)
+    {
+        expectIdenticalTemplate(avx2.getTemplate("part", template_id),
+                                avx512.getTemplate("part", template_id));
+    }
+
+    avx2.addTemplate(alternate, "alternate");
+    avx512.addTemplate(alternate, "alternate");
+    expectIdenticalMatches(avx2.match(scene, 70.0f), avx512.match(scene, 70.0f));
+}
 
 /** @brief 全非零搜索掩膜应与无掩膜的全图精确结果完全相同。 */
 TEST(ShapeTemplateMatcherParityTest, FullSearchMaskMatchesUnmaskedResults)

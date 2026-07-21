@@ -36,7 +36,7 @@ struct ShapeTemplateMatcherConfig
     int   max_results{0};                                        ///< 最多返回的匹配数量；0 表示不限制。
     int   scan_step{1};                                          ///< 滑窗扫描步长，单位为像素。
     int   max_parallelism{0};                                    ///< 模板扫描工作线程数；0 表示自动，1 表示串行。
-    int   max_training_parallelism{0};                           ///< 仅 v1 模板训练工作线程数；0 表示自动，1 表示串行；v0 始终使用原始串行路径；该运行时项不写入模板文件。
+    int   max_training_parallelism{0};                           ///< v1/v2 模板训练工作线程数；0 表示自动，1 表示串行；v0 始终使用原始串行路径；该运行时项不写入模板文件。
     float min_feature_distance{0.0f};                            ///< 贪心选点最小间距；0 表示按模板面积自动估计。
 };
 
@@ -100,8 +100,9 @@ struct ShapeTemplateMatch
 /** @brief 内置形状模板匹配实现版本。 */
 enum class ShapeTemplateMatcherVersion
 {
-    V0, ///< 原始标量实现；训练与匹配均不使用 v1 优化。
+    V0, ///< 原始标量实现；训练与匹配均不使用 SIMD 优化。
     V1, ///< AVX2 加速匹配与严格等价的优化训练实现。
+    V2, ///< AVX512F/BW 加速匹配与严格等价的优化训练实现。
 };
 
 } // namespace irt::features

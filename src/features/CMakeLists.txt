@@ -3,14 +3,22 @@ if(NOT Faiss_LIBS)
     message(FATAL "Faiss not found, can't build features module")
 endif()
 
-# v0 保持可在非 AVX2 CPU 上运行；只为 v1 快速实现启用 AVX2，避免把该 ISA
-# 要求扩散到公共流程、示例和其他模块。未来 AVX512 版本可按同样方式增加独立快速实现。
+# v0 保持可在非 SIMD CPU 上运行；v1/v2 的指令集只作用于各自的私有实现文件，避免
+# AVX2/AVX512 要求扩散到公共流程、示例和其他模块。
 if(MSVC)
     set_source_files_properties(priv/ShapeTemplateMatcherFastImpl.cpp
         PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
+    set_source_files_properties(priv/ShapeTemplateMatcherAvx512Impl.cpp
+        PROPERTIES
+            COMPILE_OPTIONS "/arch:AVX512"
+            COMPILE_DEFINITIONS "INFERRT_SHAPE_TEMPLATE_AVX512_ENABLED=1")
 else()
     set_source_files_properties(priv/ShapeTemplateMatcherFastImpl.cpp
         PROPERTIES COMPILE_OPTIONS "-mavx2")
+    set_source_files_properties(priv/ShapeTemplateMatcherAvx512Impl.cpp
+        PROPERTIES
+            COMPILE_OPTIONS "-mavx512f;-mavx512bw"
+            COMPILE_DEFINITIONS "INFERRT_SHAPE_TEMPLATE_AVX512_ENABLED=1")
 endif()
 
 # 图像检索需要 OpenCV 做图片读取/预处理，CUDA 支持 TensorRT/GPU Faiss 路径，

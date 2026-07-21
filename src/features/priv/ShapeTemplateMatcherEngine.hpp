@@ -43,8 +43,8 @@ using ShapeTemplateResponseTable = std::array<std::array<unsigned char, kShapeTe
 struct ShapeTemplateResponseMaps
 {
     std::array<cv::Mat, kShapeTemplateOrientationBins> maps; ///< 按模板方向索引的 ``CV_8U`` 响应图。
-    std::array<float, kShapeTemplateOrientationBins> average_responses{}; ///< 各模板方向响应均值，用于 v1 剪枝排序。
-    cv::Mat quantized_labels;                                ///< 源图量化方向；v1 可直接 SIMD 查表，减少响应图切换。
+    std::array<float, kShapeTemplateOrientationBins> average_responses{}; ///< 各模板方向响应均值，用于 v1/v2 剪枝排序。
+    cv::Mat quantized_labels;                                ///< 源图量化方向；v1/v2 可直接 SIMD 查表，减少响应图切换。
     ShapeTemplateResponseTable response_table{};             ///< 方向标签到响应分子的稳定查找表。
     int denominator_per_feature{1};                          ///< 单个特征点满分对应的分母。
 };
@@ -70,7 +70,7 @@ public:
 
     /** @brief 当前版本是否需要引擎物化 8 张响应图。 */
     virtual bool needsMaterializedResponseMaps() const noexcept = 0;
-    /** @brief 当前版本是否使用 v1 专属的并行模板训练路径。 */
+    /** @brief 当前版本是否使用 SIMD 专属的并行模板训练路径。 */
     virtual bool usesOptimizedTemplateTraining() const noexcept = 0;
     virtual void fillQuantizedLabels(const cv::Mat &magnitude, const cv::Mat &angle, const cv::Mat &mask,
                                      float threshold, cv::Mat &labels) const = 0;
@@ -82,10 +82,9 @@ public:
     /**
      * @brief 扫描一个模板并返回达到阈值的位置。
      *
-     * v0 保持参考 ``shape_based_matching`` 的标量逐位置累加语义；v1 可将同一语义替换为
-     * 批量 SIMD 累加与早停。引擎仍统一负责模板调度、类别信息、排序和 NMS，因此未来 v2/AVX512
-     * 只需实现该热点接口。
-     * @param full_search_mask ``true`` 表示搜索掩膜没有零值；v1 可据此跳过候选掩膜判断。
+     * v0 保持参考 ``shape_based_matching`` 的标量逐位置累加语义；v1/v2 可将同一语义替换为
+     * 批量 SIMD 累加与早停。引擎仍统一负责模板调度、类别信息、排序和 NMS。
+     * @param full_search_mask ``true`` 表示搜索掩膜没有零值；SIMD 版本可据此跳过候选掩膜判断。
     */
     virtual std::vector<ShapeTemplateScoredPosition>
     scanTemplate(const ShapeTemplateResponseMaps &response_maps, const ShapeTemplateInfo &templ,
@@ -100,8 +99,8 @@ void sortShapeTemplateCandidates(std::vector<ShapeTemplateCandidate> &candidates
 /**
  * @brief 与版本无关的模板流程核心。
  *
- * @details 具体 v0/v1 实现只在构造时传入不同内核；本类统一执行训练、持久化、匹配和 NMS，
- * 从而保证两个版本的流程和结果数据结构一致。
+ * @details 具体 v0/v1/v2 实现只在构造时传入不同内核；本类统一执行训练、持久化、匹配和 NMS，
+ * 从而保证各版本的流程和结果数据结构一致。
  */
 class ShapeTemplateMatcherEngine : public IShapeTemplateMatcher
 {

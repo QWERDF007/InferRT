@@ -9,6 +9,7 @@
 #include <inferrt/features/ShapeTemplateMatcher.hpp>
 #include <inferrt/features/v0/ShapeTemplateMatcher.hpp>
 #include <inferrt/features/v1/ShapeTemplateMatcherFast.hpp>
+#include <inferrt/features/v2/ShapeTemplateMatcherAvx512.hpp>
 
 #include <memory>
 #include <utility>
@@ -24,6 +25,8 @@ createShapeTemplateMatcher(ShapeTemplateMatcherVersion version, ShapeTemplateMat
         return std::make_unique<v0::ShapeTemplateMatcher>(std::move(config));
     case ShapeTemplateMatcherVersion::V1:
         return std::make_unique<v1::ShapeTemplateMatcherFast>(std::move(config));
+    case ShapeTemplateMatcherVersion::V2:
+        return std::make_unique<v2::ShapeTemplateMatcherAvx512>(std::move(config));
     }
 
     throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported shape template matcher version");
@@ -37,6 +40,8 @@ const char *shapeTemplateMatcherVersionName(ShapeTemplateMatcherVersion version)
         return "v0";
     case ShapeTemplateMatcherVersion::V1:
         return "v1";
+    case ShapeTemplateMatcherVersion::V2:
+        return "v2";
     }
     return "unknown";
 }
