@@ -96,7 +96,7 @@ searcher.buildOrLoad(weights_file, gallery_items, index_file, rebuild_index, pro
 单个 ROI 特征的生成流程如下：
 
 1. `ImageFeatureExtractor` 读取原图，记录原始宽高。
-2. 使用 ImageNet 预处理把原图缩放到模型输入尺寸，并转为 NCHW float。
+2. 在 batch 内并行执行 ImageNet 预处理，把原图缩放到模型输入尺寸，并转为 NCHW float；写入位置仍按输入顺序固定。
 3. 调用 `IModel::forwardFeatures()` 输出指定 `feature_name` 的特征张量。
 4. 校验输出特征张量：
    - 标准 CNN/空间特征必须是 `B x C x H x W`。
@@ -137,18 +137,15 @@ search_dim = pca_dim * pooled_height * pooled_width
 
 1. `LoadingModel`：创建 `RoiFeatureExtractor`，内部持有 `ImageFeatureExtractor`。
 2. 根据输出特征图通道数和 ROIAlign 输出尺寸确定原始 `feature_dim`。
-3. 如果 `use_pca=true`，Faiss 构建回调会对当前 ROI 所在图像的特征图现场训练本地 PCA，投影为 `pca_dim x H x W` 后再执行 ROIAlign、展平和归一化。
-4. 如果 `use_pca=false`，直接通过 ROI 特征抽取回调现算特征。
-5. 调用 `buildConfiguredFaissIndex()` 构建 Faiss 索引。
-6. Faiss 构建过程中通过回调按 ROI 条目下标提取特征：
-   - 单条回调：`extract(gallery_items[index])`
-   - 连续批量回调：`extractBatch(gallery_items, begin, count)`
-   - 任意下标批量回调：`extractBatch(gallery_items, indices)`
+3. 按规范化后的图像路径分组，并按模型最大 batch 打包不同图像；同一图像的所有 ROI 只进入一次模型前向。
+4. 对每个图像 batch 并行执行图像解码和 ImageNet 预处理，再调用一次模型前向；在共享特征图上批量 ROIAlign，按原始 ROI 顺序回写临时特征文件。
+5. 如果 `use_pca=true`，对每张图的特征图训练本地 PCA，投影为 `pca_dim x H x W` 后再执行该图的 ROIAlign、展平和归一化。
+6. 调用 `buildConfiguredFaissIndex()`，通过临时特征存储的连续区间/索引批量回调训练和添加 Faiss 索引。
 7. 写入 `<index>.manifest.yaml`，包含 ROI ID 映射和配置。
 8. 保存或加载完成后的 Faiss 索引进入可查询状态。
 
-当前 ROI 批量接口会复用相同的特征抽取和 ROIAlign 逻辑。后续如果同一张图有多个 ROI，可以在 `RoiFeatureExtractor`
-中进一步合并同图 ROI，减少重复模型前向。
+ROI 批量接口复用相同的特征抽取和 ROIAlign 逻辑；构建时会先按图像路径分组，同一张图的多个 ROI
+只执行一次模型前向，再在同一份特征图上批量 ROIAlign，并按原始 ROI 顺序回写特征。
 
 ## 7. Faiss 索引模式
 
@@ -161,7 +158,7 @@ ROI 检索复用图像搜索的 Faiss 构建工具，支持两条路径。
 1. 抽样 ROI 特征作为训练数据。
 2. 按特征维度和样本量选择 IVF/PQ 参数。
 3. 训练 IVF-PQ。
-4. 释放训练样本缓存；按 `model_batch_size` 分批重新提取 ROI 特征，并立即添加到索引。
+4. 释放训练样本缓存；按 `model_batch_size` 从构建阶段的临时特征存储读取并立即添加到索引。
 5. 写入 `.faiss`。
 6. 如果配置为 GPU Faiss，将 CPU 索引迁移到 GPU。
 
@@ -224,7 +221,7 @@ index_->search(1, query_feature.data(), result_count, distances.data(), indices.
 ROI 搜索复用 `ImageSearchBuildProgress` 和 `ImageSearchBuildStage`：
 
 - `LoadingModel`：加载模型与创建 ROI 特征抽取器。
-- `ExtractingFeatures`：按模型 batch 提取 ROI 特征，并写入构建期间的临时特征存储。
+- `ExtractingFeatures`：按图像 batch 提取特征图、执行批量 ROIAlign，并写入构建期间的临时特征存储。
 - `BuildingIndex`：按 batch 从临时特征存储构建 Faiss 特征库；CPU 磁盘 IVF 的两次扫描也统一归入此阶段。
 - `LoadingIndex`：已有索引被复用时，加载索引或迁移到 GPU。
 
@@ -240,5 +237,5 @@ ROI 搜索复用 `ImageSearchBuildProgress` 和 `ImageSearchBuildStage`：
 - 已加载索引的 Faiss 维度必须等于当前配置下的 ROIAlign 输出维度，否则查询前会报错并要求重建索引。
 - ROIAlign 输出越大，单条 ROI 向量维度越高，索引训练和搜索成本也越高。
 - PCA 在每张图自己的特征图通道维上训练并投影；ROIAlign 只作用于降维后的空间特征图，因此修改 `use_pca` 或 `pca_dim` 后需要重建索引。
-- 同一张图多个 ROI 当前会逐条抽取特征图，后续可按图像分组优化。
+- 同一张图的多个 ROI 会共享一次图像特征图前向；不同图像按模型最大 batch 分组处理。
 - GPU Faiss 只支持 RAM 索引路径，`index_storage=Disk` 对 GPU Faiss 会被归一化为 RAM。

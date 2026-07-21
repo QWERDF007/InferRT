@@ -28,6 +28,7 @@
 #include <exception>
 #include <filesystem>
 #include <limits>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -579,7 +580,7 @@ public:
      */
     std::vector<float> extract(const RoiSearchItem &item)
     {
-        return extractBatch(std::vector<RoiSearchItem>{item}, 0, 1);
+        return extractItems(std::vector<RoiSearchItem>{item});
     }
 
     /**
@@ -600,38 +601,50 @@ public:
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI feature batch range is invalid");
         }
 
-        std::vector<fs::path>     paths;
-        std::vector<RoiSearchBox> rois;
-        paths.reserve(count);
-        rois.reserve(count);
+        std::vector<RoiSearchItem> selected;
+        selected.reserve(count);
         for (size_t i = 0; i < count; ++i)
         {
-            const auto &item = items[begin + i];
-            validateRoi(item.roi);
-            paths.push_back(item.image_path);
-            rois.push_back(item.roi);
+            selected.push_back(items[begin + i]);
         }
-        return extractBatch(paths, rois);
+        return extractItems(selected);
     }
 
-private:
     /**
-     * @brief 对一批图片执行一次模型前向，并完成 ROIAlign、展平和归一化。
+     * @brief 对一组 ROI 去重图像路径后执行一次模型前向和批量 ROIAlign。
+     *
+     * 同一张图的多个标注只生成一份空间特征图；ROIAlign 可以在同一份特征图上消费任意数量
+     * 的 ROI，从而避免按 ROI 重复执行模型前向。
      */
-    std::vector<float> extractBatch(const std::vector<fs::path> &paths, const std::vector<RoiSearchBox> &rois)
+    std::vector<float> extractItems(const std::vector<RoiSearchItem> &items)
     {
-        if (paths.size() != rois.size())
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI feature batch input size mismatch");
-        }
-        if (paths.empty())
+        if (items.empty())
         {
             return {};
+        }
+
+        std::vector<fs::path>     paths;
+        std::vector<RoiSearchBox> rois;
+        std::vector<size_t>       image_indices;
+        std::map<fs::path, size_t> path_to_index;
+        paths.reserve(items.size());
+        rois.reserve(items.size());
+        image_indices.reserve(items.size());
+        for (const auto &item : items)
+        {
+            validateRoi(item.roi);
+            const auto [it, inserted] = path_to_index.emplace(item.image_path, paths.size());
+            if (inserted)
+            {
+                paths.push_back(item.image_path);
+            }
+            rois.push_back(item.roi);
+            image_indices.push_back(it->second);
         }
         if (paths.size() > maxBatchSize())
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "ROI feature batch size exceeds model max batch size");
+                                 "ROI feature batch contains more unique images than model max batch size");
         }
 
         const auto tensor      = image_extractor_.extractFeatureTensorBatch(paths, 0, paths.size());
@@ -639,17 +652,36 @@ private:
         std::vector<float> features;
         if (!config_.use_pca)
         {
-            features = roiAlignAndFlatten(feature_map, tensor.original_sizes, rois);
+            features = roiAlignAndFlatten(feature_map, tensor.original_sizes, rois, image_indices);
         }
         else
         {
-            features.reserve(paths.size() * static_cast<size_t>(featureDim()));
-            for (size_t i = 0; i < paths.size(); ++i)
+            features.resize(items.size() * static_cast<size_t>(featureDim()));
+            std::vector<std::vector<size_t>> roi_indices_by_image(paths.size());
+            for (size_t roi_index = 0; roi_index < image_indices.size(); ++roi_index)
             {
-                auto single_map    = singleFeatureMap(feature_map, i);
-                auto reduced       = applyLocalPcaToFeatureMap(single_map);
-                const auto feature = roiAlignAndFlatten(reduced, {tensor.original_sizes[i]}, {rois[i]});
-                features.insert(features.end(), feature.begin(), feature.end());
+                roi_indices_by_image[image_indices[roi_index]].push_back(roi_index);
+            }
+            for (size_t image_index = 0; image_index < paths.size(); ++image_index)
+            {
+                auto single_map = singleFeatureMap(feature_map, image_index);
+                auto reduced    = applyLocalPcaToFeatureMap(single_map);
+                std::vector<RoiSearchBox> image_rois;
+                std::vector<size_t>       local_indices;
+                image_rois.reserve(roi_indices_by_image[image_index].size());
+                local_indices.resize(roi_indices_by_image[image_index].size(), 0);
+                for (const auto roi_index : roi_indices_by_image[image_index])
+                {
+                    image_rois.push_back(rois[roi_index]);
+                }
+                const auto image_features
+                    = roiAlignAndFlatten(reduced, {tensor.original_sizes[image_index]}, image_rois, local_indices);
+                const auto dim = static_cast<size_t>(featureDim());
+                for (size_t local_index = 0; local_index < roi_indices_by_image[image_index].size(); ++local_index)
+                {
+                    const auto output_index = roi_indices_by_image[image_index][local_index];
+                    std::copy_n(image_features.data() + local_index * dim, dim, features.data() + output_index * dim);
+                }
             }
         }
 
@@ -660,6 +692,8 @@ private:
         }
         return features;
     }
+
+private:
     /**
      * @brief 根据通道数计算 ROIAlign 展平后的维度。
      */
@@ -901,11 +935,13 @@ private:
      * @brief 将原图 ROI 映射到特征图坐标并批量执行 ROIAlign。
      */
     std::vector<float> roiAlignAndFlatten(const PreparedFeatureMap &feature_map,
-                                          const std::vector<ImageSize> &image_sizes,
-                                          const std::vector<RoiSearchBox> &rois) const
+                                           const std::vector<ImageSize> &image_sizes,
+                                           const std::vector<RoiSearchBox> &rois,
+                                           const std::vector<size_t> &image_indices = {}) const
     {
         validatePreparedFeatureMap(feature_map);
-        if (image_sizes.size() != rois.size() || rois.size() != static_cast<size_t>(feature_map.dims.d[0]))
+        if (image_sizes.size() != static_cast<size_t>(feature_map.dims.d[0])
+            || (!image_indices.empty() && image_indices.size() != rois.size()))
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI batch shape mismatch");
         }
@@ -920,18 +956,22 @@ private:
         for (size_t i = 0; i < rois.size(); ++i)
         {
             validateRoi(rois[i]);
-            const auto &image_size = image_sizes[i];
-            if (image_size.width <= 0 || image_size.height <= 0)
+            const auto offset = i * 5;
+            const auto image_index = image_indices.empty() ? i : image_indices[i];
+            if (image_index >= image_sizes.size())
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI image index is out of range");
+            }
+            const auto &mapped_image_size = image_sizes[image_index];
+            if (mapped_image_size.width <= 0 || mapped_image_size.height <= 0)
             {
                 throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Invalid source image size for ROI mapping");
             }
-
-            const auto offset = i * 5;
-            mapped_rois[offset]     = static_cast<float>(i);
-            mapped_rois[offset + 1] = rois[i].x1 * feature_width / static_cast<float>(image_size.width);
-            mapped_rois[offset + 2] = rois[i].y1 * feature_height / static_cast<float>(image_size.height);
-            mapped_rois[offset + 3] = rois[i].x2 * feature_width / static_cast<float>(image_size.width);
-            mapped_rois[offset + 4] = rois[i].y2 * feature_height / static_cast<float>(image_size.height);
+            mapped_rois[offset]     = static_cast<float>(image_index);
+            mapped_rois[offset + 1] = rois[i].x1 * feature_width / static_cast<float>(mapped_image_size.width);
+            mapped_rois[offset + 2] = rois[i].y1 * feature_height / static_cast<float>(mapped_image_size.height);
+            mapped_rois[offset + 3] = rois[i].x2 * feature_width / static_cast<float>(mapped_image_size.width);
+            mapped_rois[offset + 4] = rois[i].y2 * feature_height / static_cast<float>(mapped_image_size.height);
         }
 
         const int64_t input_shape[4]{
@@ -1089,17 +1129,83 @@ void RoiSearch::Impl::buildWithItems(const fs::path &weights_file, std::vector<R
     priv::FeatureStore feature_store(priv::featureStorePath(index_file), gallery_items.size(), final_feature_dim);
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::ExtractingFeatures, 0, 0, 0, 0,
                               gallery_items.size());
-    priv::processFeatureBatches(
-        gallery_items.size(), extractor->maxBatchSize(), final_feature_dim,
-        [&](size_t begin, size_t count) { return extractor->extractBatch(gallery_items, begin, count); },
-        [&](size_t begin, size_t count, const std::vector<float> &features)
-        { feature_store.writeBatch(begin, count, features); },
-        [&](const priv::FeatureBatchProgress &progress)
+
+    struct RoiImageGroup
+    {
+        fs::path           image_path;
+        std::vector<size_t> roi_indices;
+    };
+    std::vector<RoiImageGroup> groups;
+    std::map<fs::path, size_t> group_by_path;
+    groups.reserve(gallery_items.size());
+    for (size_t index = 0; index < gallery_items.size(); ++index)
+    {
+        const auto [it, inserted] = group_by_path.emplace(gallery_items[index].image_path, groups.size());
+        if (inserted)
         {
-            priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::ExtractingFeatures,
-                                      progress.batch_index, progress.batch_begin, progress.batch_count,
-                                      progress.processed_count, progress.total_count);
-        });
+            groups.push_back(RoiImageGroup{gallery_items[index].image_path, {}});
+        }
+        groups[it->second].roi_indices.push_back(index);
+    }
+
+    size_t              processed_count{0};
+    size_t              batch_index{0};
+    std::vector<size_t> packed_roi_indices;
+    size_t              packed_image_count{0};
+    auto                 process_packed = [&]
+    {
+        if (packed_roi_indices.empty())
+        {
+            return;
+        }
+
+        std::vector<RoiSearchItem> batch_items;
+        batch_items.reserve(packed_roi_indices.size());
+        for (const auto roi_index : packed_roi_indices)
+        {
+            batch_items.push_back(gallery_items[roi_index]);
+        }
+        const auto features = extractor->extractItems(batch_items);
+        if (features.size() != batch_items.size() * static_cast<size_t>(final_feature_dim))
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI feature batch size mismatch");
+        }
+
+        const auto feature_dim = static_cast<size_t>(final_feature_dim);
+        size_t     run_begin   = 0;
+        while (run_begin < packed_roi_indices.size())
+        {
+            size_t run_count = 1;
+            while (run_begin + run_count < packed_roi_indices.size()
+                   && packed_roi_indices[run_begin + run_count] == packed_roi_indices[run_begin + run_count - 1] + 1)
+            {
+                ++run_count;
+            }
+            std::vector<float> run_features(
+                features.begin() + static_cast<std::ptrdiff_t>(run_begin * feature_dim),
+                features.begin() + static_cast<std::ptrdiff_t>((run_begin + run_count) * feature_dim));
+            feature_store.writeBatchAt(packed_roi_indices[run_begin], run_count, run_features);
+            run_begin += run_count;
+        }
+
+        processed_count += packed_roi_indices.size();
+        priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::ExtractingFeatures, batch_index++,
+                                  packed_roi_indices.front(), packed_roi_indices.size(), processed_count,
+                                  gallery_items.size());
+        packed_roi_indices.clear();
+        packed_image_count = 0;
+    };
+
+    for (const auto &group : groups)
+    {
+        if (!packed_roi_indices.empty() && packed_image_count >= extractor->maxBatchSize())
+        {
+            process_packed();
+        }
+        packed_roi_indices.insert(packed_roi_indices.end(), group.roi_indices.begin(), group.roi_indices.end());
+        ++packed_image_count;
+    }
+    process_packed();
     feature_store.finishWriting();
 
     const size_t build_total = priv::useCpuDiskIndex(config_) ? gallery_items.size() * 2 : gallery_items.size();

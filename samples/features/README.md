@@ -5,6 +5,7 @@
 - `shape_template_matching/`：形状模板训练、保存、加载与匹配。
 - `feature_extract/`：导出 InferRT 特征张量，用于与 PyTorch 结果对比。
 - `image_search/`：基于 Faiss 的图像特征检索。
+- `roi_search/`：读取 LabelMe 标注、批量提取 ROI 特征并建立 Faiss 检索库。
 - `dino_pca_visualize/`：将 DINO patch token 通过 PCA 可视化。
 
 构建示例：
@@ -13,6 +14,7 @@
 cmake --build build --config Release --target inferrt_sample_shape_template_matching
 cmake --build build --config Release --target inferrt_sample_feature_extract
 cmake --build build --config Release --target inferrt_sample_image_search
+cmake --build build --config Release --target inferrt_sample_roi_search
 cmake --build build --config Release --target inferrt_sample_dino_pca_visualize
 ```
 

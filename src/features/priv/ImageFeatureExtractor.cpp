@@ -8,9 +8,11 @@
 #include <cuda_runtime_api.h>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/Utils.hpp>
+#include <opencv2/core/utility.hpp>
 #include <opencv2/imgcodecs.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <utility>
 
 namespace fs = std::filesystem;
@@ -306,34 +308,61 @@ ImageFeatureExtractor::PreprocessedBatch ImageFeatureExtractor::preprocessBatch(
     const std::vector<fs::path> &image_paths, size_t begin, size_t count) const
 {
     PreprocessedBatch batch;
-    batch.input_data.reserve(count * input_elements_per_sample_);
-    batch.image_sizes.reserve(count);
+    batch.input_data.resize(count * input_elements_per_sample_);
+    batch.image_sizes.resize(count);
 
-    for (size_t i = 0; i < count; ++i)
+    if (config_.preprocess_backend == ImageSearchPreprocessBackend::GPU)
     {
-        const auto &image_path = image_paths[begin + i];
-        cv::Mat     image      = cv::imread(image_path.string(), cv::IMREAD_COLOR);
-        if (image.empty())
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to load image: %s",
-                                 image_path.string().c_str());
-        }
-        batch.image_sizes.push_back(ImageSize{image.cols, image.rows});
+        throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED,
+                             "ImageFeatureExtractor GPU preprocessing is not implemented");
+    }
 
-        switch (config_.preprocess_backend)
+    // 图像解码、颜色转换、缩放和归一化互不依赖。按样本并行处理，写入各自固定的
+    // 输入切片，保持原始顺序和数值路径不变；这条路径同时被 ImageSearch、ImageCluster
+    // 和 RoiSearch 使用。
+    std::atomic<size_t> failed_index{count};
+    std::atomic<bool>   invalid_tensor{false};
+    cv::parallel_for_(cv::Range(0, static_cast<int>(count)), [&](const cv::Range &range)
+    {
+        for (int offset = range.start; offset < range.end; ++offset)
         {
-        case ImageSearchPreprocessBackend::CPU:
-        {
+            const auto index      = static_cast<size_t>(offset);
+            const auto &image_path = image_paths[begin + index];
+            cv::Mat     image       = cv::imread(image_path.string(), cv::IMREAD_COLOR);
+            if (image.empty())
+            {
+                size_t expected = failed_index.load(std::memory_order_relaxed);
+                while (index < expected
+                       && !failed_index.compare_exchange_weak(expected, index, std::memory_order_relaxed))
+                {
+                }
+                continue;
+            }
+
+            batch.image_sizes[index] = ImageSize{image.cols, image.rows};
             const auto preprocessed
                 = irt::model::ImageNetUtil::preprocess(image, cv::Size(input_width_, input_height_));
-            auto single = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
-            batch.input_data.insert(batch.input_data.end(), single.begin(), single.end());
-            break;
+            const auto single = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
+            if (single.size() != input_elements_per_sample_)
+            {
+                invalid_tensor.store(true, std::memory_order_relaxed);
+                continue;
+            }
+            std::copy(single.begin(), single.end(),
+                      batch.input_data.begin() + static_cast<std::ptrdiff_t>(index * input_elements_per_sample_));
         }
-        case ImageSearchPreprocessBackend::GPU:
-            throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED,
-                                 "ImageFeatureExtractor GPU preprocessing is not implemented");
-        }
+    });
+
+    const auto failed = failed_index.load(std::memory_order_relaxed);
+    if (failed < count)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to load image: %s",
+                             image_paths[begin + failed].string().c_str());
+    }
+    if (invalid_tensor.load(std::memory_order_relaxed))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "Preprocessed image tensor size does not match model input");
     }
 
     return batch;

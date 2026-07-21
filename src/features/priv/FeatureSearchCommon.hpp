@@ -75,6 +75,13 @@ public:
     FeatureStore &operator=(const FeatureStore &) = delete;
 
     void writeBatch(size_t begin, size_t count, const std::vector<float> &features);
+    /**
+     * @brief 将一批特征写入任意连续位置。
+     *
+     * ROI 搜索会按图像分组提取特征，但 Faiss ID 仍需保持调用方传入的 ROI 顺序，
+     * 因此建库阶段允许分组结果回写到临时特征文件的原始位置。
+     */
+    void writeBatchAt(size_t begin, size_t count, const std::vector<float> &features);
     void finishWriting();
 
     int featureDim() const noexcept
@@ -93,8 +100,10 @@ private:
     size_t                item_count_{0};
     int                   feature_dim_{0};
     size_t                next_write_index_{0};
+    size_t                written_count_{0};
     bool                  writing_finished_{false};
     std::ofstream         output_;
+    std::vector<unsigned char> written_;
 };
 
 /**

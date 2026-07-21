@@ -157,6 +157,14 @@ FeatureStore::FeatureStore(std::filesystem::path path, size_t item_count, int fe
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to create feature store: %s",
                              path_.string().c_str());
     }
+    const auto byte_count = item_count_ * static_cast<size_t>(feature_dim_) * sizeof(float);
+    if (byte_count > 0)
+    {
+        output_.seekp(static_cast<std::streamoff>(byte_count - 1), std::ios::beg);
+        output_.put('\0');
+        output_.seekp(0, std::ios::beg);
+    }
+    written_.assign(item_count_, 0);
 }
 
 FeatureStore::~FeatureStore()
@@ -183,12 +191,32 @@ void FeatureStore::writeBatch(size_t begin, size_t count, const std::vector<floa
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "Feature store is not writable");
     }
+    writeBatchAt(begin, count, features);
+    next_write_index_ += count;
+}
+
+void FeatureStore::writeBatchAt(size_t begin, size_t count, const std::vector<float> &features)
+{
+    if (writing_finished_ || !output_)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "Feature store is not writable");
+    }
     validateRange(begin, count);
     if (features.size() != count * static_cast<size_t>(feature_dim_))
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Feature store batch size mismatch");
     }
 
+    for (size_t index = begin; index < begin + count; ++index)
+    {
+        if (written_[index] != 0)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "Feature store range was already written");
+        }
+    }
+
+    const auto offset = static_cast<std::streamoff>(begin * static_cast<size_t>(feature_dim_) * sizeof(float));
+    output_.seekp(offset, std::ios::beg);
     output_.write(reinterpret_cast<const char *>(features.data()),
                   static_cast<std::streamsize>(features.size() * sizeof(float)));
     if (!output_)
@@ -196,12 +224,16 @@ void FeatureStore::writeBatch(size_t begin, size_t count, const std::vector<floa
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to write feature store: %s",
                              path_.string().c_str());
     }
-    next_write_index_ += count;
+    for (size_t index = begin; index < begin + count; ++index)
+    {
+        written_[index] = 1;
+    }
+    written_count_ += count;
 }
 
 void FeatureStore::finishWriting()
 {
-    if (writing_finished_ || next_write_index_ != item_count_)
+    if (writing_finished_ || written_count_ != item_count_)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "Feature store is incomplete");
     }
