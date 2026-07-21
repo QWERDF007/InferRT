@@ -592,10 +592,16 @@ void fillQuantizedLabelsAvx2(const cv::Mat &magnitude, const cv::Mat &angle, con
     }
 }
 
-std::vector<ShapeTemplateCandidate>
-collectCandidatesAvx2(const ShapeTemplateQuantizedGradient &gradient, const cv::Mat &mask, float threshold)
+/**
+ * @brief 用 AVX2 收集候选点到调用方工作缓冲区，不在此处排序。
+ *
+ * v1 训练公共流程会在工作线程复用的缓冲中执行原有完整排序；匹配器的通用收集接口仍在
+ * 包装层保留完整排序，以维持 v0/v1 的原有接口语义。
+ */
+void collectCandidatesAvx2(const ShapeTemplateQuantizedGradient &gradient, const cv::Mat &mask, float threshold,
+                           std::vector<ShapeTemplateCandidate> &candidates)
 {
-    std::vector<ShapeTemplateCandidate> candidates;
+    candidates.clear();
     const __m256 threshold_vec = _mm256_set1_ps(threshold);
     const __m256i invalid_vec  = _mm256_set1_epi8(static_cast<char>(kShapeTemplateInvalidLabel));
     const __m256i zero_vec     = _mm256_setzero_si256();
@@ -650,9 +656,6 @@ collectCandidatesAvx2(const ShapeTemplateQuantizedGradient &gradient, const cv::
                                                         std::max(mag_row[x], 0.0f)});
         }
     }
-
-    sortShapeTemplateCandidates(candidates);
-    return candidates;
 }
 
 void fillResponseMapAvx2(const cv::Mat &labels, cv::Mat &response, int template_label,
@@ -708,7 +711,16 @@ public:
     std::vector<ShapeTemplateCandidate>
     collectCandidates(const ShapeTemplateQuantizedGradient &gradient, const cv::Mat &mask, float threshold) const override
     {
-        return collectCandidatesAvx2(gradient, mask, threshold);
+        std::vector<ShapeTemplateCandidate> candidates;
+        collectCandidatesAvx2(gradient, mask, threshold, candidates);
+        sortShapeTemplateCandidates(candidates);
+        return candidates;
+    }
+
+    void collectCandidatesUnsorted(const ShapeTemplateQuantizedGradient &gradient, const cv::Mat &mask,
+                                   float threshold, std::vector<ShapeTemplateCandidate> &candidates) const override
+    {
+        collectCandidatesAvx2(gradient, mask, threshold, candidates);
     }
 
     void fillResponseMap(const cv::Mat &labels, cv::Mat &response, int template_label,

@@ -418,11 +418,11 @@ void fillQuantizedLabelsAvx512(const cv::Mat &magnitude, const cv::Mat &angle, c
     }
 }
 
-/** @brief AVX512 批量过滤候选点，候选内容和排序规则与 v0/v1 相同。 */
-std::vector<ShapeTemplateCandidate>
-collectCandidatesAvx512(const ShapeTemplateQuantizedGradient &gradient, const cv::Mat &mask, float threshold)
+/** @brief AVX512 批量过滤候选点到复用缓冲区；完整排序由训练公共流程执行。 */
+void collectCandidatesAvx512(const ShapeTemplateQuantizedGradient &gradient, const cv::Mat &mask, float threshold,
+                             std::vector<ShapeTemplateCandidate> &candidates)
 {
-    std::vector<ShapeTemplateCandidate> candidates;
+    candidates.clear();
     const __m512 threshold_vec = _mm512_set1_ps(threshold);
     const __m512i invalid_vec = _mm512_set1_epi8(static_cast<char>(kShapeTemplateInvalidLabel));
     const __m512i zero_vec = _mm512_setzero_si512();
@@ -467,8 +467,6 @@ collectCandidatesAvx512(const ShapeTemplateQuantizedGradient &gradient, const cv
                                                         std::max(mag_row[x], 0.0f)});
         }
     }
-    sortShapeTemplateCandidates(candidates);
-    return candidates;
 }
 
 /** @brief AVX512 方向响应图构建；v2 默认不物化响应图，但保留完整 kernel 协议实现。 */
@@ -515,7 +513,16 @@ public:
     std::vector<ShapeTemplateCandidate>
     collectCandidates(const ShapeTemplateQuantizedGradient &gradient, const cv::Mat &mask, float threshold) const override
     {
-        return collectCandidatesAvx512(gradient, mask, threshold);
+        std::vector<ShapeTemplateCandidate> candidates;
+        collectCandidatesAvx512(gradient, mask, threshold, candidates);
+        sortShapeTemplateCandidates(candidates);
+        return candidates;
+    }
+
+    void collectCandidatesUnsorted(const ShapeTemplateQuantizedGradient &gradient, const cv::Mat &mask,
+                                   float threshold, std::vector<ShapeTemplateCandidate> &candidates) const override
+    {
+        collectCandidatesAvx512(gradient, mask, threshold, candidates);
     }
 
     void fillResponseMap(const cv::Mat &labels, cv::Mat &response, int template_label,

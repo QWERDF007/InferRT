@@ -94,7 +94,7 @@ const int template_id = matcher.addTemplateFile("part.png", "part", "part_mask.p
 
 ```mermaid
 graph TB
-    TrainStart["addTemplate 或 addTemplateVariants"];
+    TrainStart["addTemplate addTemplateVariants 或 addTemplateVariantsBatch"];
     TrainApi["公共 API 转发 ShapeTemplateMatcherBase"];
     TrainEngine["公共引擎 校验图像 类别 变体和掩膜"];
     TrainVersion{"训练版本"};
@@ -113,20 +113,20 @@ graph TB
     end
 
     subgraph V1Train["v1 detail AVX2 优化训练路径"]
-        V1Workspace["单模板复用工作区 多变体按 max training parallelism 并行准备"];
+        V1Workspace["全局 输入乘变体 任务队列 按 max training parallelism 并行准备"];
         V1Candidates["AVX2 量化标签和候选筛选"];
-        V1Buffers["每个工作线程复用变换和梯度缓冲区"];
-        V1Select["稳定排序和贪心选点 保持与 v0 一致的模板内容"];
+        V1Buffers["每个工作线程跨输入复用变换 梯度 和候选缓冲区"];
+        V1Select["按输入顺序再按变体顺序稳定提交 保持与 v0 一致的模板内容"];
         V1Workspace --> V1Candidates;
         V1Candidates --> V1Buffers;
         V1Buffers --> V1Select;
     end
 
     subgraph V2Train["v2 detail AVX512F BW 优化训练路径"]
-        V2Workspace["单模板复用工作区 多变体按 max training parallelism 并行准备"];
+        V2Workspace["全局 输入乘变体 任务队列 按 max training parallelism 并行准备"];
         V2Candidates["AVX512 16 lane 量化和 64 lane 候选筛选"];
-        V2Buffers["每个工作线程复用变换和梯度缓冲区"];
-        V2Select["稳定排序和贪心选点 保持与 v0 v1 一致的模板内容"];
+        V2Buffers["每个工作线程跨输入复用变换 梯度 和候选缓冲区"];
+        V2Select["按输入顺序再按变体顺序稳定提交 保持与 v0 v1 一致的模板内容"];
         V2Workspace --> V2Candidates;
         V2Candidates --> V2Buffers;
         V2Buffers --> V2Select;
@@ -136,7 +136,7 @@ graph TB
     TrainVersion -->|v1| V1Workspace;
     TrainVersion -->|v2| V2Workspace;
     TrainInfo["公共引擎 计算特征包围盒并生成 ShapeTemplateInfo"];
-    TrainStore["按输入变体顺序写入 templates 并返回 template id 列表"];
+    TrainStore["按输入顺序再按变体顺序写入 templates 并返回 template id 列表"];
     V0Select --> TrainInfo;
     V1Select --> TrainInfo;
     V2Select --> TrainInfo;
@@ -202,6 +202,18 @@ scale = 1.1: angle = 0, 15, ..., 180
 4. 返回所有成功添加的模板 ID，顺序与输入 `variants` 一致。
 
 注意：当前实现是在固定尺寸画布内做中心旋转/缩放。大角度或大尺度可能让目标被裁剪，训练前应给模板图留足边界。
+
+多个训练图或多个大图 ROI 可使用共同变体的批量接口：
+
+```cpp
+std::vector<irt::features::ShapeTemplateTrainingInput> inputs{
+    {first_roi, "part", first_mask},
+    {second_roi, "part", second_mask},
+};
+const auto ids_by_input = matcher.addTemplateVariantsBatch(inputs, variants);
+```
+
+v0 对批量输入仍按输入顺序复用原始的串行训练流程。v1/v2 则把全部 `输入 × 变体` 展开为一个动态任务队列，每个工作线程跨输入复用变换、梯度和候选工作区；候选数组也会保留容量并在下一个变体收集前清空，从而避免重复分配。所有并行任务完成后，再按输入顺序、再按变体顺序提交到模板库。因此 `ids_by_input[i][j]` 对应第 `i` 个输入的第 `j` 个变体，模板 ID、YAML 顺序和匹配结果与逐输入调用 `addTemplateVariants()` 严格一致。
 
 ## 6. 模板保存和加载流程
 
@@ -420,7 +432,7 @@ inferrt_sample_shape_template_matching
 
 `--version` 支持 `v0`、`v1` 和 `v2`，默认 `v1`。模板文件不绑定实现版本，因此可用 v0 训练、v1 或 v2 匹配，或将三个版本作为结果与性能对照。v2 需要运行 CPU 同时支持 AVX512F 与 AVX512BW。
 
-示例默认预热 `3` 次并采样 `10` 次。`--warmup` 指定不计入统计的预热次数，`--repeat` 指定计时重复次数；输出会给出总耗时、均值、中位数、最小/最大值和标准差。训练计时只覆盖 `addTemplateVariants()`，匹配计时只覆盖 `match()`，不包括图像/YAML 读写、ROI 裁剪、绘制与结果写入。
+示例默认预热 `3` 次并采样 `10` 次。`--warmup` 指定不计入统计的预热次数，`--repeat` 指定计时重复次数；输出会给出总耗时、均值、中位数、最小/最大值和标准差。单 ROI 训练计时只覆盖 `addTemplateVariants()`，多 ROI 训练只覆盖 `addTemplateVariantsBatch()`，匹配计时只覆盖 `match()`；均不包括图像/YAML 读写、ROI 裁剪、绘制与结果写入。
 
 ## 10. 参数调优建议
 

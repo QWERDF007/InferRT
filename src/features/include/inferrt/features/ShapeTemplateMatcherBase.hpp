@@ -36,6 +36,10 @@ public:
     /** @brief 按给定角度和尺度变体批量训练模板。 */
     std::vector<int> addTemplateVariants(const cv::Mat &, const std::string &, const cv::Mat &,
                                          const std::vector<ShapeTemplateVariant> &) final;
+    /** @brief 对多个训练输入统一调度同一组角度和尺度变体。 */
+    std::vector<std::vector<int>>
+    addTemplateVariantsBatch(const std::vector<ShapeTemplateTrainingInput> &,
+                             const std::vector<ShapeTemplateVariant> &) final;
     /** @brief 在内存图像中执行模板匹配。 */
     std::vector<ShapeTemplateMatch> match(const cv::Mat &, float = -1.0f,
                                           const std::vector<std::string> & = {},

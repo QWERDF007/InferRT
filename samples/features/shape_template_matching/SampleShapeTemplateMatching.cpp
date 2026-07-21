@@ -18,7 +18,6 @@
 #include <iostream>
 #include <memory>
 #include <numeric>
-#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -40,11 +39,11 @@ enum class Stage
 /** @brief 训练阶段命令行参数。 */
 struct TrainingArguments
 {
-    fs::path                                  template_image; ///< 模板输入图像；可以是大图。
-    fs::path                                  template_mask;  ///< 可选目标掩膜。
-    std::optional<cv::Rect>                   template_roi;   ///< 可选大图裁剪区域。
-    fs::path                                  save_templates; ///< 训练后写入的 YAML/XML 文件。
-    std::string                               class_id{"part"};
+    fs::path              template_image; ///< 模板输入图像；可以是大图。
+    fs::path              template_mask;  ///< 可选目标掩膜。
+    std::vector<cv::Rect> template_rois;  ///< 可重复指定的大图裁剪区域；为空时训练整图。
+    fs::path              save_templates; ///< 训练后写入的 YAML/XML 文件。
+    std::string           class_id{"part"};
     float                                     angle_begin{0.0f};
     float                                     angle_end{90.0f};
     float                                     angle_step{15.0f};
@@ -212,9 +211,9 @@ cxxopts::Options makeOptions(const char *program_name)
 
     options.add_options("Training")("template", "Training image; it may be a cropped template or a larger image",
                                     cxxopts::value<std::string>()->default_value(""))(
-        "template-roi", "Optional crop rectangle in the training image: x,y,width,height",
+        "template-roi", "Repeatable crop rectangle in the training image: x,y,width,height",
         cxxopts::value<std::string>()->default_value(""))(
-        "template-mask", "Optional object mask; full-image or cropped-template size is accepted",
+        "template-mask", "Optional object mask; cropped-template size is allowed only with one template-roi",
         cxxopts::value<std::string>()->default_value(""))("save-templates",
                                                           "Output YAML/XML path for the trained templates",
                                                           cxxopts::value<std::string>()->default_value(""))(
@@ -300,10 +299,14 @@ Arguments parseArguments(int argc, char *argv[])
         training.config.max_label_difference = 1;
         training.config.max_training_parallelism = result["train-parallelism"].as<int>();
 
-        const auto roi = result["template-roi"].as<std::string>();
-        if (!roi.empty())
+        // cxxopts 的 vector 值以逗号分隔，而 ROI 本身也使用逗号。保留字符串选项，
+        // 再从原始参数顺序中收集每次出现的 --template-roi，避免将一个 ROI 拆成四项。
+        for (const auto &argument : result.arguments())
         {
-            training.template_roi = parseRoi(roi);
+            if (argument.key() == "template-roi")
+            {
+                training.template_rois.push_back(parseRoi(argument.value()));
+            }
         }
         if (training.template_image.empty())
         {
@@ -388,37 +391,85 @@ void drawMatches(cv::Mat &image, const std::vector<irt::features::ShapeTemplateM
 void runTraining(const TrainingArguments &args, const TimingArguments &timing,
                  irt::features::ShapeTemplateMatcherVersion version)
 {
-    const cv::Mat  full_image = loadImage(args.template_image, cv::IMREAD_UNCHANGED, "template image");
-    const cv::Rect roi        = args.template_roi.value_or(cv::Rect(0, 0, full_image.cols, full_image.rows));
-    validateRoi(roi, full_image.size());
+    struct TemplateRoiInput
+    {
+        cv::Rect roi;
+        cv::Mat  image;
+        cv::Mat  mask;
+    };
 
-    const cv::Mat template_image = full_image(roi).clone();
-    cv::Mat       template_mask;
+    const cv::Mat full_image = loadImage(args.template_image, cv::IMREAD_UNCHANGED, "template image");
+    std::vector<cv::Rect> rois = args.template_rois;
+    if (rois.empty())
+    {
+        rois.emplace_back(0, 0, full_image.cols, full_image.rows);
+    }
+    for (const auto &roi : rois)
+    {
+        validateRoi(roi, full_image.size());
+    }
+
+    cv::Mat mask;
     if (!args.template_mask.empty())
     {
-        const cv::Mat mask = loadImage(args.template_mask, cv::IMREAD_GRAYSCALE, "template mask");
-        if (mask.size() == full_image.size())
-        {
-            template_mask = mask(roi).clone();
-        }
-        else if (mask.size() == template_image.size())
-        {
-            template_mask = mask;
-        }
-        else
+        mask = loadImage(args.template_mask, cv::IMREAD_GRAYSCALE, "template mask");
+        if (mask.size() != full_image.size() && (rois.size() != 1 || mask.size() != rois.front().size()))
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "template mask must match either the training image or the cropped template size");
+                                 "template mask must match the full training image; a cropped mask is allowed only "
+                                 "when exactly one template-roi is provided");
         }
+    }
+
+    std::vector<TemplateRoiInput> templates;
+    templates.reserve(rois.size());
+    for (const auto &roi : rois)
+    {
+        TemplateRoiInput input;
+        input.roi   = roi;
+        input.image = full_image(roi).clone();
+        if (!mask.empty())
+        {
+            input.mask = mask.size() == full_image.size() ? mask(roi).clone() : mask;
+        }
+        templates.push_back(std::move(input));
     }
 
     const auto variants = irt::features::makeShapeTemplateAngleScaleVariants(
         args.angle_begin, args.angle_end, args.angle_step, args.scale_begin, args.scale_end, args.scale_step);
 
+    std::vector<irt::features::ShapeTemplateTrainingInput> training_inputs;
+    training_inputs.reserve(templates.size());
+    for (const auto &input : templates)
+    {
+        training_inputs.push_back(irt::features::ShapeTemplateTrainingInput{
+            input.image, args.class_id, input.mask});
+    }
+    const bool use_batch_training = training_inputs.size() > 1;
+
+    const auto addAllTemplateVariants = [&training_inputs, &variants, use_batch_training](
+                                            irt::features::IShapeTemplateMatcher &matcher)
+    {
+        if (!use_batch_training)
+        {
+            const auto &input = training_inputs.front();
+            return matcher.addTemplateVariants(input.image, input.class_id, input.object_mask, variants);
+        }
+
+        const auto ids_by_input = matcher.addTemplateVariantsBatch(training_inputs, variants);
+        std::vector<int> ids;
+        ids.reserve(training_inputs.size() * variants.size());
+        for (const auto &input_ids : ids_by_input)
+        {
+            ids.insert(ids.end(), input_ids.begin(), input_ids.end());
+        }
+        return ids;
+    };
+
     for (int iteration = 0; iteration < timing.warmup; ++iteration)
     {
         auto warmup_matcher = irt::features::createShapeTemplateMatcher(version, args.config);
-        (void)warmup_matcher->addTemplateVariants(template_image, args.class_id, template_mask, variants);
+        (void)addAllTemplateVariants(*warmup_matcher);
     }
 
     std::unique_ptr<irt::features::IShapeTemplateMatcher> trained_matcher;
@@ -429,7 +480,7 @@ void runTraining(const TrainingArguments &args, const TimingArguments &timing,
     {
         auto       matcher = irt::features::createShapeTemplateMatcher(version, args.config);
         const auto start   = std::chrono::steady_clock::now();
-        auto ids = matcher->addTemplateVariants(template_image, args.class_id, template_mask, variants);
+        auto ids = addAllTemplateVariants(*matcher);
         const auto stop = std::chrono::steady_clock::now();
         samples_ms.push_back(std::chrono::duration<double, std::milli>(stop - start).count());
         if (iteration == timing.repeat - 1)
@@ -445,24 +496,38 @@ void runTraining(const TrainingArguments &args, const TimingArguments &timing,
     std::cout << "stage: train" << std::endl;
     std::cout << "version: " << irt::features::shapeTemplateMatcherVersionName(version) << std::endl;
     std::cout << "template input: " << fs::absolute(args.template_image).string() << std::endl;
-    std::cout << "template roi: (" << roi.x << "," << roi.y << "," << roi.width << "," << roi.height << ")"
-              << std::endl;
+    std::cout << "template rois: " << templates.size() << std::endl;
+    for (size_t index = 0; index < templates.size(); ++index)
+    {
+        const auto &roi = templates[index].roi;
+        std::cout << "  " << index << ": (" << roi.x << "," << roi.y << "," << roi.width << "," << roi.height
+                  << ")" << std::endl;
+    }
+    std::cout << "variants per roi: " << variants.size() << std::endl;
     if (version == irt::features::ShapeTemplateMatcherVersion::V0)
     {
         std::cout << "training parallelism: 1 (v0 original serial path)" << std::endl;
+        std::cout << "training scheduler: per-roi original serial path" << std::endl;
     }
     else if (args.config.max_training_parallelism == 0)
     {
         std::cout << "training parallelism: auto (v1/v2 optimized path)" << std::endl;
+        std::cout << "training scheduler: "
+                  << (use_batch_training ? "global roi x variant task queue" : "single-input variant task queue")
+                  << std::endl;
     }
     else
     {
         std::cout << "training parallelism: " << args.config.max_training_parallelism
                   << " (v1/v2 optimized path)" << std::endl;
+        std::cout << "training scheduler: "
+                  << (use_batch_training ? "global roi x variant task queue" : "single-input variant task queue")
+                  << std::endl;
     }
     std::cout << "templates: " << template_ids.size() << std::endl;
     std::cout << "template file: " << fs::absolute(args.save_templates).string() << std::endl;
-    printTimingStats("train/addTemplateVariants", timing.warmup, samples_ms);
+    printTimingStats(use_batch_training ? "train/addTemplateVariantsBatch" : "train/addTemplateVariants",
+                     timing.warmup, samples_ms);
 }
 
 /** @brief 加载模板文件，统计匹配耗时并保存可视化结果。 */

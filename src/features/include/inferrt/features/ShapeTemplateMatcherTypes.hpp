@@ -59,6 +59,20 @@ struct ShapeTemplateVariant
     float scale{1.0f};         ///< 训练图像缩放倍率。
 };
 
+/**
+ * @brief 多模板变体训练中的一个输入项。
+ *
+ * @details 每个输入项可使用不同的图像、目标掩膜和类别，但同一次
+ * ``addTemplateVariantsBatch()`` 调用中的所有输入项共用一组角度/尺度变体。图像和掩膜只在
+ * 调用期间被只读访问；非空掩膜必须与图像尺寸一致。
+ */
+struct ShapeTemplateTrainingInput
+{
+    cv::Mat      image;       ///< 待训练的模板图像或从大图裁剪出的 ROI。
+    std::string  class_id;    ///< 写入模板库的类别 ID。
+    cv::Mat      object_mask; ///< 可选目标掩膜；为空时整张输入图有效。
+};
+
 /** @brief 模板中的一个量化梯度方向特征点。 */
 struct ShapeTemplateFeature
 {

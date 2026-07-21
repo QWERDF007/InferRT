@@ -129,6 +129,21 @@ cv::Mat makeTShape(int size = 48)
     return image;
 }
 
+/** @brief 生成高密度梯度图，用于覆盖大候选集训练路径。 */
+cv::Mat makeDenseGradientImage(cv::Size size = cv::Size(151, 137))
+{
+    cv::Mat image(size, CV_8UC1);
+    for (int y = 0; y < image.rows; ++y)
+    {
+        auto *row = image.ptr<unsigned char>(y);
+        for (int x = 0; x < image.cols; ++x)
+        {
+            row[x] = static_cast<unsigned char>((x * 29 + y * 17 + (x * y) % 251) & 0xff);
+        }
+    }
+    return image;
+}
+
 /**
  * @brief 将目标图粘贴到黑色场景中。
  */
@@ -782,6 +797,90 @@ TEST(ShapeTemplateMatcherTrainingParallelTest, V1ParallelVariantTrainingPreserve
     expectIdenticalMatches(v0_matches, v1_serial.match(scene, 70.0f, {"part"}));
     expectIdenticalMatches(v0_matches, v1_parallel.match(scene, 70.0f, {"part"}));
     expectIdenticalMatches(v0_matches, v1_auto.match(scene, 70.0f, {"part"}));
+}
+
+/** @brief 多输入全局训练队列必须保持 v0/v1 的模板顺序、内容和匹配结果。 */
+TEST(ShapeTemplateMatcherTrainingParallelTest, BatchTrainingPreservesSequentialMultiInputResults)
+{
+    auto config = fastConfig();
+    config.max_label_difference = 1;
+    config.match_threshold = 70.0f;
+    config.max_parallelism = 1;
+    config.max_training_parallelism = 3;
+
+    const auto object = makeLShape(56);
+    const auto alternate = makeTShape(56);
+    const auto scene = makeSceneWith(object, cv::Point(37, 29), cv::Size(151, 137));
+    const auto variants = irt::features::makeShapeTemplateAngleScaleVariants(-10.0f, 10.0f, 10.0f,
+                                                                               0.9f, 1.1f, 0.1f);
+    const std::vector<irt::features::ShapeTemplateTrainingInput> inputs{
+        {object, "part", cv::Mat()},
+        {alternate, "part", cv::Mat()},
+    };
+
+    V0ShapeTemplateMatcher v0_sequential(config);
+    V0ShapeTemplateMatcher v0_batch(config);
+    V1ShapeTemplateMatcher v1_sequential(config);
+    V1ShapeTemplateMatcher v1_batch(config);
+
+    const auto v0_first = v0_sequential.addTemplateVariants(object, "part", cv::Mat(), variants);
+    const auto v0_second = v0_sequential.addTemplateVariants(alternate, "part", cv::Mat(), variants);
+    const auto v1_first = v1_sequential.addTemplateVariants(object, "part", cv::Mat(), variants);
+    const auto v1_second = v1_sequential.addTemplateVariants(alternate, "part", cv::Mat(), variants);
+    const auto v0_batch_ids = v0_batch.addTemplateVariantsBatch(inputs, variants);
+    const auto v1_batch_ids = v1_batch.addTemplateVariantsBatch(inputs, variants);
+
+    ASSERT_EQ(v0_batch_ids.size(), inputs.size());
+    ASSERT_EQ(v1_batch_ids.size(), inputs.size());
+    EXPECT_EQ(v0_batch_ids[0], v0_first);
+    EXPECT_EQ(v0_batch_ids[1], v0_second);
+    EXPECT_EQ(v1_batch_ids[0], v1_first);
+    EXPECT_EQ(v1_batch_ids[1], v1_second);
+    EXPECT_EQ(v0_batch_ids, v1_batch_ids);
+
+    ASSERT_EQ(v0_sequential.numTemplates("part"), static_cast<int>(inputs.size() * variants.size()));
+    ASSERT_EQ(v0_batch.numTemplates("part"), v0_sequential.numTemplates("part"));
+    ASSERT_EQ(v1_sequential.numTemplates("part"), v0_sequential.numTemplates("part"));
+    ASSERT_EQ(v1_batch.numTemplates("part"), v0_sequential.numTemplates("part"));
+    for (int template_id = 0; template_id < v0_sequential.numTemplates("part"); ++template_id)
+    {
+        const auto &expected = v0_sequential.getTemplate("part", template_id);
+        expectIdenticalTemplate(expected, v0_batch.getTemplate("part", template_id));
+        expectIdenticalTemplate(expected, v1_sequential.getTemplate("part", template_id));
+        expectIdenticalTemplate(expected, v1_batch.getTemplate("part", template_id));
+    }
+
+    const auto expected_matches = v0_sequential.match(scene, 70.0f, {"part"});
+    expectIdenticalMatches(expected_matches, v0_batch.match(scene, 70.0f, {"part"}));
+    expectIdenticalMatches(expected_matches, v1_sequential.match(scene, 70.0f, {"part"}));
+    expectIdenticalMatches(expected_matches, v1_batch.match(scene, 70.0f, {"part"}));
+}
+
+/** @brief v1 复用候选缓冲的高密度候选训练应与 v0 逐字段一致。 */
+TEST(ShapeTemplateMatcherTrainingOptimizationTest, ReusedCandidateBufferPreservesDenseVariants)
+{
+    auto config                      = fastConfig();
+    config.num_features              = 96;
+    config.min_features              = 32;
+    config.weak_threshold            = 4.0f;
+    config.strong_threshold          = 8.0f;
+    config.min_feature_distance      = 10.5f;
+    config.max_training_parallelism = 3;
+
+    const auto image = makeDenseGradientImage();
+    const auto variants = irt::features::makeShapeTemplateAngleScaleVariants(-15.0f, 15.0f, 15.0f,
+                                                                               0.9f, 1.1f, 0.1f);
+
+    V0ShapeTemplateMatcher v0(config);
+    V1ShapeTemplateMatcher v1(config);
+    EXPECT_EQ(v0.addTemplateVariants(image, "dense", cv::Mat(), variants),
+              v1.addTemplateVariants(image, "dense", cv::Mat(), variants));
+    ASSERT_EQ(v0.numTemplates("dense"), static_cast<int>(variants.size()));
+    ASSERT_EQ(v1.numTemplates("dense"), v0.numTemplates("dense"));
+    for (int template_id = 0; template_id < v0.numTemplates("dense"); ++template_id)
+    {
+        expectIdenticalTemplate(v0.getTemplate("dense", template_id), v1.getTemplate("dense", template_id));
+    }
 }
 
 /** @brief 默认运行时选项必须保持精确路径；非默认模板步长只能作为显式近似策略生效。 */

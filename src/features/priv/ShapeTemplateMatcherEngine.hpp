@@ -76,6 +76,20 @@ public:
                                      float threshold, cv::Mat &labels) const = 0;
     virtual std::vector<ShapeTemplateCandidate>
     collectCandidates(const ShapeTemplateQuantizedGradient &gradient, const cv::Mat &mask, float threshold) const = 0;
+
+    /**
+     * @brief 收集未排序候选点到调用方复用的工作缓冲区。
+     *
+     * 默认实现保留旧内核的收集和排序行为，供 v0 参考路径使用。v1/v2 可覆写为仅收集，
+     * 由训练公共流程使用工作线程复用的候选缓冲完成原有排序，从而避免每个旋转/缩放变体
+     * 的整块候选内存反复分配和扩容。
+     */
+    virtual void collectCandidatesUnsorted(const ShapeTemplateQuantizedGradient &gradient, const cv::Mat &mask,
+                                           float threshold,
+                                           std::vector<ShapeTemplateCandidate> &candidates) const
+    {
+        candidates = collectCandidates(gradient, mask, threshold);
+    }
     virtual void fillResponseMap(const cv::Mat &labels, cv::Mat &response, int template_label,
                                  const ShapeTemplateResponseTable &table) const = 0;
 
@@ -124,6 +138,10 @@ public:
     std::vector<int> addTemplateVariants(const cv::Mat &image, const std::string &class_id,
                                          const cv::Mat &object_mask,
                                          const std::vector<ShapeTemplateVariant> &variants) override;
+    /** @brief 对多个输入统一执行同一组角度/尺度变体训练。 */
+    std::vector<std::vector<int>>
+    addTemplateVariantsBatch(const std::vector<ShapeTemplateTrainingInput> &inputs,
+                             const std::vector<ShapeTemplateVariant> &variants) override;
     /** @brief 在内存图像中执行匹配。 */
     std::vector<ShapeTemplateMatch> match(const cv::Mat &image, float threshold,
                                           const std::vector<std::string> &class_ids,

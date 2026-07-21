@@ -324,21 +324,22 @@ QuantizedGradient computeQuantizedGradient(const cv::Mat &image, const cv::Mat &
 /**
  * @brief 将候选点按梯度幅值和坐标稳定排序。
  */
+bool candidateComesBefore(const Candidate &a, const Candidate &b) noexcept
+{
+    if (a.score != b.score)
+    {
+        return a.score > b.score;
+    }
+    if (a.y != b.y)
+    {
+        return a.y < b.y;
+    }
+    return a.x < b.x;
+}
+
 void sortCandidates(std::vector<Candidate> &candidates)
 {
-    std::sort(candidates.begin(), candidates.end(),
-              [](const Candidate &a, const Candidate &b)
-              {
-                  if (a.score != b.score)
-                  {
-                      return a.score > b.score;
-                  }
-                  if (a.y != b.y)
-                  {
-                      return a.y < b.y;
-                  }
-                  return a.x < b.x;
-              });
+    std::sort(candidates.begin(), candidates.end(), candidateComesBefore);
 }
 
 /**
@@ -426,6 +427,19 @@ std::vector<Candidate> greedySelectCandidates(const std::vector<Candidate> &cand
     return best;
 }
 
+/**
+ * @brief 为 v1/v2 训练路径执行复用候选缓冲和严格等价的排序。
+ *
+ * 特征选择继续调用 v0 原有的贪心实现。每个工作线程跨旋转/缩放变体复用候选数组，避免
+ * ``std::vector`` 在候选收集阶段反复分配、扩容和释放；候选比较器及模板特征顺序不变。
+ */
+std::vector<Candidate> greedySelectCandidatesOptimized(std::vector<Candidate> &candidates, int num_features,
+                                                        int min_features, float min_distance)
+{
+    sortCandidates(candidates);
+    return greedySelectCandidates(candidates, num_features, min_features, min_distance);
+}
+
 /** @brief 单个训练工作线程复用的图像与梯度缓冲区。 */
 struct ShapeTemplateTrainingWorkspace
 {
@@ -434,6 +448,7 @@ struct ShapeTemplateTrainingWorkspace
     cv::Mat grad_x;
     cv::Mat grad_y;
     QuantizedGradient gradient;
+    std::vector<Candidate> candidates; ///< 跨变体复用的候选缓冲，避免反复扩容和释放。
 };
 
 /**
@@ -470,16 +485,20 @@ std::vector<Candidate> extractTemplateCandidates(const cv::Mat &image, const cv:
                                                  ShapeTemplateTrainingWorkspace &workspace)
 {
     computeTemplateQuantizedGradient(image, normalized_mask, config.weak_threshold, kernel, workspace);
-    auto candidates = kernel.collectCandidates(workspace.gradient, normalized_mask, config.strong_threshold);
-    if (static_cast<int>(candidates.size()) < config.min_features && config.weak_threshold < config.strong_threshold)
+    kernel.collectCandidatesUnsorted(workspace.gradient, normalized_mask, config.strong_threshold,
+                                     workspace.candidates);
+    if (static_cast<int>(workspace.candidates.size()) < config.min_features
+        && config.weak_threshold < config.strong_threshold)
     {
-        candidates = kernel.collectCandidates(workspace.gradient, normalized_mask, config.weak_threshold);
+        kernel.collectCandidatesUnsorted(workspace.gradient, normalized_mask, config.weak_threshold,
+                                         workspace.candidates);
     }
 
     const float distance = config.min_feature_distance > 0.0f
                              ? config.min_feature_distance
                              : autoFeatureDistance(image.size(), config.num_features);
-    auto selected = greedySelectCandidates(candidates, config.num_features, config.min_features, distance);
+    auto selected = greedySelectCandidatesOptimized(workspace.candidates, config.num_features, config.min_features,
+                                                    distance);
     if (static_cast<int>(selected.size()) < config.min_features)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
@@ -901,7 +920,10 @@ int detail::ShapeTemplateMatcherEngine::addTemplateFile(const fs::path &image_fi
 }
 
 /**
- * @brief 对训练图和掩膜逐个执行中心旋转/缩放并训练模板。
+ * @brief 对一个训练输入执行角度/尺度变体训练。
+ *
+ * @details v0 保持原始的逐变体串行路径；v1/v2 则转发到全局批量调度器，以便单输入和多输入
+ * 使用完全相同的优化训练语义。
  */
 std::vector<int> detail::ShapeTemplateMatcherEngine::addTemplateVariants(
     const cv::Mat &image, const std::string &class_id, const cv::Mat &object_mask,
@@ -941,10 +963,43 @@ std::vector<int> detail::ShapeTemplateMatcherEngine::addTemplateVariants(
         return ids;
     }
 
-    if (class_id.empty())
+    ShapeTemplateTrainingInput input{image, class_id, object_mask};
+    auto ids = addTemplateVariantsBatch({input}, variants);
+    return std::move(ids.front());
+}
+
+/**
+ * @brief 统一调度多个训练输入及其共同的角度/尺度变体。
+ *
+ * @details v1/v2 先构建 ``输入 × 变体`` 的全局任务队列。每个工作线程跨 ROI 复用仿射、梯度和
+ * 候选缓冲区；并行阶段不写 ``templates_``，所有结果会在结束后按输入顺序、再按变体顺序提交。
+ * 因而与逐输入调用 ``addTemplateVariants()`` 相比，模板 ID、YAML 顺序和匹配结果严格一致。
+ */
+std::vector<std::vector<int>> detail::ShapeTemplateMatcherEngine::addTemplateVariantsBatch(
+    const std::vector<ShapeTemplateTrainingInput> &inputs,
+    const std::vector<ShapeTemplateVariant> &variants)
+{
+    if (inputs.empty())
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Shape template class_id must not be empty");
+        return {};
     }
+    if (variants.empty())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Shape template variants must not be empty");
+    }
+
+    if (!kernel_->usesOptimizedTemplateTraining())
+    {
+        // v0 不改变参考实现：按输入顺序分别执行原有的串行变体训练。
+        std::vector<std::vector<int>> ids;
+        ids.reserve(inputs.size());
+        for (const auto &input : inputs)
+        {
+            ids.push_back(addTemplateVariants(input.image, input.class_id, input.object_mask, variants));
+        }
+        return ids;
+    }
+
     for (const auto &variant : variants)
     {
         if (!std::isfinite(variant.angle_degrees) || !std::isfinite(variant.scale) || variant.scale <= 0.0f)
@@ -953,27 +1008,64 @@ std::vector<int> detail::ShapeTemplateMatcherEngine::addTemplateVariants(
         }
     }
 
-    const cv::Mat mask = normalizeMask(object_mask, image.size(), "object_mask");
-    const cv::Point2f center(static_cast<float>(image.cols) * 0.5f, static_cast<float>(image.rows) * 0.5f);
-
     struct PreparedTemplate
     {
         std::vector<Candidate> selected_features;
     };
-    std::vector<PreparedTemplate> prepared_templates(variants.size());
-    std::vector<std::exception_ptr> errors(variants.size());
-
-    // 每个变体的图像变换、梯度提取、候选排序和特征选择互不依赖。并行阶段绝不写入
-    // templates_；所有结果会在下方按输入变体顺序提交，从而保持模板 ID、YAML 和匹配结果。
-    auto prepare_variant = [&](size_t index, ShapeTemplateTrainingWorkspace &workspace)
+    struct PreparedInput
     {
-        const auto &variant = variants[index];
-        const cv::Mat transform = cv::getRotationMatrix2D(center, variant.angle_degrees, variant.scale);
-        cv::warpAffine(image, workspace.transformed_image, transform, image.size(), cv::INTER_LINEAR,
+        const ShapeTemplateTrainingInput *input{nullptr};
+        cv::Mat                            mask;
+        cv::Point2f                        center;
+        std::vector<PreparedTemplate>      templates;
+    };
+    struct TrainingTask
+    {
+        size_t input_index{0};
+        size_t variant_index{0};
+    };
+
+    std::vector<PreparedInput> prepared_inputs;
+    prepared_inputs.reserve(inputs.size());
+    std::vector<TrainingTask> tasks;
+    tasks.reserve(inputs.size() * variants.size());
+    for (size_t input_index = 0; input_index < inputs.size(); ++input_index)
+    {
+        const auto &input = inputs[input_index];
+        validateImage(input.image, "template image");
+        if (input.class_id.empty())
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Shape template class_id must not be empty");
+        }
+
+        PreparedInput prepared;
+        prepared.input = &input;
+        prepared.mask = normalizeMask(input.object_mask, input.image.size(), "object_mask");
+        prepared.center = cv::Point2f(static_cast<float>(input.image.cols) * 0.5f,
+                                      static_cast<float>(input.image.rows) * 0.5f);
+        prepared.templates.resize(variants.size());
+        prepared_inputs.push_back(std::move(prepared));
+
+        for (size_t variant_index = 0; variant_index < variants.size(); ++variant_index)
+        {
+            tasks.push_back(TrainingTask{input_index, variant_index});
+        }
+    }
+
+    std::vector<std::exception_ptr> errors(tasks.size());
+    // 每项任务只写入自身的 prepared_templates 和 errors 元素，因此 worker 之间无共享写入。
+    auto prepare_task = [&](size_t task_index, ShapeTemplateTrainingWorkspace &workspace)
+    {
+        const auto task = tasks[task_index];
+        auto &prepared_input = prepared_inputs[task.input_index];
+        const auto &input = *prepared_input.input;
+        const auto &variant = variants[task.variant_index];
+        const cv::Mat transform = cv::getRotationMatrix2D(prepared_input.center, variant.angle_degrees, variant.scale);
+        cv::warpAffine(input.image, workspace.transformed_image, transform, input.image.size(), cv::INTER_LINEAR,
                        cv::BORDER_CONSTANT, cv::Scalar());
-        cv::warpAffine(mask, workspace.transformed_mask, transform, mask.size(), cv::INTER_NEAREST,
-                       cv::BORDER_CONSTANT, cv::Scalar(0));
-        prepared_templates[index].selected_features = extractTemplateCandidates(
+        cv::warpAffine(prepared_input.mask, workspace.transformed_mask, transform, prepared_input.mask.size(),
+                       cv::INTER_NEAREST, cv::BORDER_CONSTANT, cv::Scalar(0));
+        prepared_input.templates[task.variant_index].selected_features = extractTemplateCandidates(
             workspace.transformed_image, workspace.transformed_mask, config_, *kernel_, workspace);
     };
 
@@ -981,27 +1073,27 @@ std::vector<int> detail::ShapeTemplateMatcherEngine::addTemplateVariants(
                                   ? static_cast<unsigned int>(config_.max_training_parallelism)
                                   : std::thread::hardware_concurrency();
     worker_count = std::max(1U, worker_count);
-    worker_count = std::min(worker_count, static_cast<unsigned int>(variants.size()));
+    worker_count = std::min(worker_count, static_cast<unsigned int>(tasks.size()));
 
     if (worker_count == 1)
     {
         ShapeTemplateTrainingWorkspace workspace;
-        for (size_t index = 0; index < variants.size(); ++index)
+        for (size_t task_index = 0; task_index < tasks.size(); ++task_index)
         {
             try
             {
-                prepare_variant(index, workspace);
+                prepare_task(task_index, workspace);
             }
             catch (...)
             {
-                errors[index] = std::current_exception();
+                errors[task_index] = std::current_exception();
                 break;
             }
         }
     }
     else
     {
-        std::atomic<size_t> next_variant{0};
+        std::atomic<size_t> next_task{0};
         std::vector<std::thread> workers;
         workers.reserve(worker_count);
         for (unsigned int worker = 0; worker < worker_count; ++worker)
@@ -1011,16 +1103,16 @@ std::vector<int> detail::ShapeTemplateMatcherEngine::addTemplateVariants(
                 ShapeTemplateTrainingWorkspace workspace;
                 for (;;)
                 {
-                    const size_t index = next_variant.fetch_add(1, std::memory_order_relaxed);
-                    if (index >= variants.size())
+                    const size_t task_index = next_task.fetch_add(1, std::memory_order_relaxed);
+                    if (task_index >= tasks.size())
                         break;
                     try
                     {
-                        prepare_variant(index, workspace);
+                        prepare_task(task_index, workspace);
                     }
                     catch (...)
                     {
-                        errors[index] = std::current_exception();
+                        errors[task_index] = std::current_exception();
                     }
                 }
             });
@@ -1035,17 +1127,24 @@ std::vector<int> detail::ShapeTemplateMatcherEngine::addTemplateVariants(
             std::rethrow_exception(error);
     }
 
-    auto &class_templates = templates_[class_id];
-    const int first_template_id = static_cast<int>(class_templates.size());
-    class_templates.reserve(class_templates.size() + prepared_templates.size());
-    std::vector<int> ids;
-    ids.reserve(variants.size());
-    for (size_t index = 0; index < variants.size(); ++index)
+    std::vector<std::vector<int>> ids(inputs.size());
+    for (size_t input_index = 0; input_index < prepared_inputs.size(); ++input_index)
     {
-        const int template_id = first_template_id + static_cast<int>(index);
-        class_templates.push_back(makeTemplateInfo(class_id, template_id,
-                                                    prepared_templates[index].selected_features, variants[index]));
-        ids.push_back(template_id);
+        const auto &prepared_input = prepared_inputs[input_index];
+        const auto &class_id = prepared_input.input->class_id;
+        auto &class_templates = templates_[class_id];
+        const int first_template_id = static_cast<int>(class_templates.size());
+        class_templates.reserve(class_templates.size() + prepared_input.templates.size());
+        auto &input_ids = ids[input_index];
+        input_ids.reserve(variants.size());
+        for (size_t variant_index = 0; variant_index < variants.size(); ++variant_index)
+        {
+            const int template_id = first_template_id + static_cast<int>(variant_index);
+            class_templates.push_back(makeTemplateInfo(
+                class_id, template_id, prepared_input.templates[variant_index].selected_features,
+                variants[variant_index]));
+            input_ids.push_back(template_id);
+        }
     }
     return ids;
 }

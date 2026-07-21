@@ -38,6 +38,13 @@ std::vector<int> ShapeTemplateMatcherBase::addTemplateVariants(
     return implementation_->addTemplateVariants(image, class_id, object_mask, variants);
 }
 
+std::vector<std::vector<int>> ShapeTemplateMatcherBase::addTemplateVariantsBatch(
+    const std::vector<ShapeTemplateTrainingInput> &inputs,
+    const std::vector<ShapeTemplateVariant> &variants)
+{
+    return implementation_->addTemplateVariantsBatch(inputs, variants);
+}
+
 std::vector<ShapeTemplateMatch> ShapeTemplateMatcherBase::match(
     const cv::Mat &image, float threshold, const std::vector<std::string> &class_ids,
     const cv::Mat &search_mask, ShapeTemplateMatchOptions options) const

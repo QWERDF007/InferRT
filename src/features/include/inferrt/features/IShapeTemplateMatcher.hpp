@@ -31,6 +31,14 @@ public:
     virtual std::vector<int> addTemplateVariants(const cv::Mat &image, const std::string &class_id,
                                                  const cv::Mat &object_mask,
                                                  const std::vector<ShapeTemplateVariant> &variants) = 0;
+    /**
+     * @brief 对多个训练输入应用同一组角度/尺度变体。
+     *
+     * @return 与 ``inputs`` 一一对应的模板 ID 列表；每个内层列表的顺序与 ``variants`` 一致。
+     */
+    virtual std::vector<std::vector<int>>
+    addTemplateVariantsBatch(const std::vector<ShapeTemplateTrainingInput> &inputs,
+                             const std::vector<ShapeTemplateVariant> &variants) = 0;
     virtual std::vector<ShapeTemplateMatch> match(const cv::Mat &image, float threshold = -1.0f,
                                                   const std::vector<std::string> &class_ids = {},
                                                   const cv::Mat &search_mask = cv::Mat(),
