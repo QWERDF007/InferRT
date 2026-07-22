@@ -87,8 +87,8 @@ struct ShapeTemplateInfo
     int   template_id{-1};     ///< 模板文件内的全局模板 ID。
     int   width{0};            ///< 裁剪后的模板特征包围盒宽度。
     int   height{0};           ///< 裁剪后的模板特征包围盒高度。
-    int   template_width{0};   ///< 原始训练画布宽度；旧模板文件缺省为 0 并沿用特征包围盒语义。
-    int   template_height{0};  ///< 原始训练画布高度；旧模板文件缺省为 0 并沿用特征包围盒语义。
+    int   template_width{0};   ///< 原始训练画布宽度；当前模板格式要求该字段为正数。
+    int   template_height{0};  ///< 原始训练画布高度；当前模板格式要求该字段为正数。
     int   tl_x{0};             ///< 特征点包围盒在训练图像中的左上角 x 坐标。
     int   tl_y{0};             ///< 特征点包围盒在训练图像中的左上角 y 坐标。
     float angle_degrees{0.0f}; ///< 模板变体对应的旋转角度元数据。

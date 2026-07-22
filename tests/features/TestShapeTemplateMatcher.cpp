@@ -418,7 +418,7 @@ TEST(ShapeTemplateMatcherTest, SaveLoadRoundTripPreservesMatches)
     std::ifstream input(template_file, std::ios::binary);
     ASSERT_TRUE(input.is_open());
     const std::string serialized{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
-    EXPECT_NE(serialized.find("version: 3"), std::string::npos);
+    EXPECT_NE(serialized.find("version: 4"), std::string::npos);
     EXPECT_EQ(serialized.find("class_id:"), std::string::npos);
     const auto features_position = serialized.find("features:");
     ASSERT_NE(features_position, std::string::npos);
@@ -442,14 +442,14 @@ TEST(ShapeTemplateMatcherTest, SaveLoadRoundTripPreservesMatches)
     EXPECT_NEAR(matches.front().similarity, 100.0f, 1.0e-4f);
 }
 
-/** @brief 标准 YAML v3 持久化格式是破坏性升级，不再接收带类别字段的 v2 文件。 */
-TEST(ShapeTemplateMatcherTest, LegacyV2TemplateFilesAreRejectedAfterFormatUpgrade)
+/** @brief 标准 YAML v4 持久化格式是破坏性升级，不再接收旧 v3 模板文件。 */
+TEST(ShapeTemplateMatcherTest, LegacyV3TemplateFilesAreRejectedAfterFormatUpgrade)
 {
     TempDir temp;
-    const auto legacy_file = temp.path() / "legacy_v2_templates.yaml";
+    const auto legacy_file = temp.path() / "legacy_v3_templates.yaml";
     std::ofstream output(legacy_file);
     ASSERT_TRUE(output.is_open());
-    output << "version: 2\n"
+    output << "version: 3\n"
               "templates: []\n";
     ASSERT_TRUE(output.good());
     output.close();
@@ -458,18 +458,20 @@ TEST(ShapeTemplateMatcherTest, LegacyV2TemplateFilesAreRejectedAfterFormatUpgrad
     expectIrtExceptionCode([&] { matcher.load(legacy_file); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
-/** @brief v3 的每个特征必须严格包含四个按位置约定的字段。 */
+/** @brief v4 的每个特征必须严格包含四个按位置约定的字段。 */
 TEST(ShapeTemplateMatcherTest, CompactFeatureRowsRequireExactlyFourValues)
 {
     TempDir temp;
     const auto malformed_file = temp.path() / "malformed_compact_templates.yaml";
     std::ofstream output(malformed_file);
     ASSERT_TRUE(output.is_open());
-    output << R"(version: 3
+    output << R"(version: 4
 templates:
   - template_id: 0
     width: 8
     height: 8
+    template_width: 8
+    template_height: 8
     tl_x: 0
     tl_y: 0
     angle_degrees: 0

@@ -156,9 +156,9 @@ public:
     const ShapeTemplateInfo &getTemplate(int template_id) const override;
     /** @brief 获取配置。 */
     const ShapeTemplateMatcherConfig &config() const noexcept override;
-    /** @brief 保存紧凑 v3 模板。 */
+    /** @brief 保存紧凑 v4 模板。 */
     void save(const std::filesystem::path &template_file) const override;
-    /** @brief 加载紧凑 v3 模板。 */
+    /** @brief 加载紧凑 v4 模板。 */
     void load(const std::filesystem::path &template_file) override;
 
 private:
