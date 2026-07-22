@@ -9,7 +9,8 @@
 - `include/inferrt/features/RoiSearch.hpp`：公共 API、ROI 数据结构、配置结构和 `RoiSearch` 类声明。
 - `RoiSearch.cpp`：公共 API 的 PIMPL 转发与默认 ROI 索引路径生成。
 - `priv/RoiSearchImpl.hpp`：`RoiSearch::Impl` 私有实现声明。
-- `priv/RoiSearchImpl.cpp`：ROI 条目校验、ROI 特征抽取、索引构建/加载和查询实现。
+- `priv/RoiSearchImpl.cpp`：ROI 条目校验、索引构建/加载和查询实现。
+- `priv/RoiFeatureExtractor.hpp`：ROI 搜索与 ROI 聚类共用的模型特征图、ROIAlign、PCA 和归一化实现。
 - `priv/ImageFeatureExtractor.hpp/.cpp`：图像级与 ROI 级检索共用的模型特征图抽取器。
 - `priv/FeatureSearchCommon.hpp/.cpp`：图像级与 ROI 级检索共用的配置校验、归一化和 Faiss 索引工具。
 - `priv/ImageSearchFaissIndex.hpp`：Faiss RAM IVF-PQ 与 CPU 磁盘 IVF+Flat 索引构建工具。

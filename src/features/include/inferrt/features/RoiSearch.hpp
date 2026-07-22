@@ -6,7 +6,7 @@
  */
 
 #include <inferrt/features/Export.h>
-#include <inferrt/features/ImageSearch.hpp>
+#include <inferrt/features/RoiFeature.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -18,16 +18,16 @@
 namespace irt::features {
 
 /// 默认 ROI 检索模型名称。
-inline constexpr const char *kDefaultRoiSearchModelName = kDefaultImageSearchModelName;
+inline constexpr const char *kDefaultRoiSearchModelName = kDefaultRoiFeatureModelName;
 
 /// 默认 ROI 检索特征图张量名称。
-inline constexpr const char *kDefaultRoiSearchFeatureName = kDefaultImageSearchFeatureName;
+inline constexpr const char *kDefaultRoiSearchFeatureName = kDefaultRoiFeatureName;
 
 /// 默认 ROIAlign 输出高度。
-inline constexpr int kDefaultRoiSearchPooledHeight = 7;
+inline constexpr int kDefaultRoiSearchPooledHeight = kDefaultRoiFeaturePooledHeight;
 
 /// 默认 ROIAlign 输出宽度。
-inline constexpr int kDefaultRoiSearchPooledWidth = 7;
+inline constexpr int kDefaultRoiSearchPooledWidth = kDefaultRoiFeaturePooledWidth;
 
 /**
  * @brief ROI 框，坐标基于原始输入图像像素。
@@ -35,23 +35,12 @@ inline constexpr int kDefaultRoiSearchPooledWidth = 7;
  * ``x2`` 与 ``y2`` 表示右下边界，要求分别大于 ``x1`` 与 ``y1``。实现会按原图尺寸把该 ROI
  * 映射到模型输出特征图坐标，再执行 ROIAlign。
  */
-struct RoiSearchBox
-{
-    float x1{0.0f}; ///< 左上角 x 坐标。
-    float y1{0.0f}; ///< 左上角 y 坐标。
-    float x2{0.0f}; ///< 右下边界 x 坐标。
-    float y2{0.0f}; ///< 右下边界 y 坐标。
-};
+using RoiSearchBox = RoiFeatureBox;
 
 /**
  * @brief ROI 特征库条目。
  */
-struct RoiSearchItem
-{
-    int64_t               roi_id{0};    ///< 调用方提供的 ROI 唯一 ID。
-    std::filesystem::path image_path;   ///< ROI 所属图像路径。
-    RoiSearchBox          roi;          ///< 原图坐标系下的 ROI。
-};
+using RoiSearchItem = RoiFeatureItem;
 
 /**
  * @brief ROI 搜索结果。
@@ -65,10 +54,10 @@ struct RoiSearchResult
 /**
  * @brief ROI 检索配置。
  *
- * 继承 ``ImageSearchConfig`` 中的模型、预处理、归一化和 Faiss 配置；新增字段控制 ROIAlign
- * 的统一输出空间大小。
+ * 继承 ``RoiFeatureConfig`` 中的模型、预处理、归一化、ROIAlign 和 PCA 配置；搜索额外使用
+ * ``ImageSearchConfig`` 提供的 Faiss 索引字段。
  */
-struct RoiSearchConfig : public ImageSearchConfig
+struct RoiSearchConfig : public RoiFeatureConfig
 {
     RoiSearchConfig()
     {
@@ -76,12 +65,7 @@ struct RoiSearchConfig : public ImageSearchConfig
         feature_name = kDefaultRoiSearchFeatureName;
     }
 
-    int  pooled_height{kDefaultRoiSearchPooledHeight}; ///< ROIAlign 输出高度。
-    int  pooled_width{kDefaultRoiSearchPooledWidth};   ///< ROIAlign 输出宽度。
-    int  sampling_ratio{-1};                           ///< ROIAlign 采样率，-1 表示自适应。
-    bool aligned{false};                               ///< 是否使用 aligned ROIAlign 坐标规则。
-    bool use_pca{false};                               ///< 是否对每张图自己的特征图通道维训练本地 PCA 并降维。
-    int  pca_dim{0};                                   ///< PCA 输出通道数；必须为正数且不超过特征图通道数。
+    // ROIAlign/PCA 字段继承自 RoiFeatureConfig，搜索与聚类共享同一组设置。
 };
 
 using RoiSearchBuildProgress         = ImageSearchBuildProgress;
