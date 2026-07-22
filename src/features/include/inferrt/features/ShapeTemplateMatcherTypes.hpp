@@ -49,6 +49,7 @@ struct ShapeTemplateMatchOptions
 {
     int template_stride{1}; ///< 每隔多少个模板变体扫描一次；1 表示扫描全部模板，``> 1`` 为近似模式。
     int scan_step{0};       ///< 0 表示使用模板配置中的 ``scan_step``；正数覆盖它，较大值为近似空间搜索。
+    int max_parallelism{0}; ///< 匹配工作线程数；0 表示使用模板配置或自动选择。
 };
 
 /** @brief 生成旋转/缩放模板变体时使用的元数据。 */
@@ -86,6 +87,8 @@ struct ShapeTemplateInfo
     int   template_id{-1};     ///< 模板文件内的全局模板 ID。
     int   width{0};            ///< 裁剪后的模板特征包围盒宽度。
     int   height{0};           ///< 裁剪后的模板特征包围盒高度。
+    int   template_width{0};   ///< 原始训练画布宽度；旧模板文件缺省为 0 并沿用特征包围盒语义。
+    int   template_height{0};  ///< 原始训练画布高度；旧模板文件缺省为 0 并沿用特征包围盒语义。
     int   tl_x{0};             ///< 特征点包围盒在训练图像中的左上角 x 坐标。
     int   tl_y{0};             ///< 特征点包围盒在训练图像中的左上角 y 坐标。
     float angle_degrees{0.0f}; ///< 模板变体对应的旋转角度元数据。

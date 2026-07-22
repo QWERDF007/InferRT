@@ -284,6 +284,8 @@ TEST(ShapeTemplateMatcherTest, AddTemplateExtractsMetadata)
     EXPECT_EQ(templ.template_id, 0);
     EXPECT_GT(templ.width, 0);
     EXPECT_GT(templ.height, 0);
+    EXPECT_EQ(templ.template_width, makeLShape().cols);
+    EXPECT_EQ(templ.template_height, makeLShape().rows);
     EXPECT_GE(static_cast<int>(templ.features.size()), matcher.config().min_features);
 }
 
@@ -305,15 +307,14 @@ TEST(ShapeTemplateMatcherTest, MatchFindsTranslatedShape)
     V1ShapeTemplateMatcher matcher(fastConfig());
     const auto                          object = makeLShape();
     const int                           id     = matcher.addTemplate(object);
-    const auto                         &templ  = matcher.getTemplate(id);
     const cv::Point                     paste_at(34, 42);
     const auto                          scene = makeSceneWith(object, paste_at);
 
     const auto matches = matcher.match(scene, 95.0f);
 
     ASSERT_FALSE(matches.empty());
-    const int expected_x = paste_at.x + templ.tl_x;
-    const int expected_y = paste_at.y + templ.tl_y;
+    const int expected_x = paste_at.x;
+    const int expected_y = paste_at.y;
     const auto *exact    = findExactMatch(matches, expected_x, expected_y);
     ASSERT_NE(exact, nullptr);
     EXPECT_EQ(exact->template_id, id);
@@ -327,15 +328,14 @@ TEST(ShapeTemplateMatcherTest, MatchesNonAlignedImageSizes)
 {
     V1ShapeTemplateMatcher matcher(fastConfig());
     const auto                          object = makeLShape(50);
-    const int                           id     = matcher.addTemplate(object);
-    const auto                         &templ  = matcher.getTemplate(id);
+    matcher.addTemplate(object);
     const cv::Point                     paste_at(31, 27);
     const auto                          scene = makeSceneWith(object, paste_at, cv::Size(119, 107));
 
     const auto matches = matcher.match(scene, 95.0f);
 
     ASSERT_FALSE(matches.empty());
-    const auto *exact = findExactMatch(matches, paste_at.x + templ.tl_x, paste_at.y + templ.tl_y);
+    const auto *exact = findExactMatch(matches, paste_at.x, paste_at.y);
     ASSERT_NE(exact, nullptr);
     EXPECT_NEAR(exact->similarity, 100.0f, 1.0e-4f);
 }
@@ -619,6 +619,8 @@ void expectIdenticalTemplate(const irt::features::ShapeTemplateInfo &expected,
     EXPECT_EQ(expected.template_id, actual.template_id);
     EXPECT_EQ(expected.width, actual.width);
     EXPECT_EQ(expected.height, actual.height);
+    EXPECT_EQ(expected.template_width, actual.template_width);
+    EXPECT_EQ(expected.template_height, actual.template_height);
     EXPECT_EQ(expected.tl_x, actual.tl_x);
     EXPECT_EQ(expected.tl_y, actual.tl_y);
     EXPECT_FLOAT_EQ(expected.angle_degrees, actual.angle_degrees);

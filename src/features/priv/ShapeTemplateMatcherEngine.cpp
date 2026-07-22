@@ -517,7 +517,7 @@ std::vector<Candidate> extractTemplateCandidates(const cv::Mat &image, const cv:
  * @return 裁剪到特征包围盒后的模板信息。
  */
 ShapeTemplateInfo makeTemplateInfo(int template_id, const std::vector<Candidate> &features,
-                                   ShapeTemplateVariant variant)
+                                   ShapeTemplateVariant variant, cv::Size template_size)
 {
     int min_x = std::numeric_limits<int>::max();
     int min_y = std::numeric_limits<int>::max();
@@ -536,6 +536,8 @@ ShapeTemplateInfo makeTemplateInfo(int template_id, const std::vector<Candidate>
     info.template_id   = template_id;
     info.width         = max_x - min_x + 1;
     info.height        = max_y - min_y + 1;
+    info.template_width  = template_size.width;
+    info.template_height = template_size.height;
     info.tl_x          = min_x;
     info.tl_y          = min_y;
     info.angle_degrees = variant.angle_degrees;
@@ -765,6 +767,13 @@ void validateTemplateInfo(const ShapeTemplateInfo &info, int min_features)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Loaded template has too few features");
     }
+    if (info.template_width < 0 || info.template_height < 0
+        || (info.template_width == 0) != (info.template_height == 0)
+        || (info.template_width > 0
+            && (info.template_width < info.width || info.template_height < info.height)))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Loaded template has invalid canvas size");
+    }
     if (!std::isfinite(info.angle_degrees) || !std::isfinite(info.scale) || info.scale <= 0.0f)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Loaded template has invalid variant metadata");
@@ -857,6 +866,36 @@ void validateMatchOptions(const ShapeTemplateMatchOptions &options)
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "ShapeTemplateMatchOptions scan_step must be non-negative");
     }
+    if (options.max_parallelism < 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "ShapeTemplateMatchOptions max_parallelism must be non-negative");
+    }
+}
+
+/**
+ * @brief 将内部的特征包围盒命中转换为训练画布上的输出框。
+ *
+ * 新生成的模板保存了原始训练画布尺寸，因此输出框与 shapeMatchV2 使用的 ROI 语义一致；
+ * 没有该元数据的旧 v3 文件继续返回历史特征包围盒，保证旧模板可兼容加载。
+ */
+ShapeTemplateMatch makeShapeTemplateMatch(const ShapeTemplateInfo &templ,
+                                          const detail::ShapeTemplateScoredPosition &position)
+{
+    if (templ.template_width <= 0 || templ.template_height <= 0)
+    {
+        return ShapeTemplateMatch{position.x, position.y, templ.width, templ.height, position.score,
+                                  templ.template_id, templ.angle_degrees, templ.scale};
+    }
+
+    const int output_width  = std::max(1, static_cast<int>(std::lround(templ.template_width * templ.scale)));
+    const int output_height = std::max(1, static_cast<int>(std::lround(templ.template_height * templ.scale)));
+    const int output_x = position.x - templ.tl_x
+                       + static_cast<int>(std::lround((templ.template_width - output_width) * 0.5));
+    const int output_y = position.y - templ.tl_y
+                       + static_cast<int>(std::lround((templ.template_height - output_height) * 0.5));
+    return ShapeTemplateMatch{output_x, output_y, output_width, output_height, position.score, templ.template_id,
+                              templ.angle_degrees, templ.scale};
 }
 
 detail::ShapeTemplateMatcherEngine::~ShapeTemplateMatcherEngine() = default;
@@ -906,7 +945,7 @@ int detail::ShapeTemplateMatcherEngine::addTemplate(const cv::Mat &image, const 
     }
 
     const int template_id = static_cast<int>(templates_.size());
-    templates_.push_back(makeTemplateInfo(template_id, selected, variant));
+    templates_.push_back(makeTemplateInfo(template_id, selected, variant, image.size()));
     return template_id;
 }
 
@@ -1140,7 +1179,7 @@ std::vector<std::vector<int>> detail::ShapeTemplateMatcherEngine::addTemplateVar
             const int template_id = first_template_id + static_cast<int>(variant_index);
             templates_.push_back(makeTemplateInfo(template_id,
                                                   prepared_input.templates[variant_index].selected_features,
-                                                  variants[variant_index]));
+                                                  variants[variant_index], prepared_input.input->image.size()));
             input_ids.push_back(template_id);
         }
     }
@@ -1207,15 +1246,14 @@ std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::match(
         local_matches.reserve(scored_positions.size());
         for (const auto &position : scored_positions)
         {
-            local_matches.push_back(ShapeTemplateMatch{position.x, position.y, templ.width, templ.height,
-                                                       position.score, templ.template_id, templ.angle_degrees,
-                                                       templ.scale});
+            local_matches.push_back(makeShapeTemplateMatch(templ, position));
         }
         return local_matches;
     };
 
-    unsigned int worker_count = config_.max_parallelism > 0
-                                  ? static_cast<unsigned int>(config_.max_parallelism)
+    const int requested_parallelism = options.max_parallelism > 0 ? options.max_parallelism : config_.max_parallelism;
+    unsigned int worker_count = requested_parallelism > 0
+                                  ? static_cast<unsigned int>(requested_parallelism)
                                   : std::thread::hardware_concurrency();
     worker_count = std::max(1U, worker_count);
     worker_count = std::min(worker_count, static_cast<unsigned int>(work_items.size()));
@@ -1355,6 +1393,8 @@ void detail::ShapeTemplateMatcherEngine::save(const fs::path &template_file) con
         emitter << YAML::Key << "template_id" << YAML::Value << templ.template_id;
         emitter << YAML::Key << "width" << YAML::Value << templ.width;
         emitter << YAML::Key << "height" << YAML::Value << templ.height;
+        emitter << YAML::Key << "template_width" << YAML::Value << templ.template_width;
+        emitter << YAML::Key << "template_height" << YAML::Value << templ.template_height;
         emitter << YAML::Key << "tl_x" << YAML::Value << templ.tl_x;
         emitter << YAML::Key << "tl_y" << YAML::Value << templ.tl_y;
         emitter << YAML::Key << "angle_degrees" << YAML::Value << templ.angle_degrees;
@@ -1466,6 +1506,8 @@ void detail::ShapeTemplateMatcherEngine::load(const fs::path &template_file)
                 readYamlIfPresent(node, "template_id", info.template_id);
                 info.width         = readRequiredYamlValue<int>(node, "width");
                 info.height        = readRequiredYamlValue<int>(node, "height");
+                readYamlIfPresent(node, "template_width", info.template_width);
+                readYamlIfPresent(node, "template_height", info.template_height);
                 info.tl_x          = readRequiredYamlValue<int>(node, "tl_x");
                 info.tl_y          = readRequiredYamlValue<int>(node, "tl_y");
                 info.angle_degrees = readRequiredYamlValue<float>(node, "angle_degrees");

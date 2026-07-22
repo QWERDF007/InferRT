@@ -62,6 +62,7 @@ struct MatchingArguments
     float                   threshold{-1.0f}; ///< 负数时使用模板文件中保存的阈值。
     int                     template_stride{1}; ///< 近似模式：每隔多少个模板变体扫描一次。
     int                     scan_step{0};       ///< 近似模式：0 使用模板文件配置，正数覆盖空间扫描步长。
+    int                     max_parallelism{0}; ///< 匹配线程数；0 使用模板配置或自动选择。
 };
 
 /** @brief 计时控制参数。 */
@@ -224,7 +225,7 @@ cxxopts::Options makeOptions(const char *program_name)
         "features", "Maximum feature points per template", cxxopts::value<int>()->default_value("96"))(
         "train-parallelism", "v1/v2 training worker count; 0 chooses automatically, v0 always stays original serial",
         cxxopts::value<int>()->default_value("0"))(
-        "max-results", "Matching result limit saved in the template file", cxxopts::value<int>()->default_value("20"))(
+        "max-results", "Matching result limit saved in the template file; 0 means unlimited", cxxopts::value<int>()->default_value("0"))(
         "nms", "Matching NMS IoU threshold saved in the template file; negative disables NMS",
         cxxopts::value<float>()->default_value("0.3"));
 
@@ -237,6 +238,8 @@ cxxopts::Options makeOptions(const char *program_name)
         "template-stride", "Approximate mode: search every Nth template variant; 1 scans all variants exactly",
         cxxopts::value<int>()->default_value("1"))(
         "scan-step", "Approximate mode: override spatial scan step; 0 uses the template-file setting",
+        cxxopts::value<int>()->default_value("0"))(
+        "parallelism", "Match worker count; 0 uses the template setting or automatic selection",
         cxxopts::value<int>()->default_value("0"))(
         "output,o", "Output visualization image",
         cxxopts::value<std::string>()->default_value("shape_template_matching_result.png"));
@@ -327,6 +330,7 @@ Arguments parseArguments(int argc, char *argv[])
         matching.output_image   = result["output"].as<std::string>();
         matching.template_stride = result["template-stride"].as<int>();
         matching.scan_step       = result["scan-step"].as<int>();
+        matching.max_parallelism = result["parallelism"].as<int>();
         if (matching.load_templates.empty())
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--load-templates is required in match mode");
@@ -347,6 +351,10 @@ Arguments parseArguments(int argc, char *argv[])
         if (matching.scan_step < 0)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--scan-step must be non-negative");
+        }
+        if (matching.max_parallelism < 0)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--parallelism must be non-negative");
         }
     }
     else
@@ -536,6 +544,7 @@ void runMatching(const MatchingArguments &args, const TimingArguments &timing,
     irt::features::ShapeTemplateMatchOptions match_options;
     match_options.template_stride = args.template_stride;
     match_options.scan_step       = args.scan_step;
+    match_options.max_parallelism = args.max_parallelism;
 
     for (int iteration = 0; iteration < timing.warmup; ++iteration)
     {
@@ -571,6 +580,10 @@ void runMatching(const MatchingArguments &args, const TimingArguments &timing,
     std::cout << "template stride: " << match_options.template_stride << std::endl;
     std::cout << "scan step: " << (match_options.scan_step > 0 ? match_options.scan_step : matcher->config().scan_step)
               << (match_options.scan_step > 0 ? " (override)" : " (template config)") << std::endl;
+    std::cout << "parallelism: " << (match_options.max_parallelism > 0 ? match_options.max_parallelism
+                                                                        : matcher->config().max_parallelism)
+              << (match_options.max_parallelism > 0 ? " (override; 0=auto)" : " (template config; 0=auto)")
+              << std::endl;
     std::cout << "matches: " << matches.size() << std::endl;
     for (size_t i = 0; i < matches.size(); ++i)
     {
