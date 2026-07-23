@@ -56,9 +56,9 @@ public:
     const ShapeTemplateInfo &getTemplate(int) const final;
     /** @brief 获取当前配置。 */
     const ShapeTemplateMatcherConfig &config() const noexcept final;
-    /** @brief 保存紧凑 v3 模板文件。 */
+    /** @brief 保存紧凑 v4 模板文件。 */
     void save(const std::filesystem::path &) const final;
-    /** @brief 加载紧凑 v3 模板文件。 */
+    /** @brief 加载紧凑 v4 模板文件。 */
     void load(const std::filesystem::path &) final;
 
     /** @brief 生成闭区间角度/尺度模板变体。 */

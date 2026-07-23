@@ -170,7 +170,8 @@ graph TB
 - `width` / `height`：特征点包围盒尺寸。
 - `tl_x` / `tl_y`：特征点包围盒在训练图中的左上角。
 - `angle_degrees` / `scale`：模板变体元数据。
-- `features`：相对模板包围盒的 `(x, y, label, angle_degrees)` 列表；v3 文件中每个特征编码为固定四列的 `[x, y, label, angle_degrees]` 数组。
+- `template_width` / `template_height`：原始训练画布尺寸，v4 文件中为必填正数，用于输出完整训练 ROI。
+- `features`：相对模板包围盒的 `(x, y, label, angle_degrees)` 列表；v4 文件中每个特征编码为固定四列的 `[x, y, label, angle_degrees]` 数组。
 
 ## 5. 旋转和尺度模板训练流程
 
@@ -233,14 +234,14 @@ matcher.load("shape_templates.yaml");
 
 保存内容包括：
 
-- `version`：模板文件版本；当前为破坏性的 `3`，不接受旧 `1` 和 `2`。
+- `version`：模板文件版本；当前为破坏性的 `4`，不接受旧 `1`、`2` 和 `3`。
 - `config`：训练/匹配配置，包括阈值、方向容差、NMS、扫描步长等。
-- `templates`：模板文件内全部模板的信息和特征点列表。每个模板的 `features` 是二维数组，每行严格为 `[x, y, label, angle_degrees]`，并以 `- [x, y, label, angle_degrees]` 的紧凑 flow 形式写入，不再为每个特征重复写字段名。
+- `templates`：模板文件内全部模板的信息和特征点列表。每个模板必须保存正数的 `template_width` / `template_height` 训练画布尺寸；`features` 是二维数组，每行严格为 `[x, y, label, angle_degrees]`，并以 `- [x, y, label, angle_degrees]` 的紧凑 flow 形式写入，不再为每个特征重复写字段名。
 
 加载流程会先读入临时配置和临时模板库，完成配置校验、模板尺寸校验、特征数量校验、方向标签校验和变体元数据校验后，
 再替换当前对象状态。这样可以避免加载失败时留下半初始化模板库。
 
-模板文件格式 v3 是破坏性升级：已有 `version: 1` 或 `version: 2` 模板文件不能加载，必须以当前版本重新训练。v0、v1 与 v2 实现都共享 yaml-cpp 的标准 YAML 格式，因而新生成的模板仍可在三个实现之间交叉加载。
+模板文件格式 v4 是破坏性升级：已有 `version: 1`、`version: 2` 或 `version: 3` 模板文件不能加载，且缺少训练画布尺寸的文件也不能加载，必须重新训练。v0、v1 与 v2 实现都共享 yaml-cpp 的标准 YAML 格式，因而新生成的模板仍可在三个实现之间交叉加载。
 
 ## 7. 匹配流程
 

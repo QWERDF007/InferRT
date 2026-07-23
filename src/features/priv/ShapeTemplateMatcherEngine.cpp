@@ -35,7 +35,7 @@ namespace {
 constexpr unsigned char kInvalidLabel = detail::kShapeTemplateInvalidLabel;     ///< 无效方向标签，用于跳过弱梯度点。
 constexpr float         kEps          = 1.0e-6f;                                ///< 浮点区间比较容差。
 constexpr int           kOrientationBins = detail::kShapeTemplateOrientationBins; ///< 梯度方向量化 bin 数量。
-constexpr int           kShapeTemplateFileFormatVersion = 3; ///< 无类别紧凑二维特征数组模板文件格式版本。
+constexpr int           kShapeTemplateFileFormatVersion = 4; ///< 强制保存训练画布尺寸的紧凑二维特征数组模板文件格式版本。
 
 using QuantizedGradient = detail::ShapeTemplateQuantizedGradient;
 using Candidate          = detail::ShapeTemplateCandidate;
@@ -1150,10 +1150,8 @@ void validateTemplateInfo(const ShapeTemplateInfo &info, int min_features)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Loaded template has too few features");
     }
-    if (info.template_width < 0 || info.template_height < 0
-        || (info.template_width == 0) != (info.template_height == 0)
-        || (info.template_width > 0
-            && (info.template_width < info.width || info.template_height < info.height)))
+    if (info.template_width <= 0 || info.template_height <= 0 || info.template_width < info.width
+        || info.template_height < info.height)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Loaded template has invalid canvas size");
     }
@@ -1267,18 +1265,11 @@ void validateMatchOptions(const ShapeTemplateMatchOptions &options)
 /**
  * @brief 将内部的特征包围盒命中转换为训练画布上的输出框。
  *
- * 新生成的模板保存了原始训练画布尺寸，因此输出框与 shapeMatchV2 使用的 ROI 语义一致；
- * 没有该元数据的旧 v3 文件继续返回历史特征包围盒，保证旧模板可兼容加载。
+ * 模板保存了原始训练画布尺寸，因此输出框与 shapeMatchV2 使用的 ROI 语义一致。
  */
 ShapeTemplateMatch makeShapeTemplateMatch(const ShapeTemplateInfo &templ,
                                           const detail::ShapeTemplateScoredPosition &position)
 {
-    if (templ.template_width <= 0 || templ.template_height <= 0)
-    {
-        return ShapeTemplateMatch{position.x, position.y, templ.width, templ.height, position.score,
-                                  templ.template_id, templ.angle_degrees, templ.scale};
-    }
-
     const int output_width  = std::max(1, static_cast<int>(std::lround(templ.template_width * templ.scale)));
     const int output_height = std::max(1, static_cast<int>(std::lround(templ.template_height * templ.scale)));
     const int output_x = position.x - templ.tl_x
@@ -2007,8 +1998,8 @@ void detail::ShapeTemplateMatcherEngine::load(const fs::path &template_file)
                 readYamlIfPresent(node, "template_id", info.template_id);
                 info.width         = readRequiredYamlValue<int>(node, "width");
                 info.height        = readRequiredYamlValue<int>(node, "height");
-                readYamlIfPresent(node, "template_width", info.template_width);
-                readYamlIfPresent(node, "template_height", info.template_height);
+                info.template_width  = readRequiredYamlValue<int>(node, "template_width");
+                info.template_height = readRequiredYamlValue<int>(node, "template_height");
                 info.tl_x          = readRequiredYamlValue<int>(node, "tl_x");
                 info.tl_y          = readRequiredYamlValue<int>(node, "tl_y");
                 info.angle_degrees = readRequiredYamlValue<float>(node, "angle_degrees");
