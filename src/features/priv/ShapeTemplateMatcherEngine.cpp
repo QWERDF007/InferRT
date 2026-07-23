@@ -1813,7 +1813,7 @@ const ShapeTemplateMatcherConfig &detail::ShapeTemplateMatcherEngine::config() c
 /**
  * @brief 将配置、模板元数据和特征点写入标准 YAML。
  *
- * 使用 yaml-cpp 发射器输出。v3 将每个特征存为 flow 风格的
+ * 使用 yaml-cpp 发射器输出。v4 将每个特征存为 flow 风格的
  * ``[x, y, label, angle_degrees]``，避免对每个特征重复写入字段名；模板 ID 在加载时会按
  * 文件内顺序重新归一化，避免外部文件中的非连续 ID 破坏后续索引访问。
  */
