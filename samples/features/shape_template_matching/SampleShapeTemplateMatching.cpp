@@ -223,8 +223,30 @@ cxxopts::Options makeOptions(const char *program_name)
         "scale-end", "Last training scale", cxxopts::value<float>()->default_value("1"))(
         "scale-step", "Training scale step", cxxopts::value<float>()->default_value("1"))(
         "features", "Maximum feature points per template", cxxopts::value<int>()->default_value("96"))(
+        "weak-threshold", "Weak gradient magnitude threshold", cxxopts::value<float>()->default_value("10"))(
+        "strong-threshold", "Strong template candidate magnitude threshold", cxxopts::value<float>()->default_value("20"))(
+        "max-label-difference", "Circular orientation tolerance in bins [0,4]",
+        cxxopts::value<int>()->default_value("1"))(
+        "min-feature-distance", "Minimum template feature spacing; 0 selects an area-based default",
+        cxxopts::value<float>()->default_value("0"))(
+        "template-scan-step", "Exact spatial scan step stored in the template file",
+        cxxopts::value<int>()->default_value("1"))(
         "train-parallelism", "v1/v2 training worker count; 0 chooses automatically, v0 always stays original serial",
         cxxopts::value<int>()->default_value("0"))(
+        "gaussian-gradient", "v1 approximate preprocessing: apply 5x5 GaussianBlur before Sobel (default off)",
+        cxxopts::value<bool>()->default_value("false")->implicit_value("true"))(
+        "orientation-histogram", "v1 approximate preprocessing: apply 3x3 orientation majority filter (default off)",
+        cxxopts::value<bool>()->default_value("false")->implicit_value("true"))(
+        "edge-nms", "v1 approximate preprocessing: suppress non-maximum edge responses (default off)",
+        cxxopts::value<bool>()->default_value("false")->implicit_value("true"))(
+        "edge-connectivity", "v1 approximate preprocessing: keep weak edges connected to strong seeds (default off)",
+        cxxopts::value<bool>()->default_value("false")->implicit_value("true"))(
+        "polarity-invariant", "v1 approximate preprocessing: fold opposite gradient polarities (default off)",
+        cxxopts::value<bool>()->default_value("false")->implicit_value("true"))(
+        "spatial-spread", "v1 approximate preprocessing: spread labels to nearby weak pixels (default off)",
+        cxxopts::value<bool>()->default_value("false")->implicit_value("true"))(
+        "reuse-base-features", "v1 approximate training: reuse base features for angle/scale variants (default off)",
+        cxxopts::value<bool>()->default_value("false")->implicit_value("true"))(
         "max-results", "Matching result limit saved in the template file; 0 means unlimited", cxxopts::value<int>()->default_value("0"))(
         "nms", "Matching NMS IoU threshold saved in the template file; negative disables NMS",
         cxxopts::value<float>()->default_value("0.3"));
@@ -288,13 +310,32 @@ Arguments parseArguments(int argc, char *argv[])
         training.scale_step                  = result["scale-step"].as<float>();
         training.config.num_features         = result["features"].as<int>();
         training.config.min_features         = std::min(8, std::max(1, training.config.num_features));
-        training.config.weak_threshold       = 10.0f;
-        training.config.strong_threshold     = 20.0f;
+        training.config.weak_threshold       = result["weak-threshold"].as<float>();
+        training.config.strong_threshold     = result["strong-threshold"].as<float>();
         training.config.match_threshold      = 85.0f;
         training.config.max_results          = result["max-results"].as<int>();
         training.config.nms_threshold        = result["nms"].as<float>();
-        training.config.max_label_difference = 1;
+        training.config.max_label_difference = result["max-label-difference"].as<int>();
+        training.config.min_feature_distance = result["min-feature-distance"].as<float>();
+        training.config.scan_step            = result["template-scan-step"].as<int>();
         training.config.max_training_parallelism = result["train-parallelism"].as<int>();
+        training.config.use_gaussian_gradient = result["gaussian-gradient"].as<bool>();
+        training.config.use_orientation_histogram = result["orientation-histogram"].as<bool>();
+        training.config.use_edge_nms = result["edge-nms"].as<bool>();
+        training.config.use_edge_connectivity = result["edge-connectivity"].as<bool>();
+        training.config.use_polarity_invariant = result["polarity-invariant"].as<bool>();
+        training.config.use_spatial_spread = result["spatial-spread"].as<bool>();
+        training.config.reuse_base_features_for_variants = result["reuse-base-features"].as<bool>();
+
+        if ((training.config.use_gaussian_gradient || training.config.use_orientation_histogram
+             || training.config.use_edge_nms || training.config.use_edge_connectivity
+             || training.config.use_polarity_invariant || training.config.use_spatial_spread
+             || training.config.reuse_base_features_for_variants)
+            && args.version != irt::features::ShapeTemplateMatcherVersion::V1)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "v1 approximate preprocessing/variant-reuse options require --version v1");
+        }
 
         // cxxopts 的 vector 值以逗号分隔，而 ROI 本身也使用逗号。保留字符串选项，
         // 再从原始参数顺序中收集每次出现的 --template-roi，避免将一个 ROI 拆成四项。
@@ -522,6 +563,15 @@ void runTraining(const TrainingArguments &args, const TimingArguments &timing,
                   << std::endl;
     }
     std::cout << "templates: " << template_ids.size() << std::endl;
+    std::cout << "gaussian gradient: " << (args.config.use_gaussian_gradient ? "on" : "off") << std::endl;
+    std::cout << "orientation histogram: " << (args.config.use_orientation_histogram ? "on" : "off") << std::endl;
+    std::cout << "edge NMS: " << (args.config.use_edge_nms ? "on" : "off") << std::endl;
+    std::cout << "edge connectivity: " << (args.config.use_edge_connectivity ? "on" : "off") << std::endl;
+    std::cout << "polarity invariant: " << (args.config.use_polarity_invariant ? "on" : "off") << std::endl;
+    std::cout << "spatial spread: " << (args.config.use_spatial_spread ? "on" : "off") << std::endl;
+    std::cout << "reuse base features: " << (args.config.reuse_base_features_for_variants ? "on" : "off")
+              << std::endl;
+    std::cout << "template scan step: " << args.config.scan_step << std::endl;
     std::cout << "template file: " << fs::absolute(args.save_templates).string() << std::endl;
     printTimingStats(use_batch_training ? "train/addTemplateVariantsBatch" : "train/addTemplateVariants",
                      timing.warmup, samples_ms);
@@ -577,6 +627,14 @@ void runMatching(const MatchingArguments &args, const TimingArguments &timing,
     std::cout << "stage: match" << std::endl;
     std::cout << "version: " << irt::features::shapeTemplateMatcherVersionName(version) << std::endl;
     std::cout << "templates: " << matcher->numTemplates() << std::endl;
+    std::cout << "gaussian gradient: " << (matcher->config().use_gaussian_gradient ? "on" : "off") << std::endl;
+    std::cout << "orientation histogram: " << (matcher->config().use_orientation_histogram ? "on" : "off") << std::endl;
+    std::cout << "edge NMS: " << (matcher->config().use_edge_nms ? "on" : "off") << std::endl;
+    std::cout << "edge connectivity: " << (matcher->config().use_edge_connectivity ? "on" : "off") << std::endl;
+    std::cout << "polarity invariant: " << (matcher->config().use_polarity_invariant ? "on" : "off") << std::endl;
+    std::cout << "spatial spread: " << (matcher->config().use_spatial_spread ? "on" : "off") << std::endl;
+    std::cout << "reuse base features: " << (matcher->config().reuse_base_features_for_variants ? "on" : "off")
+              << std::endl;
     std::cout << "template stride: " << match_options.template_stride << std::endl;
     std::cout << "scan step: " << (match_options.scan_step > 0 ? match_options.scan_step : matcher->config().scan_step)
               << (match_options.scan_step > 0 ? " (override)" : " (template config)") << std::endl;

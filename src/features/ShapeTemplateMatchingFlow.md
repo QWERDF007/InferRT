@@ -374,6 +374,10 @@ v0::detail::ShapeTemplateMatcherKernelImpl  v1::detail::ShapeTemplateMatcherFast
 
 v1 的 AVX2 内核覆盖四段热点：每次处理 8 个 `float` 的方向量化、每次处理 32 个像素的候选点过滤、方向标签字节 shuffle 查表，以及批量滑窗打分。评分时按当前源图的方向响应均值重排特征；每累计 4 个特征即以理论上界淘汰不可能达标的整组候选。常见的分子上界不超过 255 时，v1 用 8-bit 累加一次处理 32 个相邻候选；较大但仍安全的配置使用 16-bit/16-lane 路径。`scan_step=2` 时，内核从连续 32-byte 读取中 shuffle 压缩出 16 个间隔候选，其他正步长使用 AVX2 gather。
 
+v1 的精确匹配还为每个工作线程复用 `ShapeTemplateScanWorkspace`，其中保存模板扫描结果和特征行访问描述；它只消除循环内的临时分配，不改变候选坐标、评分、早停或 NMS。训练选点使用等价的空间网格检查 `min_feature_distance`，匹配末端使用空间索引 NMS，均保持原排序、IoU 和 `max_results` 语义；响应查表只构建一次并由所有模板共享。
+
+参考 `shapeMatchV2` 的梯度和方向处理以 v1 配置暴露：`use_gaussian_gradient`、`use_edge_nms`、`use_edge_connectivity`、`use_orientation_histogram`、`use_polarity_invariant`、`use_spatial_spread` 和 `reuse_base_features_for_variants`。这些选项只允许 v1，默认均为 `false`；前六项会改变量化标签，最后一项会跳过变体梯度重算，开启后必须用相同配置重新训练模板并单独评估精度。
+
 v2 使用独立的 AVX512F/BW 内核：训练时每次量化 16 个 `float`、候选筛选 64 个像素；全图 `scan_step=1` 的精确匹配在上界不超过 255 时一次处理 64 个相邻候选，较大但仍安全的配置使用 32 个 16-bit lane。v2 与 v1 一样直接读取量化标签并查表，不物化方向响应图；`scan_step != 1` 或累计范围超过 16-bit 安全范围时会精确回退到标量路径。构造时同时检查 AVX512F 和 AVX512BW，以避免在不支持的 CPU 上执行非法指令。
 
 CMake 只为 v1 内核源文件开启 AVX2、只为 v2 内核源文件开启 AVX512F/BW，不会把 CPU 指令集要求扩散到 v0、公共流程、示例或其他模块。OpenCV 的 `Sobel`、`cartToPolar`、`warpAffine` 仍会按其构建配置使用优化。
@@ -426,6 +430,8 @@ inferrt_sample_shape_template_matching
 匹配区域可通过与源图同尺寸的 `--search-mask` 限制；该参数与训练阶段的 `--template-mask` 用途不同。若上游已知目标区域，建议由上游先裁剪源图，再将裁剪图传入匹配器。
 
 默认匹配保持精确：`--template-stride 1 --scan-step 0`。需要以召回、最佳变体或像素级定位精度换取延迟时，可显式设置更大的 `--template-stride` 或 `--scan-step`；它们不会写回模板文件。
+
+v1 还可在训练阶段显式传入 `--gaussian-gradient`、`--edge-nms`、`--edge-connectivity`、`--orientation-histogram`、`--polarity-invariant`、`--spatial-spread` 或 `--reuse-base-features`。这些开关会写入模板配置并在匹配时自动复用，属于可能影响精度的预处理/变体复用，默认关闭；v0/v2 会拒绝这些配置。
 
 `--version` 支持 `v0`、`v1` 和 `v2`，默认 `v1`。模板文件不绑定实现版本，因此可用 v0 训练、v1 或 v2 匹配，或将三个版本作为结果与性能对照。v2 需要运行 CPU 同时支持 AVX512F 与 AVX512BW。
 

@@ -13,6 +13,7 @@
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <utility>
@@ -31,7 +32,9 @@ using common::ShapeTemplateMatcherKernel;
 using common::ShapeTemplateQuantizedGradient;
 using common::ShapeTemplateResponseMaps;
 using common::ShapeTemplateResponseTable;
+using common::ShapeTemplateScanWorkspace;
 using common::ShapeTemplateScoredPosition;
+using common::ShapeTemplatePackedFeature;
 using common::kShapeTemplateInvalidLabel;
 using common::kShapeTemplateOrientationBins;
 using common::quantizeShapeTemplateAngle;
@@ -106,13 +109,14 @@ scanTemplateFallback(const ShapeTemplateResponseMaps &response_maps, const Shape
  * 命中时立即停止。这样既利用 AVX2 的连续读取，又保留真实大图中负样本占绝大多数时的关键
  * 剪枝收益。
  */
-std::vector<ShapeTemplateScoredPosition>
-scanTemplateFast(const ShapeTemplateResponseMaps &response_maps, const ShapeTemplateInfo &templ,
-                 const cv::Mat &search_mask, bool full_search_mask, cv::Size image_size, int scan_step,
-                 float threshold)
+void scanTemplateFast(const ShapeTemplateResponseMaps &response_maps, const ShapeTemplateInfo &templ,
+                      const cv::Mat &search_mask, bool full_search_mask, cv::Size image_size, int scan_step,
+                      float threshold, ShapeTemplateScanWorkspace &workspace)
 {
+    workspace.scored_positions.clear();
+    workspace.feature_bases.clear();
     if (templ.features.empty() || templ.width > image_size.width || templ.height > image_size.height)
-        return {};
+        return;
 
     const int max_x = image_size.width - templ.width;
     const int max_y = image_size.height - templ.height;
@@ -123,48 +127,35 @@ scanTemplateFast(const ShapeTemplateResponseMaps &response_maps, const ShapeTemp
     // 使用 signed 16-bit 比较实现寄存器内早停；较大配置保留原标量路径以避免改变语义。
     if (maximum_sum > std::numeric_limits<std::int16_t>::max())
     {
-        return scanTemplateFallback(response_maps, templ, search_mask, full_search_mask, image_size,
-                                    scan_step, threshold);
+        workspace.scored_positions = scanTemplateFallback(response_maps, templ, search_mask, full_search_mask,
+                                                          image_size, scan_step, threshold);
+        return;
     }
 
-    std::vector<ShapeTemplateScoredPosition> positions;
+    auto &positions = workspace.scored_positions;
     const float denominator = static_cast<float>(maximum_sum);
     const std::uint64_t conservative_required_sum = static_cast<std::uint64_t>(
         threshold * static_cast<float>(maximum_sum) / 100.0f);
     constexpr size_t kPruneFeatureInterval = 4;
     const size_t response_step = response_maps.quantized_labels.step;
-    struct PackedFeature
-    {
-        const unsigned char *base{nullptr};
-        float expected_response{0.0f};
-        int label{0};
-    };
-    std::vector<PackedFeature> feature_bases;
+    auto &feature_bases = workspace.feature_bases;
     feature_bases.reserve(feature_count);
     for (const auto &feature : templ.features)
     {
-        feature_bases.push_back(PackedFeature{
+        feature_bases.push_back(ShapeTemplatePackedFeature{
             response_maps.quantized_labels.ptr<unsigned char>(feature.y) + feature.x,
             response_maps.average_responses[static_cast<size_t>(feature.label)], feature.label});
     }
     std::stable_sort(feature_bases.begin(), feature_bases.end(),
-                     [](const PackedFeature &a, const PackedFeature &b)
+                     [](const ShapeTemplatePackedFeature &a, const ShapeTemplatePackedFeature &b)
                      {
                          return a.expected_response < b.expected_response;
                      });
 
     std::array<__m128i, kShapeTemplateOrientationBins> response_lookups{};
     for (int template_label = 0; template_label < kShapeTemplateOrientationBins; ++template_label)
-    {
-        alignas(16) std::array<unsigned char, 16> lookup_values{};
-        for (int source_label = 0; source_label < kShapeTemplateOrientationBins; ++source_label)
-        {
-            lookup_values[static_cast<size_t>(source_label)]
-                = response_maps.response_table[static_cast<size_t>(template_label)][static_cast<size_t>(source_label)];
-        }
-        response_lookups[static_cast<size_t>(template_label)]
-            = _mm_loadu_si128(reinterpret_cast<const __m128i *>(lookup_values.data()));
-    }
+        response_lookups[static_cast<size_t>(template_label)] = _mm_loadu_si128(
+            reinterpret_cast<const __m128i *>(response_maps.response_lookup128[static_cast<size_t>(template_label)].data()));
 
     // step=2 是最常见的空间抽样配置。候选坐标在内存中相隔一个字节，因而可从连续
     // 32-byte load 中用 shuffle 压缩出 16 个偶数位置，明显快于通用 gather。
@@ -261,7 +252,7 @@ scanTemplateFast(const ShapeTemplateResponseMaps &response_maps, const ShapeTemp
                     positions.push_back(ShapeTemplateScoredPosition{x, y, score});
             }
         }
-        return positions;
+        return;
     }
 
     // 对空间步长大于 1 的近似搜索，候选 x 不再连续，原 32-byte load 路径无法直接复用。
@@ -282,8 +273,9 @@ scanTemplateFast(const ShapeTemplateResponseMaps &response_maps, const ShapeTemp
         // i32 gather 读取四个字节；最后几个候选改走标量尾部，确保不会跨越图像行边界。
         if (scan_step > image_size.width / 8)
         {
-            return scanTemplateFallback(response_maps, templ, search_mask, full_search_mask, image_size,
-                                        scan_step, threshold);
+            workspace.scored_positions = scanTemplateFallback(response_maps, templ, search_mask, full_search_mask,
+                                                              image_size, scan_step, threshold);
+            return;
         }
         const int vector_span = 7 * scan_step;
         const int last_vector_start = std::min(max_x - vector_span,
@@ -368,7 +360,7 @@ scanTemplateFast(const ShapeTemplateResponseMaps &response_maps, const ShapeTemp
                     positions.push_back(ShapeTemplateScoredPosition{x, y, score});
             }
         }
-        return positions;
+        return;
     }
 
     // 对常见的 96 features、max_label_difference=1，最高分子仅为 192，可安全使用
@@ -460,7 +452,7 @@ scanTemplateFast(const ShapeTemplateResponseMaps &response_maps, const ShapeTemp
                     positions.push_back(ShapeTemplateScoredPosition{x, y, score});
             }
         }
-        return positions;
+        return;
     }
 
     const __m128i zero128 = _mm_setzero_si128();
@@ -535,17 +527,18 @@ scanTemplateFast(const ShapeTemplateResponseMaps &response_maps, const ShapeTemp
                 positions.push_back(ShapeTemplateScoredPosition{x, y, score});
         }
     }
-    return positions;
+    return;
 }
 
 void fillQuantizedLabelsAvx2(const cv::Mat &magnitude, const cv::Mat &angle, const cv::Mat &mask,
                              float threshold, cv::Mat &labels)
 {
     const __m256 threshold_vec = _mm256_set1_ps(threshold);
-    const std::array<__m256, kShapeTemplateOrientationBins> angle_thresholds{
-        _mm256_set1_ps(22.5f),  _mm256_set1_ps(67.5f),  _mm256_set1_ps(112.5f), _mm256_set1_ps(157.5f),
-        _mm256_set1_ps(202.5f), _mm256_set1_ps(247.5f), _mm256_set1_ps(292.5f), _mm256_set1_ps(337.5f),
-    };
+    // ``floor((angle + 22.5) / 45) mod 8`` 等价于非负角度上的截断和掩码；
+    // 相比逐阈值比较，8 个像素只需一次乘加和整数转换。
+    const __m256 angle_scale = _mm256_set1_ps(1.0f / 45.0f);
+    const __m256 angle_bias  = _mm256_set1_ps(0.5f);
+    const __m256i angle_mask = _mm256_set1_epi32(kShapeTemplateOrientationBins - 1);
 
     for (int y = 0; y < labels.rows; ++y)
     {
@@ -561,23 +554,31 @@ void fillQuantizedLabelsAvx2(const cv::Mat &magnitude, const cv::Mat &angle, con
             const int valid_mag = _mm256_movemask_ps(_mm256_cmp_ps(mag_values, threshold_vec, _CMP_GE_OQ));
             const __m256 angle_values = _mm256_loadu_ps(angle_row + x);
 
-            int labels8[8]{0, 0, 0, 0, 0, 0, 0, 0};
-            for (int threshold_index = 0; threshold_index < kShapeTemplateOrientationBins; ++threshold_index)
-            {
-                const int ge_mask = _mm256_movemask_ps(
-                    _mm256_cmp_ps(angle_values, angle_thresholds[threshold_index], _CMP_GE_OQ));
-                for (int lane = 0; lane < 8; ++lane)
-                {
-                    labels8[lane] += (ge_mask >> lane) & 1;
-                }
-            }
+            const __m256 scaled_angles = _mm256_add_ps(_mm256_mul_ps(angle_values, angle_scale), angle_bias);
+            const __m256i quantized = _mm256_and_si256(_mm256_cvttps_epi32(scaled_angles), angle_mask);
+            alignas(32) int labels8[8];
+            _mm256_store_si256(reinterpret_cast<__m256i *>(labels8), quantized);
 
             for (int lane = 0; lane < 8; ++lane)
             {
                 if (((valid_mag >> lane) & 1) != 0 && mask_row[x + lane] != 0)
                 {
+                    // 仅在量化边界附近回退到参考公式，覆盖浮点乘法与阈值比较在边界处
+                    // 可能出现的舍入差异；正常像素走上面的纯 SIMD 路径。
+                    const float current_angle = angle_row[x + lane];
+                    bool near_boundary = false;
+                    for (int boundary = 0; boundary < kShapeTemplateOrientationBins; ++boundary)
+                    {
+                        const float boundary_angle = 22.5f + 45.0f * static_cast<float>(boundary);
+                        if (std::fabs(current_angle - boundary_angle) <= 1.0e-3f)
+                        {
+                            near_boundary = true;
+                            break;
+                        }
+                    }
                     label_row[x + lane] = static_cast<unsigned char>(
-                        labels8[lane] == kShapeTemplateOrientationBins ? 0 : labels8[lane]);
+                        near_boundary ? quantizeShapeTemplateAngle(current_angle)
+                                      : (labels8[lane] & (kShapeTemplateOrientationBins - 1)));
                 }
             }
         }
@@ -702,6 +703,26 @@ public:
         return true;
     }
 
+    bool supportsApproximatePreprocessing() const noexcept override
+    {
+        return true;
+    }
+
+    bool usesReusableScanWorkspace() const noexcept override
+    {
+        return true;
+    }
+
+    bool usesIndexedNms() const noexcept override
+    {
+        return true;
+    }
+
+    bool usesIndexedFeatureSelection() const noexcept override
+    {
+        return true;
+    }
+
     void fillQuantizedLabels(const cv::Mat &magnitude, const cv::Mat &angle, const cv::Mat &mask,
                              float threshold, cv::Mat &labels) const override
     {
@@ -734,8 +755,18 @@ public:
                  const cv::Mat &search_mask, bool full_search_mask, cv::Size image_size, int scan_step,
                  float threshold) const override
     {
-        return scanTemplateFast(response_maps, templ, search_mask, full_search_mask, image_size, scan_step,
-                                threshold);
+        ShapeTemplateScanWorkspace workspace;
+        scanTemplateFast(response_maps, templ, search_mask, full_search_mask, image_size, scan_step, threshold,
+                         workspace);
+        return std::move(workspace.scored_positions);
+    }
+
+    void scanTemplate(const ShapeTemplateResponseMaps &response_maps, const ShapeTemplateInfo &templ,
+                      const cv::Mat &search_mask, bool full_search_mask, cv::Size image_size, int scan_step,
+                      float threshold, ShapeTemplateScanWorkspace &workspace) const override
+    {
+        scanTemplateFast(response_maps, templ, search_mask, full_search_mask, image_size, scan_step, threshold,
+                         workspace);
     }
 };
 

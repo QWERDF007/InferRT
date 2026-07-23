@@ -24,6 +24,7 @@
 #include <limits>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 
 namespace fs = std::filesystem;
@@ -298,28 +299,254 @@ int quantizeAngle(float angle_degrees) noexcept
 }
 
 /**
+ * @brief 对量化方向执行可选的 3x3 多数滤波。
+ *
+ * 只有在显式启用近似预处理时调用；默认路径完全不进入该分支。滤波以原始标签副本为
+ * 输入，避免扫描顺序影响邻域统计，并保留掩膜外及不足多数的像素。
+ */
+void applyOrientationHistogram(cv::Mat &labels, const cv::Mat &mask)
+{
+    cv::Mat filtered = labels.clone();
+    for (int y = 1; y < labels.rows - 1; ++y)
+    {
+        const auto *mask_row = mask.ptr<unsigned char>(y);
+        auto       *dst_row  = filtered.ptr<unsigned char>(y);
+        for (int x = 1; x < labels.cols - 1; ++x)
+        {
+            if (mask_row[x] == 0 || labels.ptr<unsigned char>(y)[x] >= kOrientationBins)
+                continue;
+
+            std::array<int, kOrientationBins> counts{};
+            for (int dy = -1; dy <= 1; ++dy)
+            {
+                const auto *neighbor = labels.ptr<unsigned char>(y + dy);
+                for (int dx = -1; dx <= 1; ++dx)
+                {
+                    const int label = neighbor[x + dx];
+                    if (label < kOrientationBins)
+                        ++counts[static_cast<size_t>(label)];
+                }
+            }
+            int best_label = labels.ptr<unsigned char>(y)[x];
+            int best_count = counts[static_cast<size_t>(best_label)];
+            for (int label = 0; label < kOrientationBins; ++label)
+            {
+                if (counts[static_cast<size_t>(label)] > best_count)
+                {
+                    best_label = label;
+                    best_count = counts[static_cast<size_t>(label)];
+                }
+            }
+            if (best_count >= 5)
+                dst_row[x] = static_cast<unsigned char>(best_label);
+        }
+    }
+    labels = std::move(filtered);
+}
+
+/** @brief 沿量化梯度方向执行 2 邻域非极大值抑制；仅用于显式近似配置。 */
+void applyEdgeNonMaximumSuppression(cv::Mat &labels, const cv::Mat &magnitude, const cv::Mat &angle,
+                                    const cv::Mat &mask)
+{
+    cv::Mat filtered = labels.clone();
+    for (int y = 1; y < labels.rows - 1; ++y)
+    {
+        const auto *mask_row = mask.ptr<unsigned char>(y);
+        const auto *mag_row  = magnitude.ptr<float>(y);
+        const auto *ang_row  = angle.ptr<float>(y);
+        auto       *dst_row  = filtered.ptr<unsigned char>(y);
+        for (int x = 1; x < labels.cols - 1; ++x)
+        {
+            if (mask_row[x] == 0 || labels.ptr<unsigned char>(y)[x] >= kOrientationBins)
+                continue;
+
+            const int bin = quantizeAngle(ang_row[x]) & 3;
+            int       dx  = 0;
+            int       dy  = 0;
+            switch (bin)
+            {
+            case 0:
+                dx = 1;
+                break;
+            case 1:
+                dx = 1;
+                dy = 1;
+                break;
+            case 2:
+                dy = 1;
+                break;
+            default:
+                dx = 1;
+                dy = -1;
+                break;
+            }
+            const float forward  = magnitude.at<float>(y + dy, x + dx);
+            const float backward = magnitude.at<float>(y - dy, x - dx);
+            if (mag_row[x] < forward || mag_row[x] < backward)
+                dst_row[x] = kInvalidLabel;
+        }
+    }
+    labels = std::move(filtered);
+}
+
+/** @brief 从强梯度种子出发保留连通的弱梯度边缘；仅用于显式近似配置。 */
+void applyEdgeConnectivity(cv::Mat &labels, const cv::Mat &magnitude, const cv::Mat &mask, float strong_threshold)
+{
+    cv::Mat reachable(labels.size(), CV_8UC1, cv::Scalar(0));
+    std::vector<cv::Point> frontier;
+    frontier.reserve(static_cast<size_t>(labels.total() / 16U + 1U));
+    for (int y = 1; y < labels.rows - 1; ++y)
+    {
+        const auto *mask_row = mask.ptr<unsigned char>(y);
+        const auto *mag_row  = magnitude.ptr<float>(y);
+        const auto *label_row = labels.ptr<unsigned char>(y);
+        auto       *seen_row = reachable.ptr<unsigned char>(y);
+        for (int x = 1; x < labels.cols - 1; ++x)
+        {
+            if (mask_row[x] != 0 && label_row[x] < kOrientationBins && mag_row[x] >= strong_threshold)
+            {
+                seen_row[x] = 1;
+                frontier.emplace_back(x, y);
+            }
+        }
+    }
+
+    for (size_t index = 0; index < frontier.size(); ++index)
+    {
+        const cv::Point point = frontier[index];
+        for (int dy = -1; dy <= 1; ++dy)
+        {
+            for (int dx = -1; dx <= 1; ++dx)
+            {
+                if (dx == 0 && dy == 0)
+                    continue;
+                const int nx = point.x + dx;
+                const int ny = point.y + dy;
+                if (nx <= 0 || nx >= labels.cols - 1 || ny <= 0 || ny >= labels.rows - 1)
+                    continue;
+                if (reachable.at<unsigned char>(ny, nx) != 0 || mask.at<unsigned char>(ny, nx) == 0
+                    || labels.at<unsigned char>(ny, nx) >= kOrientationBins)
+                    continue;
+                reachable.at<unsigned char>(ny, nx) = 1;
+                frontier.emplace_back(nx, ny);
+            }
+        }
+    }
+
+    for (int y = 1; y < labels.rows - 1; ++y)
+    {
+        auto *label_row = labels.ptr<unsigned char>(y);
+        const auto *seen_row = reachable.ptr<unsigned char>(y);
+        for (int x = 1; x < labels.cols - 1; ++x)
+        {
+            if (label_row[x] < kOrientationBins && seen_row[x] == 0)
+                label_row[x] = kInvalidLabel;
+        }
+    }
+}
+
+/** @brief 将邻域中已有方向标签扩散到孤立位置；仅用于显式近似配置。 */
+void applySpatialSpread(cv::Mat &labels, const cv::Mat &mask)
+{
+    cv::Mat spread = labels.clone();
+    for (int y = 1; y < labels.rows - 1; ++y)
+    {
+        const auto *mask_row = mask.ptr<unsigned char>(y);
+        auto       *dst_row  = spread.ptr<unsigned char>(y);
+        for (int x = 1; x < labels.cols - 1; ++x)
+        {
+            if (mask_row[x] == 0 || labels.ptr<unsigned char>(y)[x] < kOrientationBins)
+                continue;
+            std::array<int, kOrientationBins> counts{};
+            for (int dy = -1; dy <= 1; ++dy)
+            {
+                const auto *neighbor = labels.ptr<unsigned char>(y + dy);
+                for (int dx = -1; dx <= 1; ++dx)
+                {
+                    const int label = neighbor[x + dx];
+                    if (label < kOrientationBins)
+                        ++counts[static_cast<size_t>(label)];
+                }
+            }
+            int best_label = 0;
+            int best_count = 0;
+            for (int label = 0; label < kOrientationBins; ++label)
+            {
+                if (counts[static_cast<size_t>(label)] > best_count)
+                {
+                    best_label = label;
+                    best_count = counts[static_cast<size_t>(label)];
+                }
+            }
+            if (best_count >= 2)
+                dst_row[x] = static_cast<unsigned char>(best_label);
+        }
+    }
+    labels = std::move(spread);
+}
+
+/** @brief 折叠相反方向极性；仅用于显式近似配置。 */
+void applyPolarityInvariant(cv::Mat &labels)
+{
+    for (int y = 0; y < labels.rows; ++y)
+    {
+        auto *row = labels.ptr<unsigned char>(y);
+        for (int x = 0; x < labels.cols; ++x)
+        {
+            if (row[x] < kOrientationBins)
+                row[x] = static_cast<unsigned char>(row[x] & 3);
+        }
+    }
+}
+
+void applyOptionalLabelPreprocessing(QuantizedGradient &gradient, const cv::Mat &mask,
+                                     const ShapeTemplateMatcherConfig &config)
+{
+    if (config.use_edge_nms)
+        applyEdgeNonMaximumSuppression(gradient.labels, gradient.magnitude, gradient.angle, mask);
+    if (config.use_edge_connectivity)
+        applyEdgeConnectivity(gradient.labels, gradient.magnitude, mask, config.strong_threshold);
+    if (config.use_polarity_invariant)
+        applyPolarityInvariant(gradient.labels);
+    if (config.use_orientation_histogram)
+        applyOrientationHistogram(gradient.labels, mask);
+    if (config.use_spatial_spread)
+        applySpatialSpread(gradient.labels, mask);
+}
+
+/**
  * @brief 计算图像梯度幅值、方向角和量化方向标签。
  * @param image 输入图像。
  * @param mask 有效区域掩膜。
- * @param weak_threshold 弱梯度阈值。
+ * @param config 梯度阈值和可选 v1 预处理配置。
  * @return 梯度量化结果。
  */
-QuantizedGradient computeQuantizedGradient(const cv::Mat &image, const cv::Mat &mask, float weak_threshold,
+QuantizedGradient computeQuantizedGradient(const cv::Mat &image, const cv::Mat &mask,
+                                           const ShapeTemplateMatcherConfig &config,
                                            const detail::ShapeTemplateMatcherKernel &kernel)
 {
     const cv::Mat gray = toGray8(image);
     const cv::Mat mask8 = normalizeMask(mask, gray.size(), "mask");
 
+    cv::Mat filtered_gray;
+    const cv::Mat *gradient_input = &gray;
+    if (config.use_gaussian_gradient)
+    {
+        cv::GaussianBlur(gray, filtered_gray, cv::Size(5, 5), 0.0, 0.0, cv::BORDER_DEFAULT);
+        gradient_input = &filtered_gray;
+    }
+
     cv::Mat grad_x;
     cv::Mat grad_y;
-    cv::Sobel(gray, grad_x, CV_32F, 1, 0, 3);
-    cv::Sobel(gray, grad_y, CV_32F, 0, 1, 3);
+    cv::Sobel(*gradient_input, grad_x, CV_32F, 1, 0, 3);
+    cv::Sobel(*gradient_input, grad_y, CV_32F, 0, 1, 3);
 
     QuantizedGradient gradient;
     cv::cartToPolar(grad_x, grad_y, gradient.magnitude, gradient.angle, true);
     gradient.labels = cv::Mat(gray.size(), CV_8UC1, cv::Scalar(kInvalidLabel));
 
-    kernel.fillQuantizedLabels(gradient.magnitude, gradient.angle, mask8, weak_threshold, gradient.labels);
+    kernel.fillQuantizedLabels(gradient.magnitude, gradient.angle, mask8, config.weak_threshold, gradient.labels);
+    applyOptionalLabelPreprocessing(gradient, mask8, config);
     return gradient;
 }
 
@@ -439,7 +666,75 @@ std::vector<Candidate> greedySelectCandidatesOptimized(std::vector<Candidate> &c
                                                         int min_features, float min_distance)
 {
     sortCandidates(candidates);
-    return greedySelectCandidates(candidates, num_features, min_features, min_distance);
+
+    if (candidates.empty())
+        return {};
+
+    // 将候选点放入边长等于最小距离的网格。只检查 3x3 邻域即可覆盖所有可能
+    // 小于距离的点；候选遍历顺序、距离比较和逐步减小距离规则均与 v0 相同，
+    // 因而这是严格等价的空间容差优化，而不是改变选点策略。
+    const auto make_cell_key = [](int cell_x, int cell_y) noexcept
+    {
+        return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(cell_x)) << 32U)
+             | static_cast<std::uint32_t>(cell_y);
+    };
+    std::vector<Candidate> best;
+    float distance = std::max(1.0f, min_distance);
+    for (;;)
+    {
+        std::vector<Candidate> selected;
+        selected.reserve(static_cast<size_t>(num_features));
+        std::unordered_map<std::uint64_t, std::vector<size_t>> buckets;
+        buckets.reserve(static_cast<size_t>(num_features) * 2U + 1U);
+        const float min_distance_sq = distance * distance;
+
+        for (const auto &candidate : candidates)
+        {
+            const int cell_x = static_cast<int>(std::floor(static_cast<float>(candidate.x) / distance));
+            const int cell_y = static_cast<int>(std::floor(static_cast<float>(candidate.y) / distance));
+            bool keep = true;
+            for (int dy = -1; dy <= 1 && keep; ++dy)
+            {
+                for (int dx = -1; dx <= 1 && keep; ++dx)
+                {
+                    const auto it = buckets.find(make_cell_key(cell_x + dx, cell_y + dy));
+                    if (it == buckets.end())
+                        continue;
+                    for (const size_t selected_index : it->second)
+                    {
+                        const auto &existing = selected[selected_index];
+                        const float delta_x = static_cast<float>(candidate.x - existing.x);
+                        const float delta_y = static_cast<float>(candidate.y - existing.y);
+                        if (delta_x * delta_x + delta_y * delta_y < min_distance_sq)
+                        {
+                            keep = false;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!keep)
+                continue;
+
+            const size_t selected_index = selected.size();
+            selected.push_back(candidate);
+            buckets[make_cell_key(cell_x, cell_y)].push_back(selected_index);
+            if (static_cast<int>(selected.size()) >= num_features)
+                break;
+        }
+
+        if (selected.size() > best.size())
+            best = std::move(selected);
+        if (static_cast<int>(best.size()) >= min_features
+            || distance <= 1.0f + std::numeric_limits<float>::epsilon())
+            break;
+        distance *= 0.75f;
+        if (distance < 1.0f)
+            distance = 1.0f;
+    }
+    if (static_cast<int>(best.size()) > num_features)
+        best.resize(static_cast<size_t>(num_features));
+    return best;
 }
 
 /** @brief 单个训练工作线程复用的图像与梯度缓冲区。 */
@@ -458,21 +753,31 @@ struct ShapeTemplateTrainingWorkspace
  *
  * 调用方保证 ``normalized_mask`` 为同尺寸的二值 ``CV_8UC1`` 图。训练变体的掩膜
  * 由最近邻仿射变换生成，跳过重复的 ``normalizeMask()`` 不改变任一像素值。
+ * @param config 梯度阈值和可选 v1 预处理配置。
  */
 void computeTemplateQuantizedGradient(const cv::Mat &image, const cv::Mat &normalized_mask,
-                                      float weak_threshold, const detail::ShapeTemplateMatcherKernel &kernel,
+                                      const ShapeTemplateMatcherConfig &config,
+                                      const detail::ShapeTemplateMatcherKernel &kernel,
                                       ShapeTemplateTrainingWorkspace &workspace)
 {
     const cv::Mat gray = toGray8(image);
-    cv::Sobel(gray, workspace.grad_x, CV_32F, 1, 0, 3);
-    cv::Sobel(gray, workspace.grad_y, CV_32F, 0, 1, 3);
+    cv::Mat filtered_gray;
+    const cv::Mat *gradient_input = &gray;
+    if (config.use_gaussian_gradient)
+    {
+        cv::GaussianBlur(gray, filtered_gray, cv::Size(5, 5), 0.0, 0.0, cv::BORDER_DEFAULT);
+        gradient_input = &filtered_gray;
+    }
+    cv::Sobel(*gradient_input, workspace.grad_x, CV_32F, 1, 0, 3);
+    cv::Sobel(*gradient_input, workspace.grad_y, CV_32F, 0, 1, 3);
 
     cv::cartToPolar(workspace.grad_x, workspace.grad_y, workspace.gradient.magnitude, workspace.gradient.angle,
                     true);
     workspace.gradient.labels.create(gray.size(), CV_8UC1);
     workspace.gradient.labels.setTo(cv::Scalar(kInvalidLabel));
     kernel.fillQuantizedLabels(workspace.gradient.magnitude, workspace.gradient.angle, normalized_mask,
-                               weak_threshold, workspace.gradient.labels);
+                               config.weak_threshold, workspace.gradient.labels);
+    applyOptionalLabelPreprocessing(workspace.gradient, normalized_mask, config);
 }
 
 /**
@@ -486,7 +791,7 @@ std::vector<Candidate> extractTemplateCandidates(const cv::Mat &image, const cv:
                                                  const detail::ShapeTemplateMatcherKernel &kernel,
                                                  ShapeTemplateTrainingWorkspace &workspace)
 {
-    computeTemplateQuantizedGradient(image, normalized_mask, config.weak_threshold, kernel, workspace);
+    computeTemplateQuantizedGradient(image, normalized_mask, config, kernel, workspace);
     kernel.collectCandidatesUnsorted(workspace.gradient, normalized_mask, config.strong_threshold,
                                      workspace.candidates);
     if (static_cast<int>(workspace.candidates.size()) < config.min_features
@@ -499,8 +804,11 @@ std::vector<Candidate> extractTemplateCandidates(const cv::Mat &image, const cv:
     const float distance = config.min_feature_distance > 0.0f
                              ? config.min_feature_distance
                              : autoFeatureDistance(image.size(), config.num_features);
-    auto selected = greedySelectCandidatesOptimized(workspace.candidates, config.num_features, config.min_features,
-                                                    distance);
+    auto selected = kernel.usesIndexedFeatureSelection()
+                      ? greedySelectCandidatesOptimized(workspace.candidates, config.num_features,
+                                                        config.min_features, distance)
+                      : greedySelectCandidates(workspace.candidates, config.num_features, config.min_features,
+                                                distance);
     if (static_cast<int>(selected.size()) < config.min_features)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
@@ -558,8 +866,16 @@ ShapeTemplateInfo makeTemplateInfo(int template_id, const std::vector<Candidate>
  * @param b 方向标签 B。
  * @return 最短环形 bin 距离。
  */
-int labelDistance(int a, int b) noexcept
+int labelDistance(int a, int b, bool polarity_invariant) noexcept
 {
+    if (polarity_invariant)
+    {
+        constexpr int kPolarityBins = kOrientationBins / 2;
+        a &= (kPolarityBins - 1);
+        b &= (kPolarityBins - 1);
+        const int diff = std::abs(a - b);
+        return std::min(diff, kPolarityBins - diff);
+    }
     const int diff = std::abs(a - b);
     return std::min(diff, kOrientationBins - diff);
 }
@@ -573,14 +889,14 @@ int labelDistance(int a, int b) noexcept
  * @param max_label_difference 最大允许方向标签差。
  * @return ``table[template_label][source_label]`` 响应表。
  */
-ResponseTable makeResponseTable(int max_label_difference)
+ResponseTable makeResponseTable(int max_label_difference, bool polarity_invariant)
 {
     ResponseTable table{};
     for (int templ_label = 0; templ_label < kOrientationBins; ++templ_label)
     {
         for (int source_label = 0; source_label < kOrientationBins; ++source_label)
         {
-            const int diff = labelDistance(templ_label, source_label);
+            const int diff = labelDistance(templ_label, source_label, polarity_invariant);
             if (diff > max_label_difference)
             {
                 table[templ_label][source_label] = 0;
@@ -615,15 +931,23 @@ int responseDenominatorPerFeature(int max_label_difference) noexcept
  * @param max_label_difference 最大允许方向标签差。
  * @return 方向响应图集合。
  */
-ResponseMaps buildResponseMaps(const cv::Mat &labels, int max_label_difference,
+ResponseMaps buildResponseMaps(const cv::Mat &labels, int max_label_difference, bool polarity_invariant,
                                const detail::ShapeTemplateMatcherKernel &kernel,
                                const std::array<bool, kOrientationBins> &required_labels)
 {
     ResponseMaps response_maps;
     response_maps.denominator_per_feature = responseDenominatorPerFeature(max_label_difference);
-    const auto table = makeResponseTable(max_label_difference);
+    const auto table = makeResponseTable(max_label_difference, polarity_invariant);
     response_maps.quantized_labels = labels;
     response_maps.response_table = table;
+    for (int template_label = 0; template_label < kOrientationBins; ++template_label)
+    {
+        for (int source_label = 0; source_label < kOrientationBins; ++source_label)
+        {
+            response_maps.response_lookup128[static_cast<size_t>(template_label)][static_cast<size_t>(source_label)]
+                = table[static_cast<size_t>(template_label)][static_cast<size_t>(source_label)];
+        }
+    }
     if (!kernel.needsMaterializedResponseMaps())
     {
         std::array<std::uint64_t, kOrientationBins> label_counts{};
@@ -714,8 +1038,21 @@ void sortMatches(std::vector<ShapeTemplateMatch> &matches)
  * @param max_results 最大返回数量；0 表示不限制。
  * @return 过滤后的匹配结果。
  */
+int floorCellCoordinate(int value, int cell_size) noexcept
+{
+    if (value >= 0)
+        return value / cell_size;
+    return -static_cast<int>((static_cast<std::int64_t>(-value) + cell_size - 1) / cell_size);
+}
+
+std::uint64_t makeNmsCellKey(int cell_x, int cell_y) noexcept
+{
+    return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(cell_x)) << 32U)
+         | static_cast<std::uint32_t>(cell_y);
+}
+
 std::vector<ShapeTemplateMatch> applyNms(std::vector<ShapeTemplateMatch> matches, float nms_threshold,
-                                         int max_results)
+                                         int max_results, bool use_spatial_index)
 {
     sortMatches(matches);
     if (nms_threshold < 0.0f)
@@ -729,25 +1066,71 @@ std::vector<ShapeTemplateMatch> applyNms(std::vector<ShapeTemplateMatch> matches
 
     std::vector<ShapeTemplateMatch> kept;
     kept.reserve(matches.size());
+    if (!use_spatial_index)
+    {
+        for (const auto &match : matches)
+        {
+            bool keep = true;
+            for (const auto &existing : kept)
+            {
+                if (intersectionOverUnion(match, existing) > nms_threshold)
+                {
+                    keep = false;
+                    break;
+                }
+            }
+            if (keep)
+            {
+                kept.push_back(match);
+                if (max_results > 0 && static_cast<int>(kept.size()) >= max_results)
+                    break;
+            }
+        }
+        return kept;
+    }
+
+    int cell_size = 1;
+    for (const auto &match : matches)
+        cell_size = std::max(cell_size, std::max(match.width, match.height));
+
+    std::unordered_map<std::uint64_t, std::vector<size_t>> cells;
+    cells.reserve(matches.size() * 2U + 1U);
     for (const auto &match : matches)
     {
         bool keep = true;
-        for (const auto &existing : kept)
+        const int min_cell_x = floorCellCoordinate(match.x, cell_size);
+        const int max_cell_x = floorCellCoordinate(match.x + std::max(0, match.width - 1), cell_size);
+        const int min_cell_y = floorCellCoordinate(match.y, cell_size);
+        const int max_cell_y = floorCellCoordinate(match.y + std::max(0, match.height - 1), cell_size);
+        for (int cell_y = min_cell_y; cell_y <= max_cell_y && keep; ++cell_y)
         {
-            if (intersectionOverUnion(match, existing) > nms_threshold)
+            for (int cell_x = min_cell_x; cell_x <= max_cell_x && keep; ++cell_x)
             {
-                keep = false;
-                break;
+                const auto it = cells.find(makeNmsCellKey(cell_x, cell_y));
+                if (it == cells.end())
+                    continue;
+                for (const size_t kept_index : it->second)
+                {
+                    if (intersectionOverUnion(match, kept[kept_index]) > nms_threshold)
+                    {
+                        keep = false;
+                        break;
+                    }
+                }
             }
         }
-        if (keep)
+        if (!keep)
+            continue;
+
+        const size_t kept_index = kept.size();
+        kept.push_back(match);
+        for (int cell_y = min_cell_y; cell_y <= max_cell_y; ++cell_y)
         {
-            kept.push_back(match);
-            if (max_results > 0 && static_cast<int>(kept.size()) >= max_results)
-            {
-                break;
-            }
+            for (int cell_x = min_cell_x; cell_x <= max_cell_x; ++cell_x)
+                cells[makeNmsCellKey(cell_x, cell_y)].push_back(kept_index);
         }
+        if (max_results > 0 && static_cast<int>(kept.size()) >= max_results)
+            break;
     }
     return kept;
 }
@@ -851,6 +1234,14 @@ detail::ShapeTemplateMatcherEngine::ShapeTemplateMatcherEngine(
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ShapeTemplateMatcher kernel must not be null");
     }
+    if ((config_.use_gaussian_gradient || config_.use_orientation_histogram || config_.use_edge_nms
+         || config_.use_edge_connectivity || config_.use_polarity_invariant || config_.use_spatial_spread
+         || config_.reuse_base_features_for_variants)
+        && !kernel_->supportsApproximatePreprocessing())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "Approximate v1 preprocessing/variant-reuse options are supported by v1 only");
+    }
 }
 
 /** @brief 校验仅影响本次调用的近似匹配策略。 */
@@ -925,7 +1316,7 @@ int detail::ShapeTemplateMatcherEngine::addTemplate(const cv::Mat &image, const 
     {
         // v0 保持原始标量训练流程：保留掩膜的完整规范化、梯度提取与候选选择顺序。
         const cv::Mat mask = normalizeMask(object_mask, image.size(), "object_mask");
-        const auto gradient = computeQuantizedGradient(image, mask, config_.weak_threshold, *kernel_);
+        const auto gradient = computeQuantizedGradient(image, mask, config_, *kernel_);
         auto candidates = kernel_->collectCandidates(gradient, mask, config_.strong_threshold);
         if (static_cast<int>(candidates.size()) < config_.min_features
             && config_.weak_threshold < config_.strong_threshold)
@@ -1061,6 +1452,7 @@ std::vector<std::vector<int>> detail::ShapeTemplateMatcherEngine::addTemplateVar
         const ShapeTemplateTrainingInput *input{nullptr};
         cv::Mat                            mask;
         cv::Point2f                        center;
+        std::vector<Candidate>             base_features;
         std::vector<PreparedTemplate>      templates;
     };
     struct TrainingTask
@@ -1082,6 +1474,14 @@ std::vector<std::vector<int>> detail::ShapeTemplateMatcherEngine::addTemplateVar
         prepared.mask = normalizeMask(input.object_mask, input.image.size(), "object_mask");
         prepared.center = cv::Point2f(static_cast<float>(input.image.cols) * 0.5f,
                                       static_cast<float>(input.image.rows) * 0.5f);
+        if (config_.reuse_base_features_for_variants)
+        {
+            // 近似模式只对每个 ROI 提取一次梯度特征；后续变体仅变换坐标和方向标签。
+            // 这会忽略缩放/旋转后的插值梯度变化，因此显式配置且默认关闭。
+            ShapeTemplateTrainingWorkspace base_workspace;
+            prepared.base_features = extractTemplateCandidates(input.image, prepared.mask, config_, *kernel_,
+                                                               base_workspace);
+        }
         prepared.templates.resize(variants.size());
         prepared_inputs.push_back(std::move(prepared));
 
@@ -1100,6 +1500,55 @@ std::vector<std::vector<int>> detail::ShapeTemplateMatcherEngine::addTemplateVar
         const auto &input = *prepared_input.input;
         const auto &variant = variants[task.variant_index];
         const cv::Mat transform = cv::getRotationMatrix2D(prepared_input.center, variant.angle_degrees, variant.scale);
+        if (config_.reuse_base_features_for_variants)
+        {
+            cv::warpAffine(prepared_input.mask, workspace.transformed_mask, transform,
+                           prepared_input.mask.size(), cv::INTER_NEAREST, cv::BORDER_CONSTANT, cv::Scalar(0));
+            auto &selected = prepared_input.templates[task.variant_index].selected_features;
+            selected.clear();
+            selected.reserve(prepared_input.base_features.size());
+            for (const auto &base : prepared_input.base_features)
+            {
+                const float transformed_x = static_cast<float>(transform.at<double>(0, 0)) * base.x
+                                          + static_cast<float>(transform.at<double>(0, 1)) * base.y
+                                          + static_cast<float>(transform.at<double>(0, 2));
+                const float transformed_y = static_cast<float>(transform.at<double>(1, 0)) * base.x
+                                          + static_cast<float>(transform.at<double>(1, 1)) * base.y
+                                          + static_cast<float>(transform.at<double>(1, 2));
+                const int x = cvRound(transformed_x);
+                const int y = cvRound(transformed_y);
+                if (x <= 0 || x >= input.image.cols - 1 || y <= 0 || y >= input.image.rows - 1
+                    || workspace.transformed_mask.at<unsigned char>(y, x) == 0)
+                    continue;
+
+                bool duplicate = false;
+                for (const auto &existing : selected)
+                {
+                    if (existing.x == x && existing.y == y)
+                    {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (duplicate)
+                    continue;
+
+                Candidate transformed = base;
+                transformed.x = x;
+                transformed.y = y;
+                transformed.angle_degrees = base.angle_degrees + variant.angle_degrees;
+                transformed.label = quantizeAngle(transformed.angle_degrees);
+                if (config_.use_polarity_invariant)
+                    transformed.label &= 3;
+                selected.push_back(transformed);
+            }
+            if (static_cast<int>(selected.size()) < config_.min_features)
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                     "Not enough transformed features to build a reused shape template");
+            }
+            return;
+        }
         cv::warpAffine(input.image, workspace.transformed_image, transform, input.image.size(), cv::INTER_LINEAR,
                        cv::BORDER_CONSTANT, cv::Scalar());
         cv::warpAffine(prepared_input.mask, workspace.transformed_mask, transform, prepared_input.mask.size(),
@@ -1233,22 +1682,32 @@ std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::match(
         for (const auto &feature : work.templ->features)
             required_labels[static_cast<size_t>(feature.label)] = true;
     }
-    const auto gradient = computeQuantizedGradient(image, mask, config_.weak_threshold, *kernel_);
-    const auto response_maps = buildResponseMaps(gradient.labels, config_.max_label_difference, *kernel_,
-                                                 required_labels);
+    const auto gradient = computeQuantizedGradient(image, mask, config_, *kernel_);
+    const auto response_maps = buildResponseMaps(gradient.labels, config_.max_label_difference,
+                                                 config_.use_polarity_invariant, *kernel_, required_labels);
 
-    auto scan_template = [&](const MatchWork &work)
+    auto scan_template = [&](const MatchWork &work, detail::ShapeTemplateScanWorkspace &workspace,
+        std::vector<ShapeTemplateMatch> &local_matches)
     {
-        std::vector<ShapeTemplateMatch> local_matches;
         const auto &templ = *work.templ;
-        const auto scored_positions = kernel_->scanTemplate(response_maps, templ, mask, full_search_mask,
-                                                            image.size(), effective_scan_step, effective_threshold);
-        local_matches.reserve(scored_positions.size());
-        for (const auto &position : scored_positions)
+        std::vector<detail::ShapeTemplateScoredPosition> owned_positions;
+        const std::vector<detail::ShapeTemplateScoredPosition> *scored_positions = nullptr;
+        if (kernel_->usesReusableScanWorkspace())
+        {
+            kernel_->scanTemplate(response_maps, templ, mask, full_search_mask, image.size(), effective_scan_step,
+                                  effective_threshold, workspace);
+            scored_positions = &workspace.scored_positions;
+        }
+        else
+        {
+            owned_positions = kernel_->scanTemplate(response_maps, templ, mask, full_search_mask, image.size(),
+                                                    effective_scan_step, effective_threshold);
+            scored_positions = &owned_positions;
+        }
+        for (const auto &position : *scored_positions)
         {
             local_matches.push_back(makeShapeTemplateMatch(templ, position));
         }
-        return local_matches;
     };
 
     const int requested_parallelism = options.max_parallelism > 0 ? options.max_parallelism : config_.max_parallelism;
@@ -1261,11 +1720,29 @@ std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::match(
     std::vector<ShapeTemplateMatch> matches;
     if (worker_count <= 1)
     {
-        for (const auto &work : work_items)
+        if (kernel_->usesReusableScanWorkspace())
         {
-            auto local_matches = scan_template(work);
-            matches.insert(matches.end(), std::make_move_iterator(local_matches.begin()),
-                           std::make_move_iterator(local_matches.end()));
+            detail::ShapeTemplateScanWorkspace workspace;
+            std::vector<ShapeTemplateMatch> local_matches;
+            for (const auto &work : work_items)
+                scan_template(work, workspace, local_matches);
+            matches = std::move(local_matches);
+        }
+        else
+        {
+            // v0/v2 保持原始的“每个模板返回一个 vector、随后移动合并”调度方式。
+            for (const auto &work : work_items)
+            {
+                std::vector<ShapeTemplateMatch> local_matches;
+                const auto scored_positions = kernel_->scanTemplate(
+                    response_maps, *work.templ, mask, full_search_mask, image.size(), effective_scan_step,
+                    effective_threshold);
+                local_matches.reserve(scored_positions.size());
+                for (const auto &position : scored_positions)
+                    local_matches.push_back(makeShapeTemplateMatch(*work.templ, position));
+                matches.insert(matches.end(), std::make_move_iterator(local_matches.begin()),
+                               std::make_move_iterator(local_matches.end()));
+            }
         }
     }
     else
@@ -1279,14 +1756,13 @@ std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::match(
             workers.emplace_back([&, worker]
             {
                 auto &local_matches = partial_matches[worker];
+                detail::ShapeTemplateScanWorkspace workspace;
                 for (;;)
                 {
                     const size_t index = next_work.fetch_add(1, std::memory_order_relaxed);
                     if (index >= work_items.size())
                         break;
-                    auto matches_for_template = scan_template(work_items[index]);
-                    local_matches.insert(local_matches.end(), std::make_move_iterator(matches_for_template.begin()),
-                                         std::make_move_iterator(matches_for_template.end()));
+                    scan_template(work_items[index], workspace, local_matches);
                 }
             });
         }
@@ -1296,7 +1772,7 @@ std::vector<ShapeTemplateMatch> detail::ShapeTemplateMatcherEngine::match(
             matches.insert(matches.end(), std::make_move_iterator(local_matches.begin()),
                            std::make_move_iterator(local_matches.end()));
     }
-    return applyNms(std::move(matches), config_.nms_threshold, config_.max_results);
+    return applyNms(std::move(matches), config_.nms_threshold, config_.max_results, kernel_->usesIndexedNms());
 }
 
 /**
@@ -1384,6 +1860,14 @@ void detail::ShapeTemplateMatcherEngine::save(const fs::path &template_file) con
     emitter << YAML::Key << "scan_step" << YAML::Value << config_.scan_step;
     emitter << YAML::Key << "max_parallelism" << YAML::Value << config_.max_parallelism;
     emitter << YAML::Key << "min_feature_distance" << YAML::Value << config_.min_feature_distance;
+    emitter << YAML::Key << "use_gaussian_gradient" << YAML::Value << config_.use_gaussian_gradient;
+    emitter << YAML::Key << "use_orientation_histogram" << YAML::Value << config_.use_orientation_histogram;
+    emitter << YAML::Key << "use_edge_nms" << YAML::Value << config_.use_edge_nms;
+    emitter << YAML::Key << "use_edge_connectivity" << YAML::Value << config_.use_edge_connectivity;
+    emitter << YAML::Key << "use_polarity_invariant" << YAML::Value << config_.use_polarity_invariant;
+    emitter << YAML::Key << "use_spatial_spread" << YAML::Value << config_.use_spatial_spread;
+    emitter << YAML::Key << "reuse_base_features_for_variants" << YAML::Value
+            << config_.reuse_base_features_for_variants;
     emitter << YAML::EndMap;
 
     emitter << YAML::Key << "templates" << YAML::Value << YAML::BeginSeq;
@@ -1481,8 +1965,25 @@ void detail::ShapeTemplateMatcherEngine::load(const fs::path &template_file)
             readYamlIfPresent(config_node, "scan_step", loaded_config.scan_step);
             readYamlIfPresent(config_node, "max_parallelism", loaded_config.max_parallelism);
             readYamlIfPresent(config_node, "min_feature_distance", loaded_config.min_feature_distance);
+            readYamlIfPresent(config_node, "use_gaussian_gradient", loaded_config.use_gaussian_gradient);
+            readYamlIfPresent(config_node, "use_orientation_histogram", loaded_config.use_orientation_histogram);
+            readYamlIfPresent(config_node, "use_edge_nms", loaded_config.use_edge_nms);
+            readYamlIfPresent(config_node, "use_edge_connectivity", loaded_config.use_edge_connectivity);
+            readYamlIfPresent(config_node, "use_polarity_invariant", loaded_config.use_polarity_invariant);
+            readYamlIfPresent(config_node, "use_spatial_spread", loaded_config.use_spatial_spread);
+            readYamlIfPresent(config_node, "reuse_base_features_for_variants",
+                              loaded_config.reuse_base_features_for_variants);
         }
         validateConfig(loaded_config);
+        if ((loaded_config.use_gaussian_gradient || loaded_config.use_orientation_histogram
+             || loaded_config.use_edge_nms || loaded_config.use_edge_connectivity
+             || loaded_config.use_polarity_invariant || loaded_config.use_spatial_spread
+             || loaded_config.reuse_base_features_for_variants)
+            && !kernel_->supportsApproximatePreprocessing())
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "Approximate v1 preprocessing/variant-reuse options are supported by v1 only");
+        }
 
         std::vector<ShapeTemplateInfo> loaded_templates;
         const YAML::Node templates_node = root["templates"];

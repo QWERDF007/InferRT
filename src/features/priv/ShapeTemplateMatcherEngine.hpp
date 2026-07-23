@@ -45,6 +45,8 @@ struct ShapeTemplateResponseMaps
     std::array<float, kShapeTemplateOrientationBins> average_responses{}; ///< 各模板方向响应均值，用于 v1/v2 剪枝排序。
     cv::Mat quantized_labels;                                ///< 源图量化方向；v1/v2 可直接 SIMD 查表，减少响应图切换。
     ShapeTemplateResponseTable response_table{};             ///< 方向标签到响应分子的稳定查找表。
+    std::array<std::array<unsigned char, 16>, kShapeTemplateOrientationBins> response_lookup128{};
+                                                               ///< v1/v2 共享的 SIMD 查表副本。
     int denominator_per_feature{1};                          ///< 单个特征点满分对应的分母。
 };
 
@@ -54,6 +56,26 @@ struct ShapeTemplateScoredPosition
     int   x{0};
     int   y{0};
     float score{0.0f};
+};
+
+/** @brief v1/v2 扫描阶段可复用的特征访问描述。 */
+struct ShapeTemplatePackedFeature
+{
+    const unsigned char *base{nullptr}; ///< 源图量化标签中该特征所在行的起始地址。
+    float expected_response{0.0f};      ///< 当前源图上的平均响应，用于稳定的早停排序。
+    int label{0};                       ///< 模板方向标签。
+};
+
+/**
+ * @brief 单个匹配工作线程的可复用扫描缓冲区。
+ *
+ * v1 的每个模板都访问同一张源图标签图。把结果和特征访问数组放在线程级工作区中，
+ * 可避免模板循环内反复分配、释放临时 vector；缓冲区内容只属于当前线程，不改变匹配结果。
+ */
+struct ShapeTemplateScanWorkspace
+{
+    std::vector<ShapeTemplateScoredPosition> scored_positions;
+    std::vector<ShapeTemplatePackedFeature>  feature_bases;
 };
 
 /**
@@ -71,6 +93,26 @@ public:
     virtual bool needsMaterializedResponseMaps() const noexcept = 0;
     /** @brief 当前版本是否使用 SIMD 专属的并行模板训练路径。 */
     virtual bool usesOptimizedTemplateTraining() const noexcept = 0;
+    /** @brief 当前版本是否支持 v1 专属的、可能改变精度的预处理/变体复用选项。 */
+    virtual bool supportsApproximatePreprocessing() const noexcept
+    {
+        return false;
+    }
+    /** @brief 当前版本是否启用线程级扫描工作区；仅 v1 使用，v0/v2 保持原返回 vector 路径。 */
+    virtual bool usesReusableScanWorkspace() const noexcept
+    {
+        return false;
+    }
+    /** @brief 当前版本是否使用保持顺序和 IoU 语义不变的空间索引 NMS。 */
+    virtual bool usesIndexedNms() const noexcept
+    {
+        return false;
+    }
+    /** @brief 当前版本是否使用严格等价的空间网格特征选点；仅 v1 开启。 */
+    virtual bool usesIndexedFeatureSelection() const noexcept
+    {
+        return false;
+    }
     virtual void fillQuantizedLabels(const cv::Mat &magnitude, const cv::Mat &angle, const cv::Mat &mask,
                                      float threshold, cv::Mat &labels) const = 0;
     virtual std::vector<ShapeTemplateCandidate>
@@ -103,6 +145,20 @@ public:
     scanTemplate(const ShapeTemplateResponseMaps &response_maps, const ShapeTemplateInfo &templ,
                  const cv::Mat &search_mask, bool full_search_mask, cv::Size image_size, int scan_step,
                  float threshold) const = 0;
+
+    /**
+     * @brief 使用调用方工作区扫描一个模板。
+     *
+     * 默认实现转发到返回临时 vector 的旧接口，v1 覆写该入口以复用线程级缓冲区；v0/v2
+     * 保持原有热点实现和结果语义不变。
+     */
+    virtual void scanTemplate(const ShapeTemplateResponseMaps &response_maps, const ShapeTemplateInfo &templ,
+                              const cv::Mat &search_mask, bool full_search_mask, cv::Size image_size,
+                              int scan_step, float threshold, ShapeTemplateScanWorkspace &workspace) const
+    {
+        workspace.scored_positions = scanTemplate(response_maps, templ, search_mask, full_search_mask, image_size,
+                                                  scan_step, threshold);
+    }
 };
 
 /** @brief 供各 kernel 共享的稳定方向量化和候选排序规则。 */

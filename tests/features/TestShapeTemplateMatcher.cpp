@@ -252,6 +252,69 @@ TEST(ShapeTemplateMatcherTest, ConstructorRejectsInvalidConfig)
                            irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
+/** @brief v1 近似梯度预处理默认关闭，并且不允许误用于 v0。 */
+TEST(ShapeTemplateMatcherTest, ApproximatePreprocessingIsV1OnlyAndPersisted)
+{
+    auto config = fastConfig();
+    EXPECT_FALSE(config.use_gaussian_gradient);
+    EXPECT_FALSE(config.use_orientation_histogram);
+
+    config.use_gaussian_gradient     = true;
+    config.use_orientation_histogram = true;
+    config.use_edge_nms              = true;
+    config.use_edge_connectivity     = true;
+    config.use_polarity_invariant    = true;
+    config.use_spatial_spread        = true;
+    config.reuse_base_features_for_variants = true;
+    V1ShapeTemplateMatcher matcher(config);
+    EXPECT_TRUE(matcher.config().use_gaussian_gradient);
+    EXPECT_TRUE(matcher.config().use_orientation_histogram);
+
+    TempDir temp;
+    const auto file = temp.path() / "approximate_preprocessing.yaml";
+    matcher.save(file);
+    V1ShapeTemplateMatcher loaded;
+    loaded.load(file);
+    EXPECT_TRUE(loaded.config().use_gaussian_gradient);
+    EXPECT_TRUE(loaded.config().use_orientation_histogram);
+    EXPECT_TRUE(loaded.config().use_edge_nms);
+    EXPECT_TRUE(loaded.config().use_edge_connectivity);
+    EXPECT_TRUE(loaded.config().use_polarity_invariant);
+    EXPECT_TRUE(loaded.config().use_spatial_spread);
+    EXPECT_TRUE(loaded.config().reuse_base_features_for_variants);
+
+    auto approx_v0_config = config;
+    EXPECT_THROW({ V0ShapeTemplateMatcher rejected(approx_v0_config); }, irt::Exception);
+}
+
+/** @brief v1 基础特征复用应生成完整的旋转/尺度变体，并可立即匹配。 */
+TEST(ShapeTemplateMatcherTrainingOptimizationTest, ReusedBaseFeaturesGenerateVariants)
+{
+    auto config = fastConfig();
+    config.max_label_difference = 1;
+    config.reuse_base_features_for_variants = true;
+    config.max_training_parallelism = 2;
+
+    const auto object = makeLShape(64);
+    const auto variants = irt::features::makeShapeTemplateAngleScaleVariants(-15.0f, 15.0f, 15.0f,
+                                                                               0.9f, 1.1f, 0.1f);
+    V1ShapeTemplateMatcher matcher(config);
+    const auto ids = matcher.addTemplateVariants(object, cv::Mat(), variants);
+    ASSERT_EQ(ids.size(), variants.size());
+    ASSERT_EQ(matcher.numTemplates(), static_cast<int>(variants.size()));
+    for (size_t index = 0; index < ids.size(); ++index)
+    {
+        const auto &templ = matcher.getTemplate(ids[index]);
+        EXPECT_EQ(templ.angle_degrees, variants[index].angle_degrees);
+        EXPECT_FLOAT_EQ(templ.scale, variants[index].scale);
+        EXPECT_GE(static_cast<int>(templ.features.size()), config.min_features);
+    }
+
+    const auto scene = makeSceneWith(object, cv::Point(23, 19), cv::Size(128, 120));
+    const auto matches = matcher.match(scene, 50.0f);
+    EXPECT_FALSE(matches.empty());
+}
+
 /**
  * @brief 训练阶段应拒绝空图、错误掩膜尺寸和无梯度模板。
  */
