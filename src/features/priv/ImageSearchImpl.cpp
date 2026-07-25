@@ -433,7 +433,8 @@ void ImageSearch::Impl::buildWithImages(const fs::path &weights_file, const fs::
     extractFeaturesToStore(gallery_paths, *extractor, feature_store, progress_callback);
 
     auto built = buildIndexFromStore(gallery_items, index_path, config_, feature_store, progress_callback);
-    installIndex(weights_file, gallery_dir, index_path, std::move(built), gallery_ids, extractor->featureDim(),
+    const int feature_dim = extractor->featureDim();
+    installIndex(weights_file, gallery_dir, index_path, std::move(built), gallery_ids, feature_dim,
                  std::move(extractor));
     saveImageSearchManifest(index_path_, metadata_gallery_value, config_, gallery_ids_);
 

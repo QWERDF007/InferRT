@@ -70,6 +70,39 @@ void l1Normalize(float *values, size_t count)
     }
 }
 
+/**
+ * @brief 为小图库构建精确的内积索引。
+ *
+ * IVF-PQ 需要足够多的训练样本；在只有少量图片时，聚类既没有收益，
+ * 还会触发 Faiss 的小样本训练边界。IndexFlatIP 对小图库更快且结果精确。
+ */
+std::unique_ptr<faiss::Index> buildRamFlatIndex(
+    size_t vector_count, int feature_dim, size_t requested_batch_size,
+    const LoadFeatureCallback &load_feature, const LoadFeatureBatchCallback &load_feature_batch,
+    const ImageSearchBuildProgressCallback &progress_callback)
+{
+    if (vector_count == 0 || feature_dim <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "Flat Faiss index requires non-empty features");
+    }
+
+    auto index = std::make_unique<faiss::IndexFlatIP>(feature_dim);
+    const auto batch_size = chooseFaissIndexBuildBatchSize(requested_batch_size, vector_count, feature_dim);
+    size_t     batch_index = 0;
+    for (size_t begin = 0; begin < vector_count; begin += batch_size)
+    {
+        const size_t count = std::min(batch_size, vector_count - begin);
+        const auto features
+            = load_feature_batch ? loadFeatureBatch(begin, count, feature_dim, load_feature_batch)
+                                  : loadFeatureBatch(begin, count, feature_dim, load_feature);
+        index->add(static_cast<faiss::idx_t>(count), features.data());
+        reportBuildProgress(progress_callback, ImageSearchBuildStage::BuildingIndex, batch_index++, begin, count,
+                            begin + count, vector_count);
+    }
+    return index;
+}
+
 } // namespace
 
 void processFeatureBatches(size_t item_count, size_t batch_size, int feature_dim,
@@ -509,9 +542,17 @@ FaissIndexBundle buildConfiguredFaissIndex(size_t vector_count, int feature_dim,
         return bundle;
     }
 
-    auto cpu_index = buildRamIvfPqIndex(vector_count, feature_dim, config.model_batch_size, load_feature,
-                                        load_feature_batch, load_feature_index_batch, progress_callback,
-                                        config.faiss_backend == ImageSearchFaissBackend::GPU);
+    // IVF-PQ is not meaningful for a tiny gallery and its training code requires
+    // substantially more samples than are available here. Keep the exact flat
+    // index in that case; it is also a safer default for sample-sized galleries.
+    constexpr size_t kExactFlatIndexMaxVectors = 256;
+    auto             cpu_index
+        = vector_count <= kExactFlatIndexMaxVectors
+              ? buildRamFlatIndex(vector_count, feature_dim, config.model_batch_size, load_feature,
+                                  load_feature_batch, progress_callback)
+              : buildRamIvfPqIndex(vector_count, feature_dim, config.model_batch_size, load_feature,
+                                   load_feature_batch, load_feature_index_batch, progress_callback,
+                                   config.faiss_backend == ImageSearchFaissBackend::GPU);
 
     faiss::write_index(cpu_index.get(), index_path.string().c_str());
     return moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend, config.model_runtime.deviceId());
