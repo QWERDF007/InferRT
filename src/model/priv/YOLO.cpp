@@ -1,6 +1,7 @@
 #include "YOLO.hpp"
 
 #include "BatchNorm.hpp"
+#include "Layers.hpp"
 
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/IModel.h>
@@ -232,15 +233,12 @@ nvinfer1::ITensor *addC2f(nvinfer1::INetworkDefinition *network, const WeightsMa
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Unexpected C2f tensor shape for %s", prefix.c_str());
     }
 
-    auto *split0
-        = network->addSlice(*cv1, nvinfer1::Dims4{0, 0, 0, 0}, nvinfer1::Dims4{dims.d[0], hidden, dims.d[2], dims.d[3]},
-                            nvinfer1::Dims4{1, 1, 1, 1});
+    auto *split0 = slicePreserveFirstDim(network, *cv1, nvinfer1::Dims4{0, 0, 0, 0}, {hidden, dims.d[2], dims.d[3]});
     auto *split1
-        = network->addSlice(*cv1, nvinfer1::Dims4{0, hidden, 0, 0},
-                            nvinfer1::Dims4{dims.d[0], hidden, dims.d[2], dims.d[3]}, nvinfer1::Dims4{1, 1, 1, 1});
-    std::vector<nvinfer1::ITensor *> branches{split0->getOutput(0), split1->getOutput(0)};
+        = slicePreserveFirstDim(network, *cv1, nvinfer1::Dims4{0, hidden, 0, 0}, {hidden, dims.d[2], dims.d[3]});
+    std::vector<nvinfer1::ITensor *> branches{split0, split1};
 
-    auto *tail = split1->getOutput(0);
+    auto *tail = split1;
     for (int i = 0; i < repeats; ++i)
     {
         tail = addYOLOv8Bottleneck(network, weights_map, *tail, hidden, shortcut, prefix + ".m." + std::to_string(i));
@@ -304,7 +302,15 @@ nvinfer1::ITensor *addNearestResizeLike(nvinfer1::INetworkDefinition *network, n
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Unexpected YOLO resize tensor rank");
     }
     resize->setResizeMode(nvinfer1::InterpolationMode::kNEAREST);
-    resize->setOutputDimensions(output_dims);
+    if (output_dims.d[0] < 0)
+    {
+        resize->setInput(1,
+                         *shapeWithFirstDimOf(network, input, {output_dims.d[1], output_dims.d[2], output_dims.d[3]}));
+    }
+    else
+    {
+        resize->setOutputDimensions(output_dims);
+    }
     return resize->getOutput(0);
 }
 
@@ -363,9 +369,9 @@ DFLHeadOutputs addDFLBoxClassHeads(nvinfer1::INetworkDefinition *network, const 
     auto *cls  = addLinearConv1x1(network, weights_map, *cls1, num_classes, head_prefix + ".cv3." + index + ".2");
 
     auto *box_shuffle = network->addShuffle(*box);
-    box_shuffle->setReshapeDimensions(nvinfer1::Dims3{input_shape.d[0], kYoloV8BoxChannels, grid});
+    box_shuffle->setReshapeDimensions(nvinfer1::Dims3{box->getDimensions().d[0], kYoloV8BoxChannels, grid});
     auto *cls_shuffle = network->addShuffle(*cls);
-    cls_shuffle->setReshapeDimensions(nvinfer1::Dims3{input_shape.d[0], num_classes, grid});
+    cls_shuffle->setReshapeDimensions(nvinfer1::Dims3{cls->getDimensions().d[0], num_classes, grid});
 
     auto *dfl = addDFL(network, weights_map, *box_shuffle->getOutput(0), grid, head_prefix + ".dfl.conv.weight");
     return DFLHeadOutputs{dfl, cls_shuffle->getOutput(0), grid};
@@ -410,7 +416,7 @@ nvinfer1::ITensor *addMaskCoeffBranch(nvinfer1::INetworkDefinition *network, con
         = addLinearConv1x1(network, weights_map, *mask1, kYoloV8MaskChannels, head_prefix + ".cv4." + index + ".2");
 
     auto *shuffle = network->addShuffle(*mask);
-    shuffle->setReshapeDimensions(nvinfer1::Dims3{input_shape.d[0], kYoloV8MaskChannels, grid});
+    shuffle->setReshapeDimensions(nvinfer1::Dims3{mask->getDimensions().d[0], kYoloV8MaskChannels, grid});
     return shuffle->getOutput(0);
 }
 

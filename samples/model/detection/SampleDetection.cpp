@@ -1,5 +1,4 @@
 #include <SampleSupport.hpp>
-
 #include <cuda_runtime_api.h>
 #include <cxxopts.hpp>
 #include <inferrt/core/Exception.hpp>
@@ -73,6 +72,9 @@ struct Arguments
     std::string              legacy_anchors;
     int                      input_size{640};
     bool                     input_size_explicit{false};
+    int                      batch_min{1};
+    int                      batch_opt{1};
+    int                      batch_max{1};
     int                      num_classes{80};
     int                      max_detections{100};
     float                    conf_threshold{0.25F};
@@ -224,15 +226,18 @@ cxxopts::Options makeOptions(const char *program_name)
         "label-file,l", "Class label file", cxxopts::value<std::string>()->default_value(""))(
         "output-image,o", "Optional path to save image with boxes", cxxopts::value<std::string>()->default_value(""))(
         "input-size", "Square network input size; YOLO defaults to 640, RF-DETR uses its registered default",
-        cxxopts::value<int>())("classes", "Number of classes used by the YOLO head",
-                               cxxopts::value<int>()->default_value("80"))(
+        cxxopts::value<int>())("batch-min", "Minimum native YOLO TensorRT batch profile size",
+                               cxxopts::value<int>()->default_value("1"))(
+        "batch-opt", "Optimal native YOLO TensorRT batch profile size", cxxopts::value<int>()->default_value("1"))(
+        "batch-max", "Maximum native YOLO TensorRT batch profile size", cxxopts::value<int>()->default_value("1"))(
+        "classes", "Number of classes used by the YOLO head", cxxopts::value<int>()->default_value("80"))(
         "conf-threshold", "Confidence threshold", cxxopts::value<float>()->default_value("0.25"))(
         "nms-threshold", "Class-wise NMS IoU threshold", cxxopts::value<float>()->default_value("0.45"))(
         "max-detections", "Maximum detections printed after NMS", cxxopts::value<int>()->default_value("100"))(
         "legacy-anchors", "Legacy YOLOv5 anchors as 18 comma-separated numbers; empty uses COCO defaults",
-        cxxopts::value<std::string>()->default_value(""))("runtime",
-                                                          "Model runtime: cpu, gpu:0, cuda:0, or backend:gpu-id (e.g. tensorrt:0)",
-                                                           cxxopts::value<std::string>()->default_value("tensorrt:0"));
+        cxxopts::value<std::string>()->default_value(""))(
+        "runtime", "Model runtime: cpu, gpu:0, cuda:0, or backend:gpu-id (e.g. tensorrt:0)",
+        cxxopts::value<std::string>()->default_value("tensorrt:0"));
     irt::samples::addTimingOptions(options, "Timed inference iterations");
     options.add_options()("h,help", "Show help");
     return options;
@@ -272,6 +277,9 @@ Arguments parseArguments(int argc, char *argv[])
     args.output_image        = result["output-image"].as<std::string>();
     args.input_size_explicit = result.count("input-size") != 0U;
     args.input_size          = args.input_size_explicit ? result["input-size"].as<int>() : 640;
+    args.batch_min           = result["batch-min"].as<int>();
+    args.batch_opt           = result["batch-opt"].as<int>();
+    args.batch_max           = result["batch-max"].as<int>();
     args.num_classes         = result["classes"].as<int>();
     args.conf_threshold      = result["conf-threshold"].as<float>();
     args.nms_threshold       = result["nms-threshold"].as<float>();
@@ -301,6 +309,21 @@ Arguments parseArguments(int argc, char *argv[])
     if (args.family == DetectionFamily::RFDETR && args.input_size_explicit && args.input_size <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--input-size must be positive");
+    }
+    if (args.batch_min <= 0 || args.batch_min > args.batch_opt || args.batch_opt > args.batch_max)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "batch profile must satisfy 1 <= --batch-min <= --batch-opt <= --batch-max");
+    }
+    if (args.family != DetectionFamily::YOLO && args.batch_min != args.batch_max)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "dynamic batch profile options are currently supported only for native YOLO models");
+    }
+    if (args.batch_min != 1)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "the single-image detection sample requires --batch-min=1");
     }
     if (args.num_classes <= 0)
     {
@@ -778,7 +801,11 @@ int main(int argc, char *argv[])
         {
             if (args.family == DetectionFamily::YOLO)
             {
-                config->setInputShape(nvinfer1::Dims4{1, 3, args.input_size, args.input_size});
+                config->setInputShape(nvinfer1::Dims4{args.batch_opt, 3, args.input_size, args.input_size});
+                if (args.batch_min != args.batch_max)
+                {
+                    config->setDynamicBatchRange(args.batch_min, args.batch_opt, args.batch_max);
+                }
                 config->setNumClasses(args.num_classes);
                 config->setOutputTensorNames({"output0", "output1", "output2"});
             }
@@ -823,6 +850,10 @@ int main(int argc, char *argv[])
                                  args.family == DetectionFamily::RFDETR ? "at least two" : "three");
         }
 
+        if (args.family == DetectionFamily::YOLO)
+        {
+            model->setTensorShape(input_names.front(), nvinfer1::Dims4{1, 3, args.input_size, args.input_size});
+        }
         const nvinfer1::Dims input_dims = model->tensorShape(input_names.front());
         if (input_dims.nbDims != 4 || input_dims.d[0] != 1 || input_dims.d[1] != 3)
         {

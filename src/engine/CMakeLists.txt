@@ -1,0 +1,13 @@
+add_plugin_library(engine
+    PRIVATE_LIBS
+        inferrt_cvcuda
+        yaml-cpp::yaml-cpp
+    PUBLIC_LIBS
+        CUDA::cudart
+        TensorRT::TensorRT
+        opencv_core
+        opencv_imgproc
+        inferrt_core
+        inferrt_util
+        inferrt_model
+)

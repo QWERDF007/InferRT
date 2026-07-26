@@ -88,6 +88,7 @@ Runtime options:
 - `--runtime`: combines backend and device, for example `tensorrt:0`, `onnxruntime:cpu`, `onnxruntime:0`, or `openvino:cpu`; shorthand `cpu`, `gpu:0`, and `cuda:0` is also supported.
 - `--warmup`: iterations to run before measurement.
 - `--repeat`: measured iterations used for total/avg/min/max timing.
+- `--batch-min`, `--batch-opt`, `--batch-max`: native YOLO TensorRT dynamic batch profile. They must satisfy `1 <= min <= opt <= max`; this single-image sample requires `min=1`, so `--batch-min 1 --batch-opt 4 --batch-max 8` builds the profile used by `InferenceEngine`.
 
 ONNX Runtime and OpenVINO use graph inputs and outputs directly for YOLO. The graph must expose one image input and the same three YOLO output tensors expected by this sample. RF-DETR is currently supported through the native TensorRT path.
 

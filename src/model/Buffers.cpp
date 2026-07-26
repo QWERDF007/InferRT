@@ -37,4 +37,19 @@ void HostFree::operator()(void *ptr) const noexcept
     std::free(ptr);
 }
 
+bool PinnedHostAllocator::operator()(void **ptr, size_t num_bytes) const noexcept
+{
+    if (num_bytes == 0)
+    {
+        *ptr = nullptr;
+        return true;
+    }
+    return cudaHostAlloc(ptr, num_bytes, cudaHostAllocDefault) == cudaSuccess;
+}
+
+void PinnedHostFree::operator()(void *ptr) const noexcept
+{
+    cudaFreeHost(ptr);
+}
+
 } // namespace irt::model

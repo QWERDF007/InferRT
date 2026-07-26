@@ -1,6 +1,7 @@
 add_subdirectory(core)
 add_subdirectory(cvcuda)
 add_subdirectory(model)
+add_subdirectory(engine)
 add_subdirectory(features)
 add_subdirectory(util)
 add_subdirectory(ops)

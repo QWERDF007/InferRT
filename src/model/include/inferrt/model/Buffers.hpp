@@ -68,6 +68,33 @@ public:
 };
 
 /**
+ * @brief 锁页主机内存分配器。
+ *
+ * 使用 CUDA `cudaHostAlloc` 分配，适用于需要通过异步 H2D/D2H 传输的稳定 staging buffer。
+ */
+class INFERRT_MODEL_API PinnedHostAllocator
+{
+public:
+    /**
+     * @brief 分配指定字节数的锁页主机内存。
+     * @param ptr 输出参数，接收主机指针。
+     * @param num_bytes 需要分配的字节数。
+     * @return 分配成功返回 true，否则返回 false。
+     */
+    bool operator()(void **ptr, size_t num_bytes) const noexcept;
+};
+
+/**
+ * @brief 锁页主机内存释放器。
+ */
+class INFERRT_MODEL_API PinnedHostFree
+{
+public:
+    /** @brief 释放由 PinnedHostAllocator 分配的内存；允许为 nullptr。 */
+    void operator()(void *ptr) const noexcept;
+};
+
+/**
  * @brief 通用缓冲区 RAII 模板。
  *
  * 该模板参考 TensorRT `samples/common/buffers.h` 中的 GenericBuffer 设计，
@@ -367,5 +394,12 @@ using DeviceBuffer = GenericBuffer<DeviceAllocator, DeviceFree>;
  * 使用标准 `malloc/free` 管理主机内存。
  */
 using HostBuffer = GenericBuffer<HostAllocator, HostFree>;
+
+/**
+ * @brief 锁页主机缓冲区类型。
+ *
+ * 使用 CUDA `cudaHostAlloc/cudaFreeHost` 管理，适用于异步设备传输。
+ */
+using PinnedHostBuffer = GenericBuffer<PinnedHostAllocator, PinnedHostFree>;
 
 } // namespace irt::model

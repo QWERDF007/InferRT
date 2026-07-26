@@ -33,6 +33,15 @@ struct YOLOv8Spec
  */
 class YOLOModelBase : public priv::IModelImpl
 {
+public:
+    /**
+     * @brief YOLO 网络仅将 batch 维作为动态维，空间尺寸仍由配置固定。
+     */
+    bool supportsDynamicBatch() const noexcept override
+    {
+        return true;
+    }
+
 protected:
     /**
      * @brief 将默认 ImageNet 分类配置规整为 YOLO 检测配置。
@@ -125,7 +134,7 @@ public:
     {
     }
 
-    void        buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
+    void buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map) override;
 
 protected:
     void normalizeModelConfig(IModelConfig &config) const override;
