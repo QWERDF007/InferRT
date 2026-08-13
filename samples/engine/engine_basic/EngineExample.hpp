@@ -17,10 +17,12 @@
 #include <opencv2/core.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace irt::sample::engine {
 
@@ -29,8 +31,80 @@ inline bool usesLetterbox(const std::string_view model_name)
     return model_name == "yolov8n";
 }
 
+/**
+ * @brief 与 Engine 内置 CPU 预处理等价的直接路径预处理（BGR→RGB、缩放、/255、归一化）。
+ *
+ * letterbox 仅用于 YOLO 示例；ImageNet mean/std 用于 resnet18/dinov2/rfdetr。
+ */
+inline std::vector<float> preprocessForDirect(const irt::engine::EngineConfig &config, const cv::Mat &image)
+{
+    cv::Mat bgr;
+    if (image.channels() == 3)
+    {
+        bgr = image;
+    }
+    else if (image.channels() == 1)
+    {
+        cv::cvtColor(image, bgr, cv::COLOR_GRAY2BGR);
+    }
+    else if (image.channels() == 4)
+    {
+        cv::cvtColor(image, bgr, cv::COLOR_BGRA2BGR);
+    }
+    else
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported image channel count: %d",
+                             image.channels());
+    }
+
+    cv::Mat rgb;
+    cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
+
+    cv::Mat resized;
+    if (usesLetterbox(config.model_name))
+    {
+        const double   scale = std::min(static_cast<double>(config.input_width) / rgb.cols,
+                                        static_cast<double>(config.input_height) / rgb.rows);
+        const cv::Size resized_size(
+            std::min(config.input_width, std::max(1, static_cast<int>(std::round(rgb.cols * scale)))),
+            std::min(config.input_height, std::max(1, static_cast<int>(std::round(rgb.rows * scale)))));
+        cv::resize(rgb, resized, resized_size, 0.0, 0.0, cv::INTER_LINEAR);
+
+        cv::Mat        letterboxed(config.input_height, config.input_width, CV_8UC3, cv::Scalar(114, 114, 114));
+        const cv::Rect content((config.input_width - resized.cols) / 2, (config.input_height - resized.rows) / 2,
+                               resized.cols, resized.rows);
+        resized.copyTo(letterboxed(content));
+        resized = std::move(letterboxed);
+    }
+    else
+    {
+        cv::resize(rgb, resized, cv::Size(config.input_width, config.input_height), 0.0, 0.0, cv::INTER_LINEAR);
+    }
+    resized.convertTo(resized, CV_32FC3, 1.0 / 255.0);
+
+    const size_t       plane = static_cast<size_t>(config.input_width) * static_cast<size_t>(config.input_height);
+    std::vector<float> tensor(3 * plane);
+    for (int y = 0; y < config.input_height; ++y)
+    {
+        const auto *row = resized.ptr<cv::Vec3f>(y);
+        for (int x = 0; x < config.input_width; ++x)
+        {
+            const size_t offset
+                = static_cast<size_t>(y) * static_cast<size_t>(config.input_width) + static_cast<size_t>(x);
+            for (int channel = 0; channel < 3; ++channel)
+            {
+                tensor[static_cast<size_t>(channel) * plane + offset]
+                    = (row[x][channel] - config.mean[static_cast<size_t>(channel)])
+                    / config.stddev[static_cast<size_t>(channel)];
+            }
+        }
+    }
+    return tensor;
+}
+
 inline irt::engine::EngineConfig makeConfig(const std::string_view example, std::filesystem::path engine_file,
-                                             const int device_id)
+                                             const int device_id, const int input_size = 0, const int batch_min = 0,
+                                             const int batch_opt = 0, const int batch_max = 0)
 {
     irt::engine::EngineConfig config;
     config.engine_file = std::move(engine_file);
@@ -73,11 +147,42 @@ inline irt::engine::EngineConfig makeConfig(const std::string_view example, std:
         config.execution_slots      = 2;
         config.queue_capacity       = 32;
     }
+    else if (example == "rfdetr_nano")
+    {
+        config.model_name          = "rfdetr_nano";
+        config.input_width         = 1024;
+        config.input_height        = 1024;
+        config.output_tensor_names = {"dets", "labels"};
+        config.min_batch_size      = 1;
+        config.opt_batch_size      = 8;
+        config.max_batch_size      = 8;
+        config.max_wait            = std::chrono::microseconds(2000);
+        config.execution_slots     = 1;
+        config.queue_capacity      = 64;
+    }
     else
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "Unknown --example: %.*s (expected resnet18, yolov8n, or dinov2_vits14)",
+                             "Unknown --example: %.*s (expected resnet18, yolov8n, dinov2_vits14, or rfdetr_nano)",
                              static_cast<int>(example.size()), example.data());
+    }
+
+    if (input_size > 0)
+    {
+        config.input_width  = input_size;
+        config.input_height = input_size;
+    }
+    if (batch_min > 0)
+    {
+        config.min_batch_size = batch_min;
+    }
+    if (batch_opt > 0)
+    {
+        config.opt_batch_size = batch_opt;
+    }
+    if (batch_max > 0)
+    {
+        config.max_batch_size = batch_max;
     }
 
     config.validate();

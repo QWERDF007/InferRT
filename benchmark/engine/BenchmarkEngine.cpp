@@ -215,7 +215,12 @@ int main(int argc, char **argv)
         "repeat", "Measured iterations", cxxopts::value<int>()->default_value("100"))(
         "inflight", "Maximum asynchronous engine requests", cxxopts::value<int>()->default_value("8"))(
         "preprocess", "Engine preprocessing backend: cpu, cuda, or both",
-        cxxopts::value<std::string>()->default_value("cpu"))("help", "Show help");
+        cxxopts::value<std::string>()->default_value("cpu"))("input-size", "Optional square input size override",
+                                                             cxxopts::value<int>()->default_value("0"))(
+        "batch-min", "Optional dynamic batch profile minimum", cxxopts::value<int>()->default_value("0"))(
+        "batch-opt", "Optional dynamic batch profile optimum", cxxopts::value<int>()->default_value("0"))(
+        "batch-max", "Optional dynamic batch profile maximum", cxxopts::value<int>()->default_value("0"))("help",
+                                                                                                         "Show help");
 
     const auto args = options.parse(argc, argv);
     if (args.count("help") || !args.count("engine") || !args.count("image"))
@@ -231,12 +236,27 @@ int main(int argc, char **argv)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to load input image");
         }
+        cv::Mat display_image = image;
+        if (image.channels() == 1)
+        {
+            cv::cvtColor(image, display_image, cv::COLOR_GRAY2BGR);
+        }
+        else if (image.channels() == 4)
+        {
+            cv::cvtColor(image, display_image, cv::COLOR_BGRA2BGR);
+        }
+        if (!display_image.isContinuous())
+        {
+            display_image = display_image.clone();
+        }
         const int  warmup     = args["warmup"].as<int>();
         const int  repeat     = args["repeat"].as<int>();
         const int  inflight   = args["inflight"].as<int>();
         const auto preprocess = args["preprocess"].as<std::string>();
         const auto config     = irt::sample::engine::makeConfig(args["example"].as<std::string>(),
-                                                                args["engine"].as<std::string>(), args["device"].as<int>());
+                                                                args["engine"].as<std::string>(), args["device"].as<int>(),
+                                                                args["input-size"].as<int>(), args["batch-min"].as<int>(),
+                                                                args["batch-opt"].as<int>(), args["batch-max"].as<int>());
         if (warmup < 0 || repeat <= 0 || inflight <= 0 || static_cast<size_t>(inflight) > config.queue_capacity)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
@@ -254,21 +274,21 @@ int main(int argc, char **argv)
         DirectRunner direct(config);
         for (int index = 0; index < warmup; ++index)
         {
-            direct.run(image);
+            direct.run(display_image);
         }
-        printSyncResult("IModel direct (CPU)", repeat, measure(repeat, [&] { direct.run(image); }));
+        printSyncResult("IModel direct (CPU)", repeat, measure(repeat, [&] { direct.run(display_image); }));
 
         const auto runEngine = [&](const bool cuda_preprocess, const std::string_view backend_name)
         {
             auto engine = irt::engine::InferenceEngine::create(
-                config, irt::sample::engine::makePipeline(config, image.size(), cuda_preprocess));
+                config, irt::sample::engine::makePipeline(config, display_image.size(), cuda_preprocess));
             engine->start();
             for (int index = 0; index < warmup; ++index)
             {
-                (void)engine->infer(image, std::chrono::seconds(30));
+                (void)engine->infer(display_image, std::chrono::seconds(30));
             }
             printSyncResult(std::string("Engine ") + std::string(backend_name) + " sync", repeat,
-                            measure(repeat, [&] { (void)engine->infer(image, std::chrono::seconds(30)); }));
+                            measure(repeat, [&] { (void)engine->infer(display_image, std::chrono::seconds(30)); }));
 
             const auto async_start = std::chrono::steady_clock::now();
             std::deque<std::pair<std::future<irt::engine::InferenceResult>, std::chrono::steady_clock::time_point>>
@@ -278,7 +298,7 @@ int main(int argc, char **argv)
             for (int index = 0; index < repeat; ++index)
             {
                 const auto submitted = std::chrono::steady_clock::now();
-                pending.emplace_back(engine->submit(image), submitted);
+                pending.emplace_back(engine->submit(display_image), submitted);
                 if (pending.size() >= static_cast<size_t>(inflight))
                 {
                     pending.front().first.get();

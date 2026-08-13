@@ -796,8 +796,11 @@ Sample 必须同时展示普通调用和 engine 调用，且能观察流水线�
 ```text
 samples/engine/
   README.md
-  EngineExample.hpp        # C++ EngineConfig 与 PipelineBuilder 定义
-  SampleEngine.cpp
+  engine_basic/            # inferrt_sample_engine：IModel vs Engine 对比
+    EngineExample.hpp      # C++ EngineConfig 与 PipelineBuilder 定义
+    SampleEngine.cpp
+  engine_rfdetr/           # inferrt_sample_engine_rfdetr：RF-DETR 高吞吐压测
+    SampleEngineRFDETR.cpp
 ```
 
 #### `inferrt_sample_engine_classification`

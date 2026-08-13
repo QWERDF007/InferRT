@@ -348,15 +348,10 @@ Arguments parseArguments(int argc, char *argv[])
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--batch-size must be positive");
     }
-    if (args.family == DetectionFamily::YOLO && args.batch_size != 1)
+    if (!isOnnxWeightsFile(args.weights_file) && args.batch_size > args.batch_max)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "the YOLO sample path currently runs a single image; --batch-size is RF-DETR only");
-    }
-    if (args.family == DetectionFamily::RFDETR && !isOnnxWeightsFile(args.weights_file) && args.batch_size > args.batch_max)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "RF-DETR --batch-size must not exceed --batch-max for the native profile");
+                             "--batch-size must not exceed --batch-max for the native profile");
     }
     if (args.family == DetectionFamily::RFDETR && args.batch_size > 1 && !isOnnxWeightsFile(args.weights_file)
         && !args.input_size_explicit)
@@ -493,7 +488,7 @@ std::vector<Detection> nonMaximumSuppression(std::vector<Detection> detections, 
  */
 bool isLegacyYoloV5Output(const nvinfer1::Dims &dims, int num_classes)
 {
-    return dims.nbDims == 4 && dims.d[0] == 1 && dims.d[1] == 3 * (num_classes + 5) && dims.d[2] > 0 && dims.d[3] > 0;
+    return dims.nbDims == 4 && dims.d[0] > 0 && dims.d[1] == 3 * (num_classes + 5) && dims.d[2] > 0 && dims.d[3] > 0;
 }
 
 /**
@@ -501,7 +496,7 @@ bool isLegacyYoloV5Output(const nvinfer1::Dims &dims, int num_classes)
  */
 bool isDflOutput(const nvinfer1::Dims &dims, int num_classes)
 {
-    return dims.nbDims == 3 && dims.d[0] == 1 && dims.d[1] == num_classes + 4 && dims.d[2] > 0;
+    return dims.nbDims == 3 && dims.d[0] > 0 && dims.d[1] == num_classes + 4 && dims.d[2] > 0;
 }
 
 /**
@@ -528,55 +523,59 @@ void decodeLegacyYoloV5Output(const float *data, const nvinfer1::Dims &dims, int
     {
         const float anchor_w = anchors[branch_index][static_cast<size_t>(2 * anchor_idx)];
         const float anchor_h = anchors[branch_index][static_cast<size_t>(2 * anchor_idx + 1)];
-        for (int y = 0; y < grid_h; ++y)
+        for (int b = 0; b < dims.d[0]; ++b)
         {
-            for (int x = 0; x < grid_w; ++x)
+            const size_t batch_base = static_cast<size_t>(b) * static_cast<size_t>(channels) * grid_h * grid_w;
+            for (int y = 0; y < grid_h; ++y)
             {
-                const int grid_index = y * grid_w + x;
-                auto      valueAt    = [&](int attr)
+                for (int x = 0; x < grid_w; ++x)
                 {
-                    const int channel = anchor_idx * info_len + attr;
-                    return data[channel * grid_h * grid_w + grid_index];
-                };
-
-                const float objectness = sigmoid(valueAt(4));
-                if (objectness < conf_threshold)
-                {
-                    continue;
-                }
-
-                int   best_class = 0;
-                float best_score = 0.0F;
-                for (int cls = 0; cls < num_classes; ++cls)
-                {
-                    const float score = sigmoid(valueAt(5 + cls));
-                    if (score > best_score)
+                    const int grid_index = y * grid_w + x;
+                    auto      valueAt    = [&](int attr)
                     {
-                        best_score = score;
-                        best_class = cls;
+                        const int channel = anchor_idx * info_len + attr;
+                        return data[batch_base + static_cast<size_t>(channel) * grid_h * grid_w + grid_index];
+                    };
+
+                    const float objectness = sigmoid(valueAt(4));
+                    if (objectness < conf_threshold)
+                    {
+                        continue;
                     }
+
+                    int   best_class = 0;
+                    float best_score = 0.0F;
+                    for (int cls = 0; cls < num_classes; ++cls)
+                    {
+                        const float score = sigmoid(valueAt(5 + cls));
+                        if (score > best_score)
+                        {
+                            best_score = score;
+                            best_class = cls;
+                        }
+                    }
+
+                    const float confidence = objectness * best_score;
+                    if (confidence < conf_threshold)
+                    {
+                        continue;
+                    }
+
+                    const float bx = (static_cast<float>(x) - 0.5F + 2.0F * sigmoid(valueAt(0))) * stride_x;
+                    const float by = (static_cast<float>(y) - 0.5F + 2.0F * sigmoid(valueAt(1))) * stride_y;
+                    const float bw = std::pow(2.0F * sigmoid(valueAt(2)), 2.0F) * anchor_w;
+                    const float bh = std::pow(2.0F * sigmoid(valueAt(3)), 2.0F) * anchor_h;
+
+                    Detection det;
+                    det.x1         = bx - bw * 0.5F;
+                    det.y1         = by - bh * 0.5F;
+                    det.x2         = bx + bw * 0.5F;
+                    det.y2         = by + bh * 0.5F;
+                    det.confidence = confidence;
+                    det.class_id   = best_class;
+                    remapToOriginalImage(det, letterbox);
+                    detections.push_back(det);
                 }
-
-                const float confidence = objectness * best_score;
-                if (confidence < conf_threshold)
-                {
-                    continue;
-                }
-
-                const float bx = (static_cast<float>(x) - 0.5F + 2.0F * sigmoid(valueAt(0))) * stride_x;
-                const float by = (static_cast<float>(y) - 0.5F + 2.0F * sigmoid(valueAt(1))) * stride_y;
-                const float bw = std::pow(2.0F * sigmoid(valueAt(2)), 2.0F) * anchor_w;
-                const float bh = std::pow(2.0F * sigmoid(valueAt(3)), 2.0F) * anchor_h;
-
-                Detection det;
-                det.x1         = bx - bw * 0.5F;
-                det.y1         = by - bh * 0.5F;
-                det.x2         = bx + bw * 0.5F;
-                det.y2         = by + bh * 0.5F;
-                det.confidence = confidence;
-                det.class_id   = best_class;
-                remapToOriginalImage(det, letterbox);
-                detections.push_back(det);
             }
         }
     }
@@ -599,42 +598,46 @@ void decodeDflOutput(const float *data, const nvinfer1::Dims &dims, int branch_i
                              dims.d[2]);
     }
 
-    for (int idx = 0; idx < grid; ++idx)
+    for (int b = 0; b < dims.d[0]; ++b)
     {
-        int   best_class = 0;
-        float best_score = 0.0F;
-        for (int cls = 0; cls < num_classes; ++cls)
+        const size_t batch_base = static_cast<size_t>(b) * static_cast<size_t>(num_classes + 4) * grid;
+        for (int idx = 0; idx < grid; ++idx)
         {
-            const float score = sigmoid(data[(4 + cls) * grid + idx]);
-            if (score > best_score)
+            int   best_class = 0;
+            float best_score = 0.0F;
+            for (int cls = 0; cls < num_classes; ++cls)
             {
-                best_score = score;
-                best_class = cls;
+                const float score = sigmoid(data[batch_base + static_cast<size_t>(4 + cls) * grid + idx]);
+                if (score > best_score)
+                {
+                    best_score = score;
+                    best_class = cls;
+                }
             }
-        }
-        if (best_score < conf_threshold)
-        {
-            continue;
-        }
+            if (best_score < conf_threshold)
+            {
+                continue;
+            }
 
-        const int   x        = idx % grid_w;
-        const int   y        = idx / grid_w;
-        const float anchor_x = static_cast<float>(x) + 0.5F;
-        const float anchor_y = static_cast<float>(y) + 0.5F;
-        const float left     = data[0 * grid + idx];
-        const float top      = data[1 * grid + idx];
-        const float right    = data[2 * grid + idx];
-        const float bottom   = data[3 * grid + idx];
+            const int   x        = idx % grid_w;
+            const int   y        = idx / grid_w;
+            const float anchor_x = static_cast<float>(x) + 0.5F;
+            const float anchor_y = static_cast<float>(y) + 0.5F;
+            const float left     = data[batch_base + 0 * grid + idx];
+            const float top      = data[batch_base + 1 * grid + idx];
+            const float right    = data[batch_base + 2 * grid + idx];
+            const float bottom   = data[batch_base + 3 * grid + idx];
 
-        Detection det;
-        det.x1         = (anchor_x - left) * static_cast<float>(stride);
-        det.y1         = (anchor_y - top) * static_cast<float>(stride);
-        det.x2         = (anchor_x + right) * static_cast<float>(stride);
-        det.y2         = (anchor_y + bottom) * static_cast<float>(stride);
-        det.confidence = best_score;
-        det.class_id   = best_class;
-        remapToOriginalImage(det, letterbox);
-        detections.push_back(det);
+            Detection det;
+            det.x1         = (anchor_x - left) * static_cast<float>(stride);
+            det.y1         = (anchor_y - top) * static_cast<float>(stride);
+            det.x2         = (anchor_x + right) * static_cast<float>(stride);
+            det.y2         = (anchor_y + bottom) * static_cast<float>(stride);
+            det.confidence = best_score;
+            det.class_id   = best_class;
+            remapToOriginalImage(det, letterbox);
+            detections.push_back(det);
+        }
     }
 }
 
@@ -913,7 +916,8 @@ int main(int argc, char *argv[])
 
         if (args.family == DetectionFamily::YOLO)
         {
-            model->setTensorShape(input_names.front(), nvinfer1::Dims4{1, 3, args.input_size, args.input_size});
+            model->setTensorShape(input_names.front(),
+                                  nvinfer1::Dims4{args.batch_size, 3, args.input_size, args.input_size});
         }
         else if (args.family == DetectionFamily::RFDETR && args.batch_max > 1)
         {

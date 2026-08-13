@@ -1,6 +1,6 @@
 # Engine benchmark
 
-`inferrt_benchmark_engine` 使用 [EngineExample.hpp](../../samples/engine/EngineExample.hpp) 中同一份 C++ 配置、
+`inferrt_benchmark_engine` 使用 [EngineExample.hpp](../../samples/engine/engine_basic/EngineExample.hpp) 中同一份 C++ 配置、
 代码定义 DAG、图片和 TensorRT engine 测量三条完整数据路径：
 
 1. `IModel direct`：CPU 预处理、同步 H2D、推理、同步 D2H。

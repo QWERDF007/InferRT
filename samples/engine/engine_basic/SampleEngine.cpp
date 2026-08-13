@@ -213,6 +213,11 @@ int main(int argc, char **argv)
         cxxopts::value<std::string>()->default_value("cuda"))("mode", "model | engine | compare",
                                                                cxxopts::value<std::string>()->default_value("compare"))(
         "feature", "Optional feature output name to report", cxxopts::value<std::string>()->default_value(""))(
+        "input-size", "Optional square input size override (e.g. 1024 for yolov8n@1024)",
+        cxxopts::value<int>()->default_value("0"))("batch-min", "Optional dynamic batch profile minimum",
+                                                   cxxopts::value<int>()->default_value("0"))(
+        "batch-opt", "Optional dynamic batch profile optimum", cxxopts::value<int>()->default_value("0"))(
+        "batch-max", "Optional dynamic batch profile maximum", cxxopts::value<int>()->default_value("0"))(
         "timeout-ms", "Synchronous engine timeout", cxxopts::value<int>()->default_value("10000"))("help", "Show help");
 
     const auto args = options.parse(argc, argv);
@@ -224,10 +229,23 @@ int main(int argc, char **argv)
 
     try
     {
-        const auto image  = cv::imread(args["image"].as<std::string>(), cv::IMREAD_UNCHANGED);
+        const auto image = cv::imread(args["image"].as<std::string>(), cv::IMREAD_UNCHANGED);
         if (image.empty())
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to load input image");
+        }
+        cv::Mat display_image = image;
+        if (image.channels() == 1)
+        {
+            cv::cvtColor(image, display_image, cv::COLOR_GRAY2BGR);
+        }
+        else if (image.channels() == 4)
+        {
+            cv::cvtColor(image, display_image, cv::COLOR_BGRA2BGR);
+        }
+        if (!display_image.isContinuous())
+        {
+            display_image = display_image.clone();
         }
 
         const auto mode         = args["mode"].as<std::string>();
@@ -239,17 +257,21 @@ int main(int argc, char **argv)
         }
         const auto config = irt::sample::engine::makeConfig(args["example"].as<std::string>(),
                                                               args["engine"].as<std::string>(),
-                                                              args["device"].as<int>());
+                                                              args["device"].as<int>(),
+                                                              args["input-size"].as<int>(),
+                                                              args["batch-min"].as<int>(),
+                                                              args["batch-opt"].as<int>(),
+                                                              args["batch-max"].as<int>());
         if (mode == "model")
         {
-            printSummary(runModel(image, config), feature_name);
+            printSummary(runModel(display_image, config), feature_name);
             return 0;
         }
 
         auto engine = irt::engine::InferenceEngine::create(
-            config, irt::sample::engine::makePipeline(config, image.size(), preprocess_backend == "cuda"));
+            config, irt::sample::engine::makePipeline(config, display_image.size(), preprocess_backend == "cuda"));
         engine->start();
-        const auto engine_result = engine->infer(image, std::chrono::milliseconds(args["timeout-ms"].as<int>()));
+        const auto engine_result = engine->infer(display_image, std::chrono::milliseconds(args["timeout-ms"].as<int>()));
         engine->shutdown();
 
         if (mode == "engine")
@@ -262,7 +284,7 @@ int main(int argc, char **argv)
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unknown mode: %s", mode.c_str());
         }
 
-        const auto model_result = runModel(image, config);
+        const auto model_result = runModel(display_image, config);
         std::cout << "max_abs_difference=" << maxDifference(model_result, engine_result) << '\n';
         printSummary(engine_result, feature_name);
     }

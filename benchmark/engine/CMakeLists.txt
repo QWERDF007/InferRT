@@ -9,5 +9,5 @@ add_inferrt_benchmark(engine
 
 target_include_directories(${PROJECT_NAME_LOWER}_benchmark_engine
     PRIVATE
-        ${PROJECT_SOURCE_DIR}/samples/engine
+        ${PROJECT_SOURCE_DIR}/samples/engine/engine_basic
 )
