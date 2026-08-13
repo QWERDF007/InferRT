@@ -160,8 +160,9 @@ void ONNXModel::build(const std::string &onnx_file)
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create InferBuilder");
     }
 
-    const auto flags   = 1U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kSTRONGLY_TYPED);
-    auto       network = std::unique_ptr<INetworkDefinition>(builder->createNetworkV2(flags));
+    const bool use_fp16 = modelConfig().precision() == ModelPrecision::FP16;
+    const auto flags    = use_fp16 ? 0U : 1U << static_cast<uint32_t>(NetworkDefinitionCreationFlag::kSTRONGLY_TYPED);
+    auto       network  = std::unique_ptr<INetworkDefinition>(builder->createNetworkV2(flags));
     if (!network)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create NetworkDefinition");
@@ -182,6 +183,11 @@ void ONNXModel::build(const std::string &onnx_file)
     if (!config)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create BuilderConfig");
+    }
+
+    if (use_fp16)
+    {
+        config->setFlag(BuilderFlag::kFP16);
     }
 
     LOG_INFO(*trt_params.logger) << "Building TensorRT engine from ONNX..." << std::endl;

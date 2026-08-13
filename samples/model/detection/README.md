@@ -76,6 +76,24 @@ build/bin/inferrt_sample_detection.exe ^
   --repeat 20
 ```
 
+Run RF-DETR through the ONNX graph (onnx -> TensorRT parser, `ONNXModel`) instead of the native `.wts` builder.
+The ONNX graph must expose one `images` input and `dets`/`labels` float outputs (official `rf-detr` `exporter.py`
+outputs). The sample routes `.onnx` weights to `ONNXModel` for any backend:
+
+```bash
+build/bin/inferrt_sample_detection.exe ^
+  -m rfdetr_nano ^
+  -w build/python_test_artifacts/rfdetr/rfdetr_nano.onnx ^
+  -i assets/pics/dog.jpg ^
+  -l assets/coco80.names ^
+  -o build/rfdetr_nano_onnx_result.jpg ^
+  --runtime tensorrt:0 ^
+  --warmup 5 ^
+  --repeat 20
+```
+
+For `.onnx` weights the input size and output tensor names are taken from the graph, so `--input-size` is ignored.
+
 RF-DETR segmentation variants such as `rfdetr_seg_nano` use `samples/model/segmentation` because they produce masks in
 addition to boxes and labels.
 
@@ -89,8 +107,10 @@ Runtime options:
 - `--warmup`: iterations to run before measurement.
 - `--repeat`: measured iterations used for total/avg/min/max timing.
 - `--batch-min`, `--batch-opt`, `--batch-max`: native YOLO TensorRT dynamic batch profile. They must satisfy `1 <= min <= opt <= max`; this single-image sample requires `min=1`, so `--batch-min 1 --batch-opt 4 --batch-max 8` builds the profile used by `InferenceEngine`.
+- `--batch-size`: inference batch. For native RF-DETR it must be `<= --batch-max`; one dynamic engine (profile `1..batch-max`) serves runs at `1, 2, 4, ...` (e.g. `--batch-min 1 --batch-opt 8 --batch-max 8 --batch-size 2`). For RF-DETR ONNX the graph is static, so export one `.onnx` per batch size and pass `--batch-size` matching the graph; `--batch-size > 1` prints an extra `Per-image` timing line.
+- `--precision`: `fp32` (default) or `fp16`; enables TensorRT FP16 tactics (applies to native and ONNX paths, engine cache keyed by precision).
 
-ONNX Runtime and OpenVINO use graph inputs and outputs directly for YOLO. The graph must expose one image input and the same three YOLO output tensors expected by this sample. RF-DETR is currently supported through the native TensorRT path.
+ONNX Runtime and OpenVINO use graph inputs and outputs directly for YOLO. The graph must expose one image input and the same three YOLO output tensors expected by this sample. RF-DETR native `.wts` weights require the TensorRT backend; RF-DETR `.onnx` graphs run on any backend through `ONNXModel`.
 
 For legacy YOLOv5 weights with `model.24.m.*` outputs, the sample uses the standard COCO anchors by default. Custom anchors can be supplied as 18 comma-separated numbers:
 

@@ -75,12 +75,15 @@ struct Arguments
     int                      batch_min{1};
     int                      batch_opt{1};
     int                      batch_max{1};
+    int                      batch_size{1};
     int                      num_classes{80};
+    bool                     num_classes_explicit{false};
     int                      max_detections{100};
     float                    conf_threshold{0.25F};
     float                    nms_threshold{0.45F};
     DetectionFamily          family{DetectionFamily::YOLO};
     irt::model::ModelRuntime runtime{};
+    irt::model::ModelPrecision precision{irt::model::ModelPrecision::FP32};
     int                      warmup{0};
     int                      repeat{1};
 };
@@ -140,6 +143,17 @@ bool isRFDETRSegModelName(const std::string &model_name)
     const std::string normalized = toLower(model_name);
     return normalized.rfind("rfdetr", 0) == 0
         && (normalized.find("_seg") != std::string::npos || normalized.find("-seg") != std::string::npos);
+}
+
+/**
+ * @brief 判断权重文件是否为 ONNX 图。
+ *
+ * RF-DETR 家族使用 `.onnx` 权重时，sample 会路由到通用 ONNXModel
+ * （onnx -> TensorRT parser），而不是原生 `.wts` 逐层构建器。
+ */
+bool isOnnxWeightsFile(const fs::path &weights_file)
+{
+    return toLower(weights_file.extension().string()) == ".onnx";
 }
 
 const char *modelFamilyName(DetectionFamily family)
@@ -230,14 +244,18 @@ cxxopts::Options makeOptions(const char *program_name)
                                cxxopts::value<int>()->default_value("1"))(
         "batch-opt", "Optimal native YOLO TensorRT batch profile size", cxxopts::value<int>()->default_value("1"))(
         "batch-max", "Maximum native YOLO TensorRT batch profile size", cxxopts::value<int>()->default_value("1"))(
-        "classes", "Number of classes used by the YOLO head", cxxopts::value<int>()->default_value("80"))(
+        "batch-size", "Inference batch size; RF-DETR native builds a dynamic 1..N profile, ONNX graphs are static",
+        cxxopts::value<int>()->default_value("1"))(
+        "classes", "Number of classes used by the YOLO head; for RF-DETR the foreground class count",
+        cxxopts::value<int>()->default_value("80"))(
         "conf-threshold", "Confidence threshold", cxxopts::value<float>()->default_value("0.25"))(
         "nms-threshold", "Class-wise NMS IoU threshold", cxxopts::value<float>()->default_value("0.45"))(
         "max-detections", "Maximum detections printed after NMS", cxxopts::value<int>()->default_value("100"))(
         "legacy-anchors", "Legacy YOLOv5 anchors as 18 comma-separated numbers; empty uses COCO defaults",
         cxxopts::value<std::string>()->default_value(""))(
         "runtime", "Model runtime: cpu, gpu:0, cuda:0, or backend:gpu-id (e.g. tensorrt:0)",
-        cxxopts::value<std::string>()->default_value("tensorrt:0"));
+        cxxopts::value<std::string>()->default_value("tensorrt:0"))(
+        "precision", "TensorRT build precision: fp32 or fp16", cxxopts::value<std::string>()->default_value("fp32"));
     irt::samples::addTimingOptions(options, "Timed inference iterations");
     options.add_options()("h,help", "Show help");
     return options;
@@ -280,12 +298,23 @@ Arguments parseArguments(int argc, char *argv[])
     args.batch_min           = result["batch-min"].as<int>();
     args.batch_opt           = result["batch-opt"].as<int>();
     args.batch_max           = result["batch-max"].as<int>();
+    args.batch_size          = result["batch-size"].as<int>();
     args.num_classes         = result["classes"].as<int>();
+    args.num_classes_explicit = result.count("classes") != 0U;
     args.conf_threshold      = result["conf-threshold"].as<float>();
     args.nms_threshold       = result["nms-threshold"].as<float>();
     args.max_detections      = result["max-detections"].as<int>();
     args.legacy_anchors      = result["legacy-anchors"].as<std::string>();
     args.runtime             = irt::model::ModelRuntime::parse(result["runtime"].as<std::string>());
+    const std::string precision_name = toLower(result["precision"].as<std::string>());
+    if (precision_name == "fp16")
+    {
+        args.precision = irt::model::ModelPrecision::FP16;
+    }
+    else if (precision_name != "fp32")
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--precision must be fp32 or fp16");
+    }
     const auto timing        = irt::samples::parseTimingOptions(result);
     args.warmup              = timing.warmup;
     args.repeat              = timing.repeat;
@@ -315,10 +344,25 @@ Arguments parseArguments(int argc, char *argv[])
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "batch profile must satisfy 1 <= --batch-min <= --batch-opt <= --batch-max");
     }
-    if (args.family != DetectionFamily::YOLO && args.batch_min != args.batch_max)
+    if (args.batch_size <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--batch-size must be positive");
+    }
+    if (args.family == DetectionFamily::YOLO && args.batch_size != 1)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "dynamic batch profile options are currently supported only for native YOLO models");
+                             "the YOLO sample path currently runs a single image; --batch-size is RF-DETR only");
+    }
+    if (args.family == DetectionFamily::RFDETR && !isOnnxWeightsFile(args.weights_file) && args.batch_size > args.batch_max)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "RF-DETR --batch-size must not exceed --batch-max for the native profile");
+    }
+    if (args.family == DetectionFamily::RFDETR && args.batch_size > 1 && !isOnnxWeightsFile(args.weights_file)
+        && !args.input_size_explicit)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "RF-DETR --batch-size > 1 requires an explicit --input-size");
     }
     if (args.batch_min != 1)
     {
@@ -659,8 +703,8 @@ std::vector<Detection> postprocessRFDETROutputs(const std::vector<HostBuffer>   
 
     const auto &boxes_dims  = output_dims[0];
     const auto &logits_dims = output_dims[1];
-    if (boxes_dims.nbDims != 3 || logits_dims.nbDims != 3 || boxes_dims.d[0] != 1 || logits_dims.d[0] != 1
-        || boxes_dims.d[1] != logits_dims.d[1] || boxes_dims.d[2] != 4)
+    if (boxes_dims.nbDims != 3 || logits_dims.nbDims != 3 || boxes_dims.d[1] != logits_dims.d[1]
+        || boxes_dims.d[2] != 4)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected RF-DETR output shapes: dets=%s labels=%s",
                              dimsToCsv(boxes_dims).c_str(), dimsToCsv(logits_dims).c_str());
@@ -668,35 +712,39 @@ std::vector<Detection> postprocessRFDETROutputs(const std::vector<HostBuffer>   
 
     const auto *boxes   = static_cast<const float *>(outputs[0].data());
     const auto *logits  = static_cast<const float *>(outputs[1].data());
+    const int   batch   = static_cast<int>(boxes_dims.d[0]);
     const int   queries = static_cast<int>(boxes_dims.d[1]);
     const int   classes = static_cast<int>(logits_dims.d[2]);
 
     std::vector<Detection> detections;
-    for (int q = 0; q < queries; ++q)
+    for (int b = 0; b < batch; ++b)
     {
-        const float cx = boxes[q * 4 + 0] * static_cast<float>(image_size.width);
-        const float cy = boxes[q * 4 + 1] * static_cast<float>(image_size.height);
-        const float w  = boxes[q * 4 + 2] * static_cast<float>(image_size.width);
-        const float h  = boxes[q * 4 + 3] * static_cast<float>(image_size.height);
-
-        Detection base;
-        base.x1 = clampFloat(cx - 0.5F * w, 0.0F, static_cast<float>(image_size.width - 1));
-        base.y1 = clampFloat(cy - 0.5F * h, 0.0F, static_cast<float>(image_size.height - 1));
-        base.x2 = clampFloat(cx + 0.5F * w, 0.0F, static_cast<float>(image_size.width - 1));
-        base.y2 = clampFloat(cy + 0.5F * h, 0.0F, static_cast<float>(image_size.height - 1));
-
-        for (int cls = 0; cls < classes; ++cls)
+        for (int q = 0; q < queries; ++q)
         {
-            const float confidence = sigmoid(logits[q * classes + cls]);
-            if (confidence < args.conf_threshold)
-            {
-                continue;
-            }
+            const float cx = boxes[(b * queries + q) * 4 + 0] * static_cast<float>(image_size.width);
+            const float cy = boxes[(b * queries + q) * 4 + 1] * static_cast<float>(image_size.height);
+            const float w  = boxes[(b * queries + q) * 4 + 2] * static_cast<float>(image_size.width);
+            const float h  = boxes[(b * queries + q) * 4 + 3] * static_cast<float>(image_size.height);
 
-            auto det       = base;
-            det.confidence = confidence;
-            det.class_id   = cls;
-            detections.push_back(det);
+            Detection base;
+            base.x1 = clampFloat(cx - 0.5F * w, 0.0F, static_cast<float>(image_size.width - 1));
+            base.y1 = clampFloat(cy - 0.5F * h, 0.0F, static_cast<float>(image_size.height - 1));
+            base.x2 = clampFloat(cx + 0.5F * w, 0.0F, static_cast<float>(image_size.width - 1));
+            base.y2 = clampFloat(cy + 0.5F * h, 0.0F, static_cast<float>(image_size.height - 1));
+
+            for (int cls = 0; cls < classes; ++cls)
+            {
+                const float confidence = sigmoid(logits[(b * queries + q) * classes + cls]);
+                if (confidence < args.conf_threshold)
+                {
+                    continue;
+                }
+
+                auto det       = base;
+                det.confidence = confidence;
+                det.class_id   = cls;
+                detections.push_back(det);
+            }
         }
     }
 
@@ -784,11 +832,13 @@ int main(int argc, char *argv[])
             std::cerr << "Unsupported model: " << args.model_name << std::endl;
             return -1;
         }
-        if (args.family == DetectionFamily::RFDETR
+        const bool onnx_weights = isOnnxWeightsFile(args.weights_file);
+        if (args.family == DetectionFamily::RFDETR && !onnx_weights
             && args.runtime.backend() != irt::model::ModelRuntime::Backend::TensorRT)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "RF-DETR in the detection sample currently requires TensorRT backend");
+                                 "RF-DETR native .wts path in the detection sample requires TensorRT backend; .onnx "
+                                 "weights can run on any backend");
         }
 
         fs::path project_root = irt::util::findProjectRoot(argv[0], {kDefaultImagePath, kDefaultLabelPath}, __FILE__);
@@ -797,6 +847,7 @@ int main(int argc, char *argv[])
 
         auto config = std::make_unique<irt::model::IModelConfig>();
         config->setRuntime(args.runtime);
+        config->setPrecision(args.precision);
         if (args.runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT)
         {
             if (args.family == DetectionFamily::YOLO)
@@ -809,14 +860,24 @@ int main(int argc, char *argv[])
                 config->setNumClasses(args.num_classes);
                 config->setOutputTensorNames({"output0", "output1", "output2"});
             }
-            else if (args.input_size_explicit)
+            else if (args.num_classes_explicit)
             {
-                config->setInputShape(nvinfer1::Dims4{1, 3, args.input_size, args.input_size});
+                config->setNumClasses(args.num_classes);
+            }
+            if (args.family == DetectionFamily::RFDETR && !onnx_weights && args.input_size_explicit)
+            {
+                config->setInputShape(nvinfer1::Dims4{args.batch_max, 3, args.input_size, args.input_size});
+                if (args.batch_max > 1)
+                {
+                    config->setDynamicBatchRange(1, args.batch_opt, args.batch_max);
+                }
             }
         }
 
         const std::string runtime_model_name
-            = args.runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT ? args.model_name : "onnx";
+            = args.runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT
+                  ? (onnx_weights ? "onnx" : args.model_name)
+                  : "onnx";
         auto model = irt::model::CreateModel(runtime_model_name, std::move(config));
         if (!model)
         {
@@ -854,19 +915,39 @@ int main(int argc, char *argv[])
         {
             model->setTensorShape(input_names.front(), nvinfer1::Dims4{1, 3, args.input_size, args.input_size});
         }
-        const nvinfer1::Dims input_dims = model->tensorShape(input_names.front());
-        if (input_dims.nbDims != 4 || input_dims.d[0] != 1 || input_dims.d[1] != 3)
+        else if (args.family == DetectionFamily::RFDETR && args.batch_max > 1)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected input shape: %s",
-                                 dimsToCsv(input_dims).c_str());
+            const nvinfer1::Dims engine_dims = model->tensorShape(input_names.front());
+            model->setTensorShape(input_names.front(),
+                                  nvinfer1::Dims4{args.batch_size, 3, engine_dims.d[2], engine_dims.d[3]});
+        }
+        const nvinfer1::Dims input_dims = model->tensorShape(input_names.front());
+        if (input_dims.nbDims != 4 || input_dims.d[0] != args.batch_size || input_dims.d[1] != 3)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "Unexpected input shape: %s (expected batch=%d, 3 channels)", dimsToCsv(input_dims).c_str(),
+                                 args.batch_size);
         }
 
         const auto         preprocess_start = Clock::now();
         LetterboxInfo      letterbox;
-        std::vector<float> input_tensor   = args.family == DetectionFamily::RFDETR
-                                              ? preprocessRFDETR(image, input_dims)
-                                              : preprocessLetterbox(image, static_cast<int>(input_dims.d[3]),
-                                                                    static_cast<int>(input_dims.d[2]), letterbox);
+        std::vector<float> single_tensor = args.family == DetectionFamily::RFDETR
+                                               ? preprocessRFDETR(image, input_dims)
+                                               : preprocessLetterbox(image, static_cast<int>(input_dims.d[3]),
+                                                                     static_cast<int>(input_dims.d[2]), letterbox);
+        std::vector<float> input_tensor;
+        if (args.batch_size > 1)
+        {
+            input_tensor.reserve(single_tensor.size() * static_cast<size_t>(args.batch_size));
+            for (int b = 0; b < args.batch_size; ++b)
+            {
+                input_tensor.insert(input_tensor.end(), single_tensor.begin(), single_tensor.end());
+            }
+        }
+        else
+        {
+            input_tensor = std::move(single_tensor);
+        }
         const auto         preprocess_end = Clock::now();
 
         const bool uses_tensorrt = args.runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT;
@@ -996,6 +1077,15 @@ int main(int argc, char *argv[])
         printTimingStats(std::cout, "inference", inference_stats);
         printTimingStats(std::cout, "d2h", d2h_stats);
         printTimingStats(std::cout, "end_to_end", end_to_end_stats);
+        if (args.batch_size > 1)
+        {
+            std::cout << "Per-image (batch=" << args.batch_size << "): h2d="
+                      << h2d_stats.avg_ms / static_cast<double>(args.batch_size)
+                      << " ms, inference=" << inference_stats.avg_ms / static_cast<double>(args.batch_size)
+                      << " ms, d2h=" << d2h_stats.avg_ms / static_cast<double>(args.batch_size)
+                      << " ms, end_to_end=" << end_to_end_stats.avg_ms / static_cast<double>(args.batch_size) << " ms"
+                      << std::endl;
+        }
         std::cout << ", timed_loop_wall=" << elapsedMs(infer_start, infer_end)
                   << " ms, postprocess=" << elapsedMs(postprocess_start, postprocess_end) << " ms" << std::endl;
         std::cout << "Done!" << std::endl;
