@@ -26,4 +26,13 @@ namespace irt::cvcuda {
                                                       int channels, const float *mean, const float *stddev,
                                                       cudaStream_t stream = nullptr);
 
+/**
+ * @brief 使用显式输入缩放因子完成 HWC uint8 到 NCHW float 的归一化。
+ *
+ * 输出元素为 `(src * scale - mean[channel]) / stddev[channel]`。
+ */
+[[nodiscard]] INFERRT_CVCUDA_API IRTStatus normalize(const uint8_t *d_src, float *d_dst, cv::Size size,
+                                                      int channels, const float *mean, const float *stddev,
+                                                      float scale, cudaStream_t stream = nullptr);
+
 } // namespace irt::cvcuda

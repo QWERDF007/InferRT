@@ -122,6 +122,27 @@ TEST(ImageSearchTest, DefaultConstructsNotReadySearcher)
     EXPECT_EQ(search.config().faiss_backend, irt::features::ImageSearchFaissBackend::CPU);
     EXPECT_EQ(search.config().index_storage, irt::features::ImageSearchIndexStorage::RAM);
     EXPECT_EQ(search.config().model_batch_size, irt::features::kDefaultImageSearchModelBatchSize);
+    EXPECT_EQ(search.config().preprocess.input_width, 0);
+    EXPECT_EQ(search.config().preprocess.input_height, 0);
+    EXPECT_EQ(search.config().preprocess.input_channels, 3);
+}
+
+TEST(ImageSearchTest, PreprocessSpecIsValidatedAsPartOfFeatureConfig)
+{
+    irt::features::ImageSearchConfig config;
+    EXPECT_NO_THROW((void)irt::features::ImageSearch(config));
+
+    config.preprocess.input_width = 224;
+    config.preprocess.input_height = 224;
+    config.preprocess.input_channels = 1;
+    config.preprocess.src_color = irt::ColorFormat::GRAY;
+    config.preprocess.dst_color = irt::ColorFormat::GRAY;
+    config.preprocess.mean = {0.0F};
+    config.preprocess.stddev = {1.0F};
+    EXPECT_NO_THROW((void)irt::features::ImageSearch(config));
+
+    config.preprocess.stddev = {0.0F};
+    EXPECT_THROW((void)irt::features::ImageSearch(config), irt::Exception);
 }
 
 /**
@@ -716,6 +737,26 @@ TEST(ImageSearchTest, CpuDiskIndexBoundsWideFeatureBuffers)
     EXPECT_LE(batch_size * bytes_per_feature, irt::features::priv::kFaissIndexBuildMaxBatchBytes);
 }
 
+TEST(ImageSearchTest, FeatureBatchSizeOverflowIsRejectedBeforeCallback)
+{
+    bool callback_called = false;
+    const auto load = [&](size_t, size_t)
+    {
+        callback_called = true;
+        return std::vector<float>{};
+    };
+
+    EXPECT_THROW(irt::features::priv::loadFeatureBatch(0, std::numeric_limits<size_t>::max(), 2, load),
+                 irt::Exception);
+    EXPECT_FALSE(callback_called);
+}
+
+TEST(ImageSearchTest, CpuDiskLayoutOverflowIsRejected)
+{
+    const std::vector<uint64_t> list_sizes{std::numeric_limits<uint64_t>::max()};
+    EXPECT_THROW(irt::features::priv::makeCpuOnDiskIvfListMeta(list_sizes, sizeof(float)), irt::Exception);
+}
+
 /**
  * @brief 384 维 CLS 特征、万级图库应能成功构建 CPU 磁盘 IVF 索引并落盘。
  */
@@ -855,12 +896,12 @@ TEST(ImageSearchTest, SearchBeforeBuildOrLoadThrowsInvalidOperation)
     config.feature_name = "layer4";
     irt::features::ImageSearch search(config);
 
-    expectIrtExceptionCode([&] { search.search("query.jpg"); }, irt::Status::ERROR_INVALID_OPERATION);
+    expectIrtExceptionCode([&] { search.search("query.jpg"); }, irt::Status::INVALID_OPERATION);
 
     config.index_storage = irt::features::ImageSearchIndexStorage::Disk;
     irt::features::ImageSearch disk_search(config);
 
-    expectIrtExceptionCode([&] { disk_search.search("query.jpg"); }, irt::Status::ERROR_INVALID_OPERATION);
+    expectIrtExceptionCode([&] { disk_search.search("query.jpg"); }, irt::Status::INVALID_OPERATION);
 }
 
 /**

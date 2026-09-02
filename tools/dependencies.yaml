@@ -2,6 +2,7 @@
 # root may be a path or a variable read from CMakeCache.txt / the listed CMake file.
 dependencies:
   - name: onnxruntime
+    requires: [INFERRT_BUILD_ONNX]
     cmake: cmake/ConfigONNXRuntime.cmake
     root: ONNXRUNTIME_ROOT
     destinations:
@@ -14,6 +15,7 @@ dependencies:
       - lib/libonnxruntime*.dylib
 
   - name: tensorrt
+    requires: [INFERRT_ENABLE_CUDA, INFERRT_BUILD_TENSORRT]
     cmake: cmake/ConfigTensorRT.cmake
     root: TRT_ROOT
     destinations:
@@ -29,18 +31,21 @@ dependencies:
       - lib/libnvonnxparser*.dylib
 
   - name: opencv
+    requires: [INFERRT_ENABLE_CUDA]
     cmake: cmake/ConfigOpenCV.cmake
     root: OpenCV_HOME
+    windows_root: OpenCV_BIN_DIR
     destinations:
       - build/bin
     windows:
-      - bin/*.dll
+      - "*.dll"
     linux:
       - lib/libopencv*.so*
     macos:
       - lib/libopencv*.dylib
 
   - name: faiss
+    requires: [INFERRT_ENABLE_CUDA, INFERRT_BUILD_TENSORRT]
     cmake: cmake/ConfigFaiss.cmake
     root: Faiss_HOME
     destinations:
@@ -52,7 +57,32 @@ dependencies:
     macos:
       - lib/libfaiss*.dylib
 
+  # FAISS on Windows links the Intel MKL threaded runtime dynamically.
+  # Keep these files in the package so feature binaries do not depend on a
+  # developer machine's MKL installation.
+  - name: faiss-mkl-runtime
+    requires: [INFERRT_ENABLE_CUDA, INFERRT_BUILD_TENSORRT]
+    cmake: cmake/ConfigFaiss.cmake
+    root: MKL_ROOT
+    destinations:
+      - build/bin
+    windows:
+      - bin/mkl_avx2.2.dll
+      - bin/mkl_def.2.dll
+      - bin/mkl_intel_thread.2.dll
+      - bin/mkl_core.2.dll
+
+  - name: faiss-mkl-openmp-runtime
+    requires: [INFERRT_ENABLE_CUDA, INFERRT_BUILD_TENSORRT]
+    cmake: cmake/ConfigFaiss.cmake
+    root: MKL_ROOT
+    destinations:
+      - build/bin
+    windows:
+      - ../compiler/bin/libiomp5md.dll
+
   - name: openvino-runtime
+    requires: [INFERRT_BUILD_OPENVINO]
     cmake: cmake/ConfigOpenVINO.cmake
     root: INFERRT_OPENVINO_ROOT
     destinations:
@@ -66,6 +96,7 @@ dependencies:
       - runtime/lib/intel64/*.dylib
 
   - name: openvino-tbb
+    requires: [INFERRT_BUILD_OPENVINO]
     cmake: cmake/ConfigOpenVINO.cmake
     root: INFERRT_OPENVINO_ROOT
     destinations:
@@ -77,6 +108,7 @@ dependencies:
       - runtime/3rdparty/tbb/bin/tbbmalloc_proxy.dll
 
   - name: cuda
+    requires: [INFERRT_ENABLE_CUDA]
     cmake: cmake/ConfigCUDA.cmake
     env: CUDA_PATH
     root: INFERRT_CUDA_ROOT
@@ -88,7 +120,6 @@ dependencies:
       - bin/cublasLt64_*.dll
       - bin/cufft64_*.dll
       - bin/cudnn*.dll
-      - bin/zlibwapi.dll
     linux:
       - lib64/libcudart.so*
       - lib64/libcublas.so*
@@ -100,14 +131,8 @@ dependencies:
       - lib/libcublas*.dylib
       - lib/libcufft*.dylib
 
-  - name: onnxruntime-zlib
-    root: ort1190_cuda118_dlls
-    destinations:
-      - build/bin
-    windows:
-      - zlibwapi.dll
-
   - name: python-torch-zlib
+    requires: [INFERRT_ENABLE_CUDA, INFERRT_BUILD_TENSORRT, INFERRT_BUILD_PYTHON]
     cmake: cmake/ConfigPython.cmake
     root: INFERRT_PYTHON_ROOT
     default: D:/Software/anaconda3/envs/py312

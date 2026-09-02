@@ -1,5 +1,6 @@
 #pragma once
 
+#include <inferrt/core/PreprocessSpec.hpp>
 #include <inferrt/engine/Export.h>
 
 #include <array>
@@ -14,11 +15,7 @@ namespace irt::engine {
 /**
  * @brief Engine 输入图像的预处理执行位置。
  */
-enum class PreprocessBackend
-{
-    CPU,  ///< 仅供 create(config) 兼容入口生成旧版默认 Pipeline。
-    CUDA, ///< 仅供 create(config) 兼容入口生成旧版默认 Pipeline。
-};
+using PreprocessBackend = irt::PreprocessBackend;
 
 /** @brief 请求队列达到容量上限时的处理策略。 */
 enum class QueuePolicy
@@ -53,9 +50,12 @@ struct INFERRT_ENGINE_API EngineConfig
     std::vector<std::string> feature_tensor_names;
     bool                     feature_only{false};
 
-    int input_width{0};
-    int input_height{0};
-    int input_channels{3};
+    /**
+     * Complete image preprocessing contract.  Input geometry, color/layout,
+     * normalization and backend selection have one owner so model tools,
+     * built-in operators and the legacy engine pipeline cannot drift apart.
+     */
+    irt::PreprocessSpec preprocess{};
 
     int                       min_batch_size{1};
     int                       opt_batch_size{1};
@@ -84,18 +84,11 @@ struct INFERRT_ENGINE_API EngineConfig
     std::vector<int>  preferred_batch_sizes;
     StaticBatchPolicy static_batch_policy{StaticBatchPolicy::Pad};
 
-    std::array<float, 3> mean{0.485F, 0.456F, 0.406F};
-    std::array<float, 3> stddev{0.229F, 0.224F, 0.225F};
-
-    // 以下字段只由兼容入口 InferenceEngine::create(config) 使用。新代码应通过
-    // PipelineBuilder 在 C++ 中定义 DAG，再调用 create(config, plan)。
-    PreprocessBackend preprocess_backend{PreprocessBackend::CPU};
-    bool              letterbox{false};
-    int               source_width{0};
-    int               source_height{0};
-
     /** @brief 从 YAML 文件读取配置。 */
     static EngineConfig load(const std::filesystem::path &path);
+
+    /** @brief 生成并校验唯一的图像预处理规格。 */
+    [[nodiscard]] const irt::PreprocessSpec &preprocessSpec() const noexcept;
 
     /** @brief 校验字段之间的约束，不访问 CUDA 或模型文件。 */
     void validate() const;

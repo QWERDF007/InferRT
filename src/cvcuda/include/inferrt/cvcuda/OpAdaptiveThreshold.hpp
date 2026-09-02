@@ -18,6 +18,11 @@ public:
 
     ~AdaptiveThreshold();
 
+    AdaptiveThreshold(const AdaptiveThreshold &)            = delete;
+    AdaptiveThreshold &operator=(const AdaptiveThreshold &) = delete;
+    AdaptiveThreshold(AdaptiveThreshold &&) noexcept;
+    AdaptiveThreshold &operator=(AdaptiveThreshold &&) noexcept;
+
     [[nodiscard]] IRTStatus operator()(const T *d_src, T *d_dst, cv::Size size, const int CH, const double maxval,
                                        const int adaptive_method, const int threshold_type, const int block_size,
                                        const double param, const float *d_weights = nullptr,
@@ -25,11 +30,11 @@ public:
 
     virtual OperatorHandle handle() const noexcept override
     {
-        return impl_;
+        return impl_.get();
     }
 
 private:
-    OperatorHandle impl_;
+    OperatorImplPtr impl_;
 };
 
 } // namespace irt::cvcuda

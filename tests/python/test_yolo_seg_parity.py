@@ -27,6 +27,13 @@ YOLO_SEG_OUTPUT_NAMES = (*YOLO_OUTPUT_NAMES, "proto")
 YOLO_SEG_NUM_CLASSES = 80
 YOLO_SEG_MASK_CHANNELS = 32
 YOLO_SEG_CHANNELS = 4 + YOLO_SEG_NUM_CLASSES + YOLO_SEG_MASK_CHANNELS
+YOLO_SEG_CLASS_FEATURES = (
+    "yolo.model.21",
+    "yolo.model.22.cv3.2.0",
+    "yolo.model.22.cv3.2.1",
+    "yolo.model.22.cv3.2.2",
+)
+YOLO_CACHE_VERSION = "yolo-v2"
 
 
 def _as_numpy_tensor(value: Any, *, name: str) -> np.ndarray:
@@ -159,6 +166,90 @@ def _run_inferrt_yolo_seg(
     outputs = allocate_output_tensors(model, output_names)
     model.infer({input_names[0]: np.ascontiguousarray(input_tensor, dtype=np.float32)}, outputs)
     return {name: np.asarray(outputs[name], dtype=np.float32) for name in output_names}
+
+
+def _run_torch_yolo_seg_features(
+    *,
+    repo_root: Path,
+    build_dir: Path,
+    checkpoint: Path,
+    ultralytics_repo: Path,
+    yolov5_repo: Path,
+    input_tensor: np.ndarray,
+    feature_names: tuple[str, ...],
+) -> dict[str, np.ndarray]:
+    """捕获 Ultralytics YOLOv8-Seg 中间模块输出，作为构图诊断参考。"""
+
+    torch = pytest.importorskip("torch")
+    model = _load_torch_yolo_model(
+        repo_root=repo_root,
+        build_dir=build_dir,
+        model_name="yolov8n_seg",
+        checkpoint=checkpoint,
+        ultralytics_repo=ultralytics_repo,
+        yolov5_repo=yolov5_repo,
+    )
+    modules = dict(model.named_modules())
+    captured: dict[str, Any] = {}
+    hooks = []
+    for feature_name in feature_names:
+        module = modules.get(feature_name.removeprefix("yolo."))
+        if module is None:
+            raise AssertionError(f"Ultralytics module is not available: {feature_name.removeprefix('yolo.')}")
+
+        def capture(_module: Any, _inputs: Any, output: Any, *, name: str = feature_name) -> None:
+            captured[name] = _as_numpy_tensor(output, name=name)
+
+        hooks.append(module.register_forward_hook(capture))
+    try:
+        batch = torch.from_numpy(np.ascontiguousarray(input_tensor, dtype=np.float32))
+        with torch.inference_mode():
+            model(batch)
+    finally:
+        for hook in hooks:
+            hook.remove()
+    if set(captured) != set(feature_names):
+        raise AssertionError(f"Ultralytics feature capture mismatch: expected={feature_names}, got={sorted(captured)}")
+    return {name: captured[name] for name in feature_names}
+
+
+def _run_inferrt_yolo_seg_features(
+    irt_module: Any,
+    *,
+    weights_path: Path,
+    input_tensor: np.ndarray,
+    feature_names: tuple[str, ...],
+) -> dict[str, np.ndarray]:
+    """构建 YOLOv8-Seg feature-only TensorRT 图并执行指定中间输出。"""
+
+    config = irt_module.ModelConfig()
+    config.runtime = "tensorrt:0"
+    config.feature_only = True
+    config.feature_tensor_names = list(feature_names)
+    config.output_tensor_names = list(feature_names)
+    model = irt_module.create_model("yolov8n_seg", config=config)
+    try:
+        model.build(str(weights_path))
+    except Exception as exc:
+        message = str(exc)
+        unavailable_markers = (
+            "backend is not enabled",
+            "CUDA driver",
+            "CUDA failure",
+            "CUDA error",
+            "Failed to initialize CUDA",
+            "Cannot get DEVICE_PROPERTIES",
+        )
+        if any(marker in message for marker in unavailable_markers):
+            pytest.skip(f"TENSORRT/GPU/yolov8n_seg feature backend unavailable: {message}")
+        raise
+
+    input_names = list(model.input_tensor_names())
+    output_names = list(model.output_tensor_names())
+    assert input_names == ["input"]
+    assert output_names == list(feature_names)
+    outputs = model.forward_features({input_names[0]: np.ascontiguousarray(input_tensor, dtype=np.float32)})
+    return {str(name): np.asarray(value, dtype=np.float32) for name, value in dict(outputs).items()}
 
 
 def _decode_inferrt_yolo_seg_outputs(outputs: dict[str, np.ndarray], image_size: int) -> np.ndarray:
@@ -304,4 +395,63 @@ def test_yolov8_seg_tensorrt_matches_ultralytics_forward(
     )
     inferrt_outputs = _run_inferrt_yolo_seg(irt_module, weights_path=weights_path, input_tensor=input_tensor)
 
+    manifest_path = weights_path.with_suffix(".manifest.yaml")
+    assert manifest_path.is_file(), f"YOLOv8-Seg engine manifest missing: {manifest_path}"
+    manifest_version = next(
+        (line.split(":", 1)[1].strip() for line in manifest_path.read_text(encoding="utf-8").splitlines()
+         if line.startswith("version:")),
+        "",
+    )
+    assert manifest_version == YOLO_CACHE_VERSION, (
+        "YOLOv8-Seg engine cache contract is stale: "
+        f"expected {YOLO_CACHE_VERSION}, got {manifest_version or '<missing>'}"
+    )
     _assert_yolo_seg_outputs_close(torch_prediction, torch_proto, inferrt_outputs)
+
+
+def test_yolov8_seg_classification_feature_path_matches_ultralytics(
+    repo_root: Path,
+    build_dir: Path,
+    model_root: Path,
+    ultralytics_repo: Path,
+    yolov5_repo: Path,
+    irt_module: Any,
+    compare_runtimes: list[str],
+    compare_devices: list[str],
+) -> None:
+    """P5 分类分支的逐层 feature-only 输出必须与 Ultralytics 对齐。"""
+
+    if "TENSORRT" not in compare_runtimes:
+        pytest.skip("YOLOv8-Seg feature parity requires --inferrt-compare-runtime=tensorrt")
+    if "gpu" not in compare_devices:
+        pytest.skip("YOLOv8-Seg feature parity requires --inferrt-compare-devices=gpu")
+
+    checkpoint = model_root / "yolov8" / "yolov8n-seg.pt"
+    weights_path = ensure_yolo_wts(
+        repo_root=repo_root,
+        build_dir=build_dir,
+        model_root=model_root,
+        model_name="yolov8n_seg",
+        checkpoint=checkpoint,
+        ultralytics_repo=ultralytics_repo,
+        yolov5_repo=yolov5_repo,
+    )
+    input_tensor = _deterministic_yolo_input()
+    torch_features = _run_torch_yolo_seg_features(
+        repo_root=repo_root,
+        build_dir=build_dir,
+        checkpoint=checkpoint,
+        ultralytics_repo=ultralytics_repo,
+        yolov5_repo=yolov5_repo,
+        input_tensor=input_tensor,
+        feature_names=YOLO_SEG_CLASS_FEATURES,
+    )
+    inferrt_features = _run_inferrt_yolo_seg_features(
+        irt_module,
+        weights_path=weights_path,
+        input_tensor=input_tensor,
+        feature_names=YOLO_SEG_CLASS_FEATURES,
+    )
+    assert sorted(inferrt_features) == sorted(torch_features)
+    for name in YOLO_SEG_CLASS_FEATURES:
+        assert_tensors_close(torch_features[name], inferrt_features[name], rtol=1e-3, atol=5e-4, name=name)

@@ -9,7 +9,12 @@ target_include_directories(${PROJECT_NAME_LOWER}_sample_common
 )
 
 add_subdirectory(version)
-add_subdirectory(cuda)
-add_subdirectory(features)
-add_subdirectory(model)
-add_subdirectory(engine)
+
+if(${PROJECT_NAME_UPPER}_ENABLE_CUDA)
+    add_subdirectory(cuda)
+endif()
+if(${PROJECT_NAME_UPPER}_ENABLE_CUDA AND ${PROJECT_NAME_UPPER}_BUILD_TENSORRT)
+    add_subdirectory(features)
+    add_subdirectory(model)
+    add_subdirectory(engine)
+endif()

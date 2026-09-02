@@ -63,27 +63,44 @@ add_library(TensorRT INTERFACE IMPORTED GLOBAL)
 add_library(TensorRT::TensorRT ALIAS TensorRT)
 
 
-# 检查 TRT_ROOT 是否已设置（CMake 变量或环境变量）
-if(NOT DEFINED TRT_ROOT AND NOT DEFINED ENV{TRT_ROOT})
+# Resolve an explicit root first, then fall back to standard CMake prefix
+# search paths.  A clean build must not depend on a stale cache entry.
+if(NOT DEFINED TRT_ROOT OR TRT_ROOT STREQUAL "")
+  set(_trt_root_hints)
+  if(DEFINED TensorRT_ROOT AND NOT TensorRT_ROOT STREQUAL "")
+    list(APPEND _trt_root_hints "${TensorRT_ROOT}")
+  endif()
+  foreach(_trt_root_environment TRT_ROOT TensorRT_ROOT TENSORRT_ROOT)
+    if(DEFINED ENV{${_trt_root_environment}} AND NOT "$ENV{${_trt_root_environment}}" STREQUAL "")
+      list(APPEND _trt_root_hints "$ENV{${_trt_root_environment}}")
+    endif()
+  endforeach()
+  if(CMAKE_PREFIX_PATH)
+    list(APPEND _trt_root_hints ${CMAKE_PREFIX_PATH})
+  endif()
+
+  find_path(_trt_include_dir
+    NAMES NvInfer.h
+    HINTS ${_trt_root_hints}
+    PATH_SUFFIXES include)
+  if(_trt_include_dir)
+    get_filename_component(TRT_ROOT "${_trt_include_dir}" DIRECTORY)
+  endif()
+  unset(_trt_include_dir CACHE)
+endif()
+
+if(NOT DEFINED TRT_ROOT OR TRT_ROOT STREQUAL "")
   message(
     FATAL_ERROR
-      "TRT_ROOT is not set. Please set TRT_ROOT to the TensorRT installation directory.\n"
-      "You can set it via:\n"
-      "  - CMake variable: -DTRT_ROOT=/path/to/tensorrt\n"
-      "  - Environment variable: set TRT_ROOT=/path/to/tensorrt"
+      "TensorRT was not found. Set -DTRT_ROOT=/path/to/tensorrt, "
+      "TensorRT_ROOT, or add the TensorRT prefix to CMAKE_PREFIX_PATH."
   )
 endif()
 
-# 如果 CMake 变量未设置，则使用环境变量
-if(NOT DEFINED TRT_ROOT)
-  set(TRT_ROOT $ENV{TRT_ROOT})
-endif()
-
-# 验证 TRT_ROOT 路径是否存在
 if(NOT EXISTS "${TRT_ROOT}")
   message(
     FATAL_ERROR
-      "TRT_ROOT=${TRT_ROOT} does not exist! Please check your TensorRT installation path."
+      "TRT_ROOT=${TRT_ROOT} does not exist. Check the TensorRT installation path."
   )
 endif()
 
@@ -102,22 +119,87 @@ set(TRT_VERSION
 )
 
 # 如果 CMake 变量和环境变量都定义了，优先使用环境变量
-if(NOT TRT_VERSION STREQUAL "" AND NOT $ENV{TRT_VERSION} STREQUAL "")
+if(NOT TRT_VERSION STREQUAL "" AND NOT "$ENV{TRT_VERSION}" STREQUAL "")
   message(
     WARNING
       "TRT_VERSION defined by cmake and environment variable both, using the later one"
   )
 endif()
 
-if(NOT $ENV{TRT_VERSION} STREQUAL "")
-  set(TRT_VERSION $ENV{TRT_VERSION})
+if(NOT "$ENV{TRT_VERSION}" STREQUAL "")
+  set(TRT_VERSION "$ENV{TRT_VERSION}")
+endif()
+
+# 安装包的消费者通常只提供 TRT_ROOT，不会有构建树里的 TRT_VERSION 缓存。
+# 优先从 TensorRT 版本头文件推导完整版本；Windows 版头文件可能通过
+# TRT_*_ENTERPRISE 宏间接定义 NV_TENSORRT_*，因此同时支持两种写法。
+file(TO_CMAKE_PATH "${TRT_ROOT}" _trt_root_cmake)
+if(TRT_VERSION STREQUAL "")
+  file(GLOB_RECURSE _trt_version_headers CONFIGURE_DEPENDS LIST_DIRECTORIES FALSE
+       "${_trt_root_cmake}/*NvInferVersion.h")
+  list(SORT _trt_version_headers)
+  foreach(_trt_version_header IN LISTS _trt_version_headers)
+    if(EXISTS "${_trt_version_header}")
+      unset(_trt_version_MAJOR)
+      unset(_trt_version_MINOR)
+      unset(_trt_version_PATCH)
+      unset(_trt_version_BUILD)
+      file(READ "${_trt_version_header}" _trt_version_text)
+      foreach(_trt_version_component MAJOR MINOR PATCH BUILD)
+        string(REGEX MATCH
+               "#[ \t]*define[ \t]+NV_TENSORRT_${_trt_version_component}[ \t]+([0-9]+)"
+               _trt_component_match "${_trt_version_text}")
+        if(NOT _trt_component_match)
+          string(REGEX MATCH
+                 "#[ \t]*define[ \t]+TRT_${_trt_version_component}_[A-Za-z0-9_]+[ \t]+([0-9]+)"
+                 _trt_component_match "${_trt_version_text}")
+        endif()
+        if(_trt_component_match)
+          set(_trt_component_value "${CMAKE_MATCH_1}")
+          set(_trt_version_${_trt_version_component} "${_trt_component_value}")
+        endif()
+      endforeach()
+      if(DEFINED _trt_version_MAJOR AND DEFINED _trt_version_MINOR
+         AND DEFINED _trt_version_PATCH)
+        set(TRT_VERSION "${_trt_version_MAJOR}.${_trt_version_MINOR}.${_trt_version_PATCH}")
+        if(DEFINED _trt_version_BUILD)
+          string(APPEND TRT_VERSION ".${_trt_version_BUILD}")
+        endif()
+        break()
+      endif()
+    endif()
+  endforeach()
+endif()
+
+# TensorRT 10 的 Windows DLL 名称也包含主版本号，可作为缺少头文件时的
+# 明确回退；没有任何可验证版本时给出可操作错误，而不是让 `if()` 解析空值。
+if(TRT_VERSION STREQUAL "" AND WIN32)
+  file(GLOB _trt_version_libraries CONFIGURE_DEPENDS LIST_DIRECTORIES FALSE
+       "${_trt_root_cmake}/bin/nvinfer_*.dll")
+  foreach(_trt_version_library IN LISTS _trt_version_libraries)
+    get_filename_component(_trt_version_library_name "${_trt_version_library}" NAME)
+    string(REGEX MATCH "^nvinfer_([0-9]+)\.dll$" _trt_library_match
+           "${_trt_version_library_name}")
+    if(_trt_library_match)
+      set(TRT_VERSION "${CMAKE_MATCH_1}")
+      break()
+    endif()
+  endforeach()
+endif()
+
+if(TRT_VERSION STREQUAL "")
+  message(FATAL_ERROR
+          "TRT_VERSION is not set and could not be inferred from TRT_ROOT=${TRT_ROOT}. "
+          "Set -DTRT_VERSION=<major.minor.patch[.build]> or provide "
+          "${TRT_ROOT}/include/NvInferVersion.h.")
 endif()
 
 # 从 TRT_VERSION 中提取主版本号（第一个连续的数字序列）
-# 例如："8.6.1.6" → "8", "10.0.1.6" → "10", "12.5.0.0" → "12"
-string(REGEX MATCH "([0-9]+)" _match "${TRT_VERSION}")
-set(TRT_MAJOR_VERSION "${_match}")
-unset(_match)
+# 例如："8.6.1.6" → "8", "10.0.1.6" → "10"
+string(REGEX MATCH "^[0-9]+" TRT_MAJOR_VERSION "${TRT_VERSION}")
+if(TRT_MAJOR_VERSION STREQUAL "")
+  message(FATAL_ERROR "Invalid TRT_VERSION='${TRT_VERSION}': expected a numeric major version")
+endif()
 
 
 # 根据操作系统和 TensorRT 版本配置库模块
@@ -209,3 +291,4 @@ unset(_modules)
 unset(_trt_include_candidates)
 unset(_trt_library_candidates)
 unset(_trt_arch)
+unset(_trt_root_cmake)

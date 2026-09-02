@@ -13,11 +13,17 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 #include <vector>
 
 namespace {
 
 using irt::cvcuda::test::AssertInferRTSuccess;
+
+static_assert(!std::is_copy_constructible_v<irt::cvcuda::NMS>);
+static_assert(!std::is_copy_assignable_v<irt::cvcuda::NMS>);
+static_assert(std::is_move_constructible_v<irt::cvcuda::NMS>);
+static_assert(std::is_move_assignable_v<irt::cvcuda::NMS>);
 
 /**
  * @brief 计算 xyxy 框面积，退化边长按 0 处理。
@@ -232,4 +238,86 @@ TEST(NMSFunctionEdgeCaseTest, RejectsNullCount)
 {
     const int ret = irt::cvcuda::nms(nullptr, nullptr, nullptr, nullptr, 0, 0.5f, nullptr);
     EXPECT_EQ(ret, IRT_ERROR_INVALID_ARGUMENT);
+}
+
+TEST(NMSWorkspaceTest, ReusesWorkspaceAcrossSteadyStateCalls)
+{
+    const std::vector<float> boxes{0.0F, 0.0F, 10.0F, 10.0F};
+    const std::vector<float> scores{0.9F};
+    float                   *d_boxes      = nullptr;
+    float                   *d_scores     = nullptr;
+    int64_t                 *d_keep       = nullptr;
+    int                     *d_keep_count = nullptr;
+    ASSERT_EQ(cudaMalloc(&d_boxes, boxes.size() * sizeof(float)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_scores, scores.size() * sizeof(float)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_keep, sizeof(int64_t)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_keep_count, sizeof(int)), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(d_boxes, boxes.data(), boxes.size() * sizeof(float), cudaMemcpyHostToDevice), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(d_scores, scores.data(), scores.size() * sizeof(float), cudaMemcpyHostToDevice), cudaSuccess);
+
+    irt::cvcuda::NMS op;
+    ASSERT_TRUE(AssertInferRTSuccess(op(d_boxes, d_scores, d_keep, d_keep_count, 1, 0.5F, nullptr)));
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto first = op.workspaceStats();
+    ASSERT_EQ(first.allocation_count, 1U);
+    ASSERT_GT(first.workspace_bytes, 0U);
+
+    ASSERT_TRUE(AssertInferRTSuccess(op(d_boxes, d_scores, d_keep, d_keep_count, 1, 0.5F, nullptr)));
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto steady = op.workspaceStats();
+    EXPECT_EQ(steady.allocation_count, first.allocation_count);
+    EXPECT_EQ(steady.workspace_bytes, first.workspace_bytes);
+    EXPECT_EQ(steady.release_count, 0U);
+
+    cudaFree(d_boxes);
+    cudaFree(d_scores);
+    cudaFree(d_keep);
+    cudaFree(d_keep_count);
+}
+
+TEST(NMSWorkspaceTest, RebindsWorkspaceAcrossStreamsAfterSynchronizingPreviousWork)
+{
+    const std::vector<float> boxes{0.0F, 0.0F, 10.0F, 10.0F};
+    const std::vector<float> scores{0.9F};
+    float                   *d_boxes      = nullptr;
+    float                   *d_scores     = nullptr;
+    int64_t                 *d_keep       = nullptr;
+    int                     *d_keep_count = nullptr;
+    cudaStream_t              first_stream  = nullptr;
+    cudaStream_t              second_stream = nullptr;
+
+    ASSERT_EQ(cudaMalloc(&d_boxes, boxes.size() * sizeof(float)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_scores, scores.size() * sizeof(float)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_keep, sizeof(int64_t)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_keep_count, sizeof(int)), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(d_boxes, boxes.data(), boxes.size() * sizeof(float), cudaMemcpyHostToDevice), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(d_scores, scores.data(), scores.size() * sizeof(float), cudaMemcpyHostToDevice), cudaSuccess);
+    ASSERT_EQ(cudaStreamCreate(&first_stream), cudaSuccess);
+    ASSERT_EQ(cudaStreamCreate(&second_stream), cudaSuccess);
+
+    {
+        irt::cvcuda::NMS op;
+        ASSERT_TRUE(AssertInferRTSuccess(
+            op(d_boxes, d_scores, d_keep, d_keep_count, 1, 0.5F, first_stream)));
+        ASSERT_EQ(cudaStreamSynchronize(first_stream), cudaSuccess);
+        const auto first = op.workspaceStats();
+        ASSERT_EQ(first.allocation_count, 1U);
+        ASSERT_EQ(first.release_count, 0U);
+        ASSERT_NE(first.stream, 0U);
+
+        ASSERT_TRUE(AssertInferRTSuccess(
+            op(d_boxes, d_scores, d_keep, d_keep_count, 1, 0.5F, second_stream)));
+        ASSERT_EQ(cudaStreamSynchronize(second_stream), cudaSuccess);
+        const auto second = op.workspaceStats();
+        EXPECT_EQ(second.allocation_count, 2U);
+        EXPECT_EQ(second.release_count, 1U);
+        EXPECT_NE(second.stream, first.stream);
+    }
+
+    cudaStreamDestroy(first_stream);
+    cudaStreamDestroy(second_stream);
+    cudaFree(d_boxes);
+    cudaFree(d_scores);
+    cudaFree(d_keep);
+    cudaFree(d_keep_count);
 }

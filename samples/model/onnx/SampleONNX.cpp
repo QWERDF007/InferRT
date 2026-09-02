@@ -58,8 +58,8 @@ struct ImageTensorShape
 struct OutputBuffer
 {
     std::string         name;
-    nvinfer1::Dims      dims;
-    nvinfer1::DataType  data_type;
+    irt::Shape          dims;
+    irt::TensorDataType data_type{irt::TensorDataType::F32};
     void               *device_ptr{nullptr};
     std::vector<char>   host_bytes;
 };
@@ -112,21 +112,21 @@ Arguments parseArguments(int argc, char *argv[])
  * @param dims 输入张量维度。
  * @return 规范化后的图像形状。
  */
-ImageTensorShape parseImageTensorShape(const nvinfer1::Dims &dims)
+ImageTensorShape parseImageTensorShape(const irt::Shape &dims)
 {
-    if (dims.nbDims == 4)
+    if (dims.rank() == 4)
     {
-        return {static_cast<int>(dims.d[0]), static_cast<int>(dims.d[1]), static_cast<int>(dims.d[2]),
-                static_cast<int>(dims.d[3])};
+        return {static_cast<int>(dims[0]), static_cast<int>(dims[1]), static_cast<int>(dims[2]),
+                static_cast<int>(dims[3])};
     }
 
-    if (dims.nbDims == 3)
+    if (dims.rank() == 3)
     {
-        return {1, static_cast<int>(dims.d[0]), static_cast<int>(dims.d[1]), static_cast<int>(dims.d[2])};
+        return {1, static_cast<int>(dims[0]), static_cast<int>(dims[1]), static_cast<int>(dims[2])};
     }
 
     throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Expected 3D or 4D image tensor, got %d dims",
-                         dims.nbDims);
+                         dims.rank());
 }
 
 /**
@@ -135,24 +135,24 @@ ImageTensorShape parseImageTensorShape(const nvinfer1::Dims &dims)
  * @param requested_batch 请求的 batch 大小。
  * @return 实际运行时维度。
  */
-nvinfer1::Dims resolveInputDims(const nvinfer1::Dims &engine_dims, size_t requested_batch)
+irt::Shape resolveInputDims(const irt::Shape &engine_dims, size_t requested_batch)
 {
-    nvinfer1::Dims resolved = engine_dims;
+    irt::Shape resolved = engine_dims;
 
-    if (resolved.nbDims == 4)
+    if (resolved.rank() == 4)
     {
-        if (resolved.d[0] < 0)
+        if (resolved[0] < 0)
         {
-            resolved.d[0] = static_cast<int64_t>(requested_batch);
+            resolved[0] = static_cast<int64_t>(requested_batch);
         }
-        else if (static_cast<size_t>(resolved.d[0]) != requested_batch)
+        else if (static_cast<size_t>(resolved[0]) != requested_batch)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "Model expects batch size %lld, but %zu images were provided", resolved.d[0],
+                                 "Model expects batch size %lld, but %zu images were provided", resolved[0],
                                  requested_batch);
         }
     }
-    else if (resolved.nbDims == 3 && requested_batch != 1)
+    else if (resolved.rank() == 3 && requested_batch != 1)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "Model does not expose an explicit batch dimension; provide exactly one image");
@@ -175,25 +175,22 @@ std::vector<float> preprocessOne(const cv::Mat &img, const ImageTensorShape &sha
                              "Only 1-channel or 3-channel image input is supported");
     }
 
-    cv::Mat converted;
-    if (shape.channels == 3)
+    irt::PreprocessSpec spec;
+    spec.input_width     = shape.width;
+    spec.input_height    = shape.height;
+    spec.input_channels  = shape.channels;
+    spec.source_channels = 3;
+    spec.src_color       = irt::ColorFormat::BGR;
+    spec.dst_color       = shape.channels == 3 ? irt::ColorFormat::RGB : irt::ColorFormat::GRAY;
+    spec.interpolation   = irt::Interpolation::Linear;
+    spec.padding_mode    = irt::PaddingMode::DirectResize;
+    spec.scale           = 1.0F / 255.0F;
+    if (shape.channels == 1)
     {
-        converted = irt::model::ImageNetUtil::preprocess(img, cv::Size(shape.width, shape.height));
-        return irt::model::ImageNetUtil::imageToTensorCHW(converted);
+        spec.mean   = {0.0F};
+        spec.stddev = {1.0F};
     }
-    else
-    {
-        cv::cvtColor(img, converted, cv::COLOR_BGR2GRAY);
-    }
-
-    cv::Mat resized;
-    cv::resize(converted, resized, cv::Size(shape.width, shape.height), 0, 0, cv::INTER_LINEAR);
-    resized.convertTo(resized, shape.channels == 3 ? CV_32FC3 : CV_32FC1, 1.0 / 255.0);
-
-    std::vector<float> tensor(static_cast<size_t>(shape.channels) * shape.height * shape.width);
-    std::memcpy(tensor.data(), resized.data, static_cast<size_t>(shape.height) * shape.width * sizeof(float));
-
-    return tensor;
+    return irt::model::ImageNetUtil::imageToTensorCHW(irt::model::ImageNetUtil::preprocess(img, spec));
 }
 
 /**
@@ -229,16 +226,16 @@ std::vector<float> preprocessBatch(const std::vector<fs::path> &image_paths, con
  * @param data_type 模型输入数据类型。
  * @return 可直接拷贝到设备端的字节数组。
  */
-std::vector<char> encodeInputBuffer(const std::vector<float> &input_data, nvinfer1::DataType data_type)
+std::vector<char> encodeInputBuffer(const std::vector<float> &input_data, irt::TensorDataType data_type)
 {
     std::vector<char> bytes(input_data.size() * elementSize(data_type));
 
     switch (data_type)
     {
-    case nvinfer1::DataType::kFLOAT:
+    case irt::TensorDataType::F32:
         std::memcpy(bytes.data(), input_data.data(), bytes.size());
         return bytes;
-    case nvinfer1::DataType::kHALF:
+    case irt::TensorDataType::F16:
     {
         auto *dst = reinterpret_cast<__half *>(bytes.data());
         for (size_t i = 0; i < input_data.size(); ++i)
@@ -281,9 +278,9 @@ std::vector<double> decodeOutputBuffer(const OutputBuffer &output)
 {
     switch (output.data_type)
     {
-    case nvinfer1::DataType::kFLOAT:
+    case irt::TensorDataType::F32:
         return castBufferToDouble<float>(output.host_bytes);
-    case nvinfer1::DataType::kHALF:
+    case irt::TensorDataType::F16:
     {
         const size_t count = output.host_bytes.size() / sizeof(__half);
         const auto  *src   = reinterpret_cast<const __half *>(output.host_bytes.data());
@@ -294,15 +291,15 @@ std::vector<double> decodeOutputBuffer(const OutputBuffer &output)
         }
         return values;
     }
-    case nvinfer1::DataType::kINT8:
+    case irt::TensorDataType::I8:
         return castBufferToDouble<int8_t>(output.host_bytes);
-    case nvinfer1::DataType::kUINT8:
+    case irt::TensorDataType::U8:
         return castBufferToDouble<uint8_t>(output.host_bytes);
-    case nvinfer1::DataType::kINT32:
+    case irt::TensorDataType::I32:
         return castBufferToDouble<int32_t>(output.host_bytes);
-    case nvinfer1::DataType::kINT64:
+    case irt::TensorDataType::I64:
         return castBufferToDouble<int64_t>(output.host_bytes);
-    case nvinfer1::DataType::kBOOL:
+    case irt::TensorDataType::Bool:
         return castBufferToDouble<uint8_t>(output.host_bytes);
     default:
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported output tensor data type");
@@ -357,7 +354,8 @@ void printTopK(const std::string &tensor_name, const std::vector<double> &data, 
  */
 void printOutputSummary(const OutputBuffer &output, size_t batch_size, const std::vector<std::string> &labels)
 {
-    std::cout << "Output tensor shape: " << dimsToString(output.dims) << ", dtype=" << dataTypeToString(output.data_type)
+    std::cout << "Output tensor shape: " << dimsToString(output.dims) << ", dtype="
+              << irt::model::dataTypeToString(output.data_type)
               << std::endl;
 
     if (output.host_bytes.empty())
@@ -368,7 +366,7 @@ void printOutputSummary(const OutputBuffer &output, size_t batch_size, const std
     const auto values = decodeOutputBuffer(output);
 
     bool split_by_batch
-        = output.dims.nbDims >= 1 && output.dims.d[0] > 0 && static_cast<size_t>(output.dims.d[0]) == batch_size;
+        = output.dims.rank() >= 1 && output.dims[0] > 0 && static_cast<size_t>(output.dims[0]) == batch_size;
     if (!split_by_batch)
     {
         printTopK(output.name, values, 3, labels);
@@ -406,17 +404,17 @@ int main(int argc, char *argv[])
             return -1;
         }
 
-        model->setLogLevel(nvinfer1::ILogger::Severity::kINFO);
+        model->setLogLevel(irt::model::LogLevel::Info);
 
         std::cout << "Building or loading ONNX model..." << std::endl;
         model->buildOrLoad(args.onnx_file.string());
         std::cout << "Model loaded successfully." << std::endl;
 
-        const auto input_names  = model->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
-        const auto output_names = model->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+        const auto input_names  = model->ioTensorNames(irt::TensorIOMode::Input);
+        const auto output_names = model->ioTensorNames(irt::TensorIOMode::Output);
         if (input_names.empty() || output_names.empty())
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION,
+            throw irt::Exception(irt::Status::INVALID_OPERATION,
                                  "Engine must contain at least one input and one output");
         }
         if (input_names.size() != 1)
@@ -429,7 +427,7 @@ int main(int argc, char *argv[])
         const auto         input_engine_dims = model->tensorShape(input_name);
         const auto         input_type        = model->tensorDataType(input_name);
         const bool supports_image_input
-            = input_type == nvinfer1::DataType::kFLOAT || input_type == nvinfer1::DataType::kHALF;
+            = input_type == irt::TensorDataType::F32 || input_type == irt::TensorDataType::F16;
         if (!supports_image_input)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
@@ -443,11 +441,11 @@ int main(int argc, char *argv[])
 
         std::cout << "Input tensor: " << input_name << " engine_shape=" << dimsToString(input_engine_dims)
                   << " runtime_shape=" << dimsToString(input_runtime_dims)
-                  << " dtype=" << dataTypeToString(input_type) << std::endl;
+                  << " dtype=" << irt::model::dataTypeToString(input_type) << std::endl;
         for (const auto &output_name : output_names)
         {
             std::cout << "Output tensor: " << output_name << " shape=" << dimsToString(model->tensorShape(output_name))
-                      << " dtype=" << dataTypeToString(model->tensorDataType(output_name))
+                      << " dtype=" << irt::model::dataTypeToString(model->tensorDataType(output_name))
                       << std::endl;
         }
 
@@ -457,15 +455,16 @@ int main(int argc, char *argv[])
         const std::vector<char> input_host_bytes = encodeInputBuffer(input_data, input_type);
         const auto preprocess_end = Clock::now();
 
-        std::vector<void *> device_buffers;
+        std::vector<irt::BufferView> device_buffers;
         device_buffers.reserve(input_names.size() + output_names.size());
 
         void *d_input      = nullptr;
         size_t input_bytes = input_host_bytes.size();
-        const auto stream = model->resolveExecutionStream();
+        const auto stream = reinterpret_cast<cudaStream_t>(model->resolveExecutionStream());
         cudaMalloc(&d_input, input_bytes);
         cudaMemcpyAsync(d_input, input_host_bytes.data(), input_bytes, cudaMemcpyHostToDevice, stream);
-        device_buffers.push_back(d_input);
+        device_buffers.push_back(
+            irt::BufferView::fromBytes(d_input, input_bytes, irt::MemoryKind::DEVICE, input_name));
 
         std::vector<OutputBuffer> outputs;
         outputs.reserve(output_names.size());
@@ -483,13 +482,14 @@ int main(int argc, char *argv[])
 
             const size_t output_bytes = output_count * elementSize(output_type);
             cudaMalloc(&output.device_ptr, output_bytes);
-            device_buffers.push_back(output.device_ptr);
+            device_buffers.push_back(
+                irt::BufferView::fromBytes(output.device_ptr, output_bytes, irt::MemoryKind::DEVICE, output_name));
             outputs.push_back(std::move(output));
         }
 
         std::cout << "Running inference with batch size 1..." << std::endl;
         const auto infer_start = Clock::now();
-        model->infer(device_buffers, stream, true);
+        model->infer(device_buffers, reinterpret_cast<std::uintptr_t>(stream), true);
 
         const auto postprocess_start = Clock::now();
         for (auto &output : outputs)

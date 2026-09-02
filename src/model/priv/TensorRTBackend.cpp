@@ -1,10 +1,15 @@
-#include "BackendRuntime.hpp"
+#include "TensorRTBackend.hpp"
+#include "BackendUtils.hpp"
 
 #include <inferrt/core/Exception.hpp>
-#include <inferrt/model/Utils.hpp>
+#include "TRTUtils.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <fstream>
+#include <limits>
+#include <span>
+#include <utility>
 
 namespace irt::model::priv {
 
@@ -48,7 +53,7 @@ void SaveEngineToFile(const std::string &engine_file, const std::shared_ptr<nvin
 {
     if (!engine)
     {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Engine is not initialized, cannot save");
+        throw irt::Exception(Status::INVALID_OPERATION, "Engine is not initialized, cannot save");
     }
 
     auto serialized = std::unique_ptr<nvinfer1::IHostMemory>(engine->serialize());
@@ -108,6 +113,102 @@ nvinfer1::Dims MakeProfileDims(nvinfer1::Dims dims, int batch)
     return dims;
 }
 
+irt::Shape DimsToCoreShape(const nvinfer1::Dims &dims, const std::string &tensor_name)
+{
+    if (dims.nbDims < 0 || dims.nbDims > nvinfer1::Dims::MAX_DIMS)
+    {
+        throw irt::Exception(Status::ERROR_INTERNAL, "Invalid TensorRT rank for tensor: %s", tensor_name.c_str());
+    }
+
+    std::vector<int64_t> values;
+    values.reserve(static_cast<size_t>(dims.nbDims));
+    for (int32_t index = 0; index < dims.nbDims; ++index)
+    {
+        values.push_back(static_cast<int64_t>(dims.d[index]));
+    }
+    return irt::Shape{std::move(values)};
+}
+
+irt::TensorDataType ToCoreDataType(const nvinfer1::DataType type)
+{
+    switch (type)
+    {
+    case nvinfer1::DataType::kUINT8:
+        return irt::TensorDataType::U8;
+    case nvinfer1::DataType::kINT8:
+        return irt::TensorDataType::I8;
+    case nvinfer1::DataType::kHALF:
+        return irt::TensorDataType::F16;
+    case nvinfer1::DataType::kFLOAT:
+        return irt::TensorDataType::F32;
+    case nvinfer1::DataType::kINT32:
+        return irt::TensorDataType::I32;
+    case nvinfer1::DataType::kINT64:
+        return irt::TensorDataType::I64;
+    case nvinfer1::DataType::kBOOL:
+        return irt::TensorDataType::Bool;
+    default:
+        throw irt::Exception(Status::ERROR_NOT_IMPLEMENTED, "Unsupported TensorRT tensor data type");
+    }
+}
+
+std::shared_ptr<TRTLogger> ResolveLogger(const TRTParams &params, const std::string &model_name)
+{
+    if (params.logger)
+    {
+        return params.logger;
+    }
+    return std::make_shared<TRTLogger>(model_name, params.log_level);
+}
+
+nvinfer1::TensorIOMode ToTensorRtIOMode(const irt::TensorIOMode mode)
+{
+    return mode == irt::TensorIOMode::Input ? nvinfer1::TensorIOMode::kINPUT
+                                             : nvinfer1::TensorIOMode::kOUTPUT;
+}
+
+nvinfer1::ILogger::Severity ToTensorRtSeverity(const LogLevel level)
+{
+    switch (level)
+    {
+    case LogLevel::InternalError:
+        return nvinfer1::ILogger::Severity::kINTERNAL_ERROR;
+    case LogLevel::Error:
+        return nvinfer1::ILogger::Severity::kERROR;
+    case LogLevel::Warning:
+        return nvinfer1::ILogger::Severity::kWARNING;
+    case LogLevel::Info:
+        return nvinfer1::ILogger::Severity::kINFO;
+    case LogLevel::Verbose:
+        return nvinfer1::ILogger::Severity::kVERBOSE;
+    }
+    return nvinfer1::ILogger::Severity::kWARNING;
+}
+
+LogLevel FromTensorRtSeverity(const nvinfer1::ILogger::Severity severity)
+{
+    switch (severity)
+    {
+    case nvinfer1::ILogger::Severity::kINTERNAL_ERROR:
+        return LogLevel::InternalError;
+    case nvinfer1::ILogger::Severity::kERROR:
+        return LogLevel::Error;
+    case nvinfer1::ILogger::Severity::kWARNING:
+        return LogLevel::Warning;
+    case nvinfer1::ILogger::Severity::kINFO:
+        return LogLevel::Info;
+    case nvinfer1::ILogger::Severity::kVERBOSE:
+        return LogLevel::Verbose;
+    }
+    return LogLevel::Warning;
+}
+
+nvinfer1::Dims MakeProfileDims(const irt::Shape &shape, int batch)
+{
+    auto dims = ShapeToDims(shape);
+    return MakeProfileDims(dims, batch);
+}
+
 void ConfigureDynamicBatchProfile(nvinfer1::IBuilder &builder, nvinfer1::IBuilderConfig &builder_config,
                                   nvinfer1::INetworkDefinition &network, const IModelConfig &config)
 {
@@ -134,9 +235,9 @@ void ConfigureDynamicBatchProfile(nvinfer1::IBuilder &builder, nvinfer1::IBuilde
         const auto  shape_index = ResolveConfiguredInputIndex(config, input_name, static_cast<size_t>(i));
         const auto &base_shape  = config.inputShapes().at(shape_index);
 
-        const auto min_dims = MakeProfileDims(base_shape, config.minBatchSize());
-        const auto opt_dims = MakeProfileDims(base_shape, config.optBatchSize());
-        const auto max_dims = MakeProfileDims(base_shape, config.maxBatchSize());
+        const auto min_dims = MakeProfileDims(ShapeToDims(base_shape), config.minBatchSize());
+        const auto opt_dims = MakeProfileDims(ShapeToDims(base_shape), config.optBatchSize());
+        const auto max_dims = MakeProfileDims(ShapeToDims(base_shape), config.maxBatchSize());
 
         if (!profile->setDimensions(input_name.c_str(), nvinfer1::OptProfileSelector::kMIN, min_dims)
             || !profile->setDimensions(input_name.c_str(), nvinfer1::OptProfileSelector::kOPT, opt_dims)
@@ -180,7 +281,7 @@ void SetConfiguredInputShapes(nvinfer1::ICudaEngine &engine, nvinfer1::IExecutio
         }
 
         const auto shape_index = ResolveConfiguredInputIndex(config, tensor_name, input_index);
-        auto       dims        = config.inputShapes().at(shape_index);
+        auto       dims        = ShapeToDims(config.inputShapes().at(shape_index));
         if (config.dynamicBatch())
         {
             dims.d[0] = config.optBatchSize();
@@ -195,6 +296,233 @@ void SetConfiguredInputShapes(nvinfer1::ICudaEngine &engine, nvinfer1::IExecutio
     }
 }
 
+bool IsOpaqueByteView(const irt::BufferView &buffer)
+{
+    if (buffer.desc.layout != irt::TensorLayout::Opaque || buffer.desc.data_type != irt::TensorDataType::U8
+        || buffer.desc.shape.rank() != 1 || buffer.capacity_batch != 1 || buffer.bytes_per_request == 0
+        || buffer.bytes_per_request > static_cast<size_t>((std::numeric_limits<int64_t>::max)()))
+    {
+        return false;
+    }
+
+    return buffer.desc.shape[0] == static_cast<int64_t>(buffer.bytes_per_request);
+}
+
+bool MatchesRuntimeShape(const irt::Shape &buffer_shape, const irt::Shape &runtime_shape)
+{
+    if (buffer_shape == runtime_shape)
+    {
+        return true;
+    }
+
+    // EngineSlot keeps opaque model outputs flattened per request.  Preserve
+    // that representation while still checking the runtime element count.
+    if (runtime_shape.rank() > 1 && buffer_shape.rank() == 1 && runtime_shape[0] > 0)
+    {
+        const auto runtime_batch = irt::checkedInt64ToSize(runtime_shape[0], "TensorRT runtime batch");
+        const auto runtime_elements = runtime_shape.elementCount();
+        if (runtime_elements % runtime_batch == 0
+            && buffer_shape[0] == irt::checkedSizeToInt64(runtime_elements / runtime_batch,
+                                                          "TensorRT per-request element count"))
+        {
+            return true;
+        }
+    }
+
+    if (runtime_shape.rank() <= 1 || buffer_shape.rank() + 1 != runtime_shape.rank())
+    {
+        return false;
+    }
+
+    for (size_t index = 0; index < buffer_shape.rank(); ++index)
+    {
+        if (buffer_shape[index] != runtime_shape[index + 1])
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+void ValidateTensorBuffer(const irt::BufferView &buffer, const std::string &tensor_name,
+                          const nvinfer1::IExecutionContext &context, const nvinfer1::ICudaEngine &engine,
+                          const char *tensor_kind)
+{
+    if (buffer.data == nullptr || buffer.bytes_per_request == 0 || buffer.capacity_batch <= 0)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "%s buffer is incomplete: %s", tensor_kind,
+                             tensor_name.c_str());
+    }
+    if (!buffer.tensor_name.empty() && buffer.tensor_name != tensor_name)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "%s buffer name mismatch: expected %s, got %s",
+                             tensor_kind, tensor_name.c_str(), buffer.tensor_name.c_str());
+    }
+    if (buffer.desc.memory_kind != irt::MemoryKind::DEVICE)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "%s buffer must use device memory: %s", tensor_kind,
+                             tensor_name.c_str());
+    }
+
+    const auto expected_type = ToCoreDataType(engine.getTensorDataType(tensor_name.c_str()));
+    const auto runtime_dims = context.getTensorShape(tensor_name.c_str());
+    const auto runtime_shape = DimsToCoreShape(runtime_dims, tensor_name);
+    const auto runtime_elements = TensorElementCount(runtime_dims, tensor_name);
+    const auto available_bytes = buffer.byteSize();
+    const auto required_bytes =
+        irt::checkedSizeMul(runtime_elements, irt::dataTypeSize(expected_type), "TensorRT runtime tensor bytes");
+
+    if (!IsOpaqueByteView(buffer))
+    {
+        if (buffer.desc.data_type != expected_type)
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                                 "%s buffer data type mismatch: %s, expected %s", tensor_kind, tensor_name.c_str(),
+                                 irt::dataTypeToString(expected_type).data());
+        }
+        if (!MatchesRuntimeShape(buffer.desc.shape, runtime_shape))
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "%s buffer shape mismatch: %s", tensor_kind,
+                                 tensor_name.c_str());
+        }
+    }
+
+    if (available_bytes < required_bytes)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                             "%s buffer is too small: %s, required=%zu, available=%zu", tensor_kind,
+                             tensor_name.c_str(), required_bytes, available_bytes);
+    }
+}
+
+void bindTensorAddresses(nvinfer1::IExecutionContext &context, const nvinfer1::ICudaEngine &engine,
+                         std::span<const irt::BufferView> buffers, const bool feature_only)
+{
+    std::vector<std::string> input_names;
+    std::vector<std::string> output_names;
+    for (int32_t index = 0; index < engine.getNbIOTensors(); ++index)
+    {
+        const char *name = engine.getIOTensorName(index);
+        if (name == nullptr)
+        {
+            throw irt::Exception(Status::ERROR_INTERNAL, "TensorRT engine has an unnamed I/O tensor");
+        }
+        if (engine.getTensorIOMode(name) == nvinfer1::TensorIOMode::kINPUT)
+        {
+            input_names.emplace_back(name);
+        }
+        else if (engine.getTensorIOMode(name) == nvinfer1::TensorIOMode::kOUTPUT)
+        {
+            output_names.emplace_back(name);
+        }
+    }
+
+    const size_t expected = input_names.size() + output_names.size();
+    if (buffers.size() != expected)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                             "Expected %zu buffers (%zu inputs and %zu %s), got %zu", expected, input_names.size(),
+                             output_names.size(), feature_only ? "feature outputs" : "outputs", buffers.size());
+    }
+
+    size_t buffer_index = 0;
+    for (const auto &name : input_names)
+    {
+        const auto &buffer = buffers[buffer_index++];
+        ValidateTensorBuffer(buffer, name, context, engine, "Input");
+        if (!context.setTensorAddress(name.c_str(), buffer.data))
+        {
+            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to set input tensor address: %s", name.c_str());
+        }
+    }
+    for (const auto &name : output_names)
+    {
+        const auto &buffer = buffers[buffer_index++];
+        ValidateTensorBuffer(buffer, name, context, engine, "Output");
+        if (!context.setTensorAddress(name.c_str(), buffer.data))
+        {
+            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to set output tensor address: %s", name.c_str());
+        }
+    }
+}
+
+class TensorRTSession final : public irt::ITensorRuntimeSession
+{
+public:
+    TensorRTSession(std::shared_ptr<nvinfer1::ICudaEngine> engine, std::unique_ptr<nvinfer1::IExecutionContext> context,
+                    const int device_id)
+        : engine_(std::move(engine)), context_(std::move(context)), device_id_(device_id)
+    {
+        if (!engine_ || !context_)
+        {
+            throw irt::Exception(Status::ERROR_INTERNAL, "TensorRT session requires an engine and execution context");
+        }
+    }
+
+    irt::Shape tensorShape(const std::string &tensor_name) const override
+    {
+        if (!HasTensor(engine_.get(), tensor_name))
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Tensor not found: %s", tensor_name.c_str());
+        }
+        return DimsToCoreShape(context_->getTensorShape(tensor_name.c_str()), tensor_name);
+    }
+
+    irt::TensorDataType tensorDataType(const std::string &tensor_name) const override
+    {
+        if (!HasTensor(engine_.get(), tensor_name))
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Tensor not found: %s", tensor_name.c_str());
+        }
+        return ToCoreDataType(engine_->getTensorDataType(tensor_name.c_str()));
+    }
+
+    void setTensorShape(const std::string &tensor_name, const irt::Shape &shape) override
+    {
+        if (!HasTensor(engine_.get(), tensor_name))
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Tensor not found: %s", tensor_name.c_str());
+        }
+        if (engine_->getTensorIOMode(tensor_name.c_str()) != nvinfer1::TensorIOMode::kINPUT)
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Tensor is not an input: %s", tensor_name.c_str());
+        }
+        const auto declared_shape = DimsToCoreShape(engine_->getTensorShape(tensor_name.c_str()), tensor_name);
+        irt::validateRuntimeShape(declared_shape, shape, tensor_name);
+        const auto dims = ShapeToDims(shape);
+        if (!context_->setInputShape(tensor_name.c_str(), dims))
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Failed to set input tensor shape: %s",
+                                 tensor_name.c_str());
+        }
+    }
+
+    void execute(std::span<const irt::BufferView> buffers, irt::ExecuteOptions options) override
+    {
+        setCudaDevice(device_id_);
+        bindTensorAddresses(*context_, *engine_, buffers, false);
+        const auto stream = reinterpret_cast<cudaStream_t>(options.stream);
+        if (!context_->enqueueV3(stream))
+        {
+            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to execute TensorRT enqueue");
+        }
+        if (!options.non_blocking)
+        {
+            const auto status = cudaStreamSynchronize(stream);
+            if (status != cudaSuccess)
+            {
+                throw irt::Exception(Status::ERROR_INTERNAL, "Failed to synchronize CUDA stream: %s",
+                                     cudaGetErrorString(status));
+            }
+        }
+    }
+
+private:
+    std::shared_ptr<nvinfer1::ICudaEngine> engine_;
+    std::unique_ptr<nvinfer1::IExecutionContext> context_;
+    int device_id_{0};
+};
+
 } // namespace
 
 ModelRuntime::Backend TensorRTBackend::backend() const noexcept
@@ -204,17 +532,13 @@ ModelRuntime::Backend TensorRTBackend::backend() const noexcept
 
 void TensorRTBackend::load(const std::string &engine_file, const IModelConfig &config, const std::string &model_name)
 {
-    setCudaDevice(config.runtime().deviceId());
-    device_id_ = config.runtime().deviceId();
-    params_.context.reset();
-    params_.engine.reset();
+    const int requested_device_id = config.runtime().deviceId();
+    setCudaDevice(requested_device_id);
 
-    if (params_.logger == nullptr)
-    {
-        initLogger(model_name);
-    }
-
-    LOG_INFO(*params_.logger) << "Loading TensorRT engine from: " << engine_file << std::endl;
+    // Keep the active engine, context, stream, and logger untouched until the
+    // complete replacement has been loaded and validated.
+    auto new_logger = ResolveLogger(params_, model_name);
+    LOG_INFO(*new_logger) << "Loading TensorRT engine from: " << engine_file << std::endl;
 
     std::ifstream file(engine_file, std::ios::binary);
     if (!file.is_open())
@@ -223,34 +547,57 @@ void TensorRTBackend::load(const std::string &engine_file, const IModelConfig &c
     }
 
     file.seekg(0, std::ios::end);
-    size_t file_size = file.tellg();
+    const auto file_size = file.tellg();
+    if (file_size <= 0
+        || static_cast<std::uintmax_t>(file_size) > static_cast<std::uintmax_t>((std::numeric_limits<size_t>::max)())
+        || static_cast<std::uintmax_t>(file_size)
+               > static_cast<std::uintmax_t>((std::numeric_limits<std::streamsize>::max)()))
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "TensorRT engine file is empty or too large: %s",
+                             engine_file.c_str());
+    }
     file.seekg(0, std::ios::beg);
+    if (!file)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Failed to seek engine file: %s", engine_file.c_str());
+    }
 
-    std::vector<char> engine_data(file_size);
-    file.read(engine_data.data(), file_size);
+    const auto byte_count = static_cast<size_t>(file_size);
+    std::vector<char> engine_data(byte_count);
+    file.read(engine_data.data(), static_cast<std::streamsize>(byte_count));
+    if (file.gcount() != static_cast<std::streamsize>(byte_count))
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Failed to read TensorRT engine file: %s",
+                             engine_file.c_str());
+    }
     file.close();
 
-    auto runtime = std::unique_ptr<nvinfer1::IRuntime>(nvinfer1::createInferRuntime(*params_.logger));
+    auto runtime = std::unique_ptr<nvinfer1::IRuntime>(nvinfer1::createInferRuntime(*new_logger));
     if (!runtime)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create InferRuntime");
     }
 
-    params_.engine
-        = std::shared_ptr<nvinfer1::ICudaEngine>(runtime->deserializeCudaEngine(engine_data.data(), file_size),
+    auto new_engine
+        = std::shared_ptr<nvinfer1::ICudaEngine>(runtime->deserializeCudaEngine(engine_data.data(), byte_count),
                                                  [](nvinfer1::ICudaEngine *engine) { delete engine; });
-    if (!params_.engine)
+    if (!new_engine)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to deserialize CUDA engine");
     }
 
-    params_.context.reset(params_.engine->createExecutionContext());
-    if (!params_.context)
+    auto new_context = std::unique_ptr<nvinfer1::IExecutionContext>(new_engine->createExecutionContext());
+    if (!new_context)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create execution context");
     }
 
-    SetConfiguredInputShapes(*params_.engine, *params_.context, config);
+    SetConfiguredInputShapes(*new_engine, *new_context, config);
+
+    params_.context = std::move(new_context);
+    params_.engine  = std::move(new_engine);
+    params_.logger  = std::move(new_logger);
+    device_id_      = requested_device_id;
 }
 
 void TensorRTBackend::save(const std::string &engine_file) const
@@ -258,11 +605,11 @@ void TensorRTBackend::save(const std::string &engine_file) const
     SaveEngineToFile(engine_file, params_.engine);
 }
 
-std::vector<std::string> TensorRTBackend::ioTensorNames(nvinfer1::TensorIOMode mode) const
+std::vector<std::string> TensorRTBackend::ioTensorNames(const irt::TensorIOMode mode) const
 {
     if (!params_.engine)
     {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Engine is not initialized");
+        throw irt::Exception(Status::INVALID_OPERATION, "Engine is not initialized");
     }
 
     std::vector<std::string> names;
@@ -270,7 +617,7 @@ std::vector<std::string> TensorRTBackend::ioTensorNames(nvinfer1::TensorIOMode m
     for (int32_t i = 0; i < num_io_tensors; ++i)
     {
         const char *tensor_name = params_.engine->getIOTensorName(i);
-        if (params_.engine->getTensorIOMode(tensor_name) == mode)
+        if (params_.engine->getTensorIOMode(tensor_name) == ToTensorRtIOMode(mode))
         {
             names.emplace_back(tensor_name);
         }
@@ -279,48 +626,81 @@ std::vector<std::string> TensorRTBackend::ioTensorNames(nvinfer1::TensorIOMode m
     return names;
 }
 
-nvinfer1::Dims TensorRTBackend::tensorShape(const std::string &tensor_name) const
+irt::MemoryKind TensorRTBackend::ioMemoryKind(const irt::TensorIOMode mode) const noexcept
+{
+    (void)mode;
+    return irt::MemoryKind::DEVICE;
+}
+
+irt::Shape TensorRTBackend::tensorShape(const std::string &tensor_name) const
 {
     if (params_.context && HasTensor(params_.engine.get(), tensor_name))
     {
-        return params_.context->getTensorShape(tensor_name.c_str());
+        return DimsToCoreShape(params_.context->getTensorShape(tensor_name.c_str()), tensor_name);
     }
 
     if (params_.engine && HasTensor(params_.engine.get(), tensor_name))
     {
-        return params_.engine->getTensorShape(tensor_name.c_str());
+        return DimsToCoreShape(params_.engine->getTensorShape(tensor_name.c_str()), tensor_name);
     }
 
     if (!params_.engine)
     {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Engine is not initialized");
+        throw irt::Exception(Status::INVALID_OPERATION, "Engine is not initialized");
     }
 
     throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Tensor not found: %s", tensor_name.c_str());
 }
 
-nvinfer1::DataType TensorRTBackend::tensorDataType(const std::string &tensor_name) const
+bool TensorRTBackend::isInputBatchDynamic(const std::string &tensor_name) const
+{
+    if (!params_.engine)
+    {
+        throw irt::Exception(Status::INVALID_OPERATION, "Engine is not initialized");
+    }
+    if (!HasTensor(params_.engine.get(), tensor_name))
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Tensor not found: %s", tensor_name.c_str());
+    }
+    if (params_.engine->getTensorIOMode(tensor_name.c_str()) != nvinfer1::TensorIOMode::kINPUT)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Tensor is not an input: %s", tensor_name.c_str());
+    }
+
+    const auto dims = params_.engine->getTensorShape(tensor_name.c_str());
+    return dims.nbDims > 0 && dims.d[0] < 0;
+}
+
+irt::TensorDataType TensorRTBackend::tensorDataType(const std::string &tensor_name) const
 {
     if (params_.engine && HasTensor(params_.engine.get(), tensor_name))
     {
-        return params_.engine->getTensorDataType(tensor_name.c_str());
+        return ToCoreDataType(params_.engine->getTensorDataType(tensor_name.c_str()));
     }
 
     if (!params_.engine)
     {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Engine is not initialized");
+        throw irt::Exception(Status::INVALID_OPERATION, "Engine is not initialized");
     }
 
     throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Tensor not found: %s", tensor_name.c_str());
 }
 
-void TensorRTBackend::setTensorShape(const std::string &tensor_name, const nvinfer1::Dims &dims)
+void TensorRTBackend::setTensorShape(const std::string &tensor_name, const irt::Shape &shape)
 {
     if (!params_.context)
     {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Execution context is not initialized");
+        throw irt::Exception(Status::INVALID_OPERATION, "Execution context is not initialized");
     }
 
+    if (!params_.engine || !HasTensor(params_.engine.get(), tensor_name)
+        || params_.engine->getTensorIOMode(tensor_name.c_str()) != nvinfer1::TensorIOMode::kINPUT)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Tensor is not an input: %s", tensor_name.c_str());
+    }
+    const auto declared_shape = DimsToCoreShape(params_.engine->getTensorShape(tensor_name.c_str()), tensor_name);
+    irt::validateRuntimeShape(declared_shape, shape, tensor_name);
+    const auto dims = ShapeToDims(shape);
     if (!params_.context->setInputShape(tensor_name.c_str(), dims))
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Failed to set input tensor shape: %s",
@@ -328,19 +708,55 @@ void TensorRTBackend::setTensorShape(const std::string &tensor_name, const nvinf
     }
 }
 
-void TensorRTBackend::infer(const std::vector<void *> &buffers)
+void TensorRTBackend::execute(std::span<const irt::BufferView> buffers, irt::ExecuteOptions options)
 {
-    execute(buffers, nullptr, false);
+    setCudaDevice(device_id_);
+    if (!params_.context)
+    {
+        throw irt::Exception(Status::INVALID_OPERATION, "Execution context is not initialized");
+    }
+    bindTensorAddresses(*params_.context, *params_.engine, buffers, params_.feature_only);
+
+    const auto stream = resolveExecutionStream(options.stream);
+    options.stream    = stream;
+    if (!params_.context->enqueueV3(reinterpret_cast<cudaStream_t>(stream)))
+    {
+        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to execute TensorRT enqueue");
+    }
+
+    if (!options.non_blocking)
+    {
+        const auto status = cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(stream));
+        if (status != cudaSuccess)
+        {
+            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to synchronize CUDA stream: %s",
+                                 cudaGetErrorString(status));
+        }
+    }
 }
 
-void TensorRTBackend::setStream(cudaStream_t stream)
+std::unique_ptr<irt::ITensorRuntimeSession> TensorRTBackend::createSession() const
 {
-    if (!stream)
+    if (!params_.engine)
+    {
+        throw irt::Exception(Status::INVALID_OPERATION, "Engine is not initialized");
+    }
+    auto context = std::unique_ptr<nvinfer1::IExecutionContext>(params_.engine->createExecutionContext());
+    if (!context)
+    {
+        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create TensorRT execution context");
+    }
+    return std::make_unique<TensorRTSession>(params_.engine, std::move(context), device_id_);
+}
+
+void TensorRTBackend::setStream(const std::uintptr_t stream)
+{
+    if (stream == 0)
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "stream must not be null; use clearStream to reset");
     }
 
-    params_.external_stream = stream;
+    params_.external_stream = reinterpret_cast<cudaStream_t>(stream);
 }
 
 void TensorRTBackend::clearStream()
@@ -348,57 +764,47 @@ void TensorRTBackend::clearStream()
     params_.external_stream = nullptr;
 }
 
-cudaStream_t TensorRTBackend::resolveExecutionStream(cudaStream_t stream_override)
+std::uintptr_t TensorRTBackend::resolveExecutionStream(const std::uintptr_t stream_override)
 {
     setCudaDevice(device_id_);
 
-    if (stream_override)
+    if (stream_override != 0)
     {
         return stream_override;
     }
 
     if (params_.external_stream)
     {
-        return params_.external_stream;
+        return reinterpret_cast<std::uintptr_t>(params_.external_stream);
     }
 
     if (params_.stream)
     {
-        return *params_.stream;
+        return reinterpret_cast<std::uintptr_t>(*params_.stream);
     }
 
     if (params_.context)
     {
         EnsureInternalStream(params_);
-        return *params_.stream;
+        return reinterpret_cast<std::uintptr_t>(*params_.stream);
     }
 
-    return nullptr;
+    return 0;
 }
 
-nvinfer1::ILogger::Severity TensorRTBackend::logLevel() const noexcept
+LogLevel TensorRTBackend::logLevel() const noexcept
 {
-    return params_.log_level;
+    return FromTensorRtSeverity(params_.log_level);
 }
 
-void TensorRTBackend::setLogLevel(nvinfer1::ILogger::Severity severity)
+void TensorRTBackend::setLogLevel(const LogLevel level)
 {
-    log_level_        = severity;
-    params_.log_level = severity;
+    log_level_        = level;
+    params_.log_level = ToTensorRtSeverity(level);
     if (params_.logger)
     {
-        params_.logger->setReportableSeverity(severity);
+        params_.logger->setReportableSeverity(params_.log_level);
     }
-}
-
-TensorRTBackend *TensorRTBackend::asTensorRT() noexcept
-{
-    return this;
-}
-
-const TensorRTBackend *TensorRTBackend::asTensorRT() const noexcept
-{
-    return this;
 }
 
 TRTParams &TensorRTBackend::params() noexcept
@@ -413,21 +819,18 @@ const TRTParams &TensorRTBackend::params() const noexcept
 
 void TensorRTBackend::initLogger(const std::string &model_name)
 {
-    params_.logger = std::make_shared<Logger>(model_name, logLevel());
+    params_.logger = std::make_shared<TRTLogger>(model_name, ToTensorRtSeverity(logLevel()));
 }
 
 void TensorRTBackend::buildFromNetwork(const std::string &source_file, const std::string &model_name,
                                        const IModelConfig &model_config, NetworkBuildFn build_fn)
 {
     using namespace nvinfer1;
-    setCudaDevice(model_config.runtime().deviceId());
-    device_id_ = model_config.runtime().deviceId();
-    if (params_.logger == nullptr)
-    {
-        initLogger(model_name);
-    }
+    const int requested_device_id = model_config.runtime().deviceId();
+    setCudaDevice(requested_device_id);
+    auto new_logger = ResolveLogger(params_, model_name);
 
-    auto builder = std::unique_ptr<IBuilder>(createInferBuilder(*params_.logger));
+    auto builder = std::unique_ptr<IBuilder>(createInferBuilder(*new_logger));
     if (!builder)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create InferBuilder");
@@ -454,8 +857,15 @@ void TensorRTBackend::buildFromNetwork(const std::string &source_file, const std
     {
         builder_config->setFlag(BuilderFlag::kFP16);
     }
+    else
+    {
+        // Keep the FP32 reference path IEEE-accurate. TensorRT enables TF32
+        // tactics by default, which changes long attention/matmul chains and
+        // can move model parity outputs beyond the intended FP32 tolerance.
+        builder_config->clearFlag(BuilderFlag::kTF32);
+    }
 
-    LOG_INFO(*params_.logger) << "Building TensorRT network from: " << source_file << std::endl;
+    LOG_INFO(*new_logger) << "Building TensorRT network from: " << source_file << std::endl;
     build_fn(network.get());
 
     ConfigureDynamicBatchProfile(*builder, *builder_config, *network, model_config);
@@ -466,91 +876,36 @@ void TensorRTBackend::buildFromNetwork(const std::string &source_file, const std
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to build serialized network");
     }
 
-    auto runtime = std::unique_ptr<IRuntime>(nvinfer1::createInferRuntime(*params_.logger));
+    auto runtime = std::unique_ptr<IRuntime>(nvinfer1::createInferRuntime(*new_logger));
     if (!runtime)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create InferRuntime");
     }
 
-    params_.engine = std::shared_ptr<ICudaEngine>(runtime->deserializeCudaEngine(buffer->data(), buffer->size()),
-                                                  [](ICudaEngine *engine) { delete engine; });
-    if (!params_.engine)
+    auto new_engine = std::shared_ptr<ICudaEngine>(runtime->deserializeCudaEngine(buffer->data(), buffer->size()),
+                                                   [](ICudaEngine *engine) { delete engine; });
+    if (!new_engine)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to deserialize CUDA engine");
     }
 
-    params_.context.reset(params_.engine->createExecutionContext());
-    if (!params_.context)
+    auto new_context = std::unique_ptr<IExecutionContext>(new_engine->createExecutionContext());
+    if (!new_context)
     {
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create execution context");
     }
 
-    SetConfiguredInputShapes(*params_.engine, *params_.context, model_config);
-}
+    SetConfiguredInputShapes(*new_engine, *new_context, model_config);
 
-void TensorRTBackend::execute(const std::vector<void *> &buffers, cudaStream_t stream_override, bool non_blocking)
-{
-    setCudaDevice(device_id_);
-    bindTensorAddresses(buffers);
-
-    const auto stream = resolveExecutionStream(stream_override);
-    if (!params_.context->enqueueV3(stream))
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to execute TensorRT enqueue");
-    }
-
-    if (non_blocking)
-    {
-        return;
-    }
-
-    const auto status = cudaStreamSynchronize(stream);
-    if (status != cudaSuccess)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to synchronize CUDA stream: %s",
-                             cudaGetErrorString(status));
-    }
+    params_.context = std::move(new_context);
+    params_.engine  = std::move(new_engine);
+    params_.logger  = std::move(new_logger);
+    device_id_      = requested_device_id;
 }
 
 void TensorRTBackend::setFeatureOnly(bool feature_only) noexcept
 {
     params_.feature_only = feature_only;
-}
-
-void TensorRTBackend::bindTensorAddresses(const std::vector<void *> &buffers)
-{
-    if (!params_.context)
-    {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Execution context is not initialized");
-    }
-
-    const auto  input_names        = ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
-    const auto  output_names       = ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
-    const auto *output_description = params_.feature_only ? "feature outputs" : "outputs";
-    const auto  expected           = input_names.size() + output_names.size();
-    if (buffers.size() != expected)
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Expected %zu buffers (%zu inputs and %zu %s), got %zu",
-                             expected, input_names.size(), output_names.size(), output_description, buffers.size());
-    }
-
-    size_t buffer_index = 0;
-    for (const auto &input_name : input_names)
-    {
-        if (!params_.context->setTensorAddress(input_name.c_str(), buffers[buffer_index++]))
-        {
-            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to set input tensor address: %s", input_name.c_str());
-        }
-    }
-
-    for (const auto &output_name : output_names)
-    {
-        if (!params_.context->setTensorAddress(output_name.c_str(), buffers[buffer_index++]))
-        {
-            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to set output tensor address: %s",
-                                 output_name.c_str());
-        }
-    }
 }
 
 } // namespace irt::model::priv

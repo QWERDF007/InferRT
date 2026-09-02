@@ -17,6 +17,7 @@ from helpers.model_integration import (
     ensure_sam_v1_wts,
     is_fresh_against_all,
 )
+from helpers.torch_precision import strict_fp32_reference
 from helpers.vision import allocate_output_tensors
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
@@ -251,19 +252,20 @@ def _run_torch_sam_v1_reference(
     point_coords = torch.from_numpy(point_coords_np.reshape(1, SAM2_MAX_POINTS, 2)).to(device=device)
     point_labels = torch.from_numpy(point_labels_np.reshape(1, SAM2_MAX_POINTS)).to(device=device, dtype=torch.int64)
 
-    with torch.inference_mode():
-        image_embeddings = model.image_encoder(image)
-        sparse_embeddings, dense_embeddings = model.prompt_encoder(
-            points=(point_coords, point_labels),
-            boxes=None,
-            masks=None,
-        )
-        low_res_masks, iou_predictions = model.mask_decoder.predict_masks(
-            image_embeddings=image_embeddings,
-            image_pe=model.prompt_encoder.get_dense_pe(),
-            sparse_prompt_embeddings=sparse_embeddings,
-            dense_prompt_embeddings=dense_embeddings,
-        )
+    with strict_fp32_reference(torch):
+        with torch.inference_mode():
+            image_embeddings = model.image_encoder(image)
+            sparse_embeddings, dense_embeddings = model.prompt_encoder(
+                points=(point_coords, point_labels),
+                boxes=None,
+                masks=None,
+            )
+            low_res_masks, iou_predictions = model.mask_decoder.predict_masks(
+                image_embeddings=image_embeddings,
+                image_pe=model.prompt_encoder.get_dense_pe(),
+                sparse_prompt_embeddings=sparse_embeddings,
+                dense_prompt_embeddings=dense_embeddings,
+            )
     if device.type == "cuda":
         torch.cuda.synchronize()
 
@@ -317,20 +319,21 @@ def _run_torch_edge_sam_reference(
     point_coords = torch.from_numpy(point_coords_np.reshape(1, SAM2_MAX_POINTS, 2)).to(device=device)
     point_labels = torch.from_numpy(point_labels_np.reshape(1, SAM2_MAX_POINTS)).to(device=device, dtype=torch.int64)
 
-    with torch.inference_mode():
-        image_embeddings = model.image_encoder(image)
-        sparse_embeddings, dense_embeddings = model.prompt_encoder(
-            points=(point_coords, point_labels),
-            boxes=None,
-            masks=None,
-        )
-        low_res_masks, iou_predictions = model.mask_decoder(
-            image_embeddings=image_embeddings,
-            image_pe=model.prompt_encoder.get_dense_pe(),
-            sparse_prompt_embeddings=sparse_embeddings,
-            dense_prompt_embeddings=dense_embeddings,
-            num_multimask_outputs=4,
-        )
+    with strict_fp32_reference(torch):
+        with torch.inference_mode():
+            image_embeddings = model.image_encoder(image)
+            sparse_embeddings, dense_embeddings = model.prompt_encoder(
+                points=(point_coords, point_labels),
+                boxes=None,
+                masks=None,
+            )
+            low_res_masks, iou_predictions = model.mask_decoder(
+                image_embeddings=image_embeddings,
+                image_pe=model.prompt_encoder.get_dense_pe(),
+                sparse_prompt_embeddings=sparse_embeddings,
+                dense_prompt_embeddings=dense_embeddings,
+                num_multimask_outputs=4,
+            )
     if device.type == "cuda":
         torch.cuda.synchronize()
 
@@ -377,25 +380,26 @@ def _run_torch_sam2_reference(
     point_coords = torch.from_numpy(point_coords_np.reshape(1, SAM2_MAX_POINTS, 2)).to(device=device)
     point_labels = torch.from_numpy(point_labels_np.reshape(1, SAM2_MAX_POINTS)).to(device=device, dtype=torch.int64)
 
-    with torch.inference_mode():
-        backbone_out = model.forward_image(image)
-        image_embeddings = backbone_out["vision_features"]
-        if getattr(model, "directly_add_no_mem_embed", False):
-            no_mem_embed = model.no_mem_embed.reshape(1, 1, -1).permute(0, 2, 1).reshape(1, -1, 1, 1)
-            image_embeddings = image_embeddings + no_mem_embed
-        sparse_embeddings, dense_embeddings = model.sam_prompt_encoder(
-            points=(point_coords, point_labels),
-            boxes=None,
-            masks=None,
-        )
-        low_res_masks, iou_predictions, _, _ = model.sam_mask_decoder.predict_masks(
-            image_embeddings=image_embeddings,
-            image_pe=model.sam_prompt_encoder.get_dense_pe(),
-            sparse_prompt_embeddings=sparse_embeddings,
-            dense_prompt_embeddings=dense_embeddings,
-            repeat_image=False,
-            high_res_features=[backbone_out["backbone_fpn"][0], backbone_out["backbone_fpn"][1]],
-        )
+    with strict_fp32_reference(torch):
+        with torch.inference_mode():
+            backbone_out = model.forward_image(image)
+            image_embeddings = backbone_out["vision_features"]
+            if getattr(model, "directly_add_no_mem_embed", False):
+                no_mem_embed = model.no_mem_embed.reshape(1, 1, -1).permute(0, 2, 1).reshape(1, -1, 1, 1)
+                image_embeddings = image_embeddings + no_mem_embed
+            sparse_embeddings, dense_embeddings = model.sam_prompt_encoder(
+                points=(point_coords, point_labels),
+                boxes=None,
+                masks=None,
+            )
+            low_res_masks, iou_predictions, _, _ = model.sam_mask_decoder.predict_masks(
+                image_embeddings=image_embeddings,
+                image_pe=model.sam_prompt_encoder.get_dense_pe(),
+                sparse_prompt_embeddings=sparse_embeddings,
+                dense_prompt_embeddings=dense_embeddings,
+                repeat_image=False,
+                high_res_features=[backbone_out["backbone_fpn"][0], backbone_out["backbone_fpn"][1]],
+            )
     if device.type == "cuda":
         torch.cuda.synchronize()
 
@@ -575,7 +579,7 @@ def _ensure_sam_onnx(
     checkpoint: Path,
     export_fn: Any,
 ) -> Path:
-    """确保 SAM ONNX 产物存在且不早于 checkpoint。
+    """确保 SAM ONNX 产物与 checkpoint、导出器版本一致。
 
     Args:
         output_path: ONNX 输出路径。
@@ -586,7 +590,8 @@ def _ensure_sam_onnx(
         ONNX 模型路径。
     """
 
-    if is_fresh_against_all(output_path, [checkpoint]):
+    exporter = Path(__file__).resolve().parents[2] / "samples" / "model" / "python" / "sam_export_onnx.py"
+    if is_fresh_against_all(output_path, [checkpoint, exporter]):
         return output_path
     export_fn(output_path)
     return output_path

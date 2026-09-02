@@ -6,6 +6,7 @@ import importlib.util
 import os
 from pathlib import Path
 import sys
+import tempfile
 from typing import Any
 import warnings
 
@@ -69,14 +70,40 @@ class SAMV1OnnxWrapper(torch.nn.Module):
         point_coords = point_coords.reshape(point_coords.shape[0], SAM_MAX_POINTS, 2)
         point_labels = point_labels.reshape(point_labels.shape[0], SAM_MAX_POINTS).to(torch.int64)
         image_embeddings = self.wrapped.image_encoder(image)
-        sparse_embeddings, dense_embeddings = self.wrapped.prompt_encoder(
-            points=(point_coords, point_labels),
-            boxes=None,
-            masks=None,
+
+        prompt_encoder = self.wrapped.prompt_encoder
+        point_coords = torch.cat(
+            [point_coords + 0.5, point_coords.new_zeros((point_coords.shape[0], 1, 2))],
+            dim=1,
+        )
+        point_labels = torch.cat(
+            [point_labels, point_labels.new_full((point_labels.shape[0], 1), -1)],
+            dim=1,
+        )
+        sparse_embeddings = prompt_encoder.pe_layer.forward_with_coords(
+            point_coords,
+            prompt_encoder.input_image_size,
+        )
+        sparse_embeddings = torch.where(
+            (point_labels == -1).unsqueeze(-1),
+            prompt_encoder.not_a_point_embed.weight.reshape(1, 1, -1),
+            sparse_embeddings,
+        )
+        sparse_embeddings = sparse_embeddings + (point_labels == 0).unsqueeze(-1).to(
+            sparse_embeddings.dtype
+        ) * prompt_encoder.point_embeddings[0].weight.reshape(1, 1, -1)
+        sparse_embeddings = sparse_embeddings + (point_labels == 1).unsqueeze(-1).to(
+            sparse_embeddings.dtype
+        ) * prompt_encoder.point_embeddings[1].weight.reshape(1, 1, -1)
+        dense_embeddings = prompt_encoder.no_mask_embed.weight.reshape(1, -1, 1, 1).expand(
+            point_coords.shape[0],
+            -1,
+            prompt_encoder.image_embedding_size[0],
+            prompt_encoder.image_embedding_size[1],
         )
         low_res_masks, iou_predictions = self.wrapped.mask_decoder.predict_masks(
             image_embeddings=image_embeddings,
-            image_pe=self.wrapped.prompt_encoder.get_dense_pe(),
+            image_pe=prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
         )
@@ -240,6 +267,13 @@ def export_graph(
     opset: int,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        dir=output_path.parent,
+        prefix=f".{output_path.name}.",
+        suffix=".onnx",
+        delete=False,
+    ) as temporary_file:
+        temporary_path = Path(temporary_file.name)
     export_kwargs = {
         "export_params": True,
         "opset_version": opset,
@@ -249,17 +283,25 @@ def export_graph(
     }
     export_inputs = sam_input_tensors(inputs, device)
     try:
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="You are using the legacy TorchScript-based ONNX export.*",
-                category=DeprecationWarning,
-            )
-            torch.onnx.export(wrapper, export_inputs, str(output_path), dynamo=False, **export_kwargs)
-    except TypeError as exc:
-        if "dynamo" not in str(exc):
-            raise
-        torch.onnx.export(wrapper, export_inputs, str(output_path), **export_kwargs)
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="You are using the legacy TorchScript-based ONNX export.*",
+                    category=DeprecationWarning,
+                )
+                torch.onnx.export(wrapper, export_inputs, str(temporary_path), dynamo=False, **export_kwargs)
+        except TypeError as exc:
+            if "dynamo" not in str(exc):
+                raise
+            torch.onnx.export(wrapper, export_inputs, str(temporary_path), **export_kwargs)
+
+        import onnx
+
+        onnx.checker.check_model(str(temporary_path), full_check=True)
+        os.replace(temporary_path, output_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def export_sam_v1_onnx(
@@ -464,4 +506,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

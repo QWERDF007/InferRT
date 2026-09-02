@@ -1,64 +1,27 @@
 #include "Status.hpp"
-
-#include "Exception.hpp"
 #include "TLS.hpp"
 
-#include <iostream>
+#include <inferrt/core/Exception.hpp>
+
+#include <cstdio>
+#include <new>
+#include <stdexcept>
 
 namespace irt::core::priv {
 
 void SetThreadError(std::exception_ptr e)
 {
-    CoreTLS &tls = GetCoreTLS();
-
-    const int error_msg_len = sizeof(tls.last_error_message) - 1;
-
-    try
-    {
-        if (e)
-        {
-            rethrow_exception(e);
-        }
-        else
-        {
-            tls.last_error_status = IRT_SUCCESS;
-            snprintf(tls.last_error_message, error_msg_len, "success");
-        }
-    }
-    catch (const Exception &e)
-    {
-        tls.last_error_status = static_cast<IRTStatus>(e.code());
-        snprintf(tls.last_error_message, error_msg_len, "%s", e.msg());
-    }
-    catch (const std::invalid_argument &e)
-    {
-        tls.last_error_status = IRT_ERROR_INVALID_ARGUMENT;
-        snprintf(tls.last_error_message, error_msg_len, "%s", e.what());
-    }
-    catch (const std::bad_alloc &)
-    {
-        tls.last_error_status = IRT_ERROR_OUT_OF_MEMORY;
-        snprintf(tls.last_error_message, error_msg_len, "Not enough space for resource allocation");
-    }
-    catch (const std::exception &e)
-    {
-        tls.last_error_status = IRT_ERROR_INTERNAL;
-        snprintf(tls.last_error_message, error_msg_len, "%s", e.what());
-    }
-    catch (...)
-    {
-        tls.last_error_status = IRT_ERROR_INTERNAL;
-        snprintf(tls.last_error_message, error_msg_len, "Unexpected error");
-    }
-
-    tls.last_error_message[error_msg_len] = '\0'; // Make sure it's null-terminated
+    irt::SetThreadError(e);
 }
 
 IRTStatus PeekAtLastThreadError(char *msg, int32_t len) noexcept
 {
     CoreTLS &tls = GetCoreTLS();
     if (msg && len > 0)
-        snprintf(msg, len, "%s", tls.last_error_message);
+    {
+        snprintf(msg, static_cast<size_t>(len), "%s", tls.last_error_message);
+        msg[len - 1] = '\0';
+    }
     return tls.last_error_status;
 }
 
@@ -85,8 +48,6 @@ const char *GetName(IRTStatus code)
     case ERR:     \
         return #ERR
 
-    // written this way, without a default case,
-    // the compiler can warn us if we forgot to add a new error here.
     switch (code)
     {
         CASE(IRT_SUCCESS);
@@ -100,7 +61,6 @@ const char *GetName(IRTStatus code)
         CASE(IRT_ERROR_UNKNOWN);
     }
 
-    // Status not found?
     return "Unknown error";
 #undef CASE
 }

@@ -14,7 +14,8 @@ namespace irt::cvcuda::priv {
 class IOperatorImpl;
 }
 
-typedef irt::cvcuda::priv::IOperatorImpl *OperatorHandle;
+using OperatorHandle = irt::cvcuda::priv::IOperatorImpl *;
+using OperatorImplPtr = std::unique_ptr<irt::cvcuda::priv::IOperatorImpl>;
 
 namespace irt::cvcuda {
 class INFERRT_CVCUDA_API IOperator

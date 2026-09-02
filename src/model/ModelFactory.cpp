@@ -1,10 +1,11 @@
-#include "priv/IModelImpl.hpp"
-
+#include <inferrt/core/Exception.hpp>
 #include <inferrt/model/ModelFactory.h>
 
 #include <algorithm>
 #include <cctype>
 #include <map>
+#include <mutex>
+#include <shared_mutex>
 #include <vector>
 
 namespace irt::model {
@@ -13,71 +14,78 @@ namespace {
 
 using ModelRegistry = std::map<std::string, ModelCreator>;
 
-/**
- * @brief 获取全局模型注册表单例。
- * @return 注册表引用。
- */
-ModelRegistry &GetModelRegistry()
+struct RegistryHolder
 {
-    static ModelRegistry registry;
-    return registry;
+    std::shared_mutex mutex;
+    ModelRegistry     registry;
+};
+
+RegistryHolder &GetRegistryHolder()
+{
+    static RegistryHolder holder;
+    return holder;
 }
 
-/**
- * @brief 将模型名称归一化为小写形式。
- * @param name 原始模型名称。
- * @return 归一化后的模型名称，用于注册表查找与写入。
- */
 std::string normalizeModelName(const std::string &name)
 {
-    std::string normalized_name = name;
-    std::transform(normalized_name.begin(), normalized_name.end(), normalized_name.begin(),
+    const auto first = name.find_first_not_of(" \t\n\r");
+    if (first == std::string::npos)
+    {
+        return "";
+    }
+    const auto last = name.find_last_not_of(" \t\n\r");
+    std::string trimmed = name.substr(first, last - first + 1);
+    std::transform(trimmed.begin(), trimmed.end(), trimmed.begin(),
                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    return normalized_name;
+    return trimmed;
 }
 
 } // namespace
 
-/**
- * @brief 构造时立即完成模型注册。
- * @param name 模型名称。
- * @param creator 模型创建函数。
- */
 ModelRegistrar::ModelRegistrar(const std::string &name, ModelCreator creator)
 {
     RegisterModel(name, creator);
 }
 
-/**
- * @brief 向全局注册表写入模型创建器。
- * @param name 模型名称。
- * @param creator 模型创建函数。
- * @return 若名称未冲突则返回 `true`。
- */
 bool RegisterModel(const std::string &name, ModelCreator creator)
 {
-    return GetModelRegistry().emplace(normalizeModelName(name), creator).second;
+    if (name.empty() || creator == nullptr)
+    {
+        return false;
+    }
+
+    const std::string normalized = normalizeModelName(name);
+    if (normalized.empty())
+    {
+        return false;
+    }
+
+    auto &holder = GetRegistryHolder();
+    std::unique_lock<std::shared_mutex> lock(holder.mutex);
+    return holder.registry.emplace(normalized, creator).second;
 }
 
-/**
- * @brief 判断指定模型名称是否已注册。
- * @param name 待查询的模型名称。
- * @return 若名称存在于全局注册表中则返回 true，否则返回 false。
- */
 bool isSupportedModel(const std::string &name)
 {
-    return GetModelRegistry().find(normalizeModelName(name)) != GetModelRegistry().end();
+    if (name.empty())
+    {
+        return false;
+    }
+
+    const std::string normalized = normalizeModelName(name);
+    auto &holder = GetRegistryHolder();
+    std::shared_lock<std::shared_mutex> lock(holder.mutex);
+    return holder.registry.find(normalized) != holder.registry.end();
 }
 
-/**
- * @brief 获取当前全局注册表中的全部模型名称。
- * @return 按注册表遍历顺序返回模型名称列表。
- */
 std::vector<std::string> getRegisteredModelNames()
 {
+    auto &holder = GetRegistryHolder();
+    std::shared_lock<std::shared_mutex> lock(holder.mutex);
+
     std::vector<std::string> names;
-    names.reserve(GetModelRegistry().size());
-    for (const auto &[name, creator] : GetModelRegistry())
+    names.reserve(holder.registry.size());
+    for (const auto &[name, creator] : holder.registry)
     {
         (void)creator;
         names.push_back(name);
@@ -85,22 +93,42 @@ std::vector<std::string> getRegisteredModelNames()
     return names;
 }
 
-/**
- * @brief 根据名称创建模型并注入配置。
- * @param name 模型名称。
- * @param config 模型配置对象。
- * @return 成功时返回模型对象，失败时返回空指针。
- */
 std::unique_ptr<IModel> CreateModel(const std::string &name, std::unique_ptr<IModelConfig> config)
 {
-    const auto it = GetModelRegistry().find(normalizeModelName(name));
-    if (it == GetModelRegistry().end())
+    if (name.empty())
     {
         return nullptr;
     }
 
-    auto model = std::make_unique<IModel>(it->second());
-    model->setModelConfig(std::move(config));
+    const std::string normalized = normalizeModelName(name);
+    ModelCreator creator = nullptr;
+
+    {
+        auto &holder = GetRegistryHolder();
+        std::shared_lock<std::shared_mutex> lock(holder.mutex);
+        const auto it = holder.registry.find(normalized);
+        if (it == holder.registry.end())
+        {
+            return nullptr;
+        }
+        creator = it->second;
+    }
+
+    if (creator == nullptr)
+    {
+        throw irt::Exception(irt::Status::ERROR_INTERNAL, "Model creator for '%s' is null", name.c_str());
+    }
+
+    auto model = creator();
+    if (model == nullptr)
+    {
+        throw irt::Exception(irt::Status::ERROR_INTERNAL, "Model creator for '%s' returned nullptr", name.c_str());
+    }
+
+    if (config)
+    {
+        model->setModelConfig(std::move(config));
+    }
     return model;
 }
 

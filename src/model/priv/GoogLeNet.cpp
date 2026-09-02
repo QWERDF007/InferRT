@@ -91,7 +91,7 @@ nvinfer1::ITensor *addCeilMaxPool(nvinfer1::INetworkDefinition *network, nvinfer
     auto *pool = network->addPoolingNd(input, PoolingType::kMAX, DimsHW{kernel, kernel});
     pool->setStrideNd(DimsHW{stride, stride});
     pool->setPaddingNd(DimsHW{padding, padding});
-    pool->setPaddingMode(PaddingMode::kEXPLICIT_ROUND_UP);
+    pool->setPaddingMode(nvinfer1::PaddingMode::kEXPLICIT_ROUND_UP);
     return pool->getOutput(0);
 }
 

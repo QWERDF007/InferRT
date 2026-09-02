@@ -1,6 +1,9 @@
 #include <cpuinfo.h>
 #include <inferrt/util/Device.hpp>
+
+#if INFERRT_HAS_CUDA
 #include <nvml.h>
+#endif
 
 #include <mutex>
 
@@ -8,6 +11,7 @@ namespace irt::util {
 
 namespace {
 
+#if INFERRT_HAS_CUDA
 class NvmlSession
 {
 public:
@@ -42,15 +46,6 @@ NvmlSession &nvmlSession()
     return session;
 }
 
-bool cpuInfoInitialized()
-{
-    static std::once_flag flag;
-    static bool            initialized = false;
-
-    std::call_once(flag, [] { initialized = cpuinfo_initialize(); });
-    return initialized;
-}
-
 bool getNvmlDeviceCount(unsigned int &count)
 {
     if (!nvmlSession().available())
@@ -60,11 +55,22 @@ bool getNvmlDeviceCount(unsigned int &count)
 
     return nvmlDeviceGetCount_v2(&count) == NVML_SUCCESS;
 }
+#endif
+
+bool cpuInfoInitialized()
+{
+    static std::once_flag flag;
+    static bool            initialized = false;
+
+    std::call_once(flag, [] { initialized = cpuinfo_initialize(); });
+    return initialized;
+}
 
 } // namespace
 
 std::vector<std::string> getGPUDeviceNames()
 {
+#if INFERRT_HAS_CUDA
     unsigned int count = 0;
     if (!getNvmlDeviceCount(count))
     {
@@ -88,6 +94,9 @@ std::vector<std::string> getGPUDeviceNames()
     }
 
     return names;
+#else
+    return {};
+#endif
 }
 
 std::string getCPUDeviceName()
@@ -108,6 +117,7 @@ std::string getCPUDeviceName()
 
 uint64_t getGPUDeviceMemory(uint32_t device_index)
 {
+#if INFERRT_HAS_CUDA
     unsigned int count = 0;
     if (!getNvmlDeviceCount(count) || device_index >= count)
     {
@@ -127,6 +137,10 @@ uint64_t getGPUDeviceMemory(uint32_t device_index)
     }
 
     return static_cast<uint64_t>(memory.total);
+#else
+    (void)device_index;
+    return 0;
+#endif
 }
 
 } // namespace irt::util

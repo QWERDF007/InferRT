@@ -17,16 +17,22 @@ IRTStatus nms(const float *d_boxes, const float *d_scores, int64_t *d_keep, int 
 
 NMS::NMS()
 {
-    impl_ = new priv::NMSImpl();
+    impl_ = std::make_unique<priv::NMSImpl>();
 }
 
-NMS::~NMS()
+NMS::~NMS() = default;
+
+NMS::NMS(NMS &&) noexcept = default;
+
+NMS &NMS::operator=(NMS &&) noexcept = default;
+
+NMSWorkspaceStats NMS::workspaceStats() const noexcept
 {
-    if (impl_)
+    if (impl_ == nullptr)
     {
-        delete impl_;
-        impl_ = nullptr;
+        return {};
     }
+    return static_cast<priv::NMSImpl *>(impl_.get())->workspaceStats();
 }
 
 IRTStatus NMS::operator()(const float *d_boxes, const float *d_scores, int64_t *d_keep, int *d_keep_count,
@@ -40,7 +46,7 @@ IRTStatus NMS::operator()(const float *d_boxes, const float *d_scores, int64_t *
                 throw Exception(Status::ERROR_NOT_IMPLEMENTED, "Operator not implemented");
             }
 
-            auto *nmsImpl = static_cast<priv::NMSImpl *>(impl_);
+            auto *nmsImpl = static_cast<priv::NMSImpl *>(impl_.get());
             (*nmsImpl)(d_boxes, d_scores, d_keep, d_keep_count, num_boxes, iou_threshold, stream);
         });
     return status;

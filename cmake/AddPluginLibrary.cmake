@@ -13,17 +13,28 @@ function(add_plugin_library PLUGIN_NAME)
     set(TARGET_NAME "${PROJECT_NAME_LOWER}_${PLUGIN_NAME}")
 
     # 获取所有源文件的相对路径
-    file(GLOB_RECURSE SOURCES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.cpp *.cu)
+    file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.cpp *.cu)
 
     if(ARG_EXCLUDE_SOURCES)
         list(REMOVE_ITEM SOURCES ${ARG_EXCLUDE_SOURCES})
     endif()
 
     # 获取所有头文件的相对路径
-    file(GLOB_RECURSE HEADERS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.h *.hpp *.cuh)
+    file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.h *.hpp *.cuh)
 
     add_library(${TARGET_NAME} SHARED ${SOURCES} ${HEADERS})
     add_library(${PROJECT_NAME}::${PLUGIN_NAME} ALIAS ${TARGET_NAME})
+
+    inferrt_apply_compile_options(${TARGET_NAME})
+
+    # Public headers are stored as UTF-8 (including documentation comments).
+    # Propagate the source charset to consumers so MSVC does not parse an
+    # installed header with the active system code page.
+    if(MSVC)
+        target_compile_options(${TARGET_NAME} INTERFACE
+            "$<$<COMPILE_LANGUAGE:CXX>:/utf-8>"
+        )
+    endif()
 
     set_target_properties(${TARGET_NAME} PROPERTIES
         EXPORT_NAME ${PLUGIN_NAME}
@@ -59,8 +70,6 @@ function(add_plugin_library PLUGIN_NAME)
     # 将插件名称转换为大写，用于生成 Export.h
     string(TOUPPER ${PLUGIN_NAME} PLUGIN_NAME_UPPER)
     set(LIBPREFIX ${PLUGIN_NAME_UPPER})
-    
-    # 使用 configure_file 生成 Export.h
     configure_file(
         ${CMAKE_SOURCE_DIR}/cmake/Export.h.in
         ${CMAKE_CURRENT_BINARY_DIR}/include/${PROJECT_NAME_LOWER}/${PLUGIN_NAME}/Export.h
@@ -82,7 +91,7 @@ function(add_plugin_library PLUGIN_NAME)
     # DIRECTORY path/to/dir/ - 只安装 dir 目录的内容（不包含 dir 本身）
     install(
         DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/${PROJECT_NAME_LOWER}/${PLUGIN_NAME}/ 
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME_LOWER}/${PLUGIN_NAME} # e.g. InferRT-0.0.1/include/inferrt/cvcuda
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME_LOWER}/${PLUGIN_NAME} # e.g. InferRT-0.0.2/include/inferrt/cvcuda
         COMPONENT dev
         PATTERN "detail" EXCLUDE
     )

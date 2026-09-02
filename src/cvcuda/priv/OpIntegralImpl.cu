@@ -1,6 +1,7 @@
 #include "OpIntegralImpl.hpp"
 
 #include <inferrt/core/Exception.hpp>
+#include <inferrt/core/Tensor.hpp>
 #include <inferrt/util/CheckError.hpp>
 
 #include <cstdint>
@@ -17,8 +18,8 @@ __global__ void integral_row_prefix_kernel(const T *src, CT *dst, const int2 ssi
         return;
     }
 
-    CT *out_row = dst + (y + 1) * dst_w * CH;
-    const T *in_row = src + y * sstride;
+    CT *out_row = dst + (static_cast<size_t>(y) + 1U) * static_cast<size_t>(dst_w) * static_cast<size_t>(CH);
+    const T *in_row = src + static_cast<size_t>(y) * static_cast<size_t>(sstride);
 
 #pragma unroll
     for (int ch = 0; ch < CH; ++ch)
@@ -31,7 +32,9 @@ __global__ void integral_row_prefix_kernel(const T *src, CT *dst, const int2 ssi
 #pragma unroll
         for (int ch = 0; ch < CH; ++ch)
         {
-            out_row[(x + 1) * CH + ch] = out_row[x * CH + ch] + static_cast<CT>(in_row[x * CH + ch]);
+            out_row[(static_cast<size_t>(x) + 1U) * static_cast<size_t>(CH) + static_cast<size_t>(ch)]
+                = out_row[static_cast<size_t>(x) * static_cast<size_t>(CH) + static_cast<size_t>(ch)]
+                + static_cast<CT>(in_row[static_cast<size_t>(x) * static_cast<size_t>(CH) + static_cast<size_t>(ch)]);
         }
     }
 }
@@ -51,7 +54,8 @@ __global__ void integral_col_prefix_kernel(CT *dst, const int2 ssize, const int 
         CT sum = 0;
         for (int y = 0; y <= ssize.y; ++y)
         {
-            const int idx = (y * dst_w + x) * CH + ch;
+            const size_t idx = (static_cast<size_t>(y) * static_cast<size_t>(dst_w) + static_cast<size_t>(x))
+                             * static_cast<size_t>(CH) + static_cast<size_t>(ch);
             sum += dst[idx];
             dst[idx] = sum;
         }
@@ -81,7 +85,10 @@ void IntegralImpl<T, CT>::RunIntegral(const T *d_src, CT *d_dst, const int2 ssiz
     const int dst_w = ssize.x + 1;
     const int block_size = 256;
 
-    IRT_CHECK_THROW(cudaMemsetAsync(d_dst, 0, static_cast<size_t>(dst_w) * CH * sizeof(CT), stream),
+    const size_t top_row_elements = irt::checkedSizeMul(static_cast<size_t>(dst_w), static_cast<size_t>(CH),
+                                                        "Integral top row elements");
+    const size_t top_row_bytes = irt::checkedSizeMul(top_row_elements, sizeof(CT), "Integral top row bytes");
+    IRT_CHECK_THROW(cudaMemsetAsync(d_dst, 0, top_row_bytes, stream),
                     "Integral top-row initialization failed: ch=%d src=%dx%d", CH, ssize.x, ssize.y);
 
     switch (CH)

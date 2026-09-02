@@ -27,7 +27,7 @@ TEST_P(ModelInferRegisteredModelsTest, InferWithoutContextThrowsInvalidOperation
     auto        model = irt::model::CreateModel(param.key);
     ASSERT_NE(model, nullptr);
 
-    ExpectIrtExceptionCode([&] { model->infer(MakeNullBuffers(2)); }, irt::Status::ERROR_INVALID_OPERATION);
+    ExpectIrtExceptionCode([&] { model->infer(MakeNullBuffers(2)); }, irt::Status::INVALID_OPERATION);
 }
 
 /**
@@ -41,7 +41,7 @@ TEST_P(ModelInferRegisteredModelsTest, InferWithWrongBufferCountStillFailsBefore
     auto        model = irt::model::CreateModel(param.key);
     ASSERT_NE(model, nullptr);
 
-    ExpectIrtExceptionCode([&] { model->infer(MakeNullBuffers(1)); }, irt::Status::ERROR_INVALID_OPERATION);
+    ExpectIrtExceptionCode([&] { model->infer(MakeNullBuffers(1)); }, irt::Status::INVALID_OPERATION);
 }
 
 /**
@@ -53,7 +53,7 @@ TEST_P(ModelInferRegisteredModelsTest, ResolveExecutionStreamWithoutRuntimeRetur
     auto        model = irt::model::CreateModel(param.key);
     ASSERT_NE(model, nullptr);
 
-    EXPECT_EQ(model->resolveExecutionStream(), nullptr);
+    EXPECT_EQ(model->resolveExecutionStream(), 0U);
 }
 
 /**
@@ -65,7 +65,7 @@ TEST_P(ModelInferRegisteredModelsTest, ResolveExecutionStreamPrefersCallOverride
     auto        model = irt::model::CreateModel(param.key);
     ASSERT_NE(model, nullptr);
 
-    const cudaStream_t override_stream = reinterpret_cast<cudaStream_t>(0x1234);
+    const std::uintptr_t override_stream = 0x1234;
 
     EXPECT_EQ(model->resolveExecutionStream(override_stream), override_stream);
 }
@@ -79,11 +79,11 @@ TEST_P(ModelInferRegisteredModelsTest, SetAndClearStreamAffectsResolvedDefaultSt
     auto        model = irt::model::CreateModel(param.key);
     ASSERT_NE(model, nullptr);
 
-    const cudaStream_t external_stream = reinterpret_cast<cudaStream_t>(0x5678);
+    const std::uintptr_t external_stream = 0x5678;
 
     model->setStream(external_stream);
     EXPECT_EQ(model->resolveExecutionStream(), external_stream);
 
     model->clearStream();
-    EXPECT_EQ(model->resolveExecutionStream(), nullptr);
+    EXPECT_EQ(model->resolveExecutionStream(), 0U);
 }

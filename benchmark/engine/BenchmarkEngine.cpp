@@ -25,72 +25,6 @@
 
 namespace {
 
-std::vector<float> preprocess(const cv::Mat &image, const irt::engine::EngineConfig &config, const bool letterbox)
-{
-    cv::Mat bgr;
-    if (image.channels() == 3)
-    {
-        bgr = image;
-    }
-    else if (image.channels() == 1)
-    {
-        cv::cvtColor(image, bgr, cv::COLOR_GRAY2BGR);
-    }
-    else if (image.channels() == 4)
-    {
-        cv::cvtColor(image, bgr, cv::COLOR_BGRA2BGR);
-    }
-    else
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported image channel count: %d",
-                             image.channels());
-    }
-
-    cv::Mat rgb;
-    cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
-
-    cv::Mat resized;
-    if (letterbox)
-    {
-        const double   scale = std::min(static_cast<double>(config.input_width) / rgb.cols,
-                                        static_cast<double>(config.input_height) / rgb.rows);
-        const cv::Size resized_size(
-            std::min(config.input_width, std::max(1, static_cast<int>(std::round(rgb.cols * scale)))),
-            std::min(config.input_height, std::max(1, static_cast<int>(std::round(rgb.rows * scale)))));
-        cv::resize(rgb, resized, resized_size, 0.0, 0.0, cv::INTER_LINEAR);
-
-        cv::Mat        letterboxed(config.input_height, config.input_width, CV_8UC3, cv::Scalar(114, 114, 114));
-        const cv::Rect content((config.input_width - resized.cols) / 2, (config.input_height - resized.rows) / 2,
-                               resized.cols, resized.rows);
-        resized.copyTo(letterboxed(content));
-        resized = std::move(letterboxed);
-    }
-    else
-    {
-        cv::resize(rgb, resized, cv::Size(config.input_width, config.input_height), 0.0, 0.0, cv::INTER_LINEAR);
-    }
-    resized.convertTo(resized, CV_32FC3, 1.0 / 255.0);
-
-    const size_t       plane = static_cast<size_t>(config.input_width) * static_cast<size_t>(config.input_height);
-    std::vector<float> tensor(3 * plane);
-    for (int y = 0; y < config.input_height; ++y)
-    {
-        const auto *row = resized.ptr<cv::Vec3f>(y);
-        for (int x = 0; x < config.input_width; ++x)
-        {
-            const size_t offset
-                = static_cast<size_t>(y) * static_cast<size_t>(config.input_width) + static_cast<size_t>(x);
-            for (int channel = 0; channel < 3; ++channel)
-            {
-                tensor[static_cast<size_t>(channel) * plane + offset]
-                    = (row[x][channel] - config.mean[static_cast<size_t>(channel)])
-                    / config.stddev[static_cast<size_t>(channel)];
-            }
-        }
-    }
-    return tensor;
-}
-
 class DirectRunner
 {
 public:
@@ -101,7 +35,8 @@ public:
         model_config->setRuntime(
             {irt::model::ModelRuntime::Backend::TensorRT, irt::model::ModelRuntime::Device::GPU, config_.device_id});
         model_config->setInputShape(
-            nvinfer1::Dims4{1, config_.input_channels, config_.input_height, config_.input_width});
+            irt::Shape{1, config_.preprocess.input_channels, config_.preprocess.input_height,
+                       config_.preprocess.input_width});
         if (!config_.output_tensor_names.empty())
         {
             model_config->setOutputTensorNames(config_.output_tensor_names);
@@ -123,8 +58,8 @@ public:
         }
         model_->load(config_.engine_file.string());
 
-        const auto inputs = model_->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
-        outputs_          = model_->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+        const auto inputs = model_->ioTensorNames(irt::TensorIOMode::Input);
+        outputs_          = model_->ioTensorNames(irt::TensorIOMode::Output);
         if (inputs.size() != 1 || outputs_.empty())
         {
             throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED,
@@ -132,32 +67,37 @@ public:
         }
         input_name_ = inputs.front();
         model_->setTensorShape(input_name_,
-                               nvinfer1::Dims4{1, config_.input_channels, config_.input_height, config_.input_width});
+                               irt::Shape{1, config_.preprocess.input_channels, config_.preprocess.input_height,
+                                          config_.preprocess.input_width});
 
-        const size_t input_elements = static_cast<size_t>(config_.input_channels)
-                                    * static_cast<size_t>(config_.input_height)
-                                    * static_cast<size_t>(config_.input_width);
-        device_input_.resize(input_elements, nvinfer1::DataType::kFLOAT);
-        buffers_.push_back(device_input_.data());
+        const size_t input_elements = irt::checkedSizeProduct(
+            {static_cast<size_t>(config_.preprocess.input_channels),
+             static_cast<size_t>(config_.preprocess.input_height), static_cast<size_t>(config_.preprocess.input_width)},
+            "Engine benchmark input elements");
+        device_input_.resize(input_elements, irt::TensorDataType::F32);
+        buffers_.push_back(irt::BufferView::fromBytes(device_input_.data(), device_input_.sizeBytes(),
+                                                      irt::MemoryKind::DEVICE, input_name_));
 
         device_outputs_.reserve(outputs_.size());
         host_outputs_.reserve(outputs_.size());
         for (const auto &name : outputs_)
         {
-            if (model_->tensorDataType(name) != nvinfer1::DataType::kFLOAT)
+            if (model_->tensorDataType(name) != irt::TensorDataType::F32)
             {
                 throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED, "Benchmark supports float32 outputs only");
             }
             const size_t elements = irt::model::elementCount(model_->tensorShape(name));
-            device_outputs_.emplace_back(elements, nvinfer1::DataType::kFLOAT);
+            device_outputs_.emplace_back(elements, irt::TensorDataType::F32);
             host_outputs_.emplace_back(elements);
-            buffers_.push_back(device_outputs_.back().data());
+            buffers_.push_back(irt::BufferView::fromBytes(device_outputs_.back().data(),
+                                                          device_outputs_.back().sizeBytes(), irt::MemoryKind::DEVICE,
+                                                          name));
         }
     }
 
     void run(const cv::Mat &image)
     {
-        const auto input = preprocess(image, config_, irt::sample::engine::usesLetterbox(config_.model_name));
+        const auto input = irt::sample::engine::preprocessForDirect(config_, image);
         irt::model::checkCuda(
             cudaMemcpy(device_input_.data(), input.data(), device_input_.sizeBytes(), cudaMemcpyHostToDevice),
             "cudaMemcpy(H2D)");
@@ -178,7 +118,7 @@ private:
     irt::model::DeviceBuffer              device_input_;
     std::vector<irt::model::DeviceBuffer> device_outputs_;
     std::vector<std::vector<float>>       host_outputs_;
-    std::vector<void *>                   buffers_;
+    std::vector<irt::BufferView>          buffers_;
 };
 
 template<typename Run>

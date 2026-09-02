@@ -17,16 +17,21 @@ public:
 
     ~Integral();
 
+    Integral(const Integral &)            = delete;
+    Integral &operator=(const Integral &) = delete;
+    Integral(Integral &&) noexcept;
+    Integral &operator=(Integral &&) noexcept;
+
     [[nodiscard]] IRTStatus operator()(const T *d_src, CT *d_dst, cv::Size ssize, const int CH,
                                        cudaStream_t stream = nullptr);
 
     virtual OperatorHandle handle() const noexcept override
     {
-        return impl_;
+        return impl_.get();
     }
 
 private:
-    OperatorHandle impl_;
+    OperatorImplPtr impl_;
 };
 
 } // namespace irt::cvcuda

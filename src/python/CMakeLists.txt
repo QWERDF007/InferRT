@@ -5,6 +5,9 @@ find_package(Python COMPONENTS Interpreter Development.Module NumPy REQUIRED)
 pybind11_add_module(inferrt_model_py MODULE InferRTModelPybind.cpp)
 pybind11_add_module(inferrt_ops_py MODULE InferRTOpsPybind.cpp)
 
+inferrt_apply_compile_options(inferrt_model_py)
+inferrt_apply_compile_options(inferrt_ops_py)
+
 set_target_properties(inferrt_model_py PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
 )

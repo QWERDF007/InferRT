@@ -1,9 +1,11 @@
 #include "TestModelCommon.hpp"
 
+#include <inferrt/core/Exception.hpp>
 #include <inferrt/model/IModel.h>
 
 #include <algorithm>
 #include <string>
+#include <thread>
 #include <vector>
 
 using test::model::RegisteredModelsTest;
@@ -17,6 +19,16 @@ namespace {
 class ModelFactoryRegisteredModelsTest : public RegisteredModelsTest
 {
 };
+
+std::unique_ptr<irt::model::IModel> MinimalCreator()
+{
+    return std::make_unique<irt::model::IModel>();
+}
+
+std::unique_ptr<irt::model::IModel> NullReturningCreator()
+{
+    return nullptr;
+}
 
 } // namespace
 
@@ -82,6 +94,7 @@ TEST_P(ModelFactoryRegisteredModelsTest, CreateModelReturnsValidInstanceForRegis
 
     auto model = irt::model::CreateModel(param.key);
     ASSERT_NE(model, nullptr);
+    EXPECT_TRUE(model->isValid());
     EXPECT_EQ(model->name(), param.display_name);
 }
 
@@ -94,16 +107,46 @@ TEST_P(ModelFactoryRegisteredModelsTest, CreateModelAcceptsMixedCaseKey)
 
     auto model = irt::model::CreateModel(param.mixed_case_key);
     ASSERT_NE(model, nullptr);
+    EXPECT_TRUE(model->isValid());
     EXPECT_EQ(model->name(), param.display_name);
 }
 
 /**
- * @brief 新 key 注册成功后，应能通过工厂创建出对应实例
+ * @brief 注册时拒绝空 creator。
+ */
+TEST(IModelRegisterTest, RejectsNullCreator)
+{
+    EXPECT_FALSE(irt::model::RegisterModel("null_creator_key", nullptr));
+}
+
+/**
+ * @brief 注册时拒绝空名称或全空白名称。
+ */
+TEST(IModelRegisterTest, RejectsEmptyName)
+{
+    EXPECT_FALSE(irt::model::RegisterModel("", &MinimalCreator));
+}
+
+/**
+ * @brief creator 返回 nullptr 时应抛出带上下文的异常，而非静默崩溃。
+ */
+TEST(IModelCreateTest, CreatorReturningNullIsReported)
+{
+    const std::string key = "null_returning_model_key";
+    ASSERT_TRUE(irt::model::RegisterModel(key, &NullReturningCreator));
+    EXPECT_THROW({
+        irt::model::CreateModel(key);
+    }, irt::Exception);
+}
+
+/**
+ * @brief 新 key 注册成功后，应能通过工厂查询
  */
 TEST(IModelRegisterTest, RegisterModelReturnsTrueForNewKey)
 {
     const std::string key = "register_only_unique_key";
-    EXPECT_TRUE(irt::model::RegisterModel(key, nullptr));
+    EXPECT_TRUE(irt::model::RegisterModel(key, &MinimalCreator));
+    EXPECT_TRUE(irt::model::isSupportedModel(key));
 }
 
 /**
@@ -112,8 +155,8 @@ TEST(IModelRegisterTest, RegisterModelReturnsTrueForNewKey)
 TEST(IModelRegisterTest, RegisterModelTreatsKeysCaseInsensitively)
 {
     const std::string key = "register_only_case_key";
-    ASSERT_TRUE(irt::model::RegisterModel(key, nullptr));
-    EXPECT_FALSE(irt::model::RegisterModel("REGISTER_ONLY_CASE_KEY", nullptr));
+    ASSERT_TRUE(irt::model::RegisterModel(key, &MinimalCreator));
+    EXPECT_FALSE(irt::model::RegisterModel("REGISTER_ONLY_CASE_KEY", &MinimalCreator));
     EXPECT_TRUE(irt::model::isSupportedModel("Register_Only_Case_Key"));
 }
 
@@ -123,6 +166,94 @@ TEST(IModelRegisterTest, RegisterModelTreatsKeysCaseInsensitively)
 TEST(IModelRegisterTest, RegisterModelReturnsFalseForDuplicateKey)
 {
     const std::string key = "register_only_duplicate_key";
-    ASSERT_TRUE(irt::model::RegisterModel(key, nullptr));
-    EXPECT_FALSE(irt::model::RegisterModel(key, nullptr));
+    ASSERT_TRUE(irt::model::RegisterModel(key, &MinimalCreator));
+    EXPECT_FALSE(irt::model::RegisterModel(key, &MinimalCreator));
+}
+
+/**
+ * @brief 验证多线程并发查询与注册时线程安全（无数据竞争）。
+ */
+TEST(IModelThreadSafetyTest, ConcurrentLookupIsSafe)
+{
+    constexpr int kThreads = 8;
+    constexpr int kIters   = 100;
+    std::vector<std::thread> threads;
+    threads.reserve(kThreads);
+
+    for (int t = 0; t < kThreads; ++t)
+    {
+        threads.emplace_back([t] {
+            for (int i = 0; i < kIters; ++i)
+            {
+                EXPECT_TRUE(irt::model::isSupportedModel("resnet18"));
+                EXPECT_TRUE(irt::model::isSupportedModel("YOLOv8"));
+                EXPECT_FALSE(irt::model::isSupportedModel("non_existing_model_xyz"));
+                auto names = irt::model::getRegisteredModelNames();
+                EXPECT_FALSE(names.empty());
+                if (t == 0 && i % 10 == 0)
+                {
+                    irt::model::RegisterModel("dynamic_test_key_" + std::to_string(i), &MinimalCreator);
+                }
+            }
+        });
+    }
+
+    for (auto &th : threads)
+    {
+        th.join();
+    }
+}
+
+TEST(IModelRegisterTest, RejectsAllWhitespaceName)
+{
+    EXPECT_FALSE(irt::model::RegisterModel("   \t\n  ", &MinimalCreator));
+}
+
+TEST(IModelHandleValidationTest, InvalidModelHandlesThrowOnAllMethods)
+{
+    irt::model::IModel invalid_model;
+    EXPECT_FALSE(invalid_model.isValid());
+    EXPECT_FALSE(static_cast<bool>(invalid_model));
+
+    EXPECT_THROW(invalid_model.name(), irt::Exception);
+    EXPECT_THROW(invalid_model.wtsExtension(), irt::Exception);
+    EXPECT_THROW(invalid_model.engineExtension(), irt::Exception);
+    EXPECT_THROW(invalid_model.logLevel(), irt::Exception);
+    EXPECT_THROW(invalid_model.resolveExecutionStream(), irt::Exception);
+    EXPECT_THROW(invalid_model.modelConfig(), irt::Exception);
+    EXPECT_THROW(invalid_model.runtime(), irt::Exception);
+    EXPECT_THROW(invalid_model.build("dummy.wts"), irt::Exception);
+    EXPECT_THROW(invalid_model.load("dummy.engine"), irt::Exception);
+    EXPECT_THROW(invalid_model.save("dummy.engine"), irt::Exception);
+    EXPECT_THROW(invalid_model.buildOrLoad("dummy.wts"), irt::Exception);
+    EXPECT_THROW(invalid_model.infer({}), irt::Exception);
+    EXPECT_THROW(invalid_model.forwardFeatures({}), irt::Exception);
+    EXPECT_THROW(invalid_model.setModelConfig(nullptr), irt::Exception);
+    EXPECT_THROW(invalid_model.ioTensorNames(irt::TensorIOMode::Input), irt::Exception);
+    EXPECT_THROW(invalid_model.tensorShape("input"), irt::Exception);
+    EXPECT_THROW(invalid_model.tensorDataType("input"), irt::Exception);
+    EXPECT_THROW(invalid_model.setTensorShape("input", irt::Shape{}), irt::Exception);
+    EXPECT_THROW(invalid_model.setStream(0), irt::Exception);
+    EXPECT_THROW(invalid_model.clearStream(), irt::Exception);
+    EXPECT_THROW(invalid_model.setLogLevel(irt::model::LogLevel::Info), irt::Exception);
+}
+
+TEST(IModelConfigValidationTest, RejectsNegativeAndInvalidDimensions)
+{
+    irt::model::IModelConfig config;
+    EXPECT_THROW(config.setInputShape(irt::Shape{-1, 3, 224, 224}), irt::Exception);
+    EXPECT_THROW(config.setInputShape(irt::Shape{1, 0, 224, 224}), irt::Exception);
+    EXPECT_THROW(config.setInputShapes({}), irt::Exception);
+    EXPECT_THROW(config.setInputShapes({irt::Shape{1, 3, -1, 224}}), irt::Exception);
+    EXPECT_THROW(config.setInputTensorNames({}), irt::Exception);
+    EXPECT_THROW(config.setInputTensorNames({""}), irt::Exception);
+    EXPECT_THROW(config.setInputTensorNames({"in", "in"}), irt::Exception);
+    EXPECT_THROW(config.setOutputTensorNames({}), irt::Exception);
+    EXPECT_THROW(config.setOutputTensorNames({""}), irt::Exception);
+    EXPECT_THROW(config.setOutputTensorNames({"out", "out"}), irt::Exception);
+    EXPECT_THROW(config.setFeatureTensorNames({""}), irt::Exception);
+    EXPECT_THROW(config.setFeatureTensorNames({"f1", "f1"}), irt::Exception);
+    EXPECT_THROW(config.setDynamicBatchRange(0, 4, 8), irt::Exception);
+    EXPECT_THROW(config.setDynamicBatchRange(4, 2, 8), irt::Exception);
+    EXPECT_THROW(config.setDynamicBatchRange(4, 4, 2), irt::Exception);
 }

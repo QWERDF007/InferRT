@@ -2,9 +2,11 @@
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/core/Version.h>
 
+#include <future>
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 /**
  * @brief Public Exception 应保留状态码和格式化消息。
@@ -18,6 +20,108 @@ TEST(ExceptionTest, StoresCodeAndFormattedMessage)
     EXPECT_STREQ(ex.msg(), "value=7");
     EXPECT_NE(std::string(ex.what()).find("ERROR_INVALID_ARGUMENT: value=7"), std::string::npos);
     irt::SetThreadError(nullptr);
+}
+
+/**
+ * @brief 验证 Exception 复制后原始对象销毁，副本的 msg() 和 what() 依然有效且一致（值语义测试，防止野指针）。
+ */
+TEST(ExceptionTest, CopyPreservesMessage)
+{
+    irt::SetThreadError(nullptr);
+    irt::Exception copy_target(irt::Status::SUCCESS);
+
+    {
+        const irt::Exception source(irt::Status::ERROR_INVALID_ARGUMENT, "dangling check: %d", 42);
+        copy_target = source;
+        // source 在此作用域结束时被销毁
+    }
+
+    EXPECT_EQ(copy_target.code(), irt::Status::ERROR_INVALID_ARGUMENT);
+    EXPECT_STREQ(copy_target.msg(), "dangling check: 42");
+    EXPECT_NE(std::string(copy_target.what()).find("ERROR_INVALID_ARGUMENT: dangling check: 42"), std::string::npos);
+}
+
+/**
+ * @brief 验证 Exception 移动语义正常工作。
+ */
+TEST(ExceptionTest, MovePreservesMessage)
+{
+    irt::SetThreadError(nullptr);
+    irt::Exception source(irt::Status::ERROR_DEVICE, "cuda failure on device %d", 0);
+    const irt::Exception moved(std::move(source));
+
+    EXPECT_EQ(moved.code(), irt::Status::ERROR_DEVICE);
+    EXPECT_STREQ(moved.msg(), "cuda failure on device 0");
+    EXPECT_NE(std::string(moved.what()).find("ERROR_DEVICE: cuda failure on device 0"), std::string::npos);
+}
+
+/**
+ * @brief 验证公开 irt::Exception 能被 SetThreadError 正确识别且保留特定状态码（绝不降级为 INTERNAL）。
+ */
+TEST(ExceptionTest, MapsPublicExceptionCode)
+{
+    irt::SetThreadError(nullptr);
+    irt::SetThreadError(std::make_exception_ptr(irt::Exception(irt::Status::ERROR_OUT_OF_MEMORY, "buffer allocation failed")));
+
+    char msg[IRT_MAX_STATUS_MESSAGE_LENGTH] = {};
+    EXPECT_EQ(irt::GetLastErrorMessage(msg, sizeof(msg)), IRT_ERROR_OUT_OF_MEMORY);
+    EXPECT_STREQ(msg, "buffer allocation failed");
+}
+
+/**
+ * @brief 验证 SetThreadStatus 直写 TLS，不抛异常也不触发额外栈展开。
+ */
+TEST(ExceptionTest, SetThreadStatusDoesNotThrow)
+{
+    irt::SetThreadError(nullptr);
+    EXPECT_NO_THROW({
+        irt::SetThreadStatus(IRT_ERROR_INVALID_ARGUMENT, "direct write: %s", "ok");
+    });
+
+    char msg[IRT_MAX_STATUS_MESSAGE_LENGTH] = {};
+    EXPECT_EQ(irt::GetLastErrorMessage(msg, sizeof(msg)), IRT_ERROR_INVALID_ARGUMENT);
+    EXPECT_STREQ(msg, "direct write: ok");
+}
+
+/**
+ * @brief 验证超长消息在 SetThreadStatus 中安全截断并包含 null 结尾。
+ */
+TEST(ExceptionTest, MessageIsTruncatedAndTerminated)
+{
+    irt::SetThreadError(nullptr);
+    const std::string long_str(IRT_MAX_STATUS_MESSAGE_LENGTH + 200, 'X');
+    irt::SetThreadStatus(IRT_ERROR_INTERNAL, "%s", long_str.c_str());
+
+    char msg[IRT_MAX_STATUS_MESSAGE_LENGTH] = {};
+    EXPECT_EQ(irt::GetLastErrorMessage(msg, sizeof(msg)), IRT_ERROR_INTERNAL);
+    EXPECT_EQ(strlen(msg), static_cast<size_t>(IRT_MAX_STATUS_MESSAGE_LENGTH - 1));
+    EXPECT_EQ(msg[IRT_MAX_STATUS_MESSAGE_LENGTH - 1], '\0');
+}
+
+/**
+ * @brief 验证工作线程捕获的异常经跨线程保存 exception_ptr 后，在主线程仍能准确恢复错误上下文。
+ */
+TEST(ExceptionTest, ErrorContextSurvivesWorkerBoundary)
+{
+    std::exception_ptr captured_error;
+    std::thread worker([&] {
+        try
+        {
+            throw irt::Exception(irt::Status::NOT_READY, "async pipeline queue empty");
+        }
+        catch (...)
+        {
+            captured_error = std::current_exception();
+        }
+    });
+    worker.join();
+
+    ASSERT_NE(captured_error, nullptr);
+    irt::SetThreadError(captured_error);
+
+    char msg[IRT_MAX_STATUS_MESSAGE_LENGTH] = {};
+    EXPECT_EQ(irt::GetLastErrorMessage(msg, sizeof(msg)), IRT_ERROR_NOT_READY);
+    EXPECT_STREQ(msg, "async pipeline queue empty");
 }
 
 /**
@@ -66,7 +170,7 @@ TEST(ExceptionTest, ProtectCallConvertsInferRtExceptionToThreadStatus)
     const IRTStatus status = irt::ProtectCall(
         []
         {
-            throw irt::Exception(irt::Status::ERROR_NOT_READY, "later");
+            throw irt::Exception(irt::Status::NOT_READY, "later");
         });
 
     char msg[IRT_MAX_STATUS_MESSAGE_LENGTH] = {};
@@ -149,10 +253,10 @@ TEST(ExceptionTest, ProtectCallConvertsUnknownExceptionToInternal)
  */
 TEST(VersionTest, VersionStringsAreNonEmptyAndConsistent)
 {
-    const std::string version = irt::GetVersionString();
-    const std::string branch = irt::GetBranchString();
-    const std::string commit = irt::GetCommitHashString();
-    const std::string full = irt::GetFullVersionString();
+    const std::string version    = irt::GetVersionString();
+    const std::string branch     = irt::GetBranchString();
+    const std::string commit     = irt::GetCommitHashString();
+    const std::string full       = irt::GetFullVersionString();
     const std::string build_time = irt::GetBuildTimeString();
 
     EXPECT_FALSE(version.empty());

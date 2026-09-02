@@ -79,6 +79,12 @@ TORCHHUB_DINOV2_MODEL_NAMES = [
 TORCHHUB_DINO_MODEL_REPOS = {
     **{name: TORCHHUB_DINOV2_REPO for name in TORCHHUB_DINOV2_MODEL_NAMES},
 }
+# Checkpoint filenames commonly use ``reg4`` to describe the four register
+# tokens, while the official torch.hub entry point calls the same model ``reg``.
+TORCHHUB_DINO_MODEL_ALIASES = {
+    f"dinov2_vit{size}14_reg4": f"dinov2_vit{size}14_reg"
+    for size in ("s", "b", "l", "g")
+}
 TRANSFORMERS_DINOV3_MODEL_IDS = {
     "dinov3_vits16": "facebook/dinov3-vits16-pretrain-lvd1689m",
     "dinov3_vits16plus": "facebook/dinov3-vits16plus-pretrain-lvd1689m",
@@ -515,8 +521,9 @@ def _resolve_torchhub_repo(model_name: str, hub_repo: str | None) -> str:
 
     if hub_repo:
         return hub_repo
+    canonical_name = TORCHHUB_DINO_MODEL_ALIASES.get(model_name, model_name)
     try:
-        return TORCHHUB_DINO_MODEL_REPOS[model_name]
+        return TORCHHUB_DINO_MODEL_REPOS[canonical_name]
     except KeyError as exc:
         available = ", ".join(TORCHHUB_DINO_MODEL_REPOS.keys())
         raise ValueError(f"Unsupported torchhub model: {model_name}. Available: {available}") from exc
@@ -594,11 +601,12 @@ def create_model(
         return create_model(model_name, pretrained=pretrained)
 
     if backend == "torchhub":
-        if model_name not in TORCHHUB_DINO_MODEL_REPOS:
-            available = ", ".join(TORCHHUB_DINO_MODEL_REPOS.keys())
+        canonical_name = TORCHHUB_DINO_MODEL_ALIASES.get(model_name, model_name)
+        if canonical_name not in TORCHHUB_DINO_MODEL_REPOS:
+            available = ", ".join((*TORCHHUB_DINO_MODEL_REPOS.keys(), *TORCHHUB_DINO_MODEL_ALIASES.keys()))
             raise ValueError(f"Unsupported torchhub model: {model_name}. Available: {available}")
 
-        repo_or_dir = _resolve_torchhub_repo(model_name, hub_repo)
+        repo_or_dir = _resolve_torchhub_repo(canonical_name, hub_repo)
         hub_kwargs: dict[str, object] = {
             "source": hub_source,
             "pretrained": pretrained,
@@ -609,7 +617,7 @@ def create_model(
             # 避免交互式 trust 提示，并跳过 GitHub API 校验以减少离线环境依赖。
             hub_kwargs["trust_repo"] = True
             hub_kwargs["skip_validation"] = True
-        return torch.hub.load(repo_or_dir, model_name, **hub_kwargs)
+        return torch.hub.load(repo_or_dir, canonical_name, **hub_kwargs)
 
     if backend == "transformers":
         if not pretrained:

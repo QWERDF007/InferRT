@@ -5,18 +5,14 @@
 
 #pragma once
 
+#include <inferrt/core/PreprocessSpec.hpp>
 #include <inferrt/engine/Pipeline.hpp>
-#include <opencv2/imgproc.hpp>
-
-#include <array>
 
 namespace irt::engine {
 
 struct INFERRT_ENGINE_API CpuImageToTensorOptions
 {
-    std::array<float, 3> mean{0.485F, 0.456F, 0.406F};
-    std::array<float, 3> stddev{0.229F, 0.224F, 0.225F};
-    bool                 letterbox{false};
+    irt::PreprocessSpec preprocess{};
 };
 
 /** 将 submit() 提供的命名 float32 输入复制到 host tensor。 */
@@ -27,18 +23,27 @@ struct INFERRT_ENGINE_API CpuCopyTensorOptions
 
 struct INFERRT_ENGINE_API ResizeOptions
 {
-    int interpolation{cv::INTER_LINEAR};
+    irt::PreprocessSpec preprocess{};
 };
 
 struct INFERRT_ENGINE_API CvtColorOptions
 {
-    int code{cv::COLOR_BGR2RGB};
+    irt::PreprocessSpec preprocess{};
 };
 
 struct INFERRT_ENGINE_API NormalizeOptions
 {
-    std::array<float, 3> mean{0.485F, 0.456F, 0.406F};
-    std::array<float, 3> stddev{0.229F, 0.224F, 0.225F};
+    irt::PreprocessSpec preprocess{};
+};
+
+struct INFERRT_ENGINE_API LetterBoxOptions
+{
+    irt::PreprocessSpec preprocess{};
+};
+
+struct INFERRT_ENGINE_API CenterCropOptions
+{
+    irt::PreprocessSpec preprocess{};
 };
 
 /** @brief 显式注册全部内置 CPU/CUDA 图像算子。 */

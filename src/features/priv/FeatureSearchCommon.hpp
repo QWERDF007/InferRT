@@ -7,7 +7,9 @@
 
 #include "ImageSearchFaissIndex.hpp"
 
+#include <inferrt/core/Tensor.hpp>
 #include <inferrt/features/ImageSearch.hpp>
+#include <inferrt/features/RoiFeature.hpp>
 
 #pragma warning(push)
 #pragma warning(disable : 4244)
@@ -23,6 +25,9 @@
 #include <vector>
 
 namespace irt::features::priv {
+
+/** Validate the finite, positively ordered coordinates shared by ROI modules. */
+void validateRoi(const RoiFeatureBox &roi);
 
 /**
  * @brief 一次特征批处理完成后的进度信息。

@@ -31,6 +31,7 @@ struct RFDETRSpec
     std::vector<int>         out_feature_indexes;   ///< DINOv2 输出 stage 索引。
     std::vector<std::string> projector_scales;      ///< P3/P4/P5 projector 输出层级。
     bool                     segmentation;          ///< 是否构建实例分割 mask head。
+    bool                     lite_refpoint_refine;  ///< 是否保持 decoder reference points 不迭代更新。
 };
 
 /**
@@ -68,6 +69,17 @@ public:
     bool supportsDynamicBatch() const noexcept override
     {
         return true;
+    }
+
+    /**
+     * @brief RF-DETR 图结构使用独立缓存契约版本。
+     *
+     * 该版本覆盖 two-stage decoder、windowed DINO backbone 和 GridSample 展开图的
+     * 当前实现；任何图结构变更都必须递增版本，避免 ``build_or_load`` 复用旧 engine。
+     */
+    std::string engineCacheVersion() const noexcept override
+    {
+        return "rfdetr-v5";
     }
 
     /**

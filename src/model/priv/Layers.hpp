@@ -94,16 +94,16 @@ inline nvinfer1::Dims onesLike(const nvinfer1::Dims &dims)
  */
 inline int64_t staticVolume(const nvinfer1::Dims &dims)
 {
-    int64_t count = 1;
+    size_t count = 1;
     for (int32_t i = 0; i < dims.nbDims; ++i)
     {
         if (dims.d[i] <= 0)
         {
             throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "static tensor volume requires positive dims");
         }
-        count *= dims.d[i];
+        count = irt::checkedSizeMul(count, static_cast<size_t>(dims.d[i]), "TensorRT static volume");
     }
-    return count;
+    return irt::checkedSizeToInt64(count, "TensorRT static volume");
 }
 
 /**
@@ -312,10 +312,11 @@ inline nvinfer1::ITensor *addLinear3D(nvinfer1::INetworkDefinition *network, con
                                       nvinfer1::ITensor &input, const std::string &prefix, int in_features,
                                       int out_features, bool bias_required = true)
 {
+    const int64_t weight_count = checkedWeightProduct({out_features, in_features}, "Linear weight");
     auto *weight = network
                        ->addConstant(nvinfer1::Dims3{1, out_features, in_features},
                                      requireWeight(weights_map, prefix + ".weight", "Linear",
-                                                   static_cast<int64_t>(out_features) * in_features))
+                                                   weight_count))
                        ->getOutput(0);
     auto *matmul = network->addMatrixMultiply(input, nvinfer1::MatrixOperation::kNONE, *weight,
                                               nvinfer1::MatrixOperation::kTRANSPOSE);

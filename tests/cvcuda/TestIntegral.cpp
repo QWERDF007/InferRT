@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -218,4 +219,15 @@ TEST(IntegralFunctionEdgeCaseTest, RejectsInvalidChannels)
 
     cudaFree(d_src);
     cudaFree(d_dst);
+}
+
+/**
+ * @brief 输入行跨度超出 int 表示范围时必须在 CUDA 调用前拒绝。
+ */
+TEST(IntegralFunctionEdgeCaseTest, RejectsStrideOverflow)
+{
+    const int ret = irt::cvcuda::integral<uint8_t, uint32_t>(
+        reinterpret_cast<const uint8_t *>(1), reinterpret_cast<uint32_t *>(1),
+        cv::Size(std::numeric_limits<int>::max(), 3), 3, nullptr);
+    EXPECT_EQ(ret, IRT_ERROR_INVALID_ARGUMENT);
 }

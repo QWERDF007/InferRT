@@ -2,10 +2,12 @@
 
 #include <inferrt/core/Exception.hpp>
 
+#include <cmath>
+
 namespace irt::cvcuda::priv {
 
 void NormalizeImpl::operator()(const uint8_t *d_src, float *d_dst, const int2 size, const int channels,
-                               const float *mean, const float *stddev, cudaStream_t stream)
+                               const float *mean, const float *stddev, const float scale, cudaStream_t stream)
 {
     if (d_src == nullptr)
     {
@@ -23,19 +25,24 @@ void NormalizeImpl::operator()(const uint8_t *d_src, float *d_dst, const int2 si
     {
         throw Exception(Status::ERROR_INVALID_ARGUMENT, "Invalid image size");
     }
-    if (channels != 1 && channels != 3)
+    if (!std::isfinite(scale))
     {
-        throw Exception(Status::ERROR_INVALID_ARGUMENT, "Channel count must be 1 or 3");
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "Normalization scale must be finite");
+    }
+    if (channels != 1 && channels != 3 && channels != 4)
+    {
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "Channel count must be 1, 3 or 4");
     }
     for (int channel = 0; channel < channels; ++channel)
     {
-        if (stddev[channel] == 0.0F)
+        if (!std::isfinite(mean[channel]) || !std::isfinite(stddev[channel]) || stddev[channel] == 0.0F)
         {
-            throw Exception(Status::ERROR_INVALID_ARGUMENT, "Normalization stddev must not contain zero");
+            throw Exception(Status::ERROR_INVALID_ARGUMENT,
+                            "Normalization mean/stddev must be finite and stddev must not contain zero");
         }
     }
 
-    run(d_src, d_dst, size, channels, mean, stddev, stream);
+    run(d_src, d_dst, size, channels, mean, stddev, scale, stream);
 }
 
 } // namespace irt::cvcuda::priv

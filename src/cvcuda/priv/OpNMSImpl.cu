@@ -1,8 +1,11 @@
 #include "OpNMSImpl.hpp"
 
+#include <inferrt/core/Tensor.hpp>
 #include <inferrt/util/CheckError.hpp>
 
 #include <cstdint>
+#include <limits>
+#include <utility>
 
 #ifdef _MSC_VER
 #    pragma warning(push)
@@ -123,7 +126,240 @@ __global__ void nms_select_kernel(const unsigned long long *masks, const int *or
     *keep_count = out_count;
 }
 
+static inline size_t align256(const size_t bytes)
+{
+    return irt::checkedSizeAdd(bytes, 255, "NMS workspace alignment") & ~static_cast<size_t>(255);
+}
+
 } // namespace
+
+NMSImpl::Workspace::~Workspace() noexcept
+{
+    reset();
+}
+
+NMSImpl::Workspace::Workspace(Workspace &&other) noexcept
+    : data_(other.data_)
+    , bytes_(other.bytes_)
+    , device_id_(other.device_id_)
+    , stream_(other.stream_)
+{
+    other.data_      = nullptr;
+    other.bytes_     = 0;
+    other.device_id_ = -1;
+    other.stream_    = nullptr;
+}
+
+NMSImpl::Workspace &NMSImpl::Workspace::operator=(Workspace &&other) noexcept
+{
+    if (this != &other)
+    {
+        reset();
+        data_      = other.data_;
+        bytes_     = other.bytes_;
+        device_id_ = other.device_id_;
+        stream_    = other.stream_;
+        other.data_      = nullptr;
+        other.bytes_     = 0;
+        other.device_id_ = -1;
+        other.stream_    = nullptr;
+    }
+    return *this;
+}
+
+void NMSImpl::Workspace::allocate(const size_t bytes, const int device_id, const cudaStream_t stream)
+{
+    if (bytes == 0 || device_id < 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "NMS workspace requires positive bytes and a non-negative device");
+    }
+
+    int previous_device = -1;
+    const auto query_status = cudaGetDevice(&previous_device);
+    if (query_status != cudaSuccess)
+    {
+        throw irt::Exception(irt::Status::ERROR_INTERNAL, "NMS workspace device query failed: %s",
+                             cudaGetErrorString(query_status));
+    }
+    if (previous_device != device_id)
+    {
+        const auto set_status = cudaSetDevice(device_id);
+        if (set_status != cudaSuccess)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "NMS workspace device %d is unavailable: %s",
+                                 device_id, cudaGetErrorString(set_status));
+        }
+    }
+
+    void *candidate = nullptr;
+    const auto allocation_status = cudaMallocAsync(&candidate, bytes, stream);
+    if (allocation_status != cudaSuccess || candidate == nullptr)
+    {
+        if (previous_device != device_id)
+        {
+            (void)cudaSetDevice(previous_device);
+        }
+        throw irt::Exception(irt::Status::ERROR_OUT_OF_MEMORY,
+                             "NMS workspace cudaMallocAsync failed for %zu bytes: %s", bytes,
+                             cudaGetErrorString(allocation_status));
+    }
+
+    data_      = candidate;
+    bytes_     = bytes;
+    device_id_ = device_id;
+    stream_    = stream;
+    if (previous_device != device_id)
+    {
+        (void)cudaSetDevice(previous_device);
+    }
+}
+
+void NMSImpl::Workspace::reset() noexcept
+{
+    if (data_ == nullptr)
+    {
+        return;
+    }
+
+    int previous_device = -1;
+    const bool have_previous_device = cudaGetDevice(&previous_device) == cudaSuccess;
+    if (device_id_ >= 0 && (!have_previous_device || previous_device != device_id_))
+    {
+        (void)cudaSetDevice(device_id_);
+    }
+
+    // Synchronizing first makes reset safe when a caller changes streams or
+    // destroys the operator while work is still queued on the owning stream.
+    if (stream_ != nullptr)
+    {
+        (void)cudaStreamSynchronize(stream_);
+    }
+    const auto free_status = cudaFreeAsync(data_, stream_);
+    if (free_status == cudaSuccess)
+    {
+        (void)cudaStreamSynchronize(stream_);
+    }
+    else
+    {
+        // Keep destruction best-effort and leak-free even if the stream has
+        // already been torn down by an embedding application.
+        (void)cudaFree(data_);
+    }
+
+    if (have_previous_device && previous_device != device_id_)
+    {
+        (void)cudaSetDevice(previous_device);
+    }
+    data_      = nullptr;
+    bytes_     = 0;
+    device_id_ = -1;
+    stream_    = nullptr;
+}
+
+NMSImpl::~NMSImpl()
+{
+    synchronizeWorkspaceStream();
+    freeWorkspace();
+}
+
+void NMSImpl::freeWorkspace() noexcept
+{
+    if (workspace_.data() != nullptr)
+    {
+        ++release_count_;
+    }
+    workspace_.reset();
+    workspace_bytes_      = 0;
+    d_sorted_scores_      = nullptr;
+    d_order_              = nullptr;
+    d_masks_              = nullptr;
+    d_removed_            = nullptr;
+    allocated_boxes_      = 0;
+    allocated_col_blocks_ = 0;
+
+}
+
+void NMSImpl::synchronizeWorkspaceStream() noexcept
+{
+    if (workspace_.data() == nullptr || workspace_.deviceId() < 0)
+    {
+        return;
+    }
+    int current_device = -1;
+    if (cudaGetDevice(&current_device) != cudaSuccess)
+    {
+        return;
+    }
+    if (cudaSetDevice(workspace_.deviceId()) != cudaSuccess)
+    {
+        return;
+    }
+    (void)cudaStreamSynchronize(workspace_.stream());
+    (void)cudaSetDevice(current_device);
+}
+
+void NMSImpl::bindWorkspaceToStream(const cudaStream_t stream)
+{
+    int current_device = -1;
+    IRT_CHECK_THROW(cudaGetDevice(&current_device), "NMS current device query failed");
+    if (workspace_.data() != nullptr
+        && (workspace_.deviceId() != current_device || workspace_.stream() != stream))
+    {
+        // The workspace is single-owner.  Complete work submitted on the old
+        // stream before releasing or reusing it on another stream/device.
+        synchronizeWorkspaceStream();
+        freeWorkspace();
+    }
+    workspace_device_ = current_device;
+    workspace_stream_ = stream;
+}
+
+void NMSImpl::ensureWorkspace(const int num_boxes, const int col_blocks)
+{
+    if (num_boxes <= allocated_boxes_ && col_blocks <= allocated_col_blocks_ && workspace_.data() != nullptr)
+    {
+        return;
+    }
+
+    const int target_boxes = std::max(
+        num_boxes, allocated_boxes_ > std::numeric_limits<int>::max() / 2 ? num_boxes : allocated_boxes_ * 2);
+    const int target_col_blocks = std::max(
+        col_blocks, allocated_col_blocks_ > std::numeric_limits<int>::max() / 2 ? col_blocks : allocated_col_blocks_ * 2);
+
+    const size_t scores_size = align256(irt::checkedSizeMul(static_cast<size_t>(target_boxes), sizeof(float), "NMS scores"));
+    const size_t order_size  = align256(irt::checkedSizeMul(static_cast<size_t>(target_boxes), sizeof(int), "NMS order"));
+    const size_t masks_elements
+        = irt::checkedSizeMul(static_cast<size_t>(target_boxes), static_cast<size_t>(target_col_blocks), "NMS masks");
+    const size_t masks_size = align256(irt::checkedSizeMul(masks_elements, sizeof(unsigned long long), "NMS masks"));
+    const size_t removed_size
+        = align256(irt::checkedSizeMul(static_cast<size_t>(target_col_blocks), sizeof(unsigned long long), "NMS removed"));
+    const size_t total_size = irt::checkedSizeAdd(
+        irt::checkedSizeAdd(irt::checkedSizeAdd(scores_size, order_size, "NMS workspace"), masks_size, "NMS workspace"), removed_size,
+        "NMS workspace");
+
+    synchronizeWorkspaceStream();
+    freeWorkspace();
+
+    workspace_.allocate(total_size, workspace_device_, workspace_stream_);
+    ++allocation_count_;
+
+    workspace_bytes_      = total_size;
+    allocated_boxes_      = target_boxes;
+    allocated_col_blocks_ = target_col_blocks;
+
+    char *base = static_cast<char *>(workspace_.data());
+    d_sorted_scores_ = reinterpret_cast<float *>(base);
+    d_order_         = reinterpret_cast<int *>(base + scores_size);
+    d_masks_         = reinterpret_cast<unsigned long long *>(base + scores_size + order_size);
+    d_removed_       = reinterpret_cast<unsigned long long *>(base + scores_size + order_size + masks_size);
+}
+
+NMSWorkspaceStats NMSImpl::workspaceStats() const noexcept
+{
+    return {allocation_count_, release_count_, workspace_bytes_, workspace_device_,
+            reinterpret_cast<std::uintptr_t>(workspace_stream_)};
+}
 
 void NMSImpl::RunNMS(const float *d_boxes, const float *d_scores, int64_t *d_keep, int *d_keep_count, int num_boxes,
                      float iou_threshold, cudaStream_t stream)
@@ -134,62 +370,41 @@ void NMSImpl::RunNMS(const float *d_boxes, const float *d_scores, int64_t *d_kee
         return;
     }
 
-    const int    col_blocks = (num_boxes + NMS_THREADS_PER_BLOCK - 1) / NMS_THREADS_PER_BLOCK;
-    const size_t mask_count = static_cast<size_t>(num_boxes) * col_blocks;
-
-    float              *d_sorted_scores = nullptr;
-    int                *d_order         = nullptr;
-    unsigned long long *d_masks         = nullptr;
-    unsigned long long *d_removed       = nullptr;
-
-    try
+    const size_t block_count
+        = (static_cast<size_t>(num_boxes) + static_cast<size_t>(NMS_THREADS_PER_BLOCK) - 1)
+        / static_cast<size_t>(NMS_THREADS_PER_BLOCK);
+    if (block_count > static_cast<size_t>(std::numeric_limits<int>::max()))
     {
-        IRT_CHECK_THROW(cudaMalloc(&d_sorted_scores, static_cast<size_t>(num_boxes) * sizeof(float)),
-                        "NMS score workspace allocation failed: boxes=%d", num_boxes);
-        IRT_CHECK_THROW(cudaMalloc(&d_order, static_cast<size_t>(num_boxes) * sizeof(int)),
-                        "NMS order workspace allocation failed: boxes=%d", num_boxes);
-        IRT_CHECK_THROW(cudaMalloc(&d_masks, mask_count * sizeof(unsigned long long)),
-                        "NMS mask workspace allocation failed: boxes=%d blocks=%d", num_boxes, col_blocks);
-        IRT_CHECK_THROW(cudaMalloc(&d_removed, static_cast<size_t>(col_blocks) * sizeof(unsigned long long)),
-                        "NMS removed workspace allocation failed: blocks=%d", col_blocks);
-
-        IRT_CHECK_THROW(cudaMemcpyAsync(d_sorted_scores, d_scores, static_cast<size_t>(num_boxes) * sizeof(float),
-                                        cudaMemcpyDeviceToDevice, stream),
-                        "NMS score copy failed: boxes=%d", num_boxes);
-
-        auto policy     = thrust::cuda::par.on(stream);
-        auto scores_ptr = thrust::device_pointer_cast(d_sorted_scores);
-        auto order_ptr  = thrust::device_pointer_cast(d_order);
-        thrust::sequence(policy, order_ptr, order_ptr + num_boxes);
-        thrust::stable_sort_by_key(policy, scores_ptr, scores_ptr + num_boxes, order_ptr, thrust::greater<float>());
-
-        const dim3 grid(col_blocks, col_blocks);
-        nms_bitmask_kernel<<<grid, NMS_THREADS_PER_BLOCK, 0, stream>>>(d_boxes, d_order, d_masks, num_boxes,
-                                                                       col_blocks, iou_threshold);
-        IRT_CHECK_THROW(cudaPeekAtLastError(), "NMS bitmask kernel launch failed: boxes=%d blocks=%d", num_boxes,
-                        col_blocks);
-
-        IRT_CHECK_THROW(cudaMemsetAsync(d_removed, 0, static_cast<size_t>(col_blocks) * sizeof(unsigned long long),
-                                        stream),
-                        "NMS removed mask initialization failed: blocks=%d", col_blocks);
-        nms_select_kernel<<<1, 1, 0, stream>>>(d_masks, d_order, d_keep, d_keep_count, d_removed, num_boxes,
-                                               col_blocks);
-        IRT_CHECK_THROW(cudaPeekAtLastError(), "NMS select kernel launch failed: boxes=%d blocks=%d", num_boxes,
-                        col_blocks);
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "NMS block count exceeds supported range");
     }
-    catch (...)
-    {
-        cudaFree(d_sorted_scores);
-        cudaFree(d_order);
-        cudaFree(d_masks);
-        cudaFree(d_removed);
-        throw;
-    }
+    const int col_blocks = static_cast<int>(block_count);
+    bindWorkspaceToStream(stream);
+    ensureWorkspace(num_boxes, col_blocks);
 
-    IRT_CHECK_THROW(cudaFree(d_sorted_scores), "NMS score workspace release failed");
-    IRT_CHECK_THROW(cudaFree(d_order), "NMS order workspace release failed");
-    IRT_CHECK_THROW(cudaFree(d_masks), "NMS mask workspace release failed");
-    IRT_CHECK_THROW(cudaFree(d_removed), "NMS removed workspace release failed");
+    const size_t score_bytes = irt::checkedSizeMul(static_cast<size_t>(num_boxes), sizeof(float), "NMS score copy");
+    IRT_CHECK_THROW(cudaMemcpyAsync(d_sorted_scores_, d_scores, score_bytes, cudaMemcpyDeviceToDevice, stream),
+                    "NMS score copy failed: boxes=%d", num_boxes);
+
+    auto policy     = thrust::cuda::par.on(stream);
+    auto scores_ptr = thrust::device_pointer_cast(d_sorted_scores_);
+    auto order_ptr  = thrust::device_pointer_cast(d_order_);
+    thrust::sequence(policy, order_ptr, order_ptr + num_boxes);
+    thrust::stable_sort_by_key(policy, scores_ptr, scores_ptr + num_boxes, order_ptr, thrust::greater<float>());
+
+    const dim3 grid(col_blocks, col_blocks);
+    nms_bitmask_kernel<<<grid, NMS_THREADS_PER_BLOCK, 0, stream>>>(d_boxes, d_order_, d_masks_, num_boxes,
+                                                                   col_blocks, iou_threshold);
+    IRT_CHECK_THROW(cudaPeekAtLastError(), "NMS bitmask kernel launch failed: boxes=%d blocks=%d", num_boxes,
+                    col_blocks);
+
+    const size_t removed_bytes
+        = irt::checkedSizeMul(static_cast<size_t>(col_blocks), sizeof(unsigned long long), "NMS removed masks");
+    IRT_CHECK_THROW(cudaMemsetAsync(d_removed_, 0, removed_bytes, stream),
+                    "NMS removed mask initialization failed: blocks=%d", col_blocks);
+    nms_select_kernel<<<1, 1, 0, stream>>>(d_masks_, d_order_, d_keep, d_keep_count, d_removed_, num_boxes,
+                                           col_blocks);
+    IRT_CHECK_THROW(cudaPeekAtLastError(), "NMS select kernel launch failed: boxes=%d blocks=%d", num_boxes,
+                    col_blocks);
 }
 
 } // namespace irt::cvcuda::priv

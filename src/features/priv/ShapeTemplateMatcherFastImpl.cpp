@@ -777,7 +777,7 @@ static std::unique_ptr<ShapeTemplateMatcherKernel> makeV1Kernel()
 {
     if (!cv::checkHardwareSupport(CV_CPU_AVX2))
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION,
+        throw irt::Exception(irt::Status::INVALID_OPERATION,
                              "The v1 shape template matcher requires an AVX2-capable CPU");
     }
     return std::make_unique<ShapeTemplateMatcherFastKernelImpl>();
@@ -788,7 +788,7 @@ static std::unique_ptr<ShapeTemplateMatcherKernel> makeV1Kernel()
 /** @brief 未编译 AVX2 时保留明确的 v1 构造错误。 */
 static std::unique_ptr<ShapeTemplateMatcherKernel> makeV1Kernel()
 {
-    throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION,
+    throw irt::Exception(irt::Status::INVALID_OPERATION,
                          "The v1 shape template matcher was built without AVX2 support");
 }
 

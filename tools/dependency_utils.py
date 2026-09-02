@@ -265,6 +265,42 @@ def read_cmake_cache_value(cache_file: Path, key: str) -> str | None:
     return None
 
 
+def cmake_cache_bool(cache_file: Path, key: str) -> bool | None:
+    """读取 CMakeCache.txt 中的 BOOL 选项。
+
+    返回 ``None`` 表示缓存不存在或没有该选项；调用方可据此保留清单
+    的默认启用行为。
+    """
+
+    value = read_cmake_cache_value(cache_file, key)
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"on", "true", "yes", "y", "1"}:
+        return True
+    if normalized in {"off", "false", "no", "n", "0"}:
+        return False
+    return None
+
+
+def dependency_enabled(dep: dict[str, Any], build_dir: Path) -> bool:
+    """判断依赖是否由当前构建配置启用。
+
+    清单中的 ``requires`` 是 CMake BOOL 变量列表，所有变量都必须为 ON。
+    没有缓存或没有对应变量时返回 ``True``，这样脚本也能用于尚未配置的
+    构建目录，并继续通过根路径解析报告缺失依赖。
+    """
+
+    requirements = normalize_list(dep.get("requires"))
+    if not requirements:
+        return True
+    cache_file = build_dir / "CMakeCache.txt"
+    values = [cmake_cache_bool(cache_file, key) for key in requirements]
+    if any(value is False for value in values):
+        return False
+    return True
+
+
 def read_cmake_set(cmake_file: Path, name: str) -> str | None:
     """从简单的 CMake ``set(...)`` 语句读取变量值。
 
@@ -340,22 +376,30 @@ def _candidate_env_names(dep: dict[str, Any], root_spec: str) -> list[str]:
     return unique
 
 
-def resolve_dependency_root(dep: dict[str, Any], build_dir: Path, repo_root: Path = REPO_ROOT) -> Path | None:
+def resolve_dependency_root(
+    dep: dict[str, Any],
+    build_dir: Path,
+    repo_root: Path = REPO_ROOT,
+    platform: str | None = None,
+) -> Path | None:
     """解析依赖条目的根目录。
 
     解析顺序为：直接路径、环境变量、``CMakeCache.txt``、YAML 指定的
-    CMake 配置文件、YAML ``default`` 字段。
+    CMake 配置文件、YAML ``default`` 字段。设置 ``<platform>_root`` 时，
+    该字段优先于通用 ``root``。
 
     Args:
         dep: 依赖条目。
         build_dir: CMake 构建目录。
         repo_root: 仓库根目录。
+        platform: 当前平台键名，用于选择平台专用 root 字段。
 
     Returns:
         Path | None: 解析到的根目录；无法解析时返回 ``None``。
     """
 
-    root_spec = str(dep.get("root", "")).strip()
+    platform_root = dep.get(f"{platform}_root") if platform else None
+    root_spec = str(platform_root if platform_root not in (None, "") else dep.get("root", "")).strip()
     if not root_spec:
         return None
 
@@ -499,19 +543,21 @@ def link_file(source: Path, link: Path, mode: str = "symlink") -> None:
 
     source = source.resolve(strict=True)
     link.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        if link.exists() and source.samefile(link):
-            print(f"skip existing {link}")
-            return
-    except OSError:
-        pass
+    normalized_mode = mode.lower()
+    if normalized_mode != "copy":
+        try:
+            if link.exists() and source.samefile(link):
+                print(f"skip existing {link}")
+                return
+        except OSError:
+            pass
 
-    if mode.lower() == "copy":
+    if normalized_mode == "copy":
         copy_file(source, link)
         return
 
     remove_existing_file(link)
-    if mode.lower() == "hardlink":
+    if normalized_mode == "hardlink":
         try:
             os.link(source, link)
             print(f"create hardlink {link} -> {source}")

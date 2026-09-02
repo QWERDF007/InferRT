@@ -1,4 +1,5 @@
 #include "YOLO.hpp"
+#include "BackendUtils.hpp"
 
 #include "BatchNorm.hpp"
 #include "Layers.hpp"
@@ -353,7 +354,8 @@ nvinfer1::ITensor *addDFL(nvinfer1::INetworkDefinition *network, const WeightsMa
 DFLHeadOutputs addDFLBoxClassHeads(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
                                    nvinfer1::ITensor &input, int branch_index, const std::string &head_prefix,
                                    int in_channels, int class_channels, int num_classes,
-                                   const nvinfer1::Dims4 &input_shape)
+                                   const nvinfer1::Dims &input_shape,
+                                   priv::IModelImpl::NamedTensorMap *named_tensors = nullptr)
 {
     const std::string index = std::to_string(branch_index);
     const int grid_h = static_cast<int>(input_shape.d[2] / (branch_index == 0 ? 8 : branch_index == 1 ? 16 : 32));
@@ -367,6 +369,13 @@ DFLHeadOutputs addDFLBoxClassHeads(nvinfer1::INetworkDefinition *network, const 
     auto *cls0 = addConvBnSiLU(network, weights_map, input, class_channels, 3, 1, head_prefix + ".cv3." + index + ".0");
     auto *cls1 = addConvBnSiLU(network, weights_map, *cls0, class_channels, 3, 1, head_prefix + ".cv3." + index + ".1");
     auto *cls  = addLinearConv1x1(network, weights_map, *cls1, num_classes, head_prefix + ".cv3." + index + ".2");
+    if (named_tensors != nullptr)
+    {
+        const std::string diagnostic_prefix = "yolo." + head_prefix;
+        (*named_tensors)[diagnostic_prefix + ".cv3." + index + ".0"] = cls0;
+        (*named_tensors)[diagnostic_prefix + ".cv3." + index + ".1"] = cls1;
+        (*named_tensors)[diagnostic_prefix + ".cv3." + index + ".2"] = cls;
+    }
 
     auto *box_shuffle = network->addShuffle(*box);
     box_shuffle->setReshapeDimensions(nvinfer1::Dims3{box->getDimensions().d[0], kYoloV8BoxChannels, grid});
@@ -386,7 +395,7 @@ DFLHeadOutputs addDFLBoxClassHeads(nvinfer1::INetworkDefinition *network, const 
 nvinfer1::ITensor *addDFLDetectBranch(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
                                       nvinfer1::ITensor &input, int branch_index, const std::string &head_prefix,
                                       int in_channels, int class_channels, int num_classes,
-                                      const nvinfer1::Dims4 &input_shape)
+                                      const nvinfer1::Dims &input_shape)
 {
     auto head = addDFLBoxClassHeads(network, weights_map, input, branch_index, head_prefix, in_channels, class_channels,
                                     num_classes, input_shape);
@@ -401,7 +410,7 @@ nvinfer1::ITensor *addDFLDetectBranch(nvinfer1::INetworkDefinition *network, con
  */
 nvinfer1::ITensor *addMaskCoeffBranch(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
                                       nvinfer1::ITensor &input, int branch_index, const std::string &head_prefix,
-                                      int hidden_channels, const nvinfer1::Dims4 &input_shape)
+                                      int hidden_channels, const nvinfer1::Dims &input_shape)
 {
     const std::string index = std::to_string(branch_index);
     const int grid_h = static_cast<int>(input_shape.d[2] / (branch_index == 0 ? 8 : branch_index == 1 ? 16 : 32));
@@ -426,10 +435,11 @@ nvinfer1::ITensor *addMaskCoeffBranch(nvinfer1::INetworkDefinition *network, con
 nvinfer1::ITensor *addDFLSegmentBranch(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
                                        nvinfer1::ITensor &input, int branch_index, const std::string &head_prefix,
                                        int box_channels, int class_channels, int mask_hidden_channels, int num_classes,
-                                       const nvinfer1::Dims4 &input_shape)
+                                       const nvinfer1::Dims &input_shape,
+                                       priv::IModelImpl::NamedTensorMap *named_tensors = nullptr)
 {
     auto  head = addDFLBoxClassHeads(network, weights_map, input, branch_index, head_prefix, box_channels,
-                                     class_channels, num_classes, input_shape);
+                                     class_channels, num_classes, input_shape, named_tensors);
     auto *mask
         = addMaskCoeffBranch(network, weights_map, input, branch_index, head_prefix, mask_hidden_channels, input_shape);
 
@@ -455,7 +465,8 @@ nvinfer1::ITensor *addProtoBranch(nvinfer1::INetworkDefinition *network, const W
  * @brief 添加 YOLOv8 backbone 与 PAN/FPN neck，返回 P3/P4/P5 三个输出特征。
  */
 YOLOv8FeatureMaps addYOLOv8BackboneNeck(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map,
-                                        nvinfer1::ITensor &input, const YOLOv8Spec &spec)
+                                         nvinfer1::ITensor &input, const YOLOv8Spec &spec,
+                                         priv::IModelImpl::NamedTensorMap *named_tensors = nullptr)
 {
     const float depth        = spec.depth;
     const float width        = spec.width;
@@ -493,6 +504,12 @@ YOLOv8FeatureMaps addYOLOv8BackboneNeck(nvinfer1::INetworkDefinition *network, c
     auto *cat20  = concatChannels(network, {conv19, sppf9});
     auto *c2f21  = addC2f(network, weights_map, *cat20, sw(1024), scaledDepth(3, depth), false, "model.21");
 
+    if (named_tensors != nullptr)
+    {
+        (*named_tensors)["yolo.model.15"] = c2f15;
+        (*named_tensors)["yolo.model.18"] = c2f18;
+        (*named_tensors)["yolo.model.21"] = c2f21;
+    }
     return YOLOv8FeatureMaps{c2f15, c2f18, c2f21};
 }
 
@@ -504,10 +521,11 @@ void YOLOModelBase::normalizeModelConfig(IModelConfig &config) const
     {
         const auto &shape = config.inputShape();
         const bool  is_default_shape
-            = shape.d[0] == 1 && shape.d[1] == 3 && shape.d[2] == kDefaultImageSize && shape.d[3] == kDefaultImageSize;
+            = shape.rank() == 4 && shape[0] == 1 && shape[1] == 3 && shape[2] == kDefaultImageSize
+            && shape[3] == kDefaultImageSize;
         if (is_default_shape)
         {
-            config.setInputShape(nvinfer1::Dims4{1, 3, kYoloInputSize, kYoloInputSize});
+            config.setInputShape(irt::Shape{1, 3, kYoloInputSize, kYoloInputSize});
         }
     }
 
@@ -522,7 +540,7 @@ void YOLOModelBase::normalizeModelConfig(IModelConfig &config) const
     }
 }
 
-void YOLOModelBase::validateDetectionConfig() const
+void YOLOModelBase::validateDetectionConfig(const bool allow_feature_only) const
 {
     const auto &config = modelConfig();
     if (config.inputShapes().size() != 1)
@@ -531,18 +549,20 @@ void YOLOModelBase::validateDetectionConfig() const
     }
 
     const auto &shape = config.inputShape();
-    if (shape.nbDims != 4 || shape.d[0] <= 0 || shape.d[1] != 3 || shape.d[2] <= 0 || shape.d[3] <= 0)
+    if (shape.rank() != 4 || shape[0] <= 0 || shape[1] != 3 || shape[2] <= 0 || shape[3] <= 0)
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
-                             "YOLO input shape must be NCHW with 3 channels, got [%d,%d,%d,%d]", shape.d[0], shape.d[1],
-                             shape.d[2], shape.d[3]);
+                             "YOLO input shape must be NCHW with 3 channels, got [%lld,%lld,%lld,%lld]",
+                             static_cast<long long>(shape[0]), static_cast<long long>(shape[1]),
+                             static_cast<long long>(shape[2]), static_cast<long long>(shape[3]));
     }
-    if (shape.d[2] % 32 != 0 || shape.d[3] % 32 != 0)
+    if (shape[2] % 32 != 0 || shape[3] % 32 != 0)
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
-                             "YOLO input height/width must be divisible by 32, got H=%d W=%d", shape.d[2], shape.d[3]);
+                             "YOLO input height/width must be divisible by 32, got H=%lld W=%lld",
+                             static_cast<long long>(shape[2]), static_cast<long long>(shape[3]));
     }
-    if (config.outputTensorNames().size() != kYoloDefaultOutputs)
+    if (!allow_feature_only && config.outputTensorNames().size() != kYoloDefaultOutputs)
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "YOLO detection expects exactly 3 output tensor names");
     }
@@ -556,7 +576,7 @@ void YOLOv5Detector::buildNetwork(nvinfer1::INetworkDefinition *network, const W
     }
     validateDetectionConfig();
 
-    const auto   &shape             = modelConfig().inputShape();
+    const auto    shape             = priv::ShapeToDims(modelConfig().inputShape());
     const int     classes           = modelConfig().numClasses();
     const float   depth             = spec_.depth;
     const float   width             = spec_.width;
@@ -634,13 +654,14 @@ void YOLOv8Detector::buildNetwork(nvinfer1::INetworkDefinition *network, const W
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "network must not be null");
     }
-    validateDetectionConfig();
+    validateDetectionConfig(true);
 
-    const auto &shape   = modelConfig().inputShape();
+    const auto  shape   = priv::ShapeToDims(modelConfig().inputShape());
     const int   classes = modelConfig().numClasses();
     const auto  spec    = this->spec();
     auto       *input   = addInputTensor(network);
-    const auto  neck    = addYOLOv8BackboneNeck(network, weights_map, *input, spec);
+    priv::IModelImpl::NamedTensorMap named_tensors;
+    const auto neck = addYOLOv8BackboneNeck(network, weights_map, *input, spec, &named_tensors);
 
     auto sw = [&spec](int channels)
     {
@@ -650,14 +671,26 @@ void YOLOv8Detector::buildNetwork(nvinfer1::INetworkDefinition *network, const W
     const int box_branch_channels   = spec.width == 1.25F ? 80 : 64;
     const int class_branch_channels = spec.width == 0.25F ? std::max(64, std::min(classes, 100)) : sw(256);
 
-    auto *out0 = addDFLDetectBranch(network, weights_map, *neck.p3, 0, "model.22", box_branch_channels,
-                                    class_branch_channels, classes, shape);
-    auto *out1 = addDFLDetectBranch(network, weights_map, *neck.p4, 1, "model.22", box_branch_channels,
-                                    class_branch_channels, classes, shape);
-    auto *out2 = addDFLDetectBranch(network, weights_map, *neck.p5, 2, "model.22", box_branch_channels,
-                                    class_branch_channels, classes, shape);
+    auto out0 = addDFLBoxClassHeads(network, weights_map, *neck.p3, 0, "model.22", box_branch_channels,
+                                    class_branch_channels, classes, shape, &named_tensors);
+    auto out1 = addDFLBoxClassHeads(network, weights_map, *neck.p4, 1, "model.22", box_branch_channels,
+                                    class_branch_channels, classes, shape, &named_tensors);
+    auto out2 = addDFLBoxClassHeads(network, weights_map, *neck.p5, 2, "model.22", box_branch_channels,
+                                    class_branch_channels, classes, shape, &named_tensors);
 
-    markOutputTensors(network, {out0, out1, out2});
+    if (modelConfig().featureOnly())
+    {
+        markFeatureOutputTensors(network, named_tensors);
+        return;
+    }
+
+    std::vector<nvinfer1::ITensor *> outputs{
+        concatChannels(network, {out0.boxes, out0.classes}),
+        concatChannels(network, {out1.boxes, out1.classes}),
+        concatChannels(network, {out2.boxes, out2.classes}),
+    };
+
+    markOutputTensors(network, outputs);
 }
 
 void YOLOv8Segmenter::normalizeModelConfig(IModelConfig &config) const
@@ -666,10 +699,11 @@ void YOLOv8Segmenter::normalizeModelConfig(IModelConfig &config) const
     {
         const auto &shape = config.inputShape();
         const bool  is_default_shape
-            = shape.d[0] == 1 && shape.d[1] == 3 && shape.d[2] == kDefaultImageSize && shape.d[3] == kDefaultImageSize;
+            = shape.rank() == 4 && shape[0] == 1 && shape[1] == 3 && shape[2] == kDefaultImageSize
+            && shape[3] == kDefaultImageSize;
         if (is_default_shape)
         {
-            config.setInputShape(nvinfer1::Dims4{1, 3, kYoloInputSize, kYoloInputSize});
+            config.setInputShape(irt::Shape{1, 3, kYoloInputSize, kYoloInputSize});
         }
     }
 
@@ -698,27 +732,30 @@ void YOLOv8Segmenter::buildNetwork(nvinfer1::INetworkDefinition *network, const 
     }
 
     const auto &shape = config.inputShape();
-    if (shape.nbDims != 4 || shape.d[0] <= 0 || shape.d[1] != 3 || shape.d[2] <= 0 || shape.d[3] <= 0)
+    if (shape.rank() != 4 || shape[0] <= 0 || shape[1] != 3 || shape[2] <= 0 || shape[3] <= 0)
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
                              "YOLO segmentation input shape must be NCHW with 3 channels, got [%d,%d,%d,%d]",
-                             shape.d[0], shape.d[1], shape.d[2], shape.d[3]);
+                             static_cast<long long>(shape[0]), static_cast<long long>(shape[1]),
+                             static_cast<long long>(shape[2]), static_cast<long long>(shape[3]));
     }
-    if (shape.d[2] % 32 != 0 || shape.d[3] % 32 != 0)
+    if (shape[2] % 32 != 0 || shape[3] % 32 != 0)
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
-                             "YOLO segmentation input height/width must be divisible by 32, got H=%d W=%d", shape.d[2],
-                             shape.d[3]);
+                             "YOLO segmentation input height/width must be divisible by 32, got H=%lld W=%lld",
+                             static_cast<long long>(shape[2]), static_cast<long long>(shape[3]));
     }
-    if (config.outputTensorNames().size() != kYoloV8SegOutputs)
+    if (!config.featureOnly() && config.outputTensorNames().size() != kYoloV8SegOutputs)
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "YOLO segmentation expects exactly 4 output tensor names");
     }
 
     const int  classes = config.numClasses();
     const auto spec    = this->spec();
+    const auto trt_shape = priv::ShapeToDims(shape);
     auto      *input   = addInputTensor(network);
-    const auto neck    = addYOLOv8BackboneNeck(network, weights_map, *input, spec);
+    priv::IModelImpl::NamedTensorMap named_tensors;
+    const auto neck = addYOLOv8BackboneNeck(network, weights_map, *input, spec, &named_tensors);
 
     auto sw = [&spec](int channels)
     {
@@ -732,12 +769,18 @@ void YOLOv8Segmenter::buildNetwork(nvinfer1::INetworkDefinition *network, const 
     constexpr const char *head_prefix           = "model.22";
 
     auto *out0  = addDFLSegmentBranch(network, weights_map, *neck.p3, 0, head_prefix, box_branch_channels,
-                                      class_branch_channels, mask_hidden_channels, classes, shape);
+                                      class_branch_channels, mask_hidden_channels, classes, trt_shape, &named_tensors);
     auto *out1  = addDFLSegmentBranch(network, weights_map, *neck.p4, 1, head_prefix, box_branch_channels,
-                                      class_branch_channels, mask_hidden_channels, classes, shape);
+                                      class_branch_channels, mask_hidden_channels, classes, trt_shape, &named_tensors);
     auto *out2  = addDFLSegmentBranch(network, weights_map, *neck.p5, 2, head_prefix, box_branch_channels,
-                                      class_branch_channels, mask_hidden_channels, classes, shape);
+                                      class_branch_channels, mask_hidden_channels, classes, trt_shape, &named_tensors);
     auto *proto = addProtoBranch(network, weights_map, *neck.p3, head_prefix, proto_hidden_channels);
+
+    if (modelConfig().featureOnly())
+    {
+        markFeatureOutputTensors(network, named_tensors);
+        return;
+    }
 
     markOutputTensors(network, {out0, out1, out2, proto});
 }

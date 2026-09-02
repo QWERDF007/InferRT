@@ -1048,28 +1048,12 @@ def _feature_output_tolerances(
     return feature_tolerances
 
 
-def _model_root_from_options(pytestconfig: pytest.Config) -> Path:
-    """解析并检查真实模型根目录。
-
-    Args:
-        pytestconfig: pytest 配置对象。
-
-    Returns:
-        已解析的模型根目录路径。
-    """
-
-    value = pytestconfig.getoption("--inferrt-model-root") or os.environ.get("INFERRT_MODEL_ROOT") or "assets/models"
-    path = Path(value).expanduser().resolve()
-    if not path.exists():
-        pytest.skip(f"Model root not found: {path}")
-    return path
-
-
 def test_model_root_checkpoints_export_and_match_pytorch(
     pytestconfig: pytest.Config,
     compare_runtimes: list[str],
     compare_devices: list[str],
     irt_module: Any,
+    model_root: Path,
     tolerances: tuple[float, float],
     feature_tolerances: tuple[float, float],
 ) -> None:
@@ -1081,7 +1065,6 @@ def test_model_root_checkpoints_export_and_match_pytorch(
     if not runtime_device_pairs:
         pytest.skip("No compatible runtime/device pairs selected; TensorRT requires --inferrt-compare-devices=gpu")
 
-    model_root = _model_root_from_options(pytestconfig)
     max_cases = int(pytestconfig.getoption("--inferrt-model-dir-max-cases"))
     cases = discover_model_dir_cases(model_root, _families_from_option(pytestconfig), max_cases=max_cases)
     if not cases:

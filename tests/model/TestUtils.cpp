@@ -6,11 +6,15 @@
 #include <inferrt/model/Buffers.hpp>
 #include <inferrt/model/Utils.hpp>
 
+#include "priv/TRTUtils.hpp"
+#include "priv/Weights.hpp"
+
 #include <atomic>
 #include <cstdio>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <opencv2/opencv.hpp>
 #include <string>
 #include <utility>
@@ -132,6 +136,22 @@ TEST(LoadWeightsTest, ZeroCountWeightEntryIsValid)
     EXPECT_EQ(weights.at("empty.weight").count, 0);
 }
 
+TEST(LoadWeightsTest, TruncatedWeightDataThrowsInvalidArgument)
+{
+    TempTextFile tmp(".wts", "2\nfirst.weight 2 3F800000\nsecond.weight 1\n");
+
+    ExpectIrtExceptionCode([&] { irt::model::loadWeights(tmp.path().string()); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+TEST(LoadWeightsTest, DuplicateWeightNamesThrowInvalidArgument)
+{
+    TempTextFile tmp(".wts", "2\nshared.weight 1 3F800000\nshared.weight 1 40000000\n");
+
+    ExpectIrtExceptionCode([&] { irt::model::loadWeights(tmp.path().string()); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
 /**
  * @brief 不存在的权重文件应抛出 ERROR_INVALID_ARGUMENT
  */
@@ -215,26 +235,26 @@ TEST(ReadImagenetLabelsTest, NonExistentFileThrowsInvalidArgument)
 }
 
 /**
- * @brief elementSize 应返回 TensorRT 常用数据类型的单元素字节数。
+ * @brief elementSize 应返回核心数据类型的单元素字节数。
  */
-TEST(ModelUtilTest, ElementSizeMatchesTensorRTTypes)
+TEST(ModelUtilTest, ElementSizeMatchesCoreTypes)
 {
-    EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kFLOAT), 4U);
-    EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kHALF), 2U);
-    EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kINT8), 1U);
-    EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kUINT8), 1U);
-    EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kINT32), 4U);
-    EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kINT64), 8U);
-    EXPECT_EQ(irt::model::elementSize(nvinfer1::DataType::kBOOL), 1U);
-    EXPECT_EQ(irt::model::dataTypeSize(nvinfer1::DataType::kFLOAT), irt::model::elementSize(nvinfer1::DataType::kFLOAT));
+    EXPECT_EQ(irt::model::elementSize(irt::TensorDataType::F32), 4U);
+    EXPECT_EQ(irt::model::elementSize(irt::TensorDataType::F16), 2U);
+    EXPECT_EQ(irt::model::elementSize(irt::TensorDataType::I8), 1U);
+    EXPECT_EQ(irt::model::elementSize(irt::TensorDataType::U8), 1U);
+    EXPECT_EQ(irt::model::elementSize(irt::TensorDataType::I32), 4U);
+    EXPECT_EQ(irt::model::elementSize(irt::TensorDataType::I64), 8U);
+    EXPECT_EQ(irt::model::elementSize(irt::TensorDataType::Bool), 1U);
+    EXPECT_EQ(irt::model::dataTypeSize(irt::TensorDataType::F32), irt::model::elementSize(irt::TensorDataType::F32));
 }
 
 /**
- * @brief elementSize 对未知 TensorRT 数据类型应抛出未实现异常，避免静默返回错误字节数。
+ * @brief elementSize 对未知核心数据类型应抛出未实现异常，避免静默返回错误字节数。
  */
 TEST(ModelUtilTest, ElementSizeRejectsUnknownDataType)
 {
-    ExpectIrtExceptionCode([&] { irt::model::elementSize(static_cast<nvinfer1::DataType>(999)); },
+    ExpectIrtExceptionCode([&] { irt::model::elementSize(static_cast<irt::TensorDataType>(999)); },
                            irt::Status::ERROR_NOT_IMPLEMENTED);
 }
 
@@ -243,31 +263,22 @@ TEST(ModelUtilTest, ElementSizeRejectsUnknownDataType)
  */
 TEST(ModelUtilTest, ElementCountValidatesTensorDims)
 {
-    nvinfer1::Dims dims{};
-    dims.nbDims = 4;
-    dims.d[0] = 1;
-    dims.d[1] = 3;
-    dims.d[2] = 224;
-    dims.d[3] = 224;
+    irt::Shape dims{1, 3, 224, 224};
     EXPECT_EQ(irt::model::elementCount(dims), 150528U);
 
-    dims.d[2] = 0;
+    dims[2] = 0;
     EXPECT_THROW({ irt::model::elementCount(dims); }, irt::Exception);
 }
 
 /**
- * @brief elementCount 对标量维度应返回 1，对负维度应抛出非法参数异常。
+ * @brief 空形状沿用 core Shape 的零元素语义，对负维度抛出非法参数异常。
  */
 TEST(ModelUtilTest, ElementCountHandlesScalarAndRejectsNegativeDims)
 {
-    nvinfer1::Dims scalar{};
-    scalar.nbDims = 0;
-    EXPECT_EQ(irt::model::elementCount(scalar), 1U);
+    irt::Shape scalar{};
+    EXPECT_EQ(irt::model::elementCount(scalar), 0U);
 
-    nvinfer1::Dims invalid{};
-    invalid.nbDims = 2;
-    invalid.d[0] = 4;
-    invalid.d[1] = -1;
+    irt::Shape invalid{4, -1};
     EXPECT_THROW({ irt::model::elementCount(invalid); }, irt::Exception);
 }
 
@@ -276,21 +287,17 @@ TEST(ModelUtilTest, ElementCountHandlesScalarAndRejectsNegativeDims)
  */
 TEST(ModelUtilTest, FormatsDataTypeAndDims)
 {
-    nvinfer1::Dims dims{};
-    dims.nbDims = 3;
-    dims.d[0] = 3;
-    dims.d[1] = 224;
-    dims.d[2] = 224;
+    irt::Shape dims{3, 224, 224};
 
-    EXPECT_EQ(irt::model::dataTypeToString(nvinfer1::DataType::kFLOAT), "float32");
-    EXPECT_EQ(irt::model::dataTypeToString(nvinfer1::DataType::kHALF), "float16");
-    EXPECT_EQ(irt::model::dataTypeToString(nvinfer1::DataType::kINT8), "int8");
-    EXPECT_EQ(irt::model::dataTypeToString(nvinfer1::DataType::kUINT8), "uint8");
-    EXPECT_EQ(irt::model::dataTypeToString(nvinfer1::DataType::kINT32), "int32");
-    EXPECT_EQ(irt::model::dataTypeToString(nvinfer1::DataType::kINT64), "int64");
-    EXPECT_EQ(irt::model::dataTypeToString(nvinfer1::DataType::kBOOL), "bool");
+    EXPECT_EQ(irt::model::dataTypeToString(irt::TensorDataType::F32), "float32");
+    EXPECT_EQ(irt::model::dataTypeToString(irt::TensorDataType::F16), "float16");
+    EXPECT_EQ(irt::model::dataTypeToString(irt::TensorDataType::I8), "int8");
+    EXPECT_EQ(irt::model::dataTypeToString(irt::TensorDataType::U8), "uint8");
+    EXPECT_EQ(irt::model::dataTypeToString(irt::TensorDataType::I32), "int32");
+    EXPECT_EQ(irt::model::dataTypeToString(irt::TensorDataType::I64), "int64");
+    EXPECT_EQ(irt::model::dataTypeToString(irt::TensorDataType::Bool), "bool");
     EXPECT_EQ(irt::model::dimsToCsv(dims), "3,224,224");
-    EXPECT_EQ(irt::model::dimsToString(dims), "[3, 224, 224]");
+    EXPECT_EQ(irt::model::dimsToString(dims), "[3,224,224]");
 }
 
 /**
@@ -298,10 +305,9 @@ TEST(ModelUtilTest, FormatsDataTypeAndDims)
  */
 TEST(ModelUtilTest, FormatsUnknownDataTypeAndEmptyDims)
 {
-    nvinfer1::Dims dims{};
-    dims.nbDims = 0;
+    irt::Shape dims{};
 
-    EXPECT_EQ(irt::model::dataTypeToString(static_cast<nvinfer1::DataType>(999)), "unknown");
+    EXPECT_EQ(irt::model::dataTypeToString(static_cast<irt::TensorDataType>(999)), "unknown");
     EXPECT_EQ(irt::model::dimsToCsv(dims), "");
     EXPECT_EQ(irt::model::dimsToString(dims), "[]");
 }
@@ -364,17 +370,35 @@ TEST(DeviceBufferTest, MoveEmptyBufferKeepsValidState)
 }
 
 /**
- * @brief DeviceBuffer 按非法 TensorRT 维度 resize 时，应在申请显存前抛出异常。
+ * @brief DeviceBuffer 按非法核心形状 resize 时，应在申请显存前抛出异常。
  */
 TEST(DeviceBufferTest, ResizeRejectsInvalidDimsBeforeAllocation)
 {
     irt::model::DeviceBuffer buffer;
-    nvinfer1::Dims           dims{};
-    dims.nbDims = 2;
-    dims.d[0] = 4;
-    dims.d[1] = 0;
+    irt::Shape dims{4, 0};
 
     EXPECT_THROW({ buffer.resize(dims); }, irt::Exception);
+    EXPECT_TRUE(buffer.empty());
+}
+
+TEST(ModelUtilTest, CheckedWeightProductValidatesDimensions)
+{
+    EXPECT_EQ(irt::model::checkedWeightProduct({2, 3, 4}, "test weight"), 24);
+
+    ExpectIrtExceptionCode([&] { (void)irt::model::checkedWeightProduct({2, -1}, "test weight"); },
+                           irt::Status::ERROR_INVALID_ARGUMENT);
+    ExpectIrtExceptionCode(
+        [&] {
+            (void)irt::model::checkedWeightProduct({std::numeric_limits<int64_t>::max(), 2}, "test weight");
+        },
+        irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+TEST(HostBufferTest, ResizeRejectsElementToByteOverflowBeforeAllocation)
+{
+    irt::model::HostBuffer buffer;
+
+    EXPECT_THROW({ buffer.resize(std::numeric_limits<size_t>::max(), irt::TensorDataType::F32); }, irt::Exception);
     EXPECT_TRUE(buffer.empty());
 }
 
@@ -383,7 +407,7 @@ TEST(DeviceBufferTest, ResizeRejectsInvalidDimsBeforeAllocation)
  */
 TEST(HostBufferTest, AllocatesHostMemoryByElementCountAndType)
 {
-    irt::model::HostBuffer buffer(4, nvinfer1::DataType::kFLOAT);
+    irt::model::HostBuffer buffer(4, irt::TensorDataType::F32);
 
     ASSERT_FALSE(buffer.empty());
     ASSERT_NE(buffer.data(), nullptr);
@@ -404,33 +428,29 @@ TEST(HostBufferTest, AllocatesHostMemoryByElementCountAndType)
  */
 TEST(HostBufferTest, TypeOnlyConstructorKeepsTypeWithoutAllocation)
 {
-    irt::model::HostBuffer buffer(nvinfer1::DataType::kHALF);
+    irt::model::HostBuffer buffer(irt::TensorDataType::F16);
 
     EXPECT_TRUE(buffer.empty());
     EXPECT_EQ(buffer.data(), nullptr);
     EXPECT_EQ(buffer.get(), nullptr);
-    EXPECT_EQ(buffer.dataType(), nvinfer1::DataType::kHALF);
+    EXPECT_EQ(buffer.dataType(), irt::TensorDataType::F16);
     EXPECT_EQ(buffer.sizeBytes(), 0U);
 }
 
 /**
- * @brief HostBuffer 按 TensorRT 维度 resize 时应复用 elementCount 计算元素数量。
+ * @brief HostBuffer 按核心形状 resize 时应复用 elementCount 计算元素数量。
  */
 TEST(HostBufferTest, ResizeByDimsComputesElementCount)
 {
-    nvinfer1::Dims dims{};
-    dims.nbDims = 3;
-    dims.d[0] = 2;
-    dims.d[1] = 3;
-    dims.d[2] = 4;
+    irt::Shape dims{2, 3, 4};
 
     irt::model::HostBuffer buffer;
-    buffer.resize(dims, nvinfer1::DataType::kINT32);
+    buffer.resize(dims, irt::TensorDataType::I32);
 
     ASSERT_NE(buffer.data(), nullptr);
     EXPECT_EQ(buffer.size(), 24U);
     EXPECT_EQ(buffer.sizeBytes(), 24U * sizeof(int32_t));
-    EXPECT_EQ(buffer.dataType(), nvinfer1::DataType::kINT32);
+    EXPECT_EQ(buffer.dataType(), irt::TensorDataType::I32);
 }
 
 /**
@@ -438,14 +458,14 @@ TEST(HostBufferTest, ResizeByDimsComputesElementCount)
  */
 TEST(HostBufferTest, ResizeWithDifferentTypeUpdatesByteSize)
 {
-    irt::model::HostBuffer buffer(4, nvinfer1::DataType::kINT8);
+    irt::model::HostBuffer buffer(4, irt::TensorDataType::I8);
     ASSERT_NE(buffer.data(), nullptr);
     EXPECT_EQ(buffer.sizeBytes(), 4U);
 
-    buffer.resize(4, nvinfer1::DataType::kFLOAT);
+    buffer.resize(4, irt::TensorDataType::F32);
 
     ASSERT_NE(buffer.data(), nullptr);
-    EXPECT_EQ(buffer.dataType(), nvinfer1::DataType::kFLOAT);
+    EXPECT_EQ(buffer.dataType(), irt::TensorDataType::F32);
     EXPECT_EQ(buffer.size(), 4U);
     EXPECT_EQ(buffer.sizeBytes(), 4U * sizeof(float));
 }
@@ -455,7 +475,7 @@ TEST(HostBufferTest, ResizeWithDifferentTypeUpdatesByteSize)
  */
 TEST(HostBufferTest, ResizeWithinCapacityKeepsAllocation)
 {
-    irt::model::HostBuffer buffer(8, nvinfer1::DataType::kINT32);
+    irt::model::HostBuffer buffer(8, irt::TensorDataType::I32);
     void                  *original = buffer.data();
 
     buffer.resize(2);
@@ -471,14 +491,14 @@ TEST(HostBufferTest, ResizeWithinCapacityKeepsAllocation)
  */
 TEST(HostBufferTest, ResizeZeroWithDifferentTypeDropsOldCapacity)
 {
-    irt::model::HostBuffer buffer(4, nvinfer1::DataType::kINT8);
+    irt::model::HostBuffer buffer(4, irt::TensorDataType::I8);
 
-    buffer.resize(0, nvinfer1::DataType::kFLOAT);
+    buffer.resize(0, irt::TensorDataType::F32);
 
     EXPECT_TRUE(buffer.empty());
     EXPECT_EQ(buffer.data(), nullptr);
     EXPECT_EQ(buffer.capacity(), 0U);
-    EXPECT_EQ(buffer.dataType(), nvinfer1::DataType::kFLOAT);
+    EXPECT_EQ(buffer.dataType(), irt::TensorDataType::F32);
 
     buffer.resize(4);
 
@@ -494,7 +514,7 @@ TEST(HostBufferTest, ResizeZeroWithDifferentTypeDropsOldCapacity)
  */
 TEST(HostBufferTest, MoveTransfersOwnership)
 {
-    irt::model::HostBuffer source(3, nvinfer1::DataType::kINT8);
+    irt::model::HostBuffer source(3, irt::TensorDataType::I8);
     void                  *original = source.data();
 
     irt::model::HostBuffer target(std::move(source));
@@ -511,7 +531,7 @@ TEST(HostBufferTest, MoveTransfersOwnership)
  */
 TEST(HostBufferTest, ResetReleasesMemoryAndKeepsDataType)
 {
-    irt::model::HostBuffer buffer(4, nvinfer1::DataType::kINT32);
+    irt::model::HostBuffer buffer(4, irt::TensorDataType::I32);
     ASSERT_FALSE(buffer.empty());
 
     buffer.reset();
@@ -520,7 +540,7 @@ TEST(HostBufferTest, ResetReleasesMemoryAndKeepsDataType)
     EXPECT_EQ(buffer.data(), nullptr);
     EXPECT_EQ(buffer.size(), 0U);
     EXPECT_EQ(buffer.capacity(), 0U);
-    EXPECT_EQ(buffer.dataType(), nvinfer1::DataType::kINT32);
+    EXPECT_EQ(buffer.dataType(), irt::TensorDataType::I32);
 }
 
 /**
@@ -605,4 +625,149 @@ TEST(ImageNetUtilTest, ImageToTensorChwProducesChannelMajorLayout)
         3.0f, 6.0f, 9.0f, 12.0f,
     };
     EXPECT_EQ(tensor, expected);
+}
+
+TEST(ImageNetUtilTest, PreprocessSpecProvidesLetterboxGeometryAndNormalization)
+{
+    irt::PreprocessSpec spec;
+    spec.input_width     = 4;
+    spec.input_height    = 4;
+    spec.input_channels  = 3;
+    spec.source_channels = 3;
+    spec.padding_mode    = irt::PaddingMode::Letterbox;
+    spec.pad_value       = 10.0F;
+    spec.scale            = 1.0F;
+    spec.mean            = {0.0F, 0.0F, 0.0F};
+    spec.stddev          = {1.0F, 1.0F, 1.0F};
+
+    cv::Mat image(2, 4, CV_8UC3, cv::Scalar(1, 2, 3));
+    const auto result = irt::model::ImageNetUtil::preprocessWithGeometry(image, spec);
+
+    EXPECT_EQ(result.geometry.original_width, 4);
+    EXPECT_EQ(result.geometry.original_height, 2);
+    EXPECT_EQ(result.geometry.resized_width, 4);
+    EXPECT_EQ(result.geometry.resized_height, 2);
+    EXPECT_EQ(result.geometry.pad_left, 0);
+    EXPECT_EQ(result.geometry.pad_top, 1);
+    ASSERT_EQ(result.image.type(), CV_32FC3);
+
+    const cv::Vec3f padded = result.image.at<cv::Vec3f>(0, 0);
+    EXPECT_FLOAT_EQ(padded[0], 10.0F);
+    EXPECT_FLOAT_EQ(padded[1], 10.0F);
+    EXPECT_FLOAT_EQ(padded[2], 10.0F);
+
+    const cv::Vec3f content = result.image.at<cv::Vec3f>(1, 0);
+    EXPECT_FLOAT_EQ(content[0], 3.0F);
+    EXPECT_FLOAT_EQ(content[1], 2.0F);
+    EXPECT_FLOAT_EQ(content[2], 1.0F);
+}
+
+TEST(ImageNetUtilTest, PreprocessSpecCanPadAfterNormalization)
+{
+    irt::PreprocessSpec spec;
+    spec.input_width          = 4;
+    spec.input_height         = 4;
+    spec.input_channels       = 3;
+    spec.source_channels      = 3;
+    spec.padding_mode         = irt::PaddingMode::Letterbox;
+    spec.pad_value             = 10.0F;
+    spec.pad_after_normalize   = true;
+    spec.scale                 = 1.0F;
+    spec.mean                  = {0.0F, 0.0F, 0.0F};
+    spec.stddev                = {1.0F, 1.0F, 1.0F};
+
+    const cv::Mat image(2, 4, CV_8UC3, cv::Scalar(1, 2, 3));
+    const auto result = irt::model::ImageNetUtil::preprocessWithGeometry(image, spec);
+
+    ASSERT_EQ(result.image.type(), CV_32FC3);
+    EXPECT_EQ(result.geometry.pad_top, 1);
+    EXPECT_EQ(result.image.at<cv::Vec3f>(0, 0), cv::Vec3f(0.0F, 0.0F, 0.0F));
+    EXPECT_EQ(result.image.at<cv::Vec3f>(3, 3), cv::Vec3f(0.0F, 0.0F, 0.0F));
+    EXPECT_EQ(result.image.at<cv::Vec3f>(1, 0), cv::Vec3f(3.0F, 2.0F, 1.0F));
+}
+
+TEST(ImageNetUtilTest, PreprocessSpecSupportsTopLeftLetterboxAlignment)
+{
+    irt::PreprocessSpec spec;
+    spec.input_width       = 4;
+    spec.input_height      = 4;
+    spec.input_channels    = 3;
+    spec.source_channels   = 3;
+    spec.padding_mode      = irt::PaddingMode::Letterbox;
+    spec.padding_alignment = irt::PaddingAlignment::TopLeft;
+    spec.pad_after_normalize = true;
+    spec.scale              = 1.0F;
+    spec.mean               = {0.0F, 0.0F, 0.0F};
+    spec.stddev             = {1.0F, 1.0F, 1.0F};
+
+    const cv::Mat image(2, 4, CV_8UC3, cv::Scalar(1, 2, 3));
+    const auto result = irt::model::ImageNetUtil::preprocessWithGeometry(image, spec);
+
+    EXPECT_EQ(result.geometry.pad_left, 0);
+    EXPECT_EQ(result.geometry.pad_top, 0);
+    EXPECT_EQ(result.geometry.resized_width, 4);
+    EXPECT_EQ(result.geometry.resized_height, 2);
+    EXPECT_EQ(result.image.at<cv::Vec3f>(0, 0), cv::Vec3f(3.0F, 2.0F, 1.0F));
+    EXPECT_EQ(result.image.at<cv::Vec3f>(3, 3), cv::Vec3f(0.0F, 0.0F, 0.0F));
+}
+
+TEST(ImageNetUtilTest, PreprocessSpecSupportsBgraToRgb)
+{
+    irt::PreprocessSpec spec;
+    spec.input_width     = 1;
+    spec.input_height    = 1;
+    spec.input_channels  = 3;
+    spec.source_channels = 4;
+    spec.src_color       = irt::ColorFormat::BGRA;
+    spec.dst_color       = irt::ColorFormat::RGB;
+    spec.scale            = 1.0F;
+    spec.mean             = {0.0F, 0.0F, 0.0F};
+    spec.stddev           = {1.0F, 1.0F, 1.0F};
+
+    cv::Mat image(1, 1, CV_8UC4);
+    image.at<cv::Vec4b>(0, 0) = cv::Vec4b(1, 2, 3, 255);
+    const auto result = irt::model::ImageNetUtil::preprocessWithGeometry(image, spec);
+
+    ASSERT_EQ(result.image.type(), CV_32FC3);
+    EXPECT_EQ(result.image.at<cv::Vec3f>(0, 0), cv::Vec3f(3.0F, 2.0F, 1.0F));
+}
+
+TEST(ImageNetUtilTest, PreprocessSpecSupportsGrayAndNonContinuousInput)
+{
+    irt::PreprocessSpec spec;
+    spec.input_width     = 2;
+    spec.input_height    = 2;
+    spec.input_channels  = 1;
+    spec.source_channels = 1;
+    spec.src_color       = irt::ColorFormat::GRAY;
+    spec.dst_color       = irt::ColorFormat::GRAY;
+    spec.scale            = 1.0F;
+    spec.mean            = {1.0F};
+    spec.stddev          = {2.0F};
+
+    cv::Mat backing(3, 3, CV_8UC1, cv::Scalar(5));
+    const cv::Mat roi = backing(cv::Rect(1, 1, 2, 2));
+    ASSERT_FALSE(roi.isContinuous());
+    const auto result = irt::model::ImageNetUtil::preprocessWithGeometry(roi, spec);
+    ASSERT_EQ(result.image.type(), CV_32FC1);
+    EXPECT_FLOAT_EQ(result.image.at<float>(0, 0), 2.0F);
+
+    const auto tensor = irt::model::ImageNetUtil::imageToTensorCHW(result.image);
+    EXPECT_EQ(tensor, std::vector<float>({2.0F, 2.0F, 2.0F, 2.0F}));
+}
+
+TEST(ImageNetUtilTest, PreprocessSpecRejectsColorChannelMismatch)
+{
+    irt::PreprocessSpec spec;
+    spec.input_width     = 2;
+    spec.input_height    = 2;
+    spec.input_channels  = 3;
+    spec.source_channels = 4;
+    spec.src_color       = irt::ColorFormat::BGRA;
+    spec.dst_color       = irt::ColorFormat::RGB;
+    spec.mean            = {0.0F, 0.0F, 0.0F};
+    spec.stddev          = {1.0F, 1.0F, 1.0F};
+
+    cv::Mat bgr(2, 2, CV_8UC3, cv::Scalar(0, 0, 0));
+    EXPECT_THROW(irt::model::ImageNetUtil::preprocess(bgr, spec), irt::Exception);
 }

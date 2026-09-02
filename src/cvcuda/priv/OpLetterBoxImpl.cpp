@@ -5,7 +5,8 @@
 namespace irt::cvcuda::priv {
 
 void LetterBoxImpl::operator()(const uint8_t *d_src, float *d_dst, const int2 ssize, const int sstride,
-                               const int2 dsize, const int CH, cudaStream_t stream)
+                               const int2 dsize, const int CH, const Parameters &parameters,
+                               const irt::PreprocessGeometry &geometry, cudaStream_t stream)
 {
     if (d_src == nullptr)
     {
@@ -23,12 +24,12 @@ void LetterBoxImpl::operator()(const uint8_t *d_src, float *d_dst, const int2 ss
     {
         throw Exception(Status::ERROR_INVALID_ARGUMENT, "Invalid destination size");
     }
-    if (CH != 1 && CH != 3)
+    if (CH != 1 && CH != 3 && CH != 4)
     {
-        throw Exception(Status::ERROR_INVALID_ARGUMENT, "Invalid channel count (must be 1 or 3)");
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "Invalid channel count (must be 1, 3 or 4)");
     }
 
-    RunLetterBox(d_src, d_dst, ssize, sstride, dsize, CH, stream);
+    RunLetterBox(d_src, d_dst, ssize, sstride, dsize, CH, parameters, geometry, stream);
 }
 
 } // namespace irt::cvcuda::priv

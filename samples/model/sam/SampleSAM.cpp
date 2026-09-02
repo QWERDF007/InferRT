@@ -191,16 +191,6 @@ Arguments parseArguments(int argc, char *argv[])
 }
 
 /**
- * @brief 按官方最长边缩放规则计算 padding 前尺寸。
- */
-std::pair<int, int> computeResizeShape(int original_h, int original_w, int target_size)
-{
-    const float scale = static_cast<float>(target_size) / static_cast<float>(std::max(original_h, original_w));
-    return {static_cast<int>(std::floor(static_cast<float>(original_h) * scale + 0.5F)),
-            static_cast<int>(std::floor(static_cast<float>(original_w) * scale + 0.5F))};
-}
-
-/**
  * @brief 将输入点转换到官方 SAM padding 前坐标系。
  */
 float scalePointCoordinate(float value, int original_size, int resized_size)
@@ -220,52 +210,36 @@ PreprocessedSAMImage preprocessSAMImage(const cv::Mat &image, int input_h, int i
                              input_w);
     }
 
-    cv::Mat rgb;
-    cv::cvtColor(image, rgb, cv::COLOR_BGR2RGB);
+    irt::PreprocessSpec spec;
+    spec.input_width       = input_w;
+    spec.input_height      = input_h;
+    spec.input_channels    = 3;
+    spec.source_channels   = 3;
+    spec.src_color         = irt::ColorFormat::BGR;
+    spec.dst_color         = irt::ColorFormat::RGB;
+    spec.interpolation     = irt::Interpolation::Linear;
+    spec.output_layout     = irt::TensorLayout::CHW;
+    spec.padding_alignment = irt::PaddingAlignment::TopLeft;
+
     if (use_sam2_preprocess)
     {
-        static constexpr float kMean[3]{0.485F, 0.456F, 0.406F};
-        static constexpr float kStd[3]{0.229F, 0.224F, 0.225F};
-        cv::Mat                resized;
-        cv::resize(rgb, resized, cv::Size(input_w, input_h), 0, 0, cv::INTER_LINEAR);
-
-        std::vector<float> tensor(static_cast<size_t>(3) * input_h * input_w);
-        for (int y = 0; y < input_h; ++y)
-        {
-            const auto *row = resized.ptr<cv::Vec3b>(y);
-            for (int x = 0; x < input_w; ++x)
-            {
-                for (int c = 0; c < 3; ++c)
-                {
-                    const size_t offset
-                        = static_cast<size_t>(c) * input_h * input_w + static_cast<size_t>(y) * input_w + x;
-                    tensor[offset] = (static_cast<float>(row[x][c]) / 255.0F - kMean[c]) / kStd[c];
-                }
-            }
-        }
-        return {std::move(tensor), input_h, input_w};
+        spec.padding_mode = irt::PaddingMode::DirectResize;
+        spec.mean         = {0.485F, 0.456F, 0.406F};
+        spec.stddev       = {0.229F, 0.224F, 0.225F};
+        spec.scale        = 1.0F / 255.0F;
     }
-
-    static constexpr float kMean[3]{123.675F, 116.28F, 103.53F};
-    static constexpr float kStd[3]{58.395F, 57.12F, 57.375F};
-    const auto [resized_h, resized_w] = computeResizeShape(image.rows, image.cols, input_h);
-    cv::Mat resized;
-    cv::resize(rgb, resized, cv::Size(resized_w, resized_h), 0, 0, cv::INTER_LINEAR);
-
-    std::vector<float> tensor(static_cast<size_t>(3) * input_h * input_w, 0.0F);
-    for (int y = 0; y < resized_h; ++y)
+    else
     {
-        const auto *row = resized.ptr<cv::Vec3b>(y);
-        for (int x = 0; x < resized_w; ++x)
-        {
-            for (int c = 0; c < 3; ++c)
-            {
-                const size_t offset = static_cast<size_t>(c) * input_h * input_w + static_cast<size_t>(y) * input_w + x;
-                tensor[offset]      = (static_cast<float>(row[x][c]) - kMean[c]) / kStd[c];
-            }
-        }
+        spec.padding_mode        = irt::PaddingMode::Letterbox;
+        spec.pad_after_normalize = true;
+        spec.mean                = {123.675F, 116.28F, 103.53F};
+        spec.stddev              = {58.395F, 57.12F, 57.375F};
+        spec.scale               = 1.0F;
     }
-    return {std::move(tensor), resized_h, resized_w};
+
+    const auto processed = irt::model::ImageNetUtil::preprocessWithGeometry(image, spec);
+    return {irt::model::ImageNetUtil::imageToTensorCHW(processed.image), processed.geometry.resized_height,
+            processed.geometry.resized_width};
 }
 
 /**
@@ -335,7 +309,7 @@ int main(int argc, char *argv[])
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to create model: %s",
                                  runtime_model_name.c_str());
         }
-        model->setLogLevel(nvinfer1::ILogger::Severity::kINFO);
+        model->setLogLevel(irt::model::LogLevel::Info);
 
         std::cout << "Building or loading SAM model..." << std::endl;
         const auto build_start = Clock::now();
@@ -349,8 +323,8 @@ int main(int argc, char *argv[])
                                  image_path.string().c_str());
         }
 
-        const auto input_names  = model->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
-        const auto output_names = model->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+        const auto input_names  = model->ioTensorNames(irt::TensorIOMode::Input);
+        const auto output_names = model->ioTensorNames(irt::TensorIOMode::Output);
         if (input_names.size() != 5 || output_names.size() != 3)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
@@ -358,19 +332,19 @@ int main(int argc, char *argv[])
         }
 
         const auto image_dims       = model->tensorShape(input_names[0]);
-        const int  input_h          = static_cast<int>(image_dims.d[2]);
-        const int  input_w          = static_cast<int>(image_dims.d[3]);
+        const int  input_h          = static_cast<int>(image_dims[2]);
+        const int  input_w          = static_cast<int>(image_dims[3]);
         const auto prompt_mask_dims = model->tensorShape(input_names[3]);
-        const int  prompt_mask_h    = static_cast<int>(prompt_mask_dims.d[2]);
-        const int  prompt_mask_w    = static_cast<int>(prompt_mask_dims.d[3]);
+        const int  prompt_mask_h    = static_cast<int>(prompt_mask_dims[2]);
+        const int  prompt_mask_w    = static_cast<int>(prompt_mask_dims[3]);
         const auto output_mask_dims = model->tensorShape(output_names[0]);
-        if (output_mask_dims.nbDims != 4)
+        if (output_mask_dims.rank() != 4)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM masks output must be 4D, got %dD",
-                                 output_mask_dims.nbDims);
+                                 output_mask_dims.rank());
         }
-        const int output_mask_h = static_cast<int>(output_mask_dims.d[2]);
-        const int output_mask_w = static_cast<int>(output_mask_dims.d[3]);
+        const int output_mask_h = static_cast<int>(output_mask_dims[2]);
+        const int output_mask_w = static_cast<int>(output_mask_dims[3]);
 
         const auto         preprocess_start = Clock::now();
         auto               preprocessed     = preprocessSAMImage(image, input_h, input_w, isSAM2Model(args.model_name));
@@ -397,28 +371,32 @@ int main(int argc, char *argv[])
             &image_tensor, &point_coords, &point_labels, &mask_input, &has_mask_input,
         };
 
-        const auto                stream        = model->resolveExecutionStream();
+        const cudaStream_t        stream        = reinterpret_cast<cudaStream_t>(model->resolveExecutionStream());
         const bool                uses_tensorrt
             = args.runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT;
         std::vector<DeviceBuffer> device_inputs;
         std::vector<DeviceBuffer> device_outputs;
         std::vector<HostBuffer>   host_outputs;
-        std::vector<void *>       buffers;
+        std::vector<irt::BufferView> buffers;
         device_inputs.reserve(input_vectors.size());
         device_outputs.reserve(output_names.size());
         host_outputs.reserve(output_names.size());
         buffers.reserve(input_vectors.size() + output_names.size());
 
-        for (const auto *values : input_vectors)
+        for (size_t index = 0; index < input_vectors.size(); ++index)
         {
+            const auto *values = input_vectors[index];
             if (uses_tensorrt)
             {
-                device_inputs.emplace_back(values->size(), nvinfer1::DataType::kFLOAT);
-                buffers.push_back(device_inputs.back().data());
+                device_inputs.emplace_back(values->size(), irt::TensorDataType::F32);
+                buffers.push_back(irt::BufferView::fromBytes(device_inputs.back().data(), device_inputs.back().sizeBytes(),
+                                                             irt::MemoryKind::DEVICE, input_names[index]));
             }
             else
             {
-                buffers.push_back(const_cast<float *>(values->data()));
+                buffers.push_back(irt::BufferView::fromBytes(const_cast<float *>(values->data()),
+                                                             values->size() * sizeof(float), irt::MemoryKind::HOST,
+                                                             input_names[index]));
             }
         }
 
@@ -429,10 +407,15 @@ int main(int argc, char *argv[])
             const size_t count = elementCount(dims);
             if (uses_tensorrt)
             {
-                device_outputs.emplace_back(count, nvinfer1::DataType::kFLOAT);
+                device_outputs.emplace_back(count, irt::TensorDataType::F32);
             }
-            host_outputs.emplace_back(count, nvinfer1::DataType::kFLOAT);
-            buffers.push_back(uses_tensorrt ? device_outputs.back().data() : host_outputs.back().data());
+            host_outputs.emplace_back(count, irt::TensorDataType::F32);
+            buffers.push_back(uses_tensorrt
+                                  ? irt::BufferView::fromBytes(device_outputs.back().data(),
+                                                               device_outputs.back().sizeBytes(), irt::MemoryKind::DEVICE,
+                                                               output_name)
+                                  : irt::BufferView::fromBytes(host_outputs.back().data(), host_outputs.back().sizeBytes(),
+                                                               irt::MemoryKind::HOST, output_name));
         }
 
         auto run_inference_once = [&]() -> IterationTiming
@@ -455,7 +438,7 @@ int main(int argc, char *argv[])
             timing.h2d_ms      = elapsedMs(h2d_start, h2d_end);
 
             const auto inference_start = Clock::now();
-            model->infer(buffers, stream, true);
+            model->infer(buffers, reinterpret_cast<std::uintptr_t>(stream), true);
             if (uses_tensorrt)
             {
                 checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(SAM inference)");

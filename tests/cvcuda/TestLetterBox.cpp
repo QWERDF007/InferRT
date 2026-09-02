@@ -95,7 +95,7 @@ std::vector<float> makeLetterBoxReference(const cv::Mat &src, cv::Size dsize)
  * @tparam Caller 可调用对象，签名为 (const uint8_t*, float*, cv::Size, cv::Size, int, cudaStream_t) -> int
  * @param src_w 源图宽度
  * @param src_h 源图高度
- * @param ch 通道数（1 或 3）
+ * @param ch 通道数（1、3 或 4）
  * @param dsize 目标画布尺寸
  * @param caller LetterBox 实现（函数或类 operator()）
  */
@@ -186,18 +186,69 @@ TEST(LetterBoxClassTest, BgrHwcToRgbChwWithPadding)
 /**
  * @brief 测试非法通道数：应返回 IRT_ERROR_INVALID_ARGUMENT
  *
- * 仅支持 1 或 3 通道；传入 ch=4 时期望失败且不崩溃。
+ * 仅支持 1、3 或 4 通道；传入 ch=5 时期望失败且不崩溃。
  */
 TEST(LetterBoxFunctionEdgeCaseTest, RejectsInvalidChannels)
 {
     uint8_t *d_src = nullptr;
     float   *d_dst = nullptr;
-    ASSERT_EQ(cudaMalloc(&d_src, 10 * 10 * 4), cudaSuccess);
-    ASSERT_EQ(cudaMalloc(&d_dst, 32 * 32 * 4 * sizeof(float)), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_src, 10 * 10 * 5), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_dst, 32 * 32 * 5 * sizeof(float)), cudaSuccess);
 
-    const int ret = irt::cvcuda::letterBox(d_src, d_dst, cv::Size(10, 10), cv::Size(32, 32), 4, nullptr);
+    const int ret = irt::cvcuda::letterBox(d_src, d_dst, cv::Size(10, 10), cv::Size(32, 32), 5, nullptr);
     EXPECT_EQ(ret, IRT_ERROR_INVALID_ARGUMENT);
 
     cudaFree(d_src);
     cudaFree(d_dst);
+}
+
+TEST(LetterBoxSpecTest, RespectsTopLeftPaddingAlignment)
+{
+    constexpr int source_width  = 4;
+    constexpr int source_height = 2;
+    constexpr int target_width  = 4;
+    constexpr int target_height = 4;
+    constexpr int channels      = 3;
+
+    cv::Mat source(source_height, source_width, CV_8UC3, cv::Scalar(10, 20, 30));
+    const size_t source_bytes = source.total() * source.elemSize();
+    const size_t target_bytes = static_cast<size_t>(target_width) * target_height * channels * sizeof(float);
+
+    uint8_t *d_source = nullptr;
+    float   *d_target = nullptr;
+    ASSERT_EQ(cudaMalloc(&d_source, source_bytes), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_target, target_bytes), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(d_source, source.data, source_bytes, cudaMemcpyHostToDevice), cudaSuccess);
+
+    irt::PreprocessSpec spec;
+    spec.input_width       = target_width;
+    spec.input_height      = target_height;
+    spec.input_channels    = channels;
+    spec.source_channels   = channels;
+    spec.src_color         = irt::ColorFormat::BGR;
+    spec.dst_color         = irt::ColorFormat::RGB;
+    spec.padding_mode      = irt::PaddingMode::Letterbox;
+    spec.padding_alignment = irt::PaddingAlignment::TopLeft;
+    spec.mean              = {0.0F, 0.0F, 0.0F};
+    spec.stddev            = {1.0F, 1.0F, 1.0F};
+
+    irt::cvcuda::LetterBox letter_box;
+    const int ret = letter_box(d_source, d_target, cv::Size(source_width, source_height),
+                               cv::Size(target_width, target_height), channels, spec, nullptr);
+    ASSERT_TRUE(AssertInferRTSuccess(ret));
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    std::vector<float> target(static_cast<size_t>(target_width) * target_height * channels);
+    ASSERT_EQ(cudaMemcpy(target.data(), d_target, target_bytes, cudaMemcpyDeviceToHost), cudaSuccess);
+
+    cudaFree(d_source);
+    cudaFree(d_target);
+
+    const size_t plane_size = static_cast<size_t>(target_width) * target_height;
+    EXPECT_NEAR(target[0], 30.0F / 255.0F, 1.0F / 255.0F);
+    EXPECT_NEAR(target[plane_size], 20.0F / 255.0F, 1.0F / 255.0F);
+    EXPECT_NEAR(target[2 * plane_size], 10.0F / 255.0F, 1.0F / 255.0F);
+    EXPECT_FLOAT_EQ(target[target_width * 2], 114.0F / 255.0F);
+    EXPECT_FLOAT_EQ(target[plane_size + target_width * 2], 114.0F / 255.0F);
+    EXPECT_FLOAT_EQ(target[2 * plane_size + target_width * 2], 114.0F / 255.0F);
 }

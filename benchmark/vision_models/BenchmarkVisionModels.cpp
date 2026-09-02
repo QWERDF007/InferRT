@@ -24,6 +24,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <span>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -430,10 +431,10 @@ public:
         }
     }
 
-    float measure(IModel &model, const std::vector<void *> &buffers, cudaStream_t stream)
+    float measure(IModel &model, std::span<const irt::BufferView> buffers, cudaStream_t stream)
     {
         irt::model::checkCuda(cudaEventRecord(start_, stream), "cudaEventRecord(start)");
-        model.infer(buffers, stream, true);
+        model.infer(buffers, reinterpret_cast<std::uintptr_t>(stream), true);
         irt::model::checkCuda(cudaEventRecord(stop_, stream), "cudaEventRecord(stop)");
         irt::model::checkCuda(cudaEventSynchronize(stop_), "cudaEventSynchronize(stop)");
 
@@ -465,21 +466,21 @@ public:
         {
             throw std::runtime_error("Failed to create model: " + std::string(spec_.name));
         }
-        model_->setLogLevel(nvinfer1::ILogger::Severity::kERROR);
+        model_->setLogLevel(irt::model::LogLevel::Error);
         model_->buildOrLoad(weights_file_.string());
 
-        const auto input_names = model_->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
+        const auto input_names = model_->ioTensorNames(irt::TensorIOMode::Input);
         if (input_names.size() != 1)
         {
             throw std::runtime_error("Vision benchmark expects one input tensor for " + std::string(spec_.name));
         }
         input_name_ = input_names.front();
-        output_names_ = model_->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+        output_names_ = model_->ioTensorNames(irt::TensorIOMode::Output);
         if (output_names_.empty())
         {
             throw std::runtime_error("Model has no output tensors: " + std::string(spec_.name));
         }
-        stream_ = model_->resolveExecutionStream();
+        stream_ = reinterpret_cast<cudaStream_t>(model_->resolveExecutionStream());
         if (stream_ == nullptr)
         {
             throw std::runtime_error("Model did not provide a CUDA stream: " + std::string(spec_.name));
@@ -494,11 +495,11 @@ public:
         }
 
         auto input_dims = model_->tensorShape(input_name_);
-        if (input_dims.nbDims != 4)
+        if (input_dims.rank() != 4)
         {
             throw std::runtime_error("Expected NCHW input for " + std::string(spec_.name));
         }
-        input_dims.d[0] = batch;
+        input_dims[0] = batch;
         model_->setTensorShape(input_name_, input_dims);
         input_dims = model_->tensorShape(input_name_);
 
@@ -507,14 +508,17 @@ public:
         output_buffers_.reserve(output_names_.size());
         buffers_.clear();
         buffers_.reserve(1 + output_names_.size());
-        buffers_.push_back(input_.data());
+        buffers_.push_back(irt::BufferView::fromBytes(input_.data(), input_.sizeBytes(), irt::MemoryKind::DEVICE,
+                                                      input_name_));
 
         for (const auto &output_name : output_names_)
         {
             const auto dims      = model_->tensorShape(output_name);
             const auto data_type = model_->tensorDataType(output_name);
             output_buffers_.emplace_back(irt::model::elementCount(dims), data_type);
-            buffers_.push_back(output_buffers_.back().data());
+            buffers_.push_back(irt::BufferView::fromBytes(output_buffers_.back().data(),
+                                                           output_buffers_.back().sizeBytes(), irt::MemoryKind::DEVICE,
+                                                           output_name));
         }
 
         irt::model::checkCuda(cudaMemsetAsync(input_.data(), 0, input_.sizeBytes(), stream_),
@@ -523,7 +527,7 @@ public:
 
         for (int index = 0; index < 2; ++index)
         {
-            model_->infer(buffers_, stream_, true);
+            model_->infer(buffers_, reinterpret_cast<std::uintptr_t>(stream_), true);
         }
         irt::model::checkCuda(cudaStreamSynchronize(stream_), "cudaStreamSynchronize(warmup)");
         batch_ = batch;
@@ -561,7 +565,7 @@ private:
     cudaStream_t              stream_{nullptr};
     DeviceBuffer              input_;
     std::vector<DeviceBuffer> output_buffers_;
-    std::vector<void *>       buffers_;
+    std::vector<irt::BufferView> buffers_;
 };
 
 const Options *g_options = nullptr;

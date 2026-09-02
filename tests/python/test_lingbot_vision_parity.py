@@ -12,14 +12,29 @@ import pytest
 from helpers.manifest import assert_tensors_close
 from helpers.model_integration import artifact_dir, is_fresh_against_all
 from helpers.runtime import run_python_classification, run_python_features
+from helpers.torch_precision import strict_fp32_reference
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 _VARIANTS = (
     ("small", "lingbot_vision_vits16", "lingbot-vision-vit-small.pt", "lbot_vision_vits.yaml"),
     ("base", "lingbot_vision_vitb16", "lingbot-vision-vit-base.pt", "lbot_vision_vitb.yaml"),
-    ("large", "lingbot_vision_vitl16", "lingbot-vision-vit-large.pt", "lbot_vision_vitl.yaml"),
-    ("giant", "lingbot_vision_vitg16", "lingbot-vision-vit-giant.pt", "lbot_vision_vitg.yaml"),
+    pytest.param(
+        "large",
+        "lingbot_vision_vitl16",
+        "lingbot-vision-vit-large.pt",
+        "lbot_vision_vitl.yaml",
+        marks=pytest.mark.optional_resource,
+        id="large",
+    ),
+    pytest.param(
+        "giant",
+        "lingbot_vision_vitg16",
+        "lingbot-vision-vit-giant.pt",
+        "lbot_vision_vitg.yaml",
+        marks=pytest.mark.optional_resource,
+        id="giant",
+    ),
 )
 _FEATURE_NAMES = ["x_norm_clstoken", "x_storage_tokens", "x_norm_patchtokens"]
 _INPUT_SIZE = 512
@@ -62,13 +77,9 @@ def _reference_outputs(model: Any) -> tuple[np.ndarray, dict[str, np.ndarray], n
     device = next(model.parameters()).device
     batch = torch.from_numpy(input_tensor).to(device)
 
-    if torch.cuda.is_available():
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False
-        torch.set_float32_matmul_precision("highest")
-
-    with torch.inference_mode():
-        outputs = model.forward_features(batch)
+    with strict_fp32_reference(torch):
+        with torch.inference_mode():
+            outputs = model.forward_features(batch)
 
     features = {
         name: outputs[name].detach().cpu().numpy()

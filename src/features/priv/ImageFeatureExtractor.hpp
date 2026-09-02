@@ -6,6 +6,7 @@
  */
 
 #include "FeatureSearchCommon.hpp"
+#include "ModelShapeAdapter.hpp"
 
 #include <NvInfer.h>
 #include <inferrt/model/Buffers.hpp>
@@ -68,6 +69,9 @@ public:
      * @brief 获取单张图像展平后的输出特征维度。
      */
     int featureDim() const noexcept;
+
+    /** @brief 返回加载模型后解析出的有效预处理规格。 */
+    const irt::PreprocessSpec &preprocessSpec() const noexcept;
 
     /**
      * @brief 获取模型输入宽度。
@@ -139,6 +143,7 @@ private:
     };
 
     nvinfer1::Dims    resolveInputShape(nvinfer1::Dims input_shape);
+    void              resolvePreprocessSpec();
     PreprocessedBatch preprocessBatch(const std::vector<std::filesystem::path> &image_paths, size_t begin,
                                       size_t count) const;
     nvinfer1::Dims    setRuntimeBatchSize(size_t batch_size);
@@ -147,6 +152,7 @@ private:
     std::string feature_name_; ///< 输出特征张量名称。
 
     ImageSearchConfig config_{}; ///< 检索配置。
+    irt::PreprocessSpec preprocess_spec_{}; ///< 模型输入解析后的唯一预处理规格。
 
     std::unique_ptr<irt::model::IModel> model_; ///< 推理模型。
 
@@ -155,7 +161,7 @@ private:
 
     nvinfer1::Dims     input_shape_{}; ///< 最大 batch 对应的输入形状。
     nvinfer1::Dims     output_dims_{}; ///< 最大 batch 对应的输出形状。
-    nvinfer1::DataType output_type_{}; ///< 输出张量数据类型。
+    irt::TensorDataType output_type_{irt::TensorDataType::F32}; ///< 输出张量数据类型。
 
     int input_height_{224}; ///< 模型输入高度。
     int input_width_{224};  ///< 模型输入宽度。

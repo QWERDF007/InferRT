@@ -1,6 +1,7 @@
 #include "OpRoIAlignImpl.hpp"
 
 #include <inferrt/core/Exception.hpp>
+#include <inferrt/core/Tensor.hpp>
 
 #include <cmath>
 
@@ -34,6 +35,13 @@ void RoIAlignImpl::operator()(const float *d_input, const float *d_rois, float *
     {
         throw Exception(Status::ERROR_INVALID_ARGUMENT, "spatial_scale must be finite");
     }
+
+    (void)irt::checkedSizeProduct({static_cast<size_t>(num_rois), static_cast<size_t>(channels),
+                                   static_cast<size_t>(output_size.x), static_cast<size_t>(output_size.y)},
+                                  "RoIAlign output");
+    (void)irt::checkedSizeProduct({static_cast<size_t>(batches), static_cast<size_t>(channels),
+                                   static_cast<size_t>(input_size.x), static_cast<size_t>(input_size.y)},
+                                  "RoIAlign input");
 
     const bool has_output = num_rois > 0 && channels > 0 && output_size.x > 0 && output_size.y > 0;
     if (has_output && d_input == nullptr)

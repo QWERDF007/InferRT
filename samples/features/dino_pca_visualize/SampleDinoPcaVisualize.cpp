@@ -76,8 +76,8 @@ struct IterationTiming
 struct OutputTensor
 {
     std::string                         name;
-    nvinfer1::Dims                      dims{};
-    nvinfer1::DataType                  data_type{nvinfer1::DataType::kFLOAT};
+    irt::Shape                          dims{};
+    irt::TensorDataType                 data_type{irt::TensorDataType::F32};
     size_t                              element_count{0};
     size_t                              num_bytes{0};
     DeviceBuffer                        device;
@@ -185,17 +185,17 @@ fs::path resolveOutputDir(const fs::path &configured)
     return configured.is_absolute() ? configured : fs::current_path() / configured;
 }
 
-std::vector<float> preprocessImage(const cv::Mat &image, const nvinfer1::Dims &input_dims)
+std::vector<float> preprocessImage(const cv::Mat &image, const irt::Shape &input_dims)
 {
-    if (input_dims.nbDims != 4 || input_dims.d[0] != 1 || input_dims.d[1] != 3 || input_dims.d[2] <= 0
-        || input_dims.d[3] <= 0)
+    if (input_dims.rank() != 4 || input_dims[0] != 1 || input_dims[1] != 3 || input_dims[2] <= 0
+        || input_dims[3] <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "DINO PCA sample expects input shape 1x3xHxW, got %s", dimsToCsv(input_dims).c_str());
     }
 
     const cv::Mat preprocessed = irt::model::ImageNetUtil::preprocess(
-        image, cv::Size(static_cast<int>(input_dims.d[3]), static_cast<int>(input_dims.d[2])));
+        image, cv::Size(static_cast<int>(input_dims[3]), static_cast<int>(input_dims[2])));
     return irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
 }
 
@@ -251,13 +251,13 @@ std::pair<int, int> inferPatchGrid(size_t token_count, int input_h, int input_w)
     return {best_h, best_w};
 }
 
-PatchFeatureMatrix makePatchFeatureMatrix(const OutputTensor &tensor, const nvinfer1::Dims &input_dims)
+PatchFeatureMatrix makePatchFeatureMatrix(const OutputTensor &tensor, const irt::Shape &input_dims)
 {
-    if (tensor.data_type != nvinfer1::DataType::kFLOAT)
+    if (tensor.data_type != irt::TensorDataType::F32)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "PCA visualization expects float32 feature tensor, got %s",
-                             dataTypeToString(tensor.data_type).c_str());
+                             irt::model::dataTypeToString(tensor.data_type).c_str());
     }
 
     const auto *data = reinterpret_cast<const float *>(tensor.host_bytes.data());
@@ -267,19 +267,19 @@ PatchFeatureMatrix makePatchFeatureMatrix(const OutputTensor &tensor, const nvin
     }
 
     PatchFeatureMatrix matrix;
-    const int input_h = input_dims.nbDims == 4 ? static_cast<int>(input_dims.d[2]) : 0;
-    const int input_w = input_dims.nbDims == 4 ? static_cast<int>(input_dims.d[3]) : 0;
+    const int input_h = input_dims.rank() == 4 ? static_cast<int>(input_dims[2]) : 0;
+    const int input_w = input_dims.rank() == 4 ? static_cast<int>(input_dims[3]) : 0;
 
-    if (tensor.dims.nbDims == 3)
+    if (tensor.dims.rank() == 3)
     {
-        if (tensor.dims.d[0] != 1 || tensor.dims.d[1] <= 0 || tensor.dims.d[2] <= 0)
+        if (tensor.dims[0] != 1 || tensor.dims[1] <= 0 || tensor.dims[2] <= 0)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                                  "Expected feature shape [1, tokens, channels], got %s",
                                  dimsToCsv(tensor.dims).c_str());
         }
-        const int tokens   = static_cast<int>(tensor.dims.d[1]);
-        const int channels = static_cast<int>(tensor.dims.d[2]);
+        const int tokens   = static_cast<int>(tensor.dims[1]);
+        const int channels = static_cast<int>(tensor.dims[2]);
         auto [grid_h, grid_w] = inferPatchGrid(static_cast<size_t>(tokens), input_h, input_w);
         matrix.features       = cv::Mat(tokens, channels, CV_32F, const_cast<float *>(data)).clone();
         matrix.grid_h         = grid_h;
@@ -288,16 +288,16 @@ PatchFeatureMatrix makePatchFeatureMatrix(const OutputTensor &tensor, const nvin
         return matrix;
     }
 
-    if (tensor.dims.nbDims == 2)
+    if (tensor.dims.rank() == 2)
     {
-        if (tensor.dims.d[0] <= 0 || tensor.dims.d[1] <= 0)
+        if (tensor.dims[0] <= 0 || tensor.dims[1] <= 0)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                                  "Expected feature shape [tokens, channels], got %s",
                                  dimsToCsv(tensor.dims).c_str());
         }
-        const int tokens   = static_cast<int>(tensor.dims.d[0]);
-        const int channels = static_cast<int>(tensor.dims.d[1]);
+        const int tokens   = static_cast<int>(tensor.dims[0]);
+        const int channels = static_cast<int>(tensor.dims[1]);
         auto [grid_h, grid_w] = inferPatchGrid(static_cast<size_t>(tokens), input_h, input_w);
         matrix.features       = cv::Mat(tokens, channels, CV_32F, const_cast<float *>(data)).clone();
         matrix.grid_h         = grid_h;
@@ -306,18 +306,18 @@ PatchFeatureMatrix makePatchFeatureMatrix(const OutputTensor &tensor, const nvin
         return matrix;
     }
 
-    if (tensor.dims.nbDims == 4)
+    if (tensor.dims.rank() == 4)
     {
-        if (tensor.dims.d[0] != 1)
+        if (tensor.dims[0] != 1)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                                  "Only single-image feature maps are supported, got %s",
                                  dimsToCsv(tensor.dims).c_str());
         }
 
-        const int d1 = static_cast<int>(tensor.dims.d[1]);
-        const int d2 = static_cast<int>(tensor.dims.d[2]);
-        const int d3 = static_cast<int>(tensor.dims.d[3]);
+        const int d1 = static_cast<int>(tensor.dims[1]);
+        const int d2 = static_cast<int>(tensor.dims[2]);
+        const int d3 = static_cast<int>(tensor.dims[3]);
         if (d1 <= 0 || d2 <= 0 || d3 <= 0)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Invalid 4D feature shape: %s",
@@ -507,7 +507,7 @@ void writeManifest(const fs::path            &path,
                    const Arguments          &args,
                    const fs::path           &weights_path,
                    const fs::path           &image_path,
-                   const nvinfer1::Dims     &input_dims,
+                   const irt::Shape          &input_dims,
                    const OutputTensor       &feature,
                    const PatchFeatureMatrix &matrix,
                    const fs::path           &direct_path,
@@ -602,7 +602,7 @@ int main(int argc, char *argv[])
                                  runtime_model_name.c_str());
         }
 
-        model->setLogLevel(nvinfer1::ILogger::Severity::kINFO);
+        model->setLogLevel(irt::model::LogLevel::Info);
         std::cout << "Building or loading feature-only model..." << std::endl;
         const auto build_start = Clock::now();
         model->buildOrLoad(weights_path.string());
@@ -617,7 +617,7 @@ int main(int argc, char *argv[])
         }
         const auto image_load_end = Clock::now();
 
-        const auto input_tensor_names = model->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
+        const auto input_tensor_names = model->ioTensorNames(irt::TensorIOMode::Input);
         if (input_tensor_names.size() != 1)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
@@ -626,14 +626,14 @@ int main(int argc, char *argv[])
         }
 
         const std::string &input_name = input_tensor_names.front();
-        nvinfer1::Dims     input_dims = model->tensorShape(input_name);
-        if (input_dims.nbDims != 4 || input_dims.d[1] != 3 || input_dims.d[2] <= 0 || input_dims.d[3] <= 0)
+        irt::Shape          input_dims = model->tensorShape(input_name);
+        if (input_dims.rank() != 4 || input_dims[1] != 3 || input_dims[2] <= 0 || input_dims[3] <= 0)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                                  "DINO PCA sample expects input shape Nx3xHxW, got %s",
                                  dimsToCsv(input_dims).c_str());
         }
-        input_dims.d[0] = 1;
+        input_dims[0] = 1;
         model->setTensorShape(input_name, input_dims);
 
         const auto preprocess_start = Clock::now();
@@ -641,15 +641,15 @@ int main(int argc, char *argv[])
         const auto preprocess_end   = Clock::now();
 
         const bool uses_tensorrt = args.runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT;
-        const auto stream        = uses_tensorrt ? model->resolveExecutionStream() : nullptr;
+        const cudaStream_t stream = uses_tensorrt ? reinterpret_cast<cudaStream_t>(model->resolveExecutionStream()) : nullptr;
 
         DeviceBuffer d_input;
         if (uses_tensorrt)
         {
-            d_input = DeviceBuffer(input_data.size(), nvinfer1::DataType::kFLOAT);
+            d_input = DeviceBuffer(input_data.size(), irt::TensorDataType::F32);
         }
 
-        const auto output_names = model->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+        const auto output_names = model->ioTensorNames(irt::TensorIOMode::Output);
         if (output_names.empty())
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Model has no feature outputs");
@@ -679,13 +679,21 @@ int main(int argc, char *argv[])
             outputs.push_back(std::move(tensor));
         }
 
-        std::vector<void *> buffers;
+        std::vector<irt::BufferView> buffers;
         buffers.reserve(1 + outputs.size());
-        buffers.push_back(uses_tensorrt ? d_input.data() : const_cast<float *>(input_data.data()));
+        buffers.push_back(uses_tensorrt
+                              ? irt::BufferView::fromBytes(d_input.data(), d_input.sizeBytes(), irt::MemoryKind::DEVICE,
+                                                           input_name)
+                              : irt::BufferView::fromBytes(const_cast<float *>(input_data.data()),
+                                                           input_data.size() * sizeof(float), irt::MemoryKind::HOST,
+                                                           input_name));
         for (auto &output : outputs)
         {
-            buffers.push_back(uses_tensorrt ? output.device.data()
-                                            : static_cast<void *>(output.graph_storage.data()));
+            buffers.push_back(uses_tensorrt
+                              ? irt::BufferView::fromBytes(output.device.data(), output.device.sizeBytes(),
+                                                               irt::MemoryKind::DEVICE, output.name)
+                              : irt::BufferView::fromBytes(output.graph_storage.data(), output.num_bytes,
+                                                               irt::MemoryKind::HOST, output.name));
         }
 
         auto run_feature_once = [&]() -> IterationTiming
@@ -704,7 +712,7 @@ int main(int argc, char *argv[])
             timing.h2d_ms      = elapsedMs(h2d_start, h2d_end);
 
             const auto inference_start = Clock::now();
-            model->forwardFeatures(buffers, stream, true);
+            model->forwardFeatures(buffers, reinterpret_cast<std::uintptr_t>(stream), true);
             if (uses_tensorrt)
             {
                 checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(feature forward)");

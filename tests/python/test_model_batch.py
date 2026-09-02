@@ -9,26 +9,29 @@ import numpy as np
 import pytest
 
 from helpers.manifest import assert_tensors_close
+from helpers.model_integration import resolve_model_file
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 
-def _resnet18_weights(repo_root: Path) -> Path:
-    """返回示例 ResNet18 权重；缺失时跳过依赖真实权重的测试。"""
+def _resnet18_weights(model_root: Path) -> Path:
+    """返回配置模型根目录下的 ResNet18 权重。"""
 
-    weights = repo_root / "assets" / "models" / "resnet" / "resnet18.wts"
-    if not weights.exists():
-        pytest.skip(f"ResNet18 weights not found: {weights}")
-    return weights
+    return resolve_model_file(
+        model_root,
+        ("resnet/resnet18.wts", "resnet/resnet18-f37072fd/resnet18.wts"),
+        "ResNet18 weights",
+    )
 
 
-def _dinov2_vits14_weights(repo_root: Path) -> Path:
-    """返回示例 DINOv2 ViT-S/14 权重；缺失时跳过真实模型对比。"""
+def _dinov2_vits14_weights(model_root: Path) -> Path:
+    """返回配置模型根目录下的 DINOv2 ViT-S/14 权重。"""
 
-    weights = repo_root / "assets" / "models" / "dinov2" / "dinov2_vits14.wts"
-    if not weights.exists():
-        pytest.skip(f"DINOv2 ViT-S/14 weights not found: {weights}")
-    return weights
+    return resolve_model_file(
+        model_root,
+        ("dinov2/dinov2_vits14.wts", "dinov2/dinov2_vits14_pretrain/dinov2_vits14.wts"),
+        "DINOv2 ViT-S/14 weights",
+    )
 
 
 def _make_inputs(batch: int) -> np.ndarray:
@@ -174,12 +177,12 @@ def _dino_feature_atol(name: str, feature_atol: float) -> float:
 
 def test_resnet18_dynamic_batch_infer_matches_pytorch(
     irt_module: Any,
-    repo_root: Path,
+    model_root: Path,
     tolerances: tuple[float, float],
 ) -> None:
     """同一个动态 batch engine 应能先跑 batch=1，再跑 batch=2，并与 PyTorch 对齐。"""
 
-    weights = _resnet18_weights(repo_root)
+    weights = _resnet18_weights(model_root)
     config = _dynamic_resnet_config(irt_module, batch=2)
     model = irt_module.create_model("resnet18", config)
     _build_or_skip(model, weights)
@@ -211,12 +214,12 @@ def test_resnet18_dynamic_batch_infer_matches_pytorch(
 
 def test_dinov2_dynamic_batch_infer_matches_pytorch(
     irt_module: Any,
-    repo_root: Path,
+    model_root: Path,
     feature_tolerances: tuple[float, float],
 ) -> None:
     """DINO 动态 batch engine 应支持 batch=1/2 主输出，并与 PyTorch CLS 特征对齐。"""
 
-    weights = _dinov2_vits14_weights(repo_root)
+    weights = _dinov2_vits14_weights(model_root)
     config = _dynamic_dino_config(irt_module, batch=2)
     model = irt_module.create_model("dinov2_vits14", config)
     _build_or_skip(model, weights)
@@ -237,12 +240,12 @@ def test_dinov2_dynamic_batch_infer_matches_pytorch(
 
 def test_resnet18_dynamic_batch_forward_features_matches_pytorch(
     irt_module: Any,
-    repo_root: Path,
+    model_root: Path,
     feature_tolerances: tuple[float, float],
 ) -> None:
     """feature-only engine 的输出 batch 维应与输入一致，并与 PyTorch 中间层对齐。"""
 
-    weights = _resnet18_weights(repo_root)
+    weights = _resnet18_weights(model_root)
     config = _dynamic_resnet_config(irt_module, batch=2, feature_only=True)
     model = irt_module.create_model("resnet18", config)
     _build_or_skip(model, weights)
@@ -267,12 +270,12 @@ def test_resnet18_dynamic_batch_forward_features_matches_pytorch(
 
 def test_dinov2_dynamic_batch_forward_features_matches_pytorch(
     irt_module: Any,
-    repo_root: Path,
+    model_root: Path,
     feature_tolerances: tuple[float, float],
 ) -> None:
     """DINO feature-only 动态 batch 输出应保持输入 batch，并与 PyTorch 中间特征对齐。"""
 
-    weights = _dinov2_vits14_weights(repo_root)
+    weights = _dinov2_vits14_weights(model_root)
     config = _dynamic_dino_config(irt_module, batch=2, feature_only=True)
     model = irt_module.create_model("dinov2_vits14", config)
     _build_or_skip(model, weights)

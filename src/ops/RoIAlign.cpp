@@ -1,4 +1,5 @@
 #include <inferrt/core/Exception.hpp>
+#include <inferrt/core/Tensor.hpp>
 #include <inferrt/ops/RoIAlign.hpp>
 
 #include <algorithm>
@@ -37,21 +38,13 @@ void validateInputShape(const int64_t input_shape[4])
     }
 }
 
-size_t checkedMul(size_t lhs, size_t rhs, const char *name)
-{
-    if (rhs != 0 && lhs > std::numeric_limits<size_t>::max() / rhs)
-    {
-        throw Exception(Status::ERROR_INVALID_OPERATION, "%s size overflow", name);
-    }
-    return lhs * rhs;
-}
-
 size_t outputElementCount(int64_t num_rois, int64_t channels, int pooled_height, int pooled_width)
 {
-    size_t count = static_cast<size_t>(num_rois);
-    count        = checkedMul(count, static_cast<size_t>(channels), "RoIAlign output");
-    count        = checkedMul(count, static_cast<size_t>(pooled_height), "RoIAlign output");
-    count        = checkedMul(count, static_cast<size_t>(pooled_width), "RoIAlign output");
+    size_t count = irt::checkedInt64ToSize(num_rois, "RoIAlign ROI count");
+    count = irt::checkedSizeMul(count, irt::checkedInt64ToSize(channels, "RoIAlign channel count"),
+                                "RoIAlign output");
+    count = irt::checkedSizeMul(count, static_cast<size_t>(pooled_height), "RoIAlign output");
+    count = irt::checkedSizeMul(count, static_cast<size_t>(pooled_width), "RoIAlign output");
     return count;
 }
 
@@ -91,10 +84,24 @@ float bilinearInterpolate(const float *input, int64_t batch, int64_t channel, in
     const float hy = 1.0f - ly;
     const float hx = 1.0f - lx;
 
-    const size_t base = static_cast<size_t>((batch * channels + channel) * height * width);
+    const size_t batch_offset = irt::checkedSizeMul(irt::checkedInt64ToSize(batch, "RoIAlign batch index"),
+                                                    irt::checkedInt64ToSize(channels, "RoIAlign channels"),
+                                                    "RoIAlign input batch offset");
+    const size_t channel_offset = irt::checkedSizeAdd(batch_offset,
+                                                      irt::checkedInt64ToSize(channel, "RoIAlign channel index"),
+                                                      "RoIAlign input channel offset");
+    const size_t spatial = irt::checkedSizeMul(irt::checkedInt64ToSize(height, "RoIAlign height"),
+                                               irt::checkedInt64ToSize(width, "RoIAlign width"),
+                                               "RoIAlign input plane");
+    const size_t base = irt::checkedSizeMul(channel_offset, spatial, "RoIAlign input offset");
     const auto   at   = [&](int64_t iy, int64_t ix) -> float
     {
-        return input[base + static_cast<size_t>(iy * width + ix)];
+        const size_t row = irt::checkedSizeMul(irt::checkedInt64ToSize(iy, "RoIAlign y index"),
+                                               irt::checkedInt64ToSize(width, "RoIAlign width"),
+                                               "RoIAlign row offset");
+        const size_t offset = irt::checkedSizeAdd(row, irt::checkedInt64ToSize(ix, "RoIAlign x index"),
+                                                  "RoIAlign pixel offset");
+        return input[irt::checkedSizeAdd(base, offset, "RoIAlign input index")];
     };
 
     const float v1 = at(y_low, x_low);
@@ -107,7 +114,12 @@ float bilinearInterpolate(const float *input, int64_t batch, int64_t channel, in
 
 int adaptiveGridSize(float roi_size, int pooled_size)
 {
-    return static_cast<int>(std::ceil(roi_size / static_cast<float>(pooled_size)));
+    const double grid = std::ceil(static_cast<double>(roi_size) / static_cast<double>(pooled_size));
+    if (!std::isfinite(grid) || grid > static_cast<double>(std::numeric_limits<int>::max()))
+    {
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "RoIAlign sampling grid exceeds int range");
+    }
+    return static_cast<int>(grid);
 }
 
 } // namespace
@@ -195,7 +207,9 @@ void RoIAlign::forward(const float *input, const int64_t input_shape[4], const f
 
     for (int64_t roi_index = 0; roi_index < num_rois; ++roi_index)
     {
-        const float *roi = rois + roi_index * 5;
+        const float *roi = rois
+                         + irt::checkedSizeMul(irt::checkedInt64ToSize(roi_index, "RoIAlign ROI index"), 5U,
+                                               "RoIAlign ROI offset");
         for (int i = 0; i < 5; ++i)
         {
             if (!std::isfinite(roi[i]))
@@ -232,7 +246,10 @@ void RoIAlign::forward(const float *input, const int64_t input_shape[4], const f
 
         const int grid_h = exact_sampling ? sampling_ratio_ : adaptiveGridSize(roi_height, pooled_height_);
         const int grid_w = exact_sampling ? sampling_ratio_ : adaptiveGridSize(roi_width, pooled_width_);
-        const int count  = exact_sampling ? std::max(grid_h * grid_w, 1) : std::max(grid_h * grid_w, 1);
+        const size_t grid_count = irt::checkedSizeProduct({static_cast<size_t>(std::max(grid_h, 0)),
+                                                           static_cast<size_t>(std::max(grid_w, 0))},
+                                                          "RoIAlign sampling grid");
+        const size_t count = std::max(grid_count, static_cast<size_t>(1));
 
         const int loop_grid_h = std::max(grid_h, 0);
         const int loop_grid_w = std::max(grid_w, 0);
@@ -256,8 +273,17 @@ void RoIAlign::forward(const float *input, const int64_t input_shape[4], const f
                         }
                     }
 
-                    const size_t out_index = static_cast<size_t>(
-                        ((roi_index * channels + channel) * pooled_height_ + ph) * pooled_width_ + pw);
+                    size_t out_index = irt::checkedSizeMul(
+                        irt::checkedInt64ToSize(roi_index, "RoIAlign ROI index"),
+                        irt::checkedInt64ToSize(channels, "RoIAlign channels"), "RoIAlign output index");
+                    out_index = irt::checkedSizeAdd(out_index, irt::checkedInt64ToSize(channel, "RoIAlign channel"),
+                                                    "RoIAlign output index");
+                    out_index = irt::checkedSizeMul(out_index, static_cast<size_t>(pooled_height_),
+                                                    "RoIAlign output index");
+                    out_index = irt::checkedSizeAdd(out_index, static_cast<size_t>(ph), "RoIAlign output index");
+                    out_index = irt::checkedSizeMul(out_index, static_cast<size_t>(pooled_width_),
+                                                    "RoIAlign output index");
+                    out_index = irt::checkedSizeAdd(out_index, static_cast<size_t>(pw), "RoIAlign output index");
                     output[out_index] = sum / static_cast<float>(count);
                 }
             }

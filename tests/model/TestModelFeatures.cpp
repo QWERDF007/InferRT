@@ -46,7 +46,7 @@ TEST_P(ModelFeaturesRegisteredModelsTest, ForwardFeaturesWithoutFeatureContextTh
     ASSERT_NE(model, nullptr);
 
     ExpectIrtExceptionCode([&] { model->forwardFeatures(MakeNullBuffers(2)); },
-                           irt::Status::ERROR_INVALID_OPERATION);
+                           irt::Status::INVALID_OPERATION);
 }
 
 /**
@@ -59,7 +59,7 @@ TEST_P(ModelFeaturesRegisteredModelsTest, ForwardFeaturesWithFeatureOnlyConfigWi
     ASSERT_NE(model, nullptr);
 
     ExpectIrtExceptionCode([&] { model->forwardFeatures(MakeNullBuffers(2)); },
-                           irt::Status::ERROR_INVALID_OPERATION);
+                           irt::Status::INVALID_OPERATION);
 }
 
 /**
@@ -71,7 +71,7 @@ TEST_P(ModelFeaturesRegisteredModelsTest, InferWithFeatureOnlyConfigWithoutConte
     auto        model = createFeatureConfiguredModel(param.key, true);
     ASSERT_NE(model, nullptr);
 
-    ExpectIrtExceptionCode([&] { model->infer(MakeNullBuffers(2)); }, irt::Status::ERROR_INVALID_OPERATION);
+    ExpectIrtExceptionCode([&] { model->infer(MakeNullBuffers(2)); }, irt::Status::INVALID_OPERATION);
 }
 
 /**
@@ -84,5 +84,5 @@ TEST_P(ModelFeaturesRegisteredModelsTest, ForwardFeaturesWithWrongBufferCountSti
     ASSERT_NE(model, nullptr);
 
     ExpectIrtExceptionCode([&] { model->forwardFeatures(MakeNullBuffers(1)); },
-                           irt::Status::ERROR_INVALID_OPERATION);
+                           irt::Status::INVALID_OPERATION);
 }

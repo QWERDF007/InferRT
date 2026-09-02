@@ -9,6 +9,7 @@
 #include <inferrt/features/SAMImagePredictor.hpp>
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -285,4 +286,23 @@ TEST(SAMImagePredictorTest, PostprocessRejectsInvalidMaskSize)
     expectIrtExceptionCode(
         [&] { (void)irt::features::SAMImagePredictor::postprocessMasks(low_res_masks, 1, 2, 2, {}, geometry); },
         irt::Status::ERROR_INVALID_ARGUMENT);
+}
+
+/**
+ * @brief mask 平面元素数溢出时应在分配前返回参数错误。
+ */
+TEST(SAMImagePredictorTest, PostprocessRejectsMaskSizeOverflow)
+{
+    irt::features::SAMMaskPostprocessGeometry geometry;
+    geometry.original_width  = 1;
+    geometry.original_height = 1;
+    geometry.model_width     = 1;
+    geometry.model_height    = 1;
+    geometry.resized_width   = 1;
+    geometry.resized_height  = 1;
+
+    EXPECT_THROW(
+        (void)irt::features::SAMImagePredictor::postprocessMasks(
+            {}, 1, std::numeric_limits<int>::max(), std::numeric_limits<int>::max(), {}, geometry),
+        irt::Exception);
 }

@@ -1,17 +1,26 @@
 #include "priv/IModelImpl.hpp"
 
+#include <inferrt/core/Exception.hpp>
 #include <inferrt/model/IModel.h>
 
+#include <utility>
 
 namespace irt::model {
 
-IModel::IModel()
-    : impl_(nullptr)
+namespace {
+
+void ensureValid(const std::unique_ptr<priv::IModelImpl> &impl)
 {
+    if (!impl)
+    {
+        throw irt::Exception(Status::INVALID_OPERATION, "IModel handle is invalid (null implementation)");
+    }
 }
 
-IModel::IModel(std::unique_ptr<priv::IModelImpl> impl)
-    : impl_(std::move(impl))
+} // namespace
+
+IModel::IModel()
+    : impl_(nullptr)
 {
 }
 
@@ -20,114 +29,172 @@ IModel::~IModel() = default;
 IModel::IModel(IModel &&) noexcept            = default;
 IModel &IModel::operator=(IModel &&) noexcept = default;
 
-std::string IModel::name() const noexcept
+bool IModel::isValid() const noexcept
 {
-    return impl_ ? impl_->name() : "";
+    return impl_ != nullptr;
 }
 
-std::string IModel::wtsExtension() const noexcept
+std::string IModel::name() const
 {
-    return impl_ ? impl_->wtsExtension() : ".wts";
+    ensureValid(impl_);
+    return impl_->name();
 }
 
-std::string IModel::engineExtension() const noexcept
+std::string IModel::wtsExtension() const
 {
-    return impl_ ? impl_->engineExtension() : ".engine";
+    ensureValid(impl_);
+    return impl_->wtsExtension();
 }
 
-nvinfer1::ILogger::Severity IModel::logLevel() const noexcept
+std::string IModel::engineExtension() const
 {
+    ensureValid(impl_);
+    return impl_->engineExtension();
+}
+
+LogLevel IModel::logLevel() const
+{
+    ensureValid(impl_);
     return impl_->logLevel();
 }
 
 void IModel::build(const std::string &weights_file)
 {
+    ensureValid(impl_);
     impl_->build(weights_file);
 }
 
 void IModel::save(const std::string &weights_file)
 {
+    ensureValid(impl_);
     impl_->save(weights_file);
 }
 
 void IModel::load(const std::string &weights_file)
 {
+    ensureValid(impl_);
     impl_->load(weights_file);
 }
 
 void IModel::buildOrLoad(const std::string &weights_file)
 {
+    ensureValid(impl_);
     impl_->buildOrLoad(weights_file);
 }
 
-void IModel::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)
+void IModel::infer(std::span<const irt::BufferView> buffers, std::uintptr_t stream, bool non_blocking)
 {
-    impl_->buildNetwork(network, weights_map);
+    ensureValid(impl_);
+    auto normalized = normalizeExecutionBuffers(buffers);
+    impl_->infer(normalized, stream, non_blocking);
 }
 
-void IModel::infer(const std::vector<void *> &buffers, cudaStream_t stream, bool non_blocking)
+void IModel::forwardFeatures(std::span<const irt::BufferView> buffers, std::uintptr_t stream, bool non_blocking)
 {
-    impl_->infer(buffers, stream, non_blocking);
-}
-
-void IModel::forwardFeatures(const std::vector<void *> &buffers, cudaStream_t stream, bool non_blocking)
-{
-    impl_->forwardFeatures(buffers, stream, non_blocking);
+    ensureValid(impl_);
+    auto normalized = normalizeExecutionBuffers(buffers);
+    impl_->forwardFeatures(normalized, stream, non_blocking);
 }
 
 void IModel::setModelConfig(std::unique_ptr<IModelConfig> config)
 {
+    ensureValid(impl_);
     impl_->setModelConfig(std::move(config));
 }
 
-const IModelConfig &IModel::modelConfig() const noexcept
+const IModelConfig &IModel::modelConfig() const
 {
+    ensureValid(impl_);
     return impl_->modelConfig();
 }
 
-const ModelRuntime &IModel::runtime() const noexcept
+const ModelRuntime &IModel::runtime() const
 {
+    ensureValid(impl_);
     return impl_->modelConfig().runtime();
 }
 
-std::vector<std::string> IModel::ioTensorNames(nvinfer1::TensorIOMode mode) const
+std::vector<std::string> IModel::ioTensorNames(irt::TensorIOMode mode) const
 {
+    ensureValid(impl_);
     return impl_->ioTensorNames(mode);
 }
 
-nvinfer1::Dims IModel::tensorShape(const std::string &tensor_name) const
+irt::Shape IModel::tensorShape(const std::string &tensor_name) const
 {
+    ensureValid(impl_);
     return impl_->tensorShape(tensor_name);
 }
 
-nvinfer1::DataType IModel::tensorDataType(const std::string &tensor_name) const
+irt::TensorDataType IModel::tensorDataType(const std::string &tensor_name) const
 {
+    ensureValid(impl_);
     return impl_->tensorDataType(tensor_name);
 }
 
-void IModel::setTensorShape(const std::string &tensor_name, const nvinfer1::Dims &dims)
+void IModel::setTensorShape(const std::string &tensor_name, irt::Shape shape)
 {
-    impl_->setTensorShape(tensor_name, dims);
+    ensureValid(impl_);
+    impl_->setTensorShape(tensor_name, shape);
 }
 
-void IModel::setStream(cudaStream_t stream)
+void IModel::setStream(std::uintptr_t stream)
 {
+    ensureValid(impl_);
     impl_->setStream(stream);
 }
 
 void IModel::clearStream()
 {
+    ensureValid(impl_);
     impl_->clearStream();
 }
 
-cudaStream_t IModel::resolveExecutionStream(cudaStream_t stream_override) const
+std::uintptr_t IModel::resolveExecutionStream(std::uintptr_t stream_override) const
 {
+    ensureValid(impl_);
     return impl_->resolveExecutionStream(stream_override);
 }
 
-void IModel::setLogLevel(nvinfer1::ILogger::Severity severity)
+void IModel::setLogLevel(LogLevel level)
 {
-    impl_->setLogLevel(severity);
+    ensureValid(impl_);
+    impl_->setLogLevel(level);
+}
+
+std::vector<irt::BufferView> IModel::normalizeExecutionBuffers(
+    const std::span<const irt::BufferView> buffers) const
+{
+    return irt::normalizeExecutionBuffers(buffers, inputs(), outputs());
+}
+
+std::vector<irt::TensorInfo> IModel::inputs() const
+{
+    ensureValid(impl_);
+    return impl_->inputs();
+}
+
+std::vector<irt::TensorInfo> IModel::outputs() const
+{
+    ensureValid(impl_);
+    return impl_->outputs();
+}
+
+void IModel::setInputShape(const std::string &name, irt::Shape shape)
+{
+    ensureValid(impl_);
+    if (shape.empty())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Input shape must be non-empty and within backend rank");
+    }
+    impl_->setTensorShape(name, shape);
+}
+
+void IModel::execute(std::span<const irt::BufferView> buffers, irt::ExecuteOptions options)
+{
+    ensureValid(impl_);
+    auto normalized = normalizeExecutionBuffers(buffers);
+    impl_->infer(normalized, options.stream, options.non_blocking);
 }
 
 } // namespace irt::model

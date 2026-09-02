@@ -11,6 +11,7 @@ import torch
 
 from classification_model_zoo import (
     TRANSFORMERS_DINOV3_MODEL_IDS,
+    TORCHHUB_DINO_MODEL_ALIASES,
     TORCHHUB_DINO_MODEL_REPOS,
     create_model as create_classification_model,
     export_model_state_dict,
@@ -41,7 +42,7 @@ def list_supported_models(backend: str) -> list[str]:
     """列出指定 DINO 模型来源支持的模型名。"""
 
     if backend == "torchhub":
-        return list(TORCHHUB_DINO_MODEL_REPOS)
+        return [*TORCHHUB_DINO_MODEL_REPOS, *TORCHHUB_DINO_MODEL_ALIASES]
     if backend == "transformers":
         return list(TRANSFORMERS_DINOV3_MODEL_IDS)
     if backend == "timm":

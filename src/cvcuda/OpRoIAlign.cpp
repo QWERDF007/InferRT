@@ -30,17 +30,14 @@ RoIAlign::RoIAlign(cv::Size output_size, float spatial_scale, int sampling_ratio
     , sampling_ratio_(sampling_ratio)
     , aligned_(aligned)
 {
-    impl_ = new priv::RoIAlignImpl();
+    impl_ = std::make_unique<priv::RoIAlignImpl>();
 }
 
-RoIAlign::~RoIAlign()
-{
-    if (impl_)
-    {
-        delete impl_;
-        impl_ = nullptr;
-    }
-}
+RoIAlign::~RoIAlign() = default;
+
+RoIAlign::RoIAlign(RoIAlign &&) noexcept = default;
+
+RoIAlign &RoIAlign::operator=(RoIAlign &&) noexcept = default;
 
 IRTStatus RoIAlign::operator()(const float *d_input, const float *d_rois, float *d_output, int batches, int channels,
                                cv::Size input_size, int num_rois, cudaStream_t stream)
@@ -61,7 +58,7 @@ IRTStatus RoIAlign::operator()(const float *d_input, const float *d_rois, float 
             _output_size.x = output_size_.width;
             _output_size.y = output_size_.height;
 
-            auto *roiAlignImpl = static_cast<priv::RoIAlignImpl *>(impl_);
+            auto *roiAlignImpl = static_cast<priv::RoIAlignImpl *>(impl_.get());
             (*roiAlignImpl)(d_input, d_rois, d_output, batches, channels, _input_size, num_rois, _output_size,
                             spatial_scale_, sampling_ratio_, aligned_, stream);
         });

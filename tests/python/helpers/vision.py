@@ -42,6 +42,35 @@ def _collect_dll_dirs(build_dir: Path) -> list[Path]:
         add_dir(Path(trt_root) / "bin")
         add_dir(Path(trt_root) / "lib")
 
+    onnxruntime_root = cache.get("ONNXRUNTIME_ROOT", "")
+    if onnxruntime_root:
+        add_dir(Path(onnxruntime_root) / "bin")
+        add_dir(Path(onnxruntime_root) / "lib")
+
+    openvino_root = cache.get("INFERRT_OPENVINO_ROOT", "")
+    if openvino_root:
+        for candidate in (
+            Path(openvino_root) / "runtime" / "bin" / "intel64" / "Release",
+            Path(openvino_root) / "runtime" / "bin" / "intel64",
+            Path(openvino_root) / "runtime" / "bin",
+            Path(openvino_root) / "runtime" / "3rdparty" / "tbb" / "bin",
+        ):
+            add_dir(candidate)
+
+    faiss_root = cache.get("Faiss_HOME", "")
+    if faiss_root:
+        add_dir(Path(faiss_root) / "bin")
+
+    mkl_root = cache.get("MKL_ROOT", "")
+    if mkl_root:
+        for candidate in (
+            Path(mkl_root) / "bin",
+            Path(mkl_root) / "compiler" / "bin",
+            Path(mkl_root) / "mkl" / "bin",
+            Path(mkl_root).parent / "compiler" / "bin",
+        ):
+            add_dir(candidate)
+
     opencv_dir = cache.get("OpenCV_DIR", "")
     if not opencv_dir:
         details = cache.get("FIND_PACKAGE_MESSAGE_DETAILS_OpenCV", "")

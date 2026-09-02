@@ -6,13 +6,15 @@ function(add_inferrt_benchmark BENCHMARK_NAME)
 
     set(TARGET_NAME "${PROJECT_NAME_LOWER}_benchmark_${BENCHMARK_NAME}")
 
-    file(GLOB SOURCES *.cpp)
-    file(GLOB HEADERS *.h *.hpp)
+    file(GLOB SOURCES CONFIGURE_DEPENDS *.cpp)
+    file(GLOB HEADERS CONFIGURE_DEPENDS *.h *.hpp)
 
     add_executable(${TARGET_NAME}
         ${SOURCES}
         ${HEADERS}
     )
+
+    inferrt_apply_compile_options(${TARGET_NAME})
 
     target_link_libraries(${TARGET_NAME}
         PRIVATE

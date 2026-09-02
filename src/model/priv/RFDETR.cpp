@@ -30,6 +30,10 @@ constexpr float kLayerNormEps           = 1.0e-6F;
 constexpr float kProposalBaseBoxScale   = 0.05F;
 constexpr float kRFDETRSinePositionTemp = 10000.0F;
 constexpr float kRFDETRTwoPi            = 6.28318530717958647692F;
+// TensorRT TopK does not define a stable order for equal values.  Keep this
+// perturbation below the scale of normal score changes while making the
+// proposal index an explicit, deterministic secondary key.
+constexpr float kRFDETRTopKTieBreakStep = 0x1.0p-21F;
 
 /**
  * @brief 输入几何信息，避免在建图阶段重复解析 shape。
@@ -161,9 +165,10 @@ nvinfer1::ITensor *addLinear3DFromKeys(nvinfer1::INetworkDefinition *network, co
                                        const std::string &bias_key, int in_features, int out_features,
                                        bool bias_required = true)
 {
+    const int64_t weight_count = checkedWeightProduct({out_features, in_features}, "RF-DETR Linear weight");
     auto *weight = requireLayer(network->addConstant(nvinfer1::Dims3{1, out_features, in_features},
                                                      requireWeight(weights_map, weight_key, "RF-DETR Linear",
-                                                                   static_cast<int64_t>(out_features) * in_features)),
+                                                                   weight_count)),
                                 "Failed to add RF-DETR linear weight")
                        ->getOutput(0);
     auto *matmul = requireLayer(network->addMatrixMultiply(input, M::kNONE, *weight, M::kTRANSPOSE),
@@ -204,7 +209,8 @@ nvinfer1::ITensor *addLinearLastDim(nvinfer1::INetworkDefinition *network, const
     weight_dims[static_cast<size_t>(dims.nbDims - 1)] = in_features;
     auto *weight = requireLayer(network->addConstant(makeDimsFromValues(weight_dims),
                                                      requireWeight(weights_map, prefix + ".weight", "RF-DETR Linear",
-                                                                   static_cast<int64_t>(out_features) * in_features)),
+                                                                   checkedWeightProduct({out_features, in_features},
+                                                                                        "RF-DETR linear-last-dim weight"))),
                                 "Failed to add RF-DETR linear-last-dim weight")
                        ->getOutput(0);
     auto *matmul = requireLayer(network->addMatrixMultiply(input, M::kNONE, *weight, M::kTRANSPOSE),
@@ -305,7 +311,8 @@ nvinfer1::ITensor *addConv2d(nvinfer1::INetworkDefinition *network, const Weight
         network->addConvolutionNd(
             input, out_channels, nvinfer1::DimsHW{kernel, kernel},
             requireWeight(weights_map, prefix + ".weight", "RF-DETR Conv2d",
-                          static_cast<int64_t>(out_channels) * (in_channels / groups) * kernel * kernel),
+                          checkedWeightProduct({out_channels, in_channels / groups, kernel, kernel},
+                                               "RF-DETR Conv2d weight")),
             bias ? requireWeight(weights_map, prefix + ".bias", "RF-DETR Conv2d", out_channels) : emptyWeights()),
         "Failed to add RF-DETR Conv2d");
     conv->setStrideNd(nvinfer1::DimsHW{stride, stride});
@@ -325,7 +332,8 @@ nvinfer1::ITensor *addDeconv2d(nvinfer1::INetworkDefinition *network, const Weig
         = requireLayer(network->addDeconvolutionNd(
                            input, out_channels, nvinfer1::DimsHW{kernel, kernel},
                            requireWeight(weights_map, prefix + ".weight", "RF-DETR ConvTranspose2d",
-                                         static_cast<int64_t>(in_channels) * out_channels * kernel * kernel),
+                                         checkedWeightProduct({in_channels, out_channels, kernel, kernel},
+                                                              "RF-DETR ConvTranspose2d weight")),
                            requireWeight(weights_map, prefix + ".bias", "RF-DETR ConvTranspose2d", out_channels)),
                        "Failed to add RF-DETR ConvTranspose2d");
     deconv->setStrideNd(nvinfer1::DimsHW{stride, stride});
@@ -409,7 +417,7 @@ bool usesDefaultImageNetInputShape(const IModelConfig &config)
         return false;
     }
     const auto &shape = config.inputShape();
-    return shape.d[0] == 1 && shape.d[1] == 3 && shape.d[2] == kDefaultImageSize && shape.d[3] == kDefaultImageSize;
+    return shape.rank() == 4 && shape[0] == 1 && shape[1] == 3 && shape[2] == kDefaultImageSize && shape[3] == kDefaultImageSize;
 }
 
 /**
@@ -429,10 +437,10 @@ RFDETRGeometry resolveGeometry(const RFDETRSpec &spec, const IModelConfig &confi
 
     const auto    &shape = config.inputShape();
     RFDETRGeometry geometry{};
-    geometry.batch    = static_cast<int>(shape.d[0]);
-    geometry.channels = static_cast<int>(shape.d[1]);
-    geometry.height   = static_cast<int>(shape.d[2]);
-    geometry.width    = static_cast<int>(shape.d[3]);
+    geometry.batch    = static_cast<int>(shape[0]);
+    geometry.channels = static_cast<int>(shape[1]);
+    geometry.height   = static_cast<int>(shape[2]);
+    geometry.width    = static_cast<int>(shape[3]);
 
     const int divisor = spec.patch_size * spec.num_windows;
     if (geometry.channels != 3)
@@ -481,7 +489,8 @@ nvinfer1::ITensor *addDINOEmbedding(const RFDETRModel &impl, nvinfer1::INetworkD
             *input, spec.encoder_dim, nvinfer1::DimsHW{spec.patch_size, spec.patch_size},
             requireWeight(
                 weights_map, patch_prefix + ".weight", "RF-DETR patch embedding",
-                static_cast<int64_t>(spec.encoder_dim) * geometry.channels * spec.patch_size * spec.patch_size),
+                checkedWeightProduct({spec.encoder_dim, geometry.channels, spec.patch_size, spec.patch_size},
+                                     "RF-DETR patch embedding weight")),
             requireWeight(weights_map, patch_prefix + ".bias", "RF-DETR patch embedding", spec.encoder_dim)),
         "Failed to add RF-DETR patch embedding");
     patch->setStrideNd(nvinfer1::DimsHW{spec.patch_size, spec.patch_size});
@@ -493,7 +502,8 @@ nvinfer1::ITensor *addDINOEmbedding(const RFDETRModel &impl, nvinfer1::INetworkD
 
     const auto &pos_weight
         = requireWeight(weights_map, encoderPrefix() + ".embeddings.position_embeddings", "RF-DETR position embedding",
-                        static_cast<int64_t>(geometry.patches + 1) * spec.encoder_dim);
+                        checkedWeightProduct({geometry.patches + 1, spec.encoder_dim},
+                                             "RF-DETR position embedding weight"));
     auto *pos_table
         = requireLayer(network->addConstant(nvinfer1::Dims3{1, geometry.patches + 1, spec.encoder_dim}, pos_weight),
                        "Failed to add RF-DETR position table")
@@ -827,7 +837,9 @@ std::vector<FeatureLevel> addProjector(nvinfer1::INetworkDefinition *network, co
 std::vector<float> makeSinePositionTable(int channels, int height, int width)
 {
     const int          num_pos_feats = channels / 2;
-    std::vector<float> table(static_cast<size_t>(channels) * height * width);
+    std::vector<float> table(irt::checkedSizeProduct({static_cast<size_t>(channels), static_cast<size_t>(height),
+                                                      static_cast<size_t>(width)},
+                                                     "RF-DETR sine position table"));
     std::vector<float> dim_t(static_cast<size_t>(num_pos_feats));
     for (int i = 0; i < num_pos_feats; ++i)
     {
@@ -990,17 +1002,48 @@ void addTwoStageQueries(nvinfer1::INetworkDefinition *network, const WeightsMap 
 
     auto *scores = requireLayer(network->addReduce(*enc_class, nvinfer1::ReduceOperation::kMAX, 1U << 2U, false),
                                 "Failed RF-DETR encoder class max");
-    named_tensors["enc.scores"] = scores->getOutput(0);
+    auto *score_tensor = scores->getOutput(0);
+    named_tensors["enc.scores"] = score_tensor;
+
+    const auto score_dims = score_tensor->getDimensions();
+    if (score_dims.nbDims != 2 || score_dims.d[1] <= 0)
+    {
+        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                             "RF-DETR encoder scores must have shape [batch, proposals]");
+    }
+    const int proposal_count = score_dims.d[1];
+    std::vector<float> tie_break(static_cast<size_t>(proposal_count));
+    for (int proposal = 0; proposal < proposal_count; ++proposal)
+    {
+        tie_break[static_cast<size_t>(proposal)] = static_cast<float>(proposal) * kRFDETRTopKTieBreakStep;
+    }
+    auto *tie_break_const
+        = requireLayer(network->addConstant(nvinfer1::Dims2{1, proposal_count}, ownedFloatVector(std::move(tie_break))),
+                        "Failed RF-DETR TopK tie-break key")
+              ->getOutput(0);
+    auto *selection_scores
+        = requireLayer(network->addElementWise(*score_tensor, *tie_break_const, E::kSUM),
+                       "Failed RF-DETR TopK selection key")
+              ->getOutput(0);
+    named_tensors["enc.selection_scores"] = selection_scores;
+
 #if TRT_VERSION >= 10140
-    auto *topk = requireLayer(network->addTopK(*scores->getOutput(0), nvinfer1::TopKOperation::kMAX, spec.num_queries,
+    auto *topk = requireLayer(network->addTopK(*selection_scores, nvinfer1::TopKOperation::kMAX, spec.num_queries,
                                                1U << 1U, nvinfer1::DataType::kINT32),
-                              "Failed RF-DETR TopK");
+                               "Failed RF-DETR TopK");
 #else
     auto *topk = requireLayer(
-        network->addTopK(*scores->getOutput(0), nvinfer1::TopKOperation::kMAX, spec.num_queries, 1U << 1U),
+        network->addTopK(*selection_scores, nvinfer1::TopKOperation::kMAX, spec.num_queries, 1U << 1U),
         "Failed RF-DETR TopK");
 #endif
-    named_tensors["enc.topk.values"]  = topk->getOutput(0);
+    // TopK values include the selection key.  Expose raw encoder scores under
+    // the feature name so feature-only consumers never observe the tie-break.
+    auto *score_view = requireLayer(network->addShuffle(*score_tensor), "Failed RF-DETR TopK score view");
+    score_view->setReshapeDimensions(nvinfer1::Dims3{0, proposal_count, 1});
+    auto *topk_score_view = gatherBatchSequence(network, *score_view->getOutput(0), *topk->getOutput(1));
+    auto *topk_scores     = requireLayer(network->addShuffle(*topk_score_view), "Failed RF-DETR TopK score reshape");
+    topk_scores->setReshapeDimensions(nvinfer1::Dims2{0, spec.num_queries});
+    named_tensors["enc.topk.values"]  = topk_scores->getOutput(0);
     named_tensors["enc.topk.indices"] = topk->getOutput(1);
     refpoints                         = gatherBatchSequence(network, *enc_boxes, *topk->getOutput(1));
     named_tensors["refpoints.enc"]    = refpoints;
@@ -1008,7 +1051,8 @@ void addTwoStageQueries(nvinfer1::INetworkDefinition *network, const WeightsMap 
     auto *query_const
         = requireLayer(network->addConstant(nvinfer1::Dims3{1, spec.num_queries, spec.hidden_dim},
                                             requireWeight(weights_map, "query_feat.weight", "RF-DETR query feature",
-                                                          static_cast<int64_t>(spec.num_queries) * spec.hidden_dim)),
+                                                          checkedWeightProduct({spec.num_queries, spec.hidden_dim},
+                                                                               "RF-DETR query feature weight"))),
                        "Failed RF-DETR query feature")
               ->getOutput(0);
     query = broadcastFirstDimLike(network, *query_const, memory);
@@ -1016,7 +1060,8 @@ void addTwoStageQueries(nvinfer1::INetworkDefinition *network, const WeightsMap 
     auto *base_ref = requireLayer(network->addConstant(
                                       nvinfer1::Dims3{1, spec.num_queries, 4},
                                       requireWeight(weights_map, "refpoint_embed.weight", "RF-DETR refpoint embed",
-                                                    static_cast<int64_t>(spec.num_queries) * 4)),
+                                                    checkedWeightProduct({spec.num_queries, 4},
+                                                                         "RF-DETR reference point weight"))),
                                   "Failed RF-DETR base refpoint")
                          ->getOutput(0);
     base_ref                        = broadcastFirstDimLike(network, *base_ref, memory);
@@ -1096,12 +1141,13 @@ nvinfer1::ITensor *addDecoderSelfAttention(nvinfer1::INetworkDefinition *network
         = requireLayer(network->addElementWise(target, query_pos, E::kSUM), "Failed RF-DETR self q add")->getOutput(0);
     const auto &packed_weight
         = requireWeight(weights_map, prefix + ".self_attn.in_proj_weight", "RF-DETR self attention projection",
-                        static_cast<int64_t>(3) * spec.hidden_dim * spec.hidden_dim);
+                        checkedWeightProduct({3, spec.hidden_dim, spec.hidden_dim}, "RF-DETR projection weight"));
     const auto &packed_bias
         = requireWeight(weights_map, prefix + ".self_attn.in_proj_bias", "RF-DETR self attention projection",
-                        static_cast<int64_t>(3) * spec.hidden_dim);
+                        checkedWeightProduct({3, spec.hidden_dim}, "RF-DETR projection bias"));
 
-    const int64_t projection_weight_count = static_cast<int64_t>(spec.hidden_dim) * spec.hidden_dim;
+    const int64_t projection_weight_count = checkedWeightProduct({spec.hidden_dim, spec.hidden_dim},
+                                                                  "RF-DETR projection weight");
     auto          q_weight = sliceFloatWeights(packed_weight, 0, projection_weight_count, "self_attn.q.weight");
     auto          k_weight
         = sliceFloatWeights(packed_weight, projection_weight_count, projection_weight_count, "self_attn.k.weight");
@@ -1302,16 +1348,30 @@ nvinfer1::ITensor *addDecoder(nvinfer1::INetworkDefinition *network, const Weigh
                               nvinfer1::ITensor &refpoints, const std::vector<FeatureLevel> &levels,
                               const RFDETRSpec &spec, nvinfer1::ITensor *&head_refpoints)
 {
-    auto *sine      = addReferenceSineEmbedding(network, refpoints, spec);
-    auto *query_pos = addMLP(network, weights_map, *sine, "transformer.decoder.ref_point_head",
-                             {2 * spec.hidden_dim, spec.hidden_dim, spec.hidden_dim});
     (void)pos;
 
-    nvinfer1::ITensor *x = &query;
-    head_refpoints       = &refpoints;
+    nvinfer1::ITensor *x            = &query;
+    nvinfer1::ITensor *current_refs = &refpoints;
+    head_refpoints                  = current_refs;
     for (int i = 0; i < spec.decoder_layers; ++i)
     {
-        x = addDecoderLayer(network, weights_map, *x, *query_pos, memory, refpoints, levels, i, spec);
+        // The reference-point head is evaluated for every decoder layer.  The
+        // official RF-DETR export defaults to lite_refpoint_refine=True, which
+        // recomputes the positional embedding while keeping the reference
+        // points fixed.  Full iterative refinement remains available for the
+        // explicit non-lite variant.
+        auto *sine = addReferenceSineEmbedding(network, *current_refs, spec);
+        auto *query_pos = addMLP(network, weights_map, *sine, "transformer.decoder.ref_point_head",
+                                 {2 * spec.hidden_dim, spec.hidden_dim, spec.hidden_dim});
+        head_refpoints = current_refs;
+        x = addDecoderLayer(network, weights_map, *x, *query_pos, memory, *current_refs, levels, i, spec);
+
+        if (!spec.lite_refpoint_refine && i + 1 < spec.decoder_layers)
+        {
+            auto *delta = addMLP(network, weights_map, *x, "bbox_embed",
+                                 {spec.hidden_dim, spec.hidden_dim, spec.hidden_dim, 4});
+            current_refs = applyBBoxReparam(network, *delta, *current_refs, spec.num_queries);
+        }
     }
     return addLayerNormLastDim(network, weights_map, *x, "transformer.decoder.norm", spec.hidden_dim);
 }
@@ -1404,7 +1464,8 @@ nvinfer1::ITensor *addSegmentationHead(nvinfer1::INetworkDefinition *network, co
 RFDETRSpec makeDetectionSpec(const char *display_name, int resolution, int patch_size, int num_windows, int encoder_dim,
                              int encoder_heads, int hidden_dim, int decoder_layers, int self_heads, int cross_heads,
                              int deform_points, std::vector<int> out_features,
-                             std::vector<std::string> projector_scales, int num_queries = 300, int num_select = 300)
+                             std::vector<std::string> projector_scales, int num_queries = 300, int num_select = 300,
+                             bool lite_refpoint_refine = true)
 {
     return {display_name,
             resolution,
@@ -1421,7 +1482,8 @@ RFDETRSpec makeDetectionSpec(const char *display_name, int resolution, int patch
             num_select,
             std::move(out_features),
             std::move(projector_scales),
-            false};
+            false,
+            lite_refpoint_refine};
 }
 
 /**
@@ -1434,6 +1496,7 @@ RFDETRSpec makeSegmentationSpec(const char *display_name, int resolution, int pa
         display_name, resolution, patch_size,  num_windows, 384,           6,      256, decoder_layers, 8,
         16,           2,          num_queries, num_select,  {3, 6, 9, 12},
                                 {"P4"},
+                                true,
                                 true
     };
 }
@@ -1653,7 +1716,7 @@ void RFDETRModel::normalizeModelConfig(IModelConfig &config) const
 {
     if (usesDefaultImageNetInputShape(config))
     {
-        config.setInputShape(nvinfer1::Dims4{1, 3, spec_.resolution, spec_.resolution});
+        config.setInputShape(irt::Shape{1, 3, spec_.resolution, spec_.resolution});
     }
     if (config.numClasses() == 1000)
     {

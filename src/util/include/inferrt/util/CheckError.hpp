@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file CheckError.hpp
  *
  * @brief 可扩展的错误处理框架, 将各种错误码转换成异常或者日志消息
@@ -19,9 +19,12 @@
 
 #include "Assert.h"
 
+#if INFERRT_HAS_CUDA
 #include <driver_types.h> // for cudaError
+#endif
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/util/Export.h>
+#include <iostream>
 
 namespace irt::util {
 
@@ -55,6 +58,7 @@ INFERRT_UTIL_API std::string FormatErrorMessage(const std::string_view &errname,
                                                 const std::string_view &msg);
 } // namespace detail
 
+#if INFERRT_HAS_CUDA
 // ============================================================================
 // CUDA 错误处理特化
 // ============================================================================
@@ -90,6 +94,7 @@ INFERRT_UTIL_API const char *ToString(cudaError_t err, const char **perrdescr = 
  * @details 在错误检查之前调用，可用于清除 CUDA 错误状态等操作
  */
 INFERRT_UTIL_API void PreprocessError(cudaError_t err);
+#endif
 
 // ============================================================================
 // 默认错误处理实现（模板）

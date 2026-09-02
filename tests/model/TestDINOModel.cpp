@@ -17,10 +17,10 @@ namespace {
 void expectInputShape(const irt::model::IModel &model, int n, int c, int h, int w)
 {
     const auto &shape = model.modelConfig().inputShape();
-    EXPECT_EQ(shape.d[0], n);
-    EXPECT_EQ(shape.d[1], c);
-    EXPECT_EQ(shape.d[2], h);
-    EXPECT_EQ(shape.d[3], w);
+    EXPECT_EQ(shape[0], n);
+    EXPECT_EQ(shape[1], c);
+    EXPECT_EQ(shape[2], h);
+    EXPECT_EQ(shape[3], w);
 }
 
 } // namespace
@@ -99,7 +99,7 @@ TEST(DINOModelConfigTest, PreservesCustomTensorAndFeatureNames)
 TEST(DINOModelConfigTest, PreservesExplicitNonDefaultInputShape)
 {
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setInputShape(nvinfer1::Dims4{1, 3, 280, 280});
+    config->setInputShape(irt::Shape{1, 3, 280, 280});
 
     auto model = irt::model::CreateModel("dinov2_vits14", std::move(config));
     ASSERT_NE(model, nullptr);
@@ -116,7 +116,7 @@ TEST(DINOModelBuildTest, DINOv2BuildRejectsInputShapeNotDivisibleByPatchSize)
     ASSERT_NE(model, nullptr);
 
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setInputShape(nvinfer1::Dims4{1, 3, 519, 518});
+    config->setInputShape(irt::Shape{1, 3, 519, 518});
     model->setModelConfig(std::move(config));
 
     const TempWeightsFile weights("inferrt_dinov2_test_");
@@ -132,7 +132,7 @@ TEST(DINOModelBuildTest, DINOv3BuildRejectsInvalidChannelCount)
     ASSERT_NE(model, nullptr);
 
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setInputShape(nvinfer1::Dims4{1, 1, 224, 224});
+    config->setInputShape(irt::Shape{1, 1, 224, 224});
     model->setModelConfig(std::move(config));
 
     const TempWeightsFile weights("inferrt_dinov3_test_");
@@ -148,7 +148,7 @@ TEST(DINOModelBuildTest, DynamicBatchConfigIsAccepted)
     ASSERT_NE(model, nullptr);
 
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setInputShape(nvinfer1::Dims4{2, 3, 518, 518});
+    config->setInputShape(irt::Shape{2, 3, 518, 518});
     config->setDynamicBatchRange(1, 2, 4);
     model->setModelConfig(std::move(config));
 

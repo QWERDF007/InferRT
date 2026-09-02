@@ -212,7 +212,7 @@ TEST(ShapeTemplateMatcherVersionTest, FactoryCreatesSupportedVersions)
                 (void)irt::features::createShapeTemplateMatcher(irt::features::ShapeTemplateMatcherVersion::V2,
                                                                  fastConfig());
             },
-            irt::Status::ERROR_INVALID_OPERATION);
+            irt::Status::INVALID_OPERATION);
     }
 }
 
@@ -359,7 +359,7 @@ TEST(ShapeTemplateMatcherTest, MatchBeforeTrainingThrowsInvalidOperation)
 {
     V1ShapeTemplateMatcher matcher(fastConfig());
 
-    expectIrtExceptionCode([&] { matcher.match(makeLShape()); }, irt::Status::ERROR_INVALID_OPERATION);
+    expectIrtExceptionCode([&] { matcher.match(makeLShape()); }, irt::Status::INVALID_OPERATION);
 }
 
 /**

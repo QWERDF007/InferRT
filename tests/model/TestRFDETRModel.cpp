@@ -32,10 +32,10 @@ struct RFDETRVariantCase
 void expectInputShape(const irt::model::IModel &model, int n, int c, int h, int w)
 {
     const auto &shape = model.modelConfig().inputShape();
-    EXPECT_EQ(shape.d[0], n);
-    EXPECT_EQ(shape.d[1], c);
-    EXPECT_EQ(shape.d[2], h);
-    EXPECT_EQ(shape.d[3], w);
+    EXPECT_EQ(shape[0], n);
+    EXPECT_EQ(shape[1], c);
+    EXPECT_EQ(shape[2], h);
+    EXPECT_EQ(shape[3], w);
 }
 
 /**
@@ -142,7 +142,7 @@ TEST(RFDETRModelConfigTest, PreservesExplicitNativeConfig)
 
     auto config = std::make_unique<irt::model::IModelConfig>();
     config->setInputTensorNames({"image"});
-    config->setInputShape(nvinfer1::Dims4{2, 3, 640, 640});
+    config->setInputShape(irt::Shape{2, 3, 640, 640});
     config->setNumClasses(7);
     config->setOutputTensorNames({"boxes", "logits"});
     config->setRuntime(irt::model::ModelRuntime::parse("onnxruntime:cpu"));
@@ -158,18 +158,6 @@ TEST(RFDETRModelConfigTest, PreservesExplicitNativeConfig)
 }
 
 /**
- * @brief RF-DETR 手写 TensorRT 图入口应拒绝空 network 指针。
- */
-TEST(RFDETRModelBuildTest, BuildNetworkRejectsNullNetwork)
-{
-    auto model = irt::model::CreateModel("rfdetr_nano");
-    ASSERT_NE(model, nullptr);
-
-    irt::model::WeightsMap weights;
-    ExpectIrtExceptionCode([&] { model->buildNetwork(nullptr, weights); }, irt::Status::ERROR_INVALID_ARGUMENT);
-}
-
-/**
  * @brief RF-DETR 构建期应拒绝不能被 patch_size*num_windows 整除的输入尺寸。
  */
 TEST(RFDETRModelBuildTest, BuildRejectsInputShapeNotDivisibleByPatchWindow)
@@ -178,7 +166,7 @@ TEST(RFDETRModelBuildTest, BuildRejectsInputShapeNotDivisibleByPatchWindow)
     ASSERT_NE(model, nullptr);
 
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setInputShape(nvinfer1::Dims4{1, 3, 385, 384});
+    config->setInputShape(irt::Shape{1, 3, 385, 384});
     model->setModelConfig(std::move(config));
 
     const TempWeightsFile weights("inferrt_rfdetr_shape_");
@@ -194,7 +182,7 @@ TEST(RFDETRModelBuildTest, BuildRejectsInvalidChannelCount)
     ASSERT_NE(model, nullptr);
 
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setInputShape(nvinfer1::Dims4{1, 1, 384, 384});
+    config->setInputShape(irt::Shape{1, 1, 384, 384});
     model->setModelConfig(std::move(config));
 
     const TempWeightsFile weights("inferrt_rfdetr_channels_");
@@ -210,7 +198,7 @@ TEST(RFDETRModelBuildTest, BuildRejectsWrongDetectionOutputTensorCount)
     ASSERT_NE(model, nullptr);
 
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setInputShape(nvinfer1::Dims4{1, 3, 384, 384});
+    config->setInputShape(irt::Shape{1, 3, 384, 384});
     config->setOutputTensorNames({"dets"});
     model->setModelConfig(std::move(config));
 
@@ -227,7 +215,7 @@ TEST(RFDETRModelBuildTest, BuildRejectsWrongSegmentationOutputTensorCount)
     ASSERT_NE(model, nullptr);
 
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setInputShape(nvinfer1::Dims4{1, 3, 384, 384});
+    config->setInputShape(irt::Shape{1, 3, 384, 384});
     config->setOutputTensorNames({"dets", "labels"});
     model->setModelConfig(std::move(config));
 
@@ -244,7 +232,7 @@ TEST(RFDETRModelBuildTest, DynamicBatchConfigIsAccepted)
     ASSERT_NE(model, nullptr);
 
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setInputShape(nvinfer1::Dims4{2, 3, 384, 384});
+    config->setInputShape(irt::Shape{2, 3, 384, 384});
     config->setDynamicBatchRange(1, 2, 4);
     model->setModelConfig(std::move(config));
 

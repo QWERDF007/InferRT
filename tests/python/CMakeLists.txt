@@ -1,9 +1,4 @@
-if(NOT ${PROJECT_NAME_UPPER}_BUILD_PYTHON)
-    return()
-endif()
-
-if(NOT ${PROJECT_NAME_UPPER}_BUILD_SAMPLES)
-    message(STATUS "Skipping Python API tests: INFERRT_BUILD_SAMPLES is OFF")
+if(NOT ${PROJECT_NAME_UPPER}_BUILD_PYTHON OR NOT ${PROJECT_NAME_UPPER}_BUILD_TENSORRT)
     return()
 endif()
 
@@ -21,3 +16,5 @@ set_tests_properties(${PROJECT_NAME_LOWER}_python_api PROPERTIES
     ENVIRONMENT "INFERRT_BUILD_DIR=${CMAKE_BINARY_DIR}"
     LABELS "python;integration"
 )
+
+inferrt_apply_test_environment(${PROJECT_NAME_LOWER}_python_api)

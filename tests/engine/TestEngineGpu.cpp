@@ -14,22 +14,10 @@
 #include <thread>
 #include <vector>
 
+#include "TestEngineHelpers.hpp"
+#include "../../src/engine/priv/EngineTestHooks.hpp"
+
 namespace {
-
-class TensorRtLogger final : public nvinfer1::ILogger
-{
-public:
-    void log(Severity, const char *) noexcept override {}
-};
-
-struct TensorRtDeleter
-{
-    template<typename T>
-    void operator()(T *object) const
-    {
-        delete object;
-    }
-};
 
 class DelayPostOperator final : public irt::engine::IOperator
 {
@@ -48,104 +36,15 @@ public:
     }
 };
 
-std::filesystem::path buildIdentityEngine(const bool two_inputs)
-{
-    TensorRtLogger                                       logger;
-    std::unique_ptr<nvinfer1::IBuilder, TensorRtDeleter> builder(nvinfer1::createInferBuilder(logger));
-    if (!builder)
-    {
-        throw std::runtime_error("Failed to create TensorRT builder");
-    }
-    std::unique_ptr<nvinfer1::INetworkDefinition, TensorRtDeleter> network(builder->createNetworkV2(0U));
-    if (!network)
-    {
-        throw std::runtime_error("Failed to create TensorRT network");
-    }
-    auto *image = network->addInput("image", nvinfer1::DataType::kFLOAT, nvinfer1::Dims4{-1, 3, 2, 2});
-    if (!image)
-    {
-        throw std::runtime_error("Failed to add image input");
-    }
-
-    nvinfer1::ITensor *output = nullptr;
-    if (two_inputs)
-    {
-        auto *aux = network->addInput("aux", nvinfer1::DataType::kFLOAT, nvinfer1::Dims4{-1, 3, 2, 2});
-        if (!aux)
-        {
-            throw std::runtime_error("Failed to add auxiliary input");
-        }
-        auto *sum = network->addElementWise(*image, *aux, nvinfer1::ElementWiseOperation::kSUM);
-        if (!sum)
-        {
-            throw std::runtime_error("Failed to add TensorRT sum layer");
-        }
-        output = sum->getOutput(0);
-    }
-    else
-    {
-        auto *identity = network->addIdentity(*image);
-        if (!identity)
-        {
-            throw std::runtime_error("Failed to add TensorRT identity layer");
-        }
-        output = identity->getOutput(0);
-    }
-    output->setName("output");
-    network->markOutput(*output);
-
-    std::unique_ptr<nvinfer1::IBuilderConfig, TensorRtDeleter> config(builder->createBuilderConfig());
-    if (!config)
-    {
-        throw std::runtime_error("Failed to create TensorRT builder config");
-    }
-    auto *profile = builder->createOptimizationProfile();
-    if (!profile)
-    {
-        throw std::runtime_error("Failed to create TensorRT optimization profile");
-    }
-    for (const char *name : two_inputs ? std::vector<const char *>{"image", "aux"} : std::vector<const char *>{"image"})
-    {
-        if (!profile->setDimensions(name, nvinfer1::OptProfileSelector::kMIN, nvinfer1::Dims4{1, 3, 2, 2})
-            || !profile->setDimensions(name, nvinfer1::OptProfileSelector::kOPT, nvinfer1::Dims4{2, 3, 2, 2})
-            || !profile->setDimensions(name, nvinfer1::OptProfileSelector::kMAX, nvinfer1::Dims4{4, 3, 2, 2}))
-        {
-            throw std::runtime_error("Failed to configure TensorRT optimization profile");
-        }
-    }
-    if (config->addOptimizationProfile(profile) == -1)
-    {
-        throw std::runtime_error("Failed to add TensorRT optimization profile");
-    }
-    std::unique_ptr<nvinfer1::IHostMemory, TensorRtDeleter> serialized(
-        builder->buildSerializedNetwork(*network, *config));
-    if (!serialized)
-    {
-        throw std::runtime_error("Failed to serialize TensorRT test engine");
-    }
-
-    const auto path = std::filesystem::temp_directory_path()
-                    / (two_inputs ? "inferrt_gpu_multi_input.engine" : "inferrt_gpu_identity.engine");
-    std::ofstream file(path, std::ios::binary | std::ios::trunc);
-    if (!file.good())
-    {
-        throw std::runtime_error("Failed to open TensorRT test engine output");
-    }
-    file.write(static_cast<const char *>(serialized->data()), static_cast<std::streamsize>(serialized->size()));
-    if (!file.good())
-    {
-        throw std::runtime_error("Failed to write TensorRT test engine");
-    }
-    return path;
-}
+using irt::engine::test::buildIdentityEngine;
 
 irt::engine::EngineConfig makeGpuConfig(const std::filesystem::path &engine_file)
 {
     irt::engine::EngineConfig config;
     config.model_name              = "engine_gpu_test";
     config.engine_file             = engine_file;
-    config.input_width             = 2;
-    config.input_height            = 2;
+    config.preprocess.input_width  = 2;
+    config.preprocess.input_height = 2;
     config.min_batch_size          = 1;
     config.opt_batch_size          = 2;
     config.max_batch_size          = 4;
@@ -165,6 +64,7 @@ std::shared_ptr<const irt::engine::PipelinePlan> makePipeline(const bool two_inp
     if (delay_postprocess)
     {
         if (!registry->registerCreator("test.delay_post",
+                                       DelayPostOperator{}.contract(),
                                        [](const NodeConfig &) { return std::make_unique<DelayPostOperator>(); }))
         {
             throw std::runtime_error("Failed to register delayed test operator");
@@ -179,7 +79,16 @@ std::shared_ptr<const irt::engine::PipelinePlan> makePipeline(const bool two_inp
                  {
                      {},
                      {"image_host"},
-                     CpuImageToTensorOptions{{0.0F, 0.0F, 0.0F}, {1.0F, 1.0F, 1.0F}, false}
+                     CpuImageToTensorOptions{[]
+                                             {
+                                                 irt::PreprocessSpec spec;
+                                                 spec.input_width    = 2;
+                                                 spec.input_height   = 2;
+                                                 spec.input_channels = 3;
+                                                 spec.mean           = {0.0F, 0.0F, 0.0F};
+                                                 spec.stddev         = {1.0F, 1.0F, 1.0F};
+                                                 return spec;
+                                             }()}
     })
         .addNode("cuda.upload", {{"image_host"}, {"image_device"}, {}})
         .bindModelInput("image_device", "image");
@@ -284,6 +193,162 @@ TEST(InferenceEngineGpuTest, KeepsSameSourceFutureDeliveryInSubmitOrder)
     EXPECT_EQ(first.get().source_sequence, 0U);
     EXPECT_EQ(second.get().source_sequence, 1U);
     engine->shutdown();
+}
+
+TEST(InferenceEngineGpuTest, FlushesPendingOrderedCompletionDuringShutdown)
+{
+    if (!hasCudaGpu())
+    {
+        GTEST_SKIP() << "CUDA GPU is unavailable";
+    }
+    const auto engine_file = buildIdentityEngine(false);
+    auto       config      = makeGpuConfig(engine_file);
+    config.execution_slots = 2;
+    config.cpu_postprocess_workers = 2;
+    auto engine = irt::engine::InferenceEngine::create(std::move(config), makePipeline(false, true));
+    engine->start();
+
+    irt::engine::RequestOptions first_options;
+    first_options.source_id         = "shutdown-order-camera";
+    first_options.compatibility_key = "first";
+    auto first = engine->submit(cv::Mat(2, 2, CV_8UC3, cv::Scalar(1, 0, 0)), first_options).takeFuture();
+    irt::engine::RequestOptions second_options;
+    second_options.source_id         = "shutdown-order-camera";
+    second_options.compatibility_key = "second";
+    auto second = engine->submit(cv::Mat(2, 2, CV_8UC3, cv::Scalar(2, 0, 0)), second_options).takeFuture();
+
+    std::thread shutdown_thread([&engine] { engine->shutdown(); });
+    shutdown_thread.join();
+
+    ASSERT_EQ(first.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    ASSERT_EQ(second.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    EXPECT_EQ(first.get().source_sequence, 0U);
+    EXPECT_EQ(second.get().source_sequence, 1U);
+    EXPECT_EQ(engine->state(), irt::engine::EngineState::Stopped);
+    const auto metrics = engine->metrics();
+    EXPECT_EQ(metrics.inflight_batches, 0U);
+    EXPECT_EQ(metrics.pinned_input_in_use, 0U);
+    EXPECT_EQ(metrics.pinned_output_in_use, 0U);
+    EXPECT_EQ(metrics.active_requests, 0U);
+    EXPECT_EQ(metrics.slot_count, 0U);
+    EXPECT_EQ(metrics.idle_slot_count, 0U);
+    EXPECT_EQ(metrics.active_slot_count, 0U);
+    EXPECT_EQ(metrics.prepare_queue_size, 0U);
+    EXPECT_EQ(metrics.gpu_queue_size, 0U);
+    EXPECT_EQ(metrics.postprocess_queue_size, 0U);
+    EXPECT_EQ(metrics.input_ticket_count, 0U);
+    EXPECT_EQ(metrics.output_ticket_count, 0U);
+    EXPECT_EQ(metrics.thread_count, 0U);
+    EXPECT_EQ(metrics.joinable_thread_count, 0U);
+}
+
+TEST(InferenceEngineGpuTest, DuplicateCompletionFromProductionPollerIsExactlyOnce)
+{
+    if (!hasCudaGpu())
+    {
+        GTEST_SKIP() << "CUDA GPU is unavailable";
+    }
+    const auto engine_file = buildIdentityEngine(false);
+    auto       config      = makeGpuConfig(engine_file);
+    irt::engine::priv::EngineTestOptions duplicate_options;
+    duplicate_options.duplicate_completion = true;
+    irt::engine::priv::EngineTestOptionsGuard duplicate_options_guard(duplicate_options);
+    config.execution_slots = 1;
+    config.max_batch_size = 1;
+    config.opt_batch_size = 1;
+    auto engine = irt::engine::InferenceEngine::create(std::move(config), makePipeline(false));
+    engine->start();
+
+    std::vector<std::future<irt::engine::InferenceResult>> futures;
+    for (int index = 0; index < 4; ++index)
+    {
+        futures.push_back(
+            engine->submit(cv::Mat(2, 2, CV_8UC3, cv::Scalar(index, 0, 0)), irt::engine::RequestOptions{})
+                .takeFuture());
+    }
+    for (auto &future : futures)
+    {
+        ASSERT_EQ(future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+        EXPECT_TRUE(future.get().outputs.contains("output"));
+    }
+    const auto metrics = engine->metrics();
+    EXPECT_EQ(metrics.accepted_requests, 4U);
+    EXPECT_EQ(metrics.completed_requests, 4U);
+    EXPECT_EQ(metrics.failed_requests + metrics.cancelled_requests + metrics.timed_out_requests
+                  + metrics.dropped_requests,
+              0U);
+    engine->shutdown();
+}
+
+TEST(InferenceEngineGpuTest, FatalCompletionAndConcurrentShutdownConvergeExactlyOnce)
+{
+    if (!hasCudaGpu())
+    {
+        GTEST_SKIP() << "CUDA GPU is unavailable";
+    }
+    const auto engine_file = buildIdentityEngine(false);
+    auto       config      = makeGpuConfig(engine_file);
+    config.execution_slots = 1;
+    config.queue_capacity = 8;
+    config.max_batch_size = 1;
+    config.opt_batch_size = 1;
+    irt::engine::priv::EngineTestOptions fatal_options;
+    fatal_options.completion_fatal = true;
+    fatal_options.completion_fatal_delay_ms = 25;
+    irt::engine::priv::EngineTestOptionsGuard fatal_options_guard(fatal_options);
+    auto engine = irt::engine::InferenceEngine::create(std::move(config), makePipeline(false));
+    engine->start();
+
+    std::vector<std::future<irt::engine::InferenceResult>> futures;
+    for (int index = 0; index < 8; ++index)
+    {
+        futures.push_back(
+            engine->submit(cv::Mat(2, 2, CV_8UC3, cv::Scalar(index, 0, 0)), irt::engine::RequestOptions{})
+                .takeFuture());
+    }
+    std::thread shutdown_thread([&engine] { engine->shutdown(); });
+    shutdown_thread.join();
+
+    size_t terminal_count = 0;
+    for (auto &future : futures)
+    {
+        ASSERT_EQ(future.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+        try
+        {
+            (void)future.get();
+        }
+        catch (const irt::Exception &)
+        {
+        }
+        ++terminal_count;
+    }
+    EXPECT_EQ(terminal_count, futures.size());
+    const auto faults = engine->faults();
+    const auto completion_fault = std::find_if(
+        faults.begin(), faults.end(), [](const irt::engine::FaultRecord &fault) {
+            return fault.stage == irt::engine::FaultStage::CompletionPoll && fault.fatal;
+        });
+    ASSERT_NE(completion_fault, faults.end());
+    EXPECT_NE(completion_fault->message.find("Injected completion poller failure"), std::string::npos);
+    const auto metrics = engine->metrics();
+    EXPECT_EQ(metrics.inflight_batches, 0U);
+    EXPECT_EQ(metrics.queued_requests, 0U);
+    EXPECT_EQ(metrics.pinned_input_in_use, 0U);
+    EXPECT_EQ(metrics.pinned_output_in_use, 0U);
+    EXPECT_EQ(metrics.active_requests, 0U);
+    EXPECT_EQ(metrics.slot_count, 0U);
+    EXPECT_EQ(metrics.idle_slot_count, 0U);
+    EXPECT_EQ(metrics.active_slot_count, 0U);
+    EXPECT_EQ(metrics.prepare_queue_size, 0U);
+    EXPECT_EQ(metrics.gpu_queue_size, 0U);
+    EXPECT_EQ(metrics.postprocess_queue_size, 0U);
+    EXPECT_EQ(metrics.input_ticket_count, 0U);
+    EXPECT_EQ(metrics.output_ticket_count, 0U);
+    EXPECT_EQ(metrics.thread_count, 0U);
+    EXPECT_EQ(metrics.joinable_thread_count, 0U);
+    EXPECT_EQ(metrics.accepted_requests,
+              metrics.completed_requests + metrics.failed_requests + metrics.cancelled_requests
+                  + metrics.timed_out_requests + metrics.dropped_requests);
 }
 
 TEST(InferenceEngineGpuTest, RecordsNamedInputPreprocessFailure)

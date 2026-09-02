@@ -7,18 +7,18 @@
     --inferrt-atol: 分类/infer_v2 张量比对绝对容差。默认 ``5e-2``。
     --inferrt-feature-rtol: 特征提取张量比对相对容差。默认 ``1e-4``。
     --inferrt-feature-atol: 特征提取张量比对绝对容差。默认 ``1.5e-1``。
-    --inferrt-model-root: 真实模型根目录。默认 ``INFERRT_MODEL_ROOT`` 或 ``assets/models``。
+    --inferrt-model-root: 真实模型根目录。默认 ``INFERRT_MODEL_ROOT`` 或 ``F:/models``。
     --inferrt-lingbot-vision-root: LingBot-Vision checkpoint 目录。默认 ``INFERRT_LINGBOT_VISION_ROOT``
         或 ``F:/models/lingbot-vision``。
     --inferrt-lingbot-vision-repo: LingBot-Vision 源码目录。默认 ``INFERRT_LINGBOT_VISION_REPO``
         或 ``F:/Github/lingbot-vision``。
     --inferrt-ultralytics-repo: 本地 ultralytics 仓库。默认 ``INFERRT_ULTRALYTICS_REPO`` 或
-        ``D:/Github/ultralytics``。
+        ``F:/Github/CV/ultralytics``。
     --inferrt-yolov5-repo: 本地 YOLOv5 仓库。默认 ``INFERRT_YOLOV5_REPO`` 或
         ``F:/Github/CV/yolov5``。
     --inferrt-sam-root: 本地 Segment Anything v1 仓库。默认 ``INFERRT_SAM_ROOT`` 或
-        ``D:/Github/SAM/segment-anything``。
-    --inferrt-sam2-root: 本地 SAM2 仓库。默认 ``INFERRT_SAM2_ROOT`` 或 ``D:/Github/SAM/sam2``。
+        ``F:/Github/SAM-based/segment-anything``。
+    --inferrt-sam2-root: 本地 SAM2 仓库。默认 ``INFERRT_SAM2_ROOT`` 或 ``F:/Github/SAM-based/sam2``。
     --inferrt-edge-sam-root: 本地 EdgeSAM 仓库。默认 ``INFERRT_EDGE_SAM_ROOT`` 或
         ``F:/Github/SAM-based/EdgeSAM``。
     --inferrt-edge-sam-checkpoint: EdgeSAM checkpoint。默认 ``INFERRT_EDGE_SAM_CHECKPOINT`` 或
@@ -53,6 +53,7 @@ for module_path in reversed(SAMPLE_MODULE_PATHS):
         sys.path.remove(module_path_text)
     sys.path.insert(0, module_path_text)
 
+from helpers.model_integration import resolve_model_file  # noqa: E402
 from helpers.vision import ensure_module_path, preprocess_image  # noqa: E402
 
 from helpers.runtime import default_build_dir, project_root  # noqa: E402
@@ -133,10 +134,16 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="后端对比设备，逗号分隔：cpu、gpu，或 cpu,gpu",
     )
     parser.addoption(
+        "--inferrt-strict-skips",
+        action="store_true",
+        default=False,
+        help="将非 optional_resource 的 integration/slow skip 视为失败，并输出测试统计",
+    )
+    parser.addoption(
         "--inferrt-model-root",
         action="store",
         default="",
-        help="真实模型根目录；默认 INFERRT_MODEL_ROOT 或 assets/models",
+        help="真实模型根目录；默认 INFERRT_MODEL_ROOT 或 F:/models",
     )
     parser.addoption(
         "--inferrt-lingbot-vision-root",
@@ -154,7 +161,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--inferrt-ultralytics-repo",
         action="store",
         default="",
-        help="本地 ultralytics 仓库路径；默认 INFERRT_ULTRALYTICS_REPO 或 D:/Github/ultralytics",
+        help="本地 ultralytics 仓库路径；默认 INFERRT_ULTRALYTICS_REPO 或 F:/Github/CV/ultralytics",
     )
     parser.addoption(
         "--inferrt-yolov5-repo",
@@ -166,13 +173,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--inferrt-sam-root",
         action="store",
         default="",
-        help="本地 segment-anything 仓库路径；默认 INFERRT_SAM_ROOT 或 D:/Github/SAM/segment-anything",
+        help="本地 segment-anything 仓库路径；默认 INFERRT_SAM_ROOT 或 F:/Github/SAM-based/segment-anything",
     )
     parser.addoption(
         "--inferrt-sam2-root",
         action="store",
         default="",
-        help="本地 SAM2 仓库路径；默认 INFERRT_SAM2_ROOT 或 D:/Github/SAM/sam2",
+        help="本地 SAM2 仓库路径；默认 INFERRT_SAM2_ROOT 或 F:/Github/SAM-based/sam2",
     )
     parser.addoption(
         "--inferrt-edge-sam-root",
@@ -375,7 +382,7 @@ def _configured_path(pytestconfig: pytest.Config, option: str, env_name: str, de
 
 @pytest.fixture(scope="session")
 def model_root(pytestconfig: pytest.Config) -> Path:
-    """真实模型根目录，默认指向 ``assets/models``。
+    """真实模型根目录，默认指向 ``F:/models``。
 
     Args:
         pytestconfig: pytest 配置对象，用于读取 ``--inferrt-model-root``。
@@ -384,7 +391,7 @@ def model_root(pytestconfig: pytest.Config) -> Path:
         Path: 已存在的模型根目录；不存在时跳过依赖真实权重的集成测试。
     """
 
-    path = _configured_path(pytestconfig, "--inferrt-model-root", "INFERRT_MODEL_ROOT", "assets/models")
+    path = _configured_path(pytestconfig, "--inferrt-model-root", "INFERRT_MODEL_ROOT", "F:/models")
     if not path.exists():
         pytest.skip(f"Model root not found: {path}")
     return path
@@ -428,7 +435,7 @@ def ultralytics_repo(pytestconfig: pytest.Config) -> Path:
         pytestconfig,
         "--inferrt-ultralytics-repo",
         "INFERRT_ULTRALYTICS_REPO",
-        "D:/Github/ultralytics",
+        "F:/Github/CV/ultralytics",
     )
 
 
@@ -448,14 +455,24 @@ def yolov5_repo(pytestconfig: pytest.Config) -> Path:
 def sam_root(pytestconfig: pytest.Config) -> Path:
     """本地 Segment Anything v1 仓库路径，用于导出 SAM v1 权重。"""
 
-    return _configured_path(pytestconfig, "--inferrt-sam-root", "INFERRT_SAM_ROOT", "D:/Github/SAM/segment-anything")
+    return _configured_path(
+        pytestconfig,
+        "--inferrt-sam-root",
+        "INFERRT_SAM_ROOT",
+        "F:/Github/SAM-based/segment-anything",
+    )
 
 
 @pytest.fixture(scope="session")
 def sam2_root(pytestconfig: pytest.Config) -> Path:
     """本地 SAM2 仓库路径，用于导出 SAM2/SAM2.1 权重。"""
 
-    return _configured_path(pytestconfig, "--inferrt-sam2-root", "INFERRT_SAM2_ROOT", "D:/Github/SAM/sam2")
+    return _configured_path(
+        pytestconfig,
+        "--inferrt-sam2-root",
+        "INFERRT_SAM2_ROOT",
+        "F:/Github/SAM-based/sam2",
+    )
 
 
 @pytest.fixture(scope="session")
@@ -484,9 +501,60 @@ def edge_sam_checkpoint(pytestconfig: pytest.Config, model_root: Path) -> Path:
     configured = pytestconfig.getoption("--inferrt-edge-sam-checkpoint") or os.environ.get(
         "INFERRT_EDGE_SAM_CHECKPOINT"
     )
-    path = Path(configured).expanduser().resolve() if configured else model_root / "SAM" / "edge_sam.pth"
-    if not path.exists():
-        pytest.skip(f"EdgeSAM checkpoint not found: {path}")
-    return path
+    if configured:
+        path = Path(configured).expanduser().resolve()
+        if not path.exists():
+            pytest.skip(f"EdgeSAM checkpoint not found: {path}")
+        return path
+    return resolve_model_file(
+        model_root,
+        ("SAM/edge_sam.pth", "edgesam/edge_sam.pth"),
+        "EdgeSAM checkpoint",
+    )
+
+
+def _is_required_skip_item(item: pytest.Item) -> bool:
+    """Return whether a skipped item belongs to the configured release gate."""
+
+    is_integration = item.get_closest_marker("integration") is not None
+    is_slow = item.get_closest_marker("slow") is not None
+    is_optional_resource = item.get_closest_marker("optional_resource") is not None
+    return (is_integration or is_slow) and not is_optional_resource
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Emit one machine-readable-enough summary and enforce strict integration skips.
+
+    Optional model/backend parity is intentionally configurable, so the default
+    developer run may skip unavailable resources.  Release/CI runs opt into
+    ``--inferrt-strict-skips``; tests marked ``integration`` or ``slow`` are
+    gated unless the individual resource variant is explicitly marked
+    ``optional_resource``.
+    """
+
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is None:
+        return
+
+    stats = reporter.stats
+    passed = len(stats.get("passed", []))
+    failed = len(stats.get("failed", [])) + len(stats.get("error", []))
+    skipped_reports = list(stats.get("skipped", []))
+    items_by_nodeid = {item.nodeid: item for item in session.items}
+    required_skips = [
+        report
+        for report in skipped_reports
+        if (
+            (item := items_by_nodeid.get(report.nodeid)) is not None
+            and _is_required_skip_item(item)
+        )
+    ]
+
+    reporter.write_line(
+        f"InferRT test summary: passed={passed} failed={failed} skipped={len(skipped_reports)} "
+        f"required_skipped={len(required_skips)}"
+    )
+    if session.config.getoption("--inferrt-strict-skips") and required_skips and exitstatus == 0:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 

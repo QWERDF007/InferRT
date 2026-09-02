@@ -33,7 +33,7 @@ add_plugin_library(features
     PUBLIC_LIBS
         opencv_core opencv_imgcodecs opencv_imgproc
         CUDA::cudart
-        ${Faiss_LIBS}
+        Faiss::faiss
 
         inferrt_core
         inferrt_util

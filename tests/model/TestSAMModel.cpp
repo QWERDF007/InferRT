@@ -26,35 +26,35 @@ void expectSAMContract(const irt::model::IModel &model, int image_size, bool exp
     ASSERT_EQ(model.modelConfig().inputShapes().size(), 5);
 
     const auto &image_shape = model.modelConfig().inputShapes()[0];
-    EXPECT_EQ(image_shape.d[0], 1);
-    EXPECT_EQ(image_shape.d[1], 3);
-    EXPECT_EQ(image_shape.d[2], image_size);
-    EXPECT_EQ(image_shape.d[3], image_size);
+    EXPECT_EQ(image_shape[0], 1);
+    EXPECT_EQ(image_shape[1], 3);
+    EXPECT_EQ(image_shape[2], image_size);
+    EXPECT_EQ(image_shape[3], image_size);
 
     const auto &point_shape = model.modelConfig().inputShapes()[1];
-    EXPECT_EQ(point_shape.d[0], 1);
-    EXPECT_EQ(point_shape.d[1], 16);
-    EXPECT_EQ(point_shape.d[2], 2);
-    EXPECT_EQ(point_shape.d[3], 1);
+    EXPECT_EQ(point_shape[0], 1);
+    EXPECT_EQ(point_shape[1], 16);
+    EXPECT_EQ(point_shape[2], 2);
+    EXPECT_EQ(point_shape[3], 1);
 
     const auto &mask_shape = model.modelConfig().inputShapes()[3];
-    EXPECT_EQ(mask_shape.d[0], 1);
-    EXPECT_EQ(mask_shape.d[1], 1);
-    EXPECT_EQ(mask_shape.d[2], 256);
-    EXPECT_EQ(mask_shape.d[3], 256);
+    EXPECT_EQ(mask_shape[0], 1);
+    EXPECT_EQ(mask_shape[1], 1);
+    EXPECT_EQ(mask_shape[2], 256);
+    EXPECT_EQ(mask_shape[3], 256);
 }
 
 /**
  * @brief 生成只改变图像尺寸的完整 SAM 输入形状。
  */
-std::vector<nvinfer1::Dims4> makeSAMInputShapes(int image_size, int batch = 1)
+std::vector<irt::Shape> makeSAMInputShapes(int image_size, int batch = 1)
 {
     return {
-        nvinfer1::Dims4{batch,  3, image_size, image_size},
-        nvinfer1::Dims4{batch, 16,          2,          1},
-        nvinfer1::Dims4{batch, 16,          1,          1},
-        nvinfer1::Dims4{batch,  1,        256,        256},
-        nvinfer1::Dims4{batch,  1,          1,          1},
+        irt::Shape{batch,  3, image_size, image_size},
+        irt::Shape{batch, 16,          2,          1},
+        irt::Shape{batch, 16,          1,          1},
+        irt::Shape{batch,  1,        256,        256},
+        irt::Shape{batch,  1,          1,          1},
     };
 }
 
@@ -188,7 +188,7 @@ TEST(SAMModelBuildTest, BuildRejectsMissingPromptInputs)
 
     auto config = std::make_unique<irt::model::IModelConfig>();
     config->setInputTensorNames({"image"});
-    config->setInputShape(nvinfer1::Dims4{1, 3, 1024, 1024});
+    config->setInputShape(irt::Shape{1, 3, 1024, 1024});
     config->setOutputTensorNames({"masks", "iou_predictions", "low_res_masks"});
     model->setModelConfig(std::move(config));
 
@@ -205,7 +205,7 @@ TEST(SAMModelBuildTest, BuildRejectsInvalidPointCoordinateShape)
     ASSERT_NE(model, nullptr);
 
     auto shapes = makeSAMInputShapes(1024);
-    shapes[1]   = nvinfer1::Dims4{1, 8, 2, 1};
+    shapes[1]   = irt::Shape{1, 8, 2, 1};
 
     auto config = std::make_unique<irt::model::IModelConfig>();
     config->setInputTensorNames({"image", "point_coords", "point_labels", "mask_input", "has_mask_input"});
@@ -245,7 +245,7 @@ TEST(SAMModelBuildTest, DynamicBatchRejectsMismatchedPromptBatch)
     ASSERT_NE(model, nullptr);
 
     auto shapes = makeSAMInputShapes(1024, 2);
-    shapes[1]   = nvinfer1::Dims4{1, 16, 2, 1};
+    shapes[1]   = irt::Shape{1, 16, 2, 1};
 
     auto config = std::make_unique<irt::model::IModelConfig>();
     config->setInputTensorNames({"image", "point_coords", "point_labels", "mask_input", "has_mask_input"});

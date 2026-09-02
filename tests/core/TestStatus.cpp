@@ -237,3 +237,34 @@ TEST(StatusTest, PeekAtLastErrorMessageIgnoresNonPositiveLength)
 
     irt::GetLastError();
 }
+
+/**
+ * @brief 新建线程首次读取错误状态和消息时，应独立返回 IRT_SUCCESS 与 "success"。
+ */
+TEST(StatusTest, MultiThreadInitialStatusAndMessageAreIndependent)
+{
+    constexpr int kNumThreads = 8;
+    std::vector<std::thread> threads;
+    std::vector<std::string> messages(kNumThreads);
+    std::vector<IRTStatus>   statuses(kNumThreads);
+
+    for (int i = 0; i < kNumThreads; ++i)
+    {
+        threads.emplace_back([i, &messages, &statuses] {
+            char buf[IRT_MAX_STATUS_MESSAGE_LENGTH] = {};
+            statuses[i] = irt::PeekAtLastErrorMessage(buf, sizeof(buf));
+            messages[i] = buf;
+        });
+    }
+
+    for (auto &t : threads)
+    {
+        t.join();
+    }
+
+    for (int i = 0; i < kNumThreads; ++i)
+    {
+        EXPECT_EQ(IRT_SUCCESS, statuses[i]);
+        EXPECT_EQ("success", messages[i]);
+    }
+}

@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -309,4 +310,16 @@ TEST(RoIAlignFunctionEdgeCaseTest, RejectsInvalidOutputSize)
     cudaFree(d_input);
     cudaFree(d_rois);
     cudaFree(d_output);
+}
+
+/**
+ * @brief kernel grid 不能窄化为 int 时必须返回参数错误，而不是溢出 launch 配置。
+ */
+TEST(RoIAlignFunctionEdgeCaseTest, RejectsOutputGridOverflow)
+{
+    const int ret = irt::cvcuda::roiAlign(
+        reinterpret_cast<const float *>(1), reinterpret_cast<const float *>(1), reinterpret_cast<float *>(1), 1, 1,
+        cv::Size(1, 1), 1,
+        cv::Size(std::numeric_limits<int>::max(), std::numeric_limits<int>::max()), 1.0F, 1, false, nullptr);
+    EXPECT_EQ(ret, IRT_ERROR_INVALID_ARGUMENT);
 }

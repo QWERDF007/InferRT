@@ -24,18 +24,17 @@ template INFERRT_CVCUDA_API IRTStatus cvtColor<float>(const float *, float *, cv
 template<typename T>
 CvtColor<T>::CvtColor()
 {
-    impl_ = new priv::CvtColorImpl<T>();
+    impl_ = std::make_unique<priv::CvtColorImpl<T>>();
 }
 
 template<typename T>
-CvtColor<T>::~CvtColor()
-{
-    if (impl_)
-    {
-        delete impl_;
-        impl_ = nullptr;
-    }
-}
+CvtColor<T>::~CvtColor() = default;
+
+template<typename T>
+CvtColor<T>::CvtColor(CvtColor &&) noexcept = default;
+
+template<typename T>
+CvtColor<T> &CvtColor<T>::operator=(CvtColor &&) noexcept = default;
 
 template<typename T>
 IRTStatus CvtColor<T>::operator()(const T *d_src, T *d_dst, cv::Size size, const int code, cudaStream_t stream)
@@ -52,7 +51,7 @@ IRTStatus CvtColor<T>::operator()(const T *d_src, T *d_dst, cv::Size size, const
             _size.x = size.width;
             _size.y = size.height;
 
-            auto *cvtColorImpl = static_cast<priv::CvtColorImpl<T> *>(impl_);
+            auto *cvtColorImpl = static_cast<priv::CvtColorImpl<T> *>(impl_.get());
             (*cvtColorImpl)(d_src, d_dst, _size, code, stream);
         });
     return status;

@@ -1,7 +1,8 @@
 include(CMakePackageConfigHelpers)
 
-set(INFERRT_INSTALL_CMAKEDIR "cmake" CACHE STRING
-    "InferRT CMake package install directory" FORCE)
+if(NOT DEFINED INFERRT_INSTALL_CMAKEDIR)
+    set(INFERRT_INSTALL_CMAKEDIR "lib/cmake/${PROJECT_NAME}" CACHE STRING "InferRT CMake package install directory")
+endif()
 
 install(EXPORT ${PROJECT_NAME}Targets
     FILE "${PROJECT_NAME}Targets.cmake"
@@ -24,12 +25,20 @@ write_basic_package_version_file(
 set(_INFERRT_PACKAGE_CONFIG_FILES
     "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
     "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake"
-    "${CMAKE_CURRENT_LIST_DIR}/FindTensorRT.cmake"
-    "${CMAKE_CURRENT_LIST_DIR}/ConfigFaiss.cmake"
 )
+
+if(${PROJECT_NAME_UPPER}_ENABLE_CUDA AND ${PROJECT_NAME_UPPER}_BUILD_TENSORRT)
+    list(APPEND _INFERRT_PACKAGE_CONFIG_FILES "${CMAKE_CURRENT_LIST_DIR}/FindTensorRT.cmake")
+endif()
+
+if(Faiss_FOUND)
+    list(APPEND _INFERRT_PACKAGE_CONFIG_FILES "${CMAKE_CURRENT_LIST_DIR}/ConfigFaiss.cmake")
+endif()
+
 if(${PROJECT_NAME_UPPER}_BUILD_ONNX)
     list(APPEND _INFERRT_PACKAGE_CONFIG_FILES "${CMAKE_CURRENT_LIST_DIR}/ConfigONNXRuntime.cmake")
 endif()
+
 if(${PROJECT_NAME_UPPER}_BUILD_OPENVINO)
     list(APPEND _INFERRT_PACKAGE_CONFIG_FILES "${CMAKE_CURRENT_LIST_DIR}/ConfigOpenVINO.cmake")
 endif()

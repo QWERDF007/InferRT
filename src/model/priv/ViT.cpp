@@ -226,10 +226,10 @@ InputGeometry resolveInputGeometry(const VisionTransformerSpec &spec, const IMod
 {
     const auto   &shape = config.inputShape();
     InputGeometry geometry{};
-    geometry.batch    = static_cast<int>(shape.d[0]);
-    geometry.channels = static_cast<int>(shape.d[1]);
-    geometry.height   = static_cast<int>(shape.d[2]);
-    geometry.width    = static_cast<int>(shape.d[3]);
+    geometry.batch    = static_cast<int>(shape[0]);
+    geometry.channels = static_cast<int>(shape[1]);
+    geometry.height   = static_cast<int>(shape[2]);
+    geometry.width    = static_cast<int>(shape[3]);
 
     if (geometry.batch != 1)
     {
@@ -275,7 +275,8 @@ nvinfer1::ITensor *addPatchAndPositionEmbedding(const VisionTransformer &impl, n
     auto      *patch        = network->addConvolutionNd(
         *input, spec.embed_dim, nvinfer1::DimsHW{spec.patch_size, spec.patch_size},
         requireWeight(weights_map, patch_prefix + ".weight",
-                                  static_cast<int64_t>(spec.embed_dim) * geometry.channels * spec.patch_size * spec.patch_size),
+                                  checkedWeightProduct({spec.embed_dim, geometry.channels, spec.patch_size, spec.patch_size},
+                                                       "ViT patch embedding weight")),
         requireWeight(weights_map, patch_prefix + ".bias", spec.embed_dim));
     patch->setStrideNd(nvinfer1::DimsHW{spec.patch_size, spec.patch_size});
 
@@ -295,7 +296,8 @@ nvinfer1::ITensor *addPatchAndPositionEmbedding(const VisionTransformer &impl, n
     auto *pos_embed = network
                           ->addConstant(nvinfer1::Dims3{1, geometry.num_tokens, spec.embed_dim},
                                         requireWeight(weights_map, positionEmbeddingKey(layout),
-                                                      static_cast<int64_t>(geometry.num_tokens) * spec.embed_dim))
+                                                      checkedWeightProduct({geometry.num_tokens, spec.embed_dim},
+                                                                           "ViT position embedding weight")))
                           ->getOutput(0);
     auto *position_added    = network->addElementWise(*concat->getOutput(0), *pos_embed, E::kSUM)->getOutput(0);
     named_tensors["tokens"] = position_added;
@@ -315,14 +317,15 @@ void VisionTransformer::normalizeModelConfig(IModelConfig &config) const
 
     const auto &shape = config.inputShape();
     const bool  is_default_image_config
-        = shape.d[0] == 1 && shape.d[1] == 3 && shape.d[2] == kDefaultImageSize && shape.d[3] == kDefaultImageSize;
+        = shape.rank() == 4 && shape[0] == 1 && shape[1] == 3 && shape[2] == kDefaultImageSize
+        && shape[3] == kDefaultImageSize;
     if (!is_default_image_config)
     {
         return;
     }
 
     // 当调用方没有显式设置输入尺寸时，使用变体名携带的默认分辨率，避免 pos_embed 数量不匹配。
-    config.setInputShape(nvinfer1::Dims4{1, 3, spec_.image_size, spec_.image_size});
+    config.setInputShape(irt::Shape{1, 3, spec_.image_size, spec_.image_size});
 }
 
 void VisionTransformer::buildNetwork(nvinfer1::INetworkDefinition *network, const WeightsMap &weights_map)

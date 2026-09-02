@@ -117,6 +117,13 @@ TEST(CvtColorFunctionTest, U8GrayToBgra)
                              { return irt::cvcuda::cvtColor<uint8_t>(src, dst, size, code, stream); });
 }
 
+TEST(CvtColorFunctionTest, U8BgraToRgb)
+{
+    runCvtColorTest<uint8_t>(23, 13, 4, cv::COLOR_BGRA2RGB, 0.0,
+                             [](const uint8_t *src, uint8_t *dst, cv::Size size, int code, cudaStream_t stream)
+                             { return irt::cvcuda::cvtColor<uint8_t>(src, dst, size, code, stream); });
+}
+
 /**
  * @brief 测试 float 类型 BGR 转 YCrCb
  *

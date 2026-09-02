@@ -1,4 +1,4 @@
-#include "priv/ClusteringCommon.hpp"
+#include "priv/ClusteringNeighborhood.hpp"
 
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/ops/DBSCAN.hpp>

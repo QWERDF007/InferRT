@@ -27,18 +27,17 @@ template INFERRT_CVCUDA_API IRTStatus adaptiveThreshold<uint8_t>(const uint8_t *
 template<typename T>
 AdaptiveThreshold<T>::AdaptiveThreshold()
 {
-    impl_ = new priv::AdaptiveThresholdImpl<T>();
+    impl_ = std::make_unique<priv::AdaptiveThresholdImpl<T>>();
 }
 
 template<typename T>
-AdaptiveThreshold<T>::~AdaptiveThreshold()
-{
-    if (impl_)
-    {
-        delete impl_;
-        impl_ = nullptr;
-    }
-}
+AdaptiveThreshold<T>::~AdaptiveThreshold() = default;
+
+template<typename T>
+AdaptiveThreshold<T>::AdaptiveThreshold(AdaptiveThreshold &&) noexcept = default;
+
+template<typename T>
+AdaptiveThreshold<T> &AdaptiveThreshold<T>::operator=(AdaptiveThreshold &&) noexcept = default;
 
 template<typename T>
 IRTStatus AdaptiveThreshold<T>::operator()(const T *d_src, T *d_dst, cv::Size size, const int CH, const double maxval,
@@ -60,7 +59,7 @@ IRTStatus AdaptiveThreshold<T>::operator()(const T *d_src, T *d_dst, cv::Size si
             const int sstride = size.width * CH;
             const int dstride = size.width * CH;
 
-            auto *adaptiveThresholdImpl = static_cast<priv::AdaptiveThresholdImpl<T> *>(impl_);
+            auto *adaptiveThresholdImpl = static_cast<priv::AdaptiveThresholdImpl<T> *>(impl_.get());
             (*adaptiveThresholdImpl)(d_src, d_dst, _size, sstride, dstride, CH, maxval, adaptive_method, threshold_type,
                                      block_size, param, d_weights, stream);
         });

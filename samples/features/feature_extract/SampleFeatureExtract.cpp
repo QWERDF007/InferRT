@@ -74,30 +74,30 @@ struct IterationTiming
  */
 struct TensorDump
 {
-    std::string        name;
-    nvinfer1::Dims     dims;
-    nvinfer1::DataType data_type;
+    std::string         name;
+    irt::Shape           dims;
+    irt::TensorDataType  data_type{irt::TensorDataType::F32};
     std::vector<char>  host_bytes;
     std::string        file_name;
 };
 
 const fs::path kDefaultOutputDir = "feature_dump_cpp";
 
-std::vector<float> preprocessBatch(const std::vector<cv::Mat> &images, const nvinfer1::Dims &input_dims)
+std::vector<float> preprocessBatch(const std::vector<cv::Mat> &images, const irt::Shape &input_dims)
 {
-    if (input_dims.nbDims != 4 || input_dims.d[1] != 3 || input_dims.d[2] <= 0 || input_dims.d[3] <= 0)
+    if (input_dims.rank() != 4 || input_dims[1] != 3 || input_dims[2] <= 0 || input_dims[3] <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Feature sample expects input shape Nx3xHxW, got %s",
                              dimsToCsv(input_dims).c_str());
     }
 
-    const size_t image_elements = static_cast<size_t>(input_dims.d[1]) * static_cast<size_t>(input_dims.d[2])
-                                * static_cast<size_t>(input_dims.d[3]);
+    const size_t image_elements = static_cast<size_t>(input_dims[1]) * static_cast<size_t>(input_dims[2])
+                                * static_cast<size_t>(input_dims[3]);
     std::vector<float> batch_data(images.size() * image_elements);
     for (size_t i = 0; i < images.size(); ++i)
     {
         const auto preprocessed = irt::model::ImageNetUtil::preprocess(
-            images[i], cv::Size(static_cast<int>(input_dims.d[3]), static_cast<int>(input_dims.d[2])));
+            images[i], cv::Size(static_cast<int>(input_dims[3]), static_cast<int>(input_dims[2])));
         const auto single = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
         if (single.size() != image_elements)
         {
@@ -185,9 +185,9 @@ Arguments parseArguments(int argc, char *argv[])
  */
 void printStats(const TensorDump &tensor)
 {
-    if (tensor.data_type != nvinfer1::DataType::kFLOAT)
+    if (tensor.data_type != irt::TensorDataType::F32)
     {
-        std::cout << tensor.name << " dtype=" << dataTypeToString(tensor.data_type) << " dims=["
+        std::cout << tensor.name << " dtype=" << irt::model::dataTypeToString(tensor.data_type) << " dims=["
                   << dimsToCsv(tensor.dims) << "] bytes=" << tensor.host_bytes.size() << std::endl;
         return;
     }
@@ -254,7 +254,7 @@ int main(int argc, char *argv[])
                                  runtime_model_name.c_str());
         }
 
-        model->setLogLevel(nvinfer1::ILogger::Severity::kINFO);
+        model->setLogLevel(irt::model::LogLevel::Info);
         std::cout << "Building or loading feature-only model..." << std::endl;
         const auto build_start = Clock::now();
         model->buildOrLoad(cli.weights_file.string());
@@ -273,7 +273,7 @@ int main(int argc, char *argv[])
             images.push_back(std::move(img));
         }
 
-        const auto input_tensor_names = model->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
+        const auto input_tensor_names = model->ioTensorNames(irt::TensorIOMode::Input);
         if (input_tensor_names.empty())
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Model must expose at least one input tensor");
@@ -285,14 +285,14 @@ int main(int argc, char *argv[])
         }
 
         auto input_dims = model->tensorShape(input_tensor_names.front());
-        if (input_dims.nbDims != 4 || input_dims.d[1] != 3 || input_dims.d[2] <= 0 || input_dims.d[3] <= 0)
+        if (input_dims.rank() != 4 || input_dims[1] != 3 || input_dims[2] <= 0 || input_dims[3] <= 0)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                                  "Feature sample expects input shape Nx3xHxW, got %s", dimsToCsv(input_dims).c_str());
         }
-        if (input_dims.d[0] != static_cast<int64_t>(images.size()))
+        if (input_dims[0] != static_cast<int64_t>(images.size()))
         {
-            input_dims.d[0] = static_cast<int64_t>(images.size());
+            input_dims[0] = static_cast<int64_t>(images.size());
             model->setTensorShape(input_tensor_names.front(), input_dims);
         }
 
@@ -301,15 +301,15 @@ int main(int argc, char *argv[])
         const auto preprocess_end   = Clock::now();
 
         const bool uses_tensorrt = cli.runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT;
-        const auto stream        = uses_tensorrt ? model->resolveExecutionStream() : nullptr;
+        const cudaStream_t stream = uses_tensorrt ? reinterpret_cast<cudaStream_t>(model->resolveExecutionStream()) : nullptr;
 
         DeviceBuffer d_input;
         if (uses_tensorrt)
         {
-            d_input = DeviceBuffer(input_data.size(), nvinfer1::DataType::kFLOAT);
+            d_input = DeviceBuffer(input_data.size(), irt::TensorDataType::F32);
         }
 
-        const auto              output_names = model->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+        const auto              output_names = model->ioTensorNames(irt::TensorIOMode::Output);
         std::vector<TensorDump> dumps;
         dumps.reserve(output_names.size());
 
@@ -318,9 +318,14 @@ int main(int argc, char *argv[])
         std::vector<std::vector<std::max_align_t>> host_outputs;
         host_outputs.reserve(output_names.size());
 
-        std::vector<void *> buffers;
+        std::vector<irt::BufferView> buffers;
         buffers.reserve(1 + output_names.size());
-        buffers.push_back(uses_tensorrt ? d_input.data() : const_cast<float *>(input_data.data()));
+        buffers.push_back(uses_tensorrt
+                              ? irt::BufferView::fromBytes(d_input.data(), d_input.sizeBytes(), irt::MemoryKind::DEVICE,
+                                                           input_tensor_names.front())
+                              : irt::BufferView::fromBytes(const_cast<float *>(input_data.data()),
+                                                           input_data.size() * sizeof(float), irt::MemoryKind::HOST,
+                                                           input_tensor_names.front()));
 
         for (const auto &output_name : output_names)
         {
@@ -337,13 +342,16 @@ int main(int argc, char *argv[])
             if (uses_tensorrt)
             {
                 device_outputs.emplace_back(element_count, tensor.data_type);
-                buffers.push_back(device_outputs.back().data());
+                buffers.push_back(irt::BufferView::fromBytes(device_outputs.back().data(),
+                                                             device_outputs.back().sizeBytes(), irt::MemoryKind::DEVICE,
+                                                             output_name));
             }
             else
             {
                 const size_t aligned_words = (num_bytes + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t);
                 host_outputs.emplace_back(aligned_words);
-                buffers.push_back(host_outputs.back().data());
+                buffers.push_back(irt::BufferView::fromBytes(host_outputs.back().data(), num_bytes,
+                                                             irt::MemoryKind::HOST, output_name));
             }
             dumps.push_back(std::move(tensor));
         }
@@ -364,7 +372,7 @@ int main(int argc, char *argv[])
             timing.h2d_ms      = elapsedMs(h2d_start, h2d_end);
 
             const auto inference_start = Clock::now();
-            model->forwardFeatures(buffers, stream, true);
+            model->forwardFeatures(buffers, reinterpret_cast<std::uintptr_t>(stream), true);
             if (uses_tensorrt)
             {
                 checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(feature forward)");
@@ -459,7 +467,7 @@ int main(int argc, char *argv[])
         for (const auto &tensor : dumps)
         {
             writeBinaryFile(output_dir / tensor.file_name, tensor.host_bytes.data(), tensor.host_bytes.size());
-            manifest << "tensor|" << tensor.name << "|" << dataTypeToString(tensor.data_type) << "|"
+            manifest << "tensor|" << tensor.name << "|" << irt::model::dataTypeToString(tensor.data_type) << "|"
                      << dimsToCsv(tensor.dims) << "|" << tensor.file_name << "\n";
         }
         const auto postprocess_end = Clock::now();

@@ -6,10 +6,12 @@ function(add_inferrt_sample SAMPLE_NAME)
 
     set(TARGET_NAME "${PROJECT_NAME_LOWER}_sample_${SAMPLE_NAME}")
 
-    file(GLOB_RECURSE SOURCES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.cpp)
-    file(GLOB_RECURSE HEADERS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.h *.hpp)
+    file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.cpp)
+    file(GLOB_RECURSE HEADERS CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.h *.hpp)
 
     add_executable(${TARGET_NAME} ${SOURCES} ${HEADERS})
+
+    inferrt_apply_compile_options(${TARGET_NAME})
 
     target_link_libraries(${TARGET_NAME}
         PRIVATE

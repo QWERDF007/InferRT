@@ -16,6 +16,7 @@ from helpers.model_integration import (
     ensure_sam2_wts,
     ensure_sam_v1_wts,
     require_sample,
+    resolve_model_file,
 )
 from helpers.runtime import run_process_capture
 
@@ -34,7 +35,11 @@ def test_sam_v1_checkpoint_exports_with_models_root(
     weights = ensure_sam_v1_wts(
         repo_root=repo_root,
         model_root=model_root,
-        checkpoint=model_root / "sam" / "sam_vit_b_01ec64.pth",
+        checkpoint=resolve_model_file(
+            model_root,
+            ("sam1/sam_vit_b_01ec64.pth", "sam/sam_vit_b_01ec64.pth"),
+            "SAM ViT-B checkpoint",
+        ),
         sam_root=sam_root,
     )
 
@@ -76,7 +81,11 @@ def test_sam2_sample_runs_with_models_root(
     weights = ensure_sam2_wts(
         repo_root=repo_root,
         model_root=model_root,
-        checkpoint=model_root / "sam" / "sam2.1_hiera_tiny.pt",
+        checkpoint=resolve_model_file(
+            model_root,
+            ("sam2/sam2.1_hiera_tiny.pt", "sam/sam2.1_hiera_tiny.pt"),
+            "SAM2.1 Hiera-Tiny checkpoint",
+        ),
         sam2_root=sam2_root,
     )
     output_image = artifact_dir(build_dir, "sam") / f"sam2_1_hiera_tiny_mask_{os.getpid()}.jpg"

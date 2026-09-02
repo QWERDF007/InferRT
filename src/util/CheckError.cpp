@@ -1,4 +1,6 @@
+#if INFERRT_HAS_CUDA
 #include <cuda_runtime.h>
+#endif
 #include <inferrt/util/CheckError.hpp>
 
 #include <cstdarg>
@@ -50,7 +52,7 @@ char *GetCheckMessage(char *buf, int bufsize, const char *fmt, ...)
 }
 
 std::string FormatErrorMessage(const std::string_view &errname, const std::string_view &callstr,
-                               const std::string_view &msg)
+                                const std::string_view &msg)
 {
     // TODO: avoid heap memory allocation here
     std::ostringstream ss;
@@ -73,6 +75,7 @@ std::string FormatErrorMessage(const std::string_view &errname, const std::strin
 
 } // namespace detail
 
+#if INFERRT_HAS_CUDA
 IRTStatus TranslateError(cudaError_t err)
 {
     switch (err)
@@ -107,5 +110,6 @@ const char *ToString(cudaError_t err, const char **perrdescr)
 
     return cudaGetErrorName(err);
 }
+#endif
 
 } // namespace irt::util

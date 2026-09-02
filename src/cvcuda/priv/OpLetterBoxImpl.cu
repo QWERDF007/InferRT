@@ -3,11 +3,13 @@
 #include "saturate.cuh"
 
 #include <inferrt/core/Exception.hpp>
+#include <inferrt/core/Tensor.hpp>
 #include <inferrt/util/CheckError.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
 namespace irt::cvcuda::priv {
 
@@ -16,7 +18,8 @@ static const int INTER_RESIZE_COEF_SCALE = 1 << INTER_RESIZE_COEF_BITS;
 
 template<int CH>
 __global__ void letter_box_kernel(const uint8_t *src, float *dst, const double2 scale, const int2 ssize,
-                                  const int sstride, const int2 dsize, const int dst_N, const int4 valid_rect)
+                                  const int sstride, const int2 dsize, const int dst_N, const int4 valid_rect,
+                                  const LetterBoxImpl::Parameters parameters)
 {
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= dst_N)
@@ -36,7 +39,10 @@ __global__ void letter_box_kernel(const uint8_t *src, float *dst, const double2 
 #pragma unroll
         for (int ch = 0; ch < CH; ++ch)
         {
-            dst[dst_idx + ch * dst_N] = 114.0f / 255.0f;
+            dst[dst_idx + ch * dst_N] = parameters.pad_after_normalize
+                                          ? 0.0F
+                                          : (parameters.pad_value * parameters.scale - parameters.mean[ch])
+                                                / parameters.stddev[ch];
         }
         return;
     }
@@ -98,71 +104,74 @@ __global__ void letter_box_kernel(const uint8_t *src, float *dst, const double2 
     for (int ch = 0; ch < CH; ++ch)
     {
         int2 hval;
-        hval.x = row0[s.x * CH + ch] * alpha.x + row0[s1.x * CH + ch] * alpha.y;
-        hval.y = row1[s.x * CH + ch] * alpha.x + row1[s1.x * CH + ch] * alpha.y;
+        const int source_channel = parameters.channel_map[ch];
+        hval.x = row0[s.x * CH + source_channel] * alpha.x + row0[s1.x * CH + source_channel] * alpha.y;
+        hval.y = row1[s.x * CH + source_channel] * alpha.x + row1[s1.x * CH + source_channel] * alpha.y;
 
         int2 term;
         term.x           = (beta.x * (hval.x >> 4)) >> 16;
         term.y           = (beta.y * (hval.y >> 4)) >> 16;
         const int result = (term.x + term.y + 2) >> 2;
 
-        const int channel_idx              = (CH == 3 && ch < 3) ? (2 - ch) : ch;
-        dst[dst_idx + channel_idx * dst_N] = result / 255.0f;
+        dst[dst_idx + ch * dst_N]
+            = (static_cast<float>(result) * parameters.scale - parameters.mean[ch]) / parameters.stddev[ch];
     }
 }
 
 template<int CH>
 void launch_letter_box_kernel(const uint8_t *d_src, float *d_dst, const double2 &scale, const int2 &ssize,
                               const int sstride, const int2 &dsize, const int dst_N, const int4 &valid_rect,
-                              const int grid_size, const int block_size, cudaStream_t stream)
+                              const int grid_size, const int block_size, const LetterBoxImpl::Parameters &parameters,
+                              cudaStream_t stream)
 {
     letter_box_kernel<CH>
-        <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dst_N, valid_rect);
+        <<<grid_size, block_size, 0, stream>>>(d_src, d_dst, scale, ssize, sstride, dsize, dst_N, valid_rect,
+                                               parameters);
 }
 
 void LetterBoxImpl::RunLetterBox(const uint8_t *d_src, float *d_dst, const int2 ssize, const int sstride,
-                                 const int2 dsize, const int CH, cudaStream_t stream)
+                                 const int2 dsize, const int CH, const Parameters &parameters,
+                                 const irt::PreprocessGeometry &geometry, cudaStream_t stream)
 {
-    const double r_w   = static_cast<double>(dsize.x) / ssize.x;
-    const double r_h   = static_cast<double>(dsize.y) / ssize.y;
-    const double ratio = std::min(r_w, r_h);
-
-    int2 resized;
-    resized.x = std::max(1, static_cast<int>(std::round(ssize.x * ratio)));
-    resized.y = std::max(1, static_cast<int>(std::round(ssize.y * ratio)));
-    resized.x = std::min(resized.x, dsize.x);
-    resized.y = std::min(resized.y, dsize.y);
+    const int2 resized{geometry.resized_width, geometry.resized_height};
 
     double2 scale;
     scale.x = static_cast<double>(ssize.x) / resized.x;
     scale.y = static_cast<double>(ssize.y) / resized.y;
 
-    int2 pad;
-    pad.x = (dsize.x - resized.x) / 2;
-    pad.y = (dsize.y - resized.y) / 2;
-
     int4 valid_rect;
-    valid_rect.x = static_cast<int>(std::round(pad.x - 0.1));
-    valid_rect.y = static_cast<int>(std::round(pad.y - 0.1));
+    valid_rect.x = geometry.pad_left;
+    valid_rect.y = geometry.pad_top;
     valid_rect.z = valid_rect.x + resized.x;
     valid_rect.w = valid_rect.y + resized.y;
 
-    const int dst_N      = dsize.x * dsize.y;
+    const size_t dst_elements = irt::checkedSizeMul(static_cast<size_t>(dsize.x), static_cast<size_t>(dsize.y),
+                                                    "LetterBox destination elements");
+    if (dst_elements > static_cast<size_t>(std::numeric_limits<int>::max()))
+    {
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "LetterBox destination is too large");
+    }
+    const int dst_N      = static_cast<int>(dst_elements);
     const int block_size = 256;
-    const int grid_size  = (dst_N + block_size - 1) / block_size;
+    const int grid_size  = static_cast<int>((dst_elements + static_cast<size_t>(block_size) - 1)
+                                            / static_cast<size_t>(block_size));
 
     switch (CH)
     {
     case 1:
         launch_letter_box_kernel<1>(d_src, d_dst, scale, ssize, sstride, dsize, dst_N, valid_rect, grid_size,
-                                    block_size, stream);
+                                    block_size, parameters, stream);
         break;
     case 3:
         launch_letter_box_kernel<3>(d_src, d_dst, scale, ssize, sstride, dsize, dst_N, valid_rect, grid_size,
-                                    block_size, stream);
+                                    block_size, parameters, stream);
+        break;
+    case 4:
+        launch_letter_box_kernel<4>(d_src, d_dst, scale, ssize, sstride, dsize, dst_N, valid_rect, grid_size,
+                                    block_size, parameters, stream);
         break;
     default:
-        throw Exception(Status::ERROR_INVALID_ARGUMENT, "Channels must be 1 or 3");
+        throw Exception(Status::ERROR_INVALID_ARGUMENT, "Channels must be 1, 3 or 4");
     }
 
     IRT_CHECK_THROW(cudaPeekAtLastError(), "LetterBox kernel launch failed: ch=%d src=%dx%d dst=%dx%d", CH, ssize.x,

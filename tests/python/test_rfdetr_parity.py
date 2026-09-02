@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from helpers.model_integration import ensure_rfdetr_wts
+from helpers.torch_precision import strict_fp32_reference
 from helpers.vision import allocate_output_tensors, preprocess_image
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
@@ -25,6 +26,7 @@ RFDETR_PREFIX_LOGITS_MAX_ATOL = 4.0
 RFDETR_PREFIX_LOGITS_MEAN_ATOL = 0.08
 RFDETR_FULL_DETS_MEAN_ATOL = 0.08
 RFDETR_FULL_LOGITS_MEAN_ATOL = 0.30
+RFDETR_CACHE_VERSION = "rfdetr-v5"
 
 
 def _assert_mean_abs_below(reference: np.ndarray, actual: np.ndarray, *, atol: float, name: str) -> None:
@@ -64,6 +66,25 @@ def _assert_max_mean_abs_below(
         )
 
 
+def _assert_exact_repeat(reference: dict[str, np.ndarray], repeat: dict[str, np.ndarray], *, name: str) -> None:
+    """同一 TensorRT engine 对同一输入重复执行时，输出必须逐元素一致。"""
+
+    if reference.keys() != repeat.keys():
+        raise AssertionError(f"Output name mismatch for {name}: first={sorted(reference)}, repeat={sorted(repeat)}")
+    for output_name in reference:
+        first = np.asarray(reference[output_name], dtype=np.float32)
+        second = np.asarray(repeat[output_name], dtype=np.float32)
+        if first.shape != second.shape:
+            raise AssertionError(
+                f"Shape mismatch for repeated {name}.{output_name}: first={first.shape}, repeat={second.shape}"
+            )
+        if not np.array_equal(first, second):
+            diff = np.abs(first - second)
+            raise AssertionError(
+                f"Repeated {name}.{output_name} is not deterministic: max_abs={float(diff.max()):.6g}"
+            )
+
+
 def _build_model_or_skip(model: Any, model_file: Path, *, label: str) -> None:
     """构建或加载 InferRT 模型；后端不可用时跳过当前集成测试。"""
 
@@ -95,38 +116,47 @@ def _run_torch_rfdetr(*, rfdetr_root: Path, checkpoint: Path, input_tensor: np.n
     """运行上游 RF-DETR PyTorch export 前向，返回原始 boxes/logits 输出。"""
 
     torch = pytest.importorskip("torch")
-    from rfdetr_compat import configure_rfdetr_import
-    from rfdetr_gen_wts import infer_checkpoint_num_classes
+    with strict_fp32_reference(torch) as reapply_precision:
+        from rfdetr_compat import configure_rfdetr_import
+        from rfdetr_gen_wts import infer_checkpoint_num_classes
 
-    configure_rfdetr_import(rfdetr_root)
-    try:
-        from rfdetr import from_checkpoint  # type: ignore
-    except ImportError as exc:
-        pytest.skip(f"RF-DETR import failed: {exc}")
+        configure_rfdetr_import(rfdetr_root)
+        try:
+            from rfdetr import from_checkpoint  # type: ignore
+        except ImportError as exc:
+            pytest.skip(f"RF-DETR import failed: {exc}")
 
-    device = _torch_device()
-    kwargs: dict[str, object] = {"device": str(device)}
-    num_classes = infer_checkpoint_num_classes(checkpoint)
-    if num_classes is not None:
-        kwargs["num_classes"] = num_classes
-    wrapper = from_checkpoint(checkpoint, **kwargs)
-    model = wrapper.model.model.eval().to(device)
-    model.export()
+        device = _torch_device()
+        kwargs: dict[str, object] = {"device": str(device)}
+        num_classes = infer_checkpoint_num_classes(checkpoint)
+        if num_classes is not None:
+            kwargs["num_classes"] = num_classes
+        wrapper = from_checkpoint(checkpoint, **kwargs)
+        model = wrapper.model.model.eval().to(device)
+        model.export()
+        reapply_precision()
 
-    batch = torch.from_numpy(np.ascontiguousarray(input_tensor, dtype=np.float32)).to(device=device)
-    with torch.inference_mode():
-        outputs = model(batch)
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
+        batch = torch.from_numpy(np.ascontiguousarray(input_tensor, dtype=np.float32)).to(device=device)
+        with torch.inference_mode():
+            outputs = model(batch)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
 
-    if not isinstance(outputs, (tuple, list)) or len(outputs) != 2:
-        raise AssertionError(f"Unexpected RF-DETR PyTorch output type: {type(outputs)!r}")
+        if not isinstance(outputs, (tuple, list)) or len(outputs) != 2:
+            raise AssertionError(f"Unexpected RF-DETR PyTorch output type: {type(outputs)!r}")
 
-    boxes, logits = outputs
-    return {
-        "dets": boxes.detach().cpu().numpy().astype(np.float32, copy=False),
-        "labels": logits.detach().cpu().numpy().astype(np.float32, copy=False),
-    }
+        boxes, logits = outputs
+        result = {
+            "dets": boxes.detach().cpu().numpy().astype(np.float32, copy=False),
+            "labels": logits.detach().cpu().numpy().astype(np.float32, copy=False),
+        }
+        # TensorRT builds that follow the PyTorch reference in the same process
+        # must see the same available workspace. Release the reference model and
+        # allocator cache before constructing the native engine.
+        del outputs, boxes, logits, batch, model, wrapper
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+        return result
 
 
 def _run_inferrt_rfdetr(
@@ -192,6 +222,26 @@ def test_rfdetr_native_tensorrt_matches_pytorch_export(
         input_tensor=input_tensor,
         resolution=resolution,
     )
+    repeated_outputs = _run_inferrt_rfdetr(
+        irt_module,
+        model_name=model_name,
+        weights_path=weights_path,
+        input_tensor=input_tensor,
+        resolution=resolution,
+    )
+
+    manifest_path = weights_path.with_suffix(".manifest.yaml")
+    assert manifest_path.is_file(), f"RF-DETR engine manifest missing: {manifest_path}"
+    manifest_version = next(
+        (line.split(":", 1)[1].strip() for line in manifest_path.read_text(encoding="utf-8").splitlines()
+         if line.startswith("version:")),
+        "",
+    )
+    assert manifest_version == RFDETR_CACHE_VERSION, (
+        f"RF-DETR engine cache contract is stale for {model_name}: "
+        f"expected {RFDETR_CACHE_VERSION}, got {manifest_version or '<missing>'}"
+    )
+    _assert_exact_repeat(inferrt_outputs, repeated_outputs, name=model_name)
 
     # RF-DETR 的 DINO backbone 在 PyTorch SDPA 与 TensorRT 展开图之间存在逐层数值累积；
     # 低置信候选的 two-stage TopK 顺序会因此漂移。检测语义更关注排序稳定的前缀候选，

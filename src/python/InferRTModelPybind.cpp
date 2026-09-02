@@ -2,13 +2,14 @@
  * @file InferRTModelPybind.cpp
  * @brief InferRT 模型的 pybind11 Python 绑定实现。
  *
- * 提供 NumPy 与 DLPack 张量到 TensorRT 推理管线的桥接，包括模型创建、
+ * 提供 NumPy 与 DLPack 张量到 InferRT 推理管线的桥接，包括模型创建、
  * engine 构建/加载、主推理、特征前向及张量形状/类型查询等能力。
  */
 
 #include <cuda_runtime_api.h>
 #include <dlpack/dlpack.h>
 #include <inferrt/core/Exception.hpp>
+#include <inferrt/core/Tensor.hpp>
 #include <inferrt/model/ModelFactory.hpp>
 #include <inferrt/model/Utils.hpp>
 #include <inferrt/util/CheckError.hpp>
@@ -23,6 +24,7 @@
 #include <limits>
 #include <memory>
 #include <numeric>
+#include <span>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -41,31 +43,22 @@ namespace py = pybind11;
 /** @brief 匿名命名空间，封装仅在本翻译单元内使用的绑定辅助逻辑。 */
 namespace {
 
-using irt::model::dataTypeSize;
-using irt::model::dataTypeToString;
-
 /**
- * @brief 将 TensorRT 维度对象转换为 Python 友好的整型数组。
- * @param dims TensorRT 维度对象。
- * @return 维度数组，顺序与 TensorRT 保持一致。
+ * @brief 将核心形状转换为 Python 友好的整型数组。
+ * @param shape 核心形状对象。
+ * @return 维度数组，顺序与核心契约保持一致。
  */
-std::vector<int64_t> dimsToVector(const nvinfer1::Dims &dims)
+std::vector<int64_t> dimsToVector(const irt::Shape &shape)
 {
-    std::vector<int64_t> values;
-    values.reserve(static_cast<size_t>(dims.nbDims));
-    for (int32_t i = 0; i < dims.nbDims; ++i)
-    {
-        values.push_back(dims.d[i]);
-    }
-    return values;
+    return shape.dims;
 }
 
 /**
- * @brief 将 Python 侧维度数组转换为 TensorRT 维度对象。
+ * @brief 将 Python 侧维度数组转换为核心形状对象。
  * @param shape Python 侧维度数组。
- * @return TensorRT 维度对象。
+ * @return 核心形状对象。
  */
-nvinfer1::Dims vectorToDims(const std::vector<int64_t> &shape)
+irt::Shape vectorToShape(const std::vector<int64_t> &shape)
 {
     constexpr size_t kMaxDims = 8;
     if (shape.size() > kMaxDims)
@@ -73,18 +66,7 @@ nvinfer1::Dims vectorToDims(const std::vector<int64_t> &shape)
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Too many dimensions: %zu", shape.size());
     }
 
-    nvinfer1::Dims dims{};
-    dims.nbDims = static_cast<int32_t>(shape.size());
-    for (size_t i = 0; i < shape.size(); ++i)
-    {
-        if (shape[i] < std::numeric_limits<int32_t>::min() || shape[i] > std::numeric_limits<int32_t>::max())
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Dimension out of int32 range: dim[%zu]=%lld", i,
-                                 static_cast<long long>(shape[i]));
-        }
-        dims.d[i] = static_cast<int32_t>(shape[i]);
-    }
-    return dims;
+    return irt::Shape{std::vector<int64_t>(shape)};
 }
 
 /**
@@ -111,30 +93,30 @@ std::unique_ptr<irt::model::IModelConfig> cloneModelConfig(const irt::model::IMo
 }
 
 /**
- * @brief 将 TensorRT 数据类型转换为 NumPy dtype。
- * @param data_type TensorRT 数据类型。
+ * @brief 将核心数据类型转换为 NumPy dtype。
+ * @param data_type 核心数据类型。
  * @return 对应的 NumPy dtype。
  */
-py::dtype dataTypeToPyDType(nvinfer1::DataType data_type)
+py::dtype dataTypeToPyDType(irt::TensorDataType data_type)
 {
     switch (data_type)
     {
-    case nvinfer1::DataType::kFLOAT:
+    case irt::TensorDataType::F32:
         return py::dtype::of<float>();
-    case nvinfer1::DataType::kHALF:
+    case irt::TensorDataType::F16:
         return py::dtype("float16");
-    case nvinfer1::DataType::kINT8:
-        return py::dtype::of<int8_t>();
-    case nvinfer1::DataType::kUINT8:
+    case irt::TensorDataType::U8:
         return py::dtype::of<uint8_t>();
-    case nvinfer1::DataType::kINT32:
+    case irt::TensorDataType::I8:
+        return py::dtype::of<int8_t>();
+    case irt::TensorDataType::I32:
         return py::dtype::of<int32_t>();
-    case nvinfer1::DataType::kINT64:
+    case irt::TensorDataType::I64:
         return py::dtype::of<int64_t>();
-    case nvinfer1::DataType::kBOOL:
+    case irt::TensorDataType::Bool:
         return py::dtype::of<bool>();
     default:
-        throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED, "Unsupported TensorRT data type");
+        throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED, "Unsupported InferRT data type");
     }
 }
 
@@ -166,11 +148,14 @@ irt::model::ModelRuntime parseRuntimeObject(const py::object &value, const irt::
  */
 size_t multiplyChecked(size_t lhs, size_t rhs, const std::string &tensor_name)
 {
-    if (rhs != 0 && lhs > std::numeric_limits<size_t>::max() / rhs)
+    try
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "Tensor size overflow: %s", tensor_name.c_str());
+        return irt::checkedSizeMul(lhs, rhs, "Tensor size");
     }
-    return lhs * rhs;
+    catch (const irt::Exception &error)
+    {
+        throw irt::Exception(error.code(), "Tensor size overflow: %s", tensor_name.c_str());
+    }
 }
 
 /**
@@ -184,7 +169,7 @@ size_t tensorElementCount(const std::vector<int64_t> &shape, const std::string &
 {
     if (shape.empty())
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "Tensor has invalid rank: %s", tensor_name.c_str());
+        throw irt::Exception(irt::Status::INVALID_OPERATION, "Tensor has invalid rank: %s", tensor_name.c_str());
     }
 
     size_t count = 1;
@@ -192,33 +177,33 @@ size_t tensorElementCount(const std::vector<int64_t> &shape, const std::string &
     {
         if (shape[i] < 0)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION,
+            throw irt::Exception(irt::Status::INVALID_OPERATION,
                                  "Tensor shape is not fully resolved, tensor=%s dim[%zu]=%lld", tensor_name.c_str(), i,
                                  static_cast<long long>(shape[i]));
         }
-        count = multiplyChecked(count, static_cast<size_t>(shape[i]), tensor_name);
+        count = multiplyChecked(count, irt::checkedInt64ToSize(shape[i], "Tensor dimension"), tensor_name);
     }
     return count;
 }
 
 /**
- * @brief 根据 TensorRT 维度对象计算张量元素总数。
- * @param dims TensorRT 维度。
+ * @brief 根据核心形状计算张量元素总数。
+ * @param shape 核心形状。
  * @param tensor_name 张量名称，仅用于报错信息。
  * @return 元素总数。
  */
-size_t tensorElementCount(const nvinfer1::Dims &dims, const std::string &tensor_name)
+size_t tensorElementCount(const irt::Shape &shape, const std::string &tensor_name)
 {
-    return tensorElementCount(dimsToVector(dims), tensor_name);
+    return tensorElementCount(shape.dims, tensor_name);
 }
 
 /**
  * @brief 将任意 Python 输入规整为指定 dtype 的连续 NumPy 数组。
  * @param input Python 输入对象。
- * @param data_type 目标 TensorRT 数据类型。
+ * @param data_type 目标核心数据类型。
  * @return 连续 NumPy 数组。
  */
-py::array asContiguousArray(const py::handle &input, nvinfer1::DataType data_type)
+py::array asContiguousArray(const py::handle &input, irt::TensorDataType data_type)
 {
     static py::object numpy = py::module_::import("numpy");
     return py::array(numpy.attr("ascontiguousarray")(input, dataTypeToPyDType(data_type)));
@@ -316,12 +301,12 @@ DLManagedTensor *consumeDLPackCapsulePointer(const py::handle &capsule)
 }
 
 /**
- * @brief 将 DLPack 数据类型映射为 TensorRT 数据类型。
+ * @brief 将 DLPack 数据类型映射为核心数据类型。
  * @param dtype DLPack `DLDataType` 描述符。
- * @return 对应的 TensorRT 类型。
+ * @return 对应的核心类型。
  * @throws irt::Exception 不支持的 code/bits/lanes 组合时抛出。
  */
-nvinfer1::DataType dlDataTypeToTrt(const DLDataType &dtype)
+irt::TensorDataType dlDataTypeToCore(const DLDataType &dtype)
 {
     if (dtype.lanes != 1)
     {
@@ -334,27 +319,27 @@ nvinfer1::DataType dlDataTypeToTrt(const DLDataType &dtype)
     case kDLFloat:
         if (dtype.bits == 16)
         {
-            return nvinfer1::DataType::kHALF;
+            return irt::TensorDataType::F16;
         }
         if (dtype.bits == 32)
         {
-            return nvinfer1::DataType::kFLOAT;
+            return irt::TensorDataType::F32;
         }
         break;
     case kDLInt:
         if (dtype.bits == 8)
         {
-            return nvinfer1::DataType::kINT8;
+            return irt::TensorDataType::I8;
         }
         if (dtype.bits == 32)
         {
-            return nvinfer1::DataType::kINT32;
+            return irt::TensorDataType::I32;
         }
         break;
     case kDLBool:
         if (dtype.bits == 8)
         {
-            return nvinfer1::DataType::kBOOL;
+            return irt::TensorDataType::Bool;
         }
         break;
     default:
@@ -409,6 +394,11 @@ bool isCompactRowMajor(const DLTensor &tensor)
         if (tensor.shape[i] != 1 && tensor.strides[i] != expected_stride)
         {
             return false;
+        }
+        if (tensor.shape[i] < 0
+            || expected_stride > std::numeric_limits<int64_t>::max() / std::max<int64_t>(tensor.shape[i], 1))
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "DLPack tensor stride calculation overflows");
         }
         expected_stride *= tensor.shape[i];
     }
@@ -729,7 +719,7 @@ public:
      */
     std::string tensorDType(const std::string &tensor_name) const
     {
-        return dataTypeToString(model_->tensorDataType(tensor_name));
+        return irt::model::dataTypeToString(model_->tensorDataType(tensor_name));
     }
 
     /**
@@ -739,23 +729,23 @@ public:
      */
     void setTensorShape(const std::string &tensor_name, const std::vector<int64_t> &shape)
     {
-        model_->setTensorShape(tensor_name, vectorToDims(shape));
+        model_->setTensorShape(tensor_name, vectorToShape(shape));
     }
 
     /**
-     * @brief 设置 TensorRT 日志级别。
+     * @brief 设置 InferRT 日志级别。
      * @param severity 日志级别。
      */
-    void setLogLevel(nvinfer1::ILogger::Severity severity)
+    void setLogLevel(irt::model::LogLevel severity)
     {
         model_->setLogLevel(severity);
     }
 
     /**
-     * @brief 获取当前 TensorRT 日志级别。
+     * @brief 获取当前 InferRT 日志级别。
      * @return 日志级别。
      */
-    nvinfer1::ILogger::Severity logLevel() const
+    irt::model::LogLevel logLevel() const
     {
         return model_->logLevel();
     }
@@ -773,12 +763,12 @@ public:
         {
             (void)non_blocking;
             return executeHost(inputs, outputs, outputTensorNames(),
-                               [this](const std::vector<void *> &buffers) { model_->infer(buffers); });
+                               [this](std::span<const irt::BufferView> buffers) { model_->infer(buffers); });
         }
 
         const auto stream = model_->resolveExecutionStream();
         return execute(
-            inputs, outputs, outputTensorNames(), [this, stream, non_blocking](const std::vector<void *> &buffers)
+            inputs, outputs, outputTensorNames(), [this, stream, non_blocking](std::span<const irt::BufferView> buffers)
             { model_->infer(buffers, stream, non_blocking); }, stream);
     }
 
@@ -801,8 +791,8 @@ public:
 
         const auto stream_value = parseStreamPtr(stream_ptr);
         return executeV2(inputs, outputs, outputTensorNames(), stream_value,
-                         [this, stream_value, non_blocking](const std::vector<void *> &buffers)
-                         { model_->infer(buffers, reinterpret_cast<cudaStream_t>(stream_value), non_blocking); });
+                         [this, stream_value, non_blocking](std::span<const irt::BufferView> buffers)
+                         { model_->infer(buffers, stream_value, non_blocking); });
     }
 
     /**
@@ -816,19 +806,20 @@ public:
         const auto output_names = outputTensorNames();
         if (output_names.empty())
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "No output tensors are configured");
+            throw irt::Exception(irt::Status::INVALID_OPERATION, "No output tensors are configured");
         }
 
         if (!usesTensorRTBackend())
         {
             (void)non_blocking;
             return executeHost(inputs, py::none(), output_names,
-                               [this](const std::vector<void *> &buffers) { model_->forwardFeatures(buffers); });
+                               [this](std::span<const irt::BufferView> buffers) { model_->forwardFeatures(buffers); });
         }
 
         const auto stream = model_->resolveExecutionStream();
         return execute(
-            inputs, py::none(), output_names, [this, stream, non_blocking](const std::vector<void *> &buffers)
+            inputs, py::none(), output_names,
+            [this, stream, non_blocking](std::span<const irt::BufferView> buffers)
             { model_->forwardFeatures(buffers, stream, non_blocking); }, stream);
     }
 
@@ -936,11 +927,11 @@ private:
      * @brief 校验调用方提供的输出 NumPy 数组是否满足 engine 要求。
      * @param tensor_name 张量名称。
      * @param array 输出数组。
-     * @param expected_dtype 期望的 TensorRT 数据类型。
+     * @param expected_dtype 期望的核心数据类型。
      * @param expected_shape 期望的运行时形状。
      * @throws irt::Exception 不可写、非 C 连续、dtype/shape/大小不匹配时抛出。
      */
-    void validateOutputArray(const std::string &tensor_name, const py::array &array, nvinfer1::DataType expected_dtype,
+    void validateOutputArray(const std::string &tensor_name, const py::array &array, irt::TensorDataType expected_dtype,
                              const std::vector<int64_t> &expected_shape) const
     {
         if (!array.writeable())
@@ -956,7 +947,7 @@ private:
         if (!array.dtype().equal(dataTypeToPyDType(expected_dtype)))
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Output tensor dtype mismatch: %s, expected=%s",
-                                 tensor_name.c_str(), dataTypeToString(expected_dtype).c_str());
+                                 tensor_name.c_str(), irt::model::dataTypeToString(expected_dtype).c_str());
         }
         if (static_cast<size_t>(array.ndim()) != expected_shape.size())
         {
@@ -975,7 +966,8 @@ private:
             }
         }
         if (static_cast<size_t>(array.nbytes())
-            != tensorElementCount(expected_shape, tensor_name) * dataTypeSize(expected_dtype))
+            != irt::checkedSizeMul(tensorElementCount(expected_shape, tensor_name),
+                                   irt::model::dataTypeSize(expected_dtype), "Tensor byte size"))
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected numpy buffer size for tensor: %s",
                                  tensor_name.c_str());
@@ -1022,7 +1014,7 @@ private:
                 shape.push_back(array.shape(dim_index));
             }
 
-            model_->setTensorShape(input_name, vectorToDims(shape));
+            model_->setTensorShape(input_name, vectorToShape(shape));
             bindings.emplace_back(input_name, std::move(array));
         }
 
@@ -1052,7 +1044,8 @@ private:
                 std::vector<py::ssize_t> py_shape(shape.begin(), shape.end());
                 py::array                array(dataTypeToPyDType(data_type), py_shape);
                 if (static_cast<size_t>(array.nbytes())
-                    != tensorElementCount(shape, tensor_name) * dataTypeSize(data_type))
+                    != irt::checkedSizeMul(tensorElementCount(shape, tensor_name),
+                                           irt::model::dataTypeSize(data_type), "Tensor byte size"))
                 {
                     throw irt::Exception(irt::Status::ERROR_INTERNAL, "Unexpected numpy buffer size for tensor: %s",
                                          tensor_name.c_str());
@@ -1103,7 +1096,7 @@ private:
                 shape.push_back(array.shape(dim_index));
             }
 
-            model_->setTensorShape(input_name, vectorToDims(shape));
+            model_->setTensorShape(input_name, vectorToShape(shape));
             bindings.emplace_back(input_name, std::move(array));
         }
 
@@ -1127,7 +1120,8 @@ private:
                 std::vector<py::ssize_t> py_shape(shape.begin(), shape.end());
                 py::array                array(dataTypeToPyDType(data_type), py_shape);
                 if (static_cast<size_t>(array.nbytes())
-                    != tensorElementCount(shape, tensor_name) * dataTypeSize(data_type))
+                    != irt::checkedSizeMul(tensorElementCount(shape, tensor_name),
+                                           irt::model::dataTypeSize(data_type), "Tensor byte size"))
                 {
                     throw irt::Exception(irt::Status::ERROR_INTERNAL, "Unexpected numpy buffer size for tensor: %s",
                                          tensor_name.c_str());
@@ -1162,17 +1156,17 @@ private:
      * @brief 校验 DLPack 张量的 dtype、秩、布局与可选的期望形状。
      * @param tensor_name 张量名称。
      * @param tensor DLPack `DLTensor` 视图。
-     * @param expected_dtype 期望的 TensorRT 数据类型。
+     * @param expected_dtype 期望的核心数据类型。
      * @param expected_shape 期望形状；为 nullptr 时仅校验 dtype 与布局。
      */
-    void validateDLPackTensor(const std::string &tensor_name, const DLTensor &tensor, nvinfer1::DataType expected_dtype,
+    void validateDLPackTensor(const std::string &tensor_name, const DLTensor &tensor, irt::TensorDataType expected_dtype,
                               const std::vector<int64_t> *expected_shape) const
     {
-        const auto actual_dtype = dlDataTypeToTrt(tensor.dtype);
+        const auto actual_dtype = dlDataTypeToCore(tensor.dtype);
         if (actual_dtype != expected_dtype)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Tensor dtype mismatch: %s, expected=%s",
-                                 tensor_name.c_str(), dataTypeToString(expected_dtype).c_str());
+                                 tensor_name.c_str(), irt::model::dataTypeToString(expected_dtype).c_str());
         }
 
         if (tensor.ndim < 0)
@@ -1262,7 +1256,7 @@ private:
      * @return 填充好的 `TensorBindingV2`。
      */
     TensorBindingV2 makeDLPackBinding(const std::string &tensor_name, const py::handle &object,
-                                      nvinfer1::DataType expected_dtype, const std::vector<int64_t> *expected_shape,
+                                      irt::TensorDataType expected_dtype, const std::vector<int64_t> *expected_shape,
                                       uintptr_t stream_ptr, bool is_input)
     {
         TensorBindingV2 binding;
@@ -1379,7 +1373,7 @@ private:
                 shape                      = dlShapeToVector(managed_tensor->dl_tensor);
             }
 
-            model_->setTensorShape(input_name, vectorToDims(shape));
+            model_->setTensorShape(input_name, vectorToShape(shape));
             bindings.push_back(std::move(binding));
         }
 
@@ -1423,55 +1417,98 @@ private:
     }
 
     /**
-     * @brief 将输入输出张量拼装成 InferRT 所需的缓冲区指针数组。
+     * @brief 将输入输出张量拼装成 backend-neutral 的 BufferView 数组。
      * @tparam BindingType `TensorBinding` 或 `TensorBindingV2`。
      * @param inputs 输入张量绑定列表。
      * @param outputs 输出张量绑定列表。
-     * @return 先输入后输出的 `void*` 指针数组，顺序与 engine 绑定一致。
+     * @return 先输入后输出的 typed buffer view，顺序与模型 I/O 一致。
      */
     template<typename BindingType>
-    std::vector<void *> buildBufferList(const std::vector<BindingType> &inputs,
-                                        const std::vector<BindingType> &outputs) const
+    std::vector<irt::BufferView> buildBufferList(const std::vector<BindingType> &inputs,
+                                                 const std::vector<BindingType> &outputs) const
     {
-        std::vector<void *> buffers;
+        std::vector<irt::BufferView> buffers;
         buffers.reserve(inputs.size() + outputs.size());
+        const auto make_view = [this](const std::string &name, void *pointer, const size_t bytes)
+        {
+            if (pointer == nullptr || bytes == 0)
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                     "Tensor buffer is null or empty: %s", name.c_str());
+            }
+            const auto shape    = model_->tensorShape(name);
+            const auto data_type = model_->tensorDataType(name);
+            const auto required = irt::checkedSizeMul(shape.elementCount(), irt::dataTypeSize(data_type),
+                                                      "Tensor byte size");
+            if (required != bytes)
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                     "Tensor buffer size mismatch: %s, expected=%zu, got=%zu", name.c_str(), required,
+                                     bytes);
+            }
+            return irt::BufferView{pointer,
+                                   {data_type, irt::TensorLayout::Opaque, irt::MemoryKind::DEVICE, shape},
+                                   required,
+                                   1,
+                                   bytes,
+                                   name};
+        };
         for (const auto &input : inputs)
         {
             if constexpr (std::is_same_v<BindingType, TensorBinding>)
             {
-                buffers.push_back(input.device_buffer.data());
+                buffers.push_back(make_view(input.name, input.device_buffer.data(), input.device_buffer.size()));
             }
             else
             {
-                buffers.push_back(input.device_ptr);
+                buffers.push_back(make_view(input.name, input.device_ptr, input.num_bytes));
             }
         }
         for (const auto &output : outputs)
         {
             if constexpr (std::is_same_v<BindingType, TensorBinding>)
             {
-                buffers.push_back(output.device_buffer.data());
+                buffers.push_back(make_view(output.name, output.device_buffer.data(), output.device_buffer.size()));
             }
             else
             {
-                buffers.push_back(output.device_ptr);
+                buffers.push_back(make_view(output.name, output.device_ptr, output.num_bytes));
             }
         }
         return buffers;
     }
 
-    std::vector<void *> buildHostBufferList(std::vector<HostTensorBinding> &inputs,
-                                            std::vector<HostTensorBinding> &outputs) const
+    std::vector<irt::BufferView> buildHostBufferList(std::vector<HostTensorBinding> &inputs,
+                                                     std::vector<HostTensorBinding> &outputs) const
     {
-        std::vector<void *> buffers;
+        std::vector<irt::BufferView> buffers;
         buffers.reserve(inputs.size() + outputs.size());
+        const auto make_view = [this](const std::string &name, py::array &array)
+        {
+            const auto shape     = model_->tensorShape(name);
+            const auto data_type = model_->tensorDataType(name);
+            const auto bytes     = static_cast<size_t>(array.nbytes());
+            const auto required  = irt::checkedSizeMul(shape.elementCount(), irt::dataTypeSize(data_type),
+                                                       "Tensor byte size");
+            if (array.mutable_data() == nullptr || bytes != required)
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                     "Host tensor buffer size mismatch: %s", name.c_str());
+            }
+            return irt::BufferView{array.mutable_data(),
+                                   {data_type, irt::TensorLayout::Opaque, irt::MemoryKind::HOST, shape},
+                                   required,
+                                   1,
+                                   bytes,
+                                   name};
+        };
         for (auto &input : inputs)
         {
-            buffers.push_back(input.host_array.mutable_data());
+            buffers.push_back(make_view(input.name, input.host_array));
         }
         for (auto &output : outputs)
         {
-            buffers.push_back(output.host_array.mutable_data());
+            buffers.push_back(make_view(output.name, output.host_array));
         }
         return buffers;
     }
@@ -1547,11 +1584,12 @@ private:
      */
     py::object execute(const py::object &inputs, const py::object &outputs,
                        const std::vector<std::string>                         &output_names,
-                       const std::function<void(const std::vector<void *> &)> &forward_fn, cudaStream_t stream)
+                       const std::function<void(std::span<const irt::BufferView>)> &forward_fn, uintptr_t stream_value)
     {
         auto input_bindings  = prepareInputBindings(inputs);
         auto output_bindings = prepareOutputBindings(outputs, output_names);
         auto buffers         = buildBufferList(input_bindings, output_bindings);
+        auto stream          = reinterpret_cast<cudaStream_t>(stream_value);
 
         {
             py::gil_scoped_release release;
@@ -1566,7 +1604,7 @@ private:
 
     py::object executeHost(const py::object &inputs, const py::object &outputs,
                            const std::vector<std::string>                         &output_names,
-                           const std::function<void(const std::vector<void *> &)> &forward_fn)
+                           const std::function<void(std::span<const irt::BufferView>)> &forward_fn)
     {
         auto input_bindings  = prepareHostInputBindings(inputs);
         auto output_bindings = prepareHostOutputBindings(outputs, output_names);
@@ -1591,7 +1629,7 @@ private:
      */
     py::object executeV2(const py::object &inputs, const py::object &outputs,
                          const std::vector<std::string> &output_names, uintptr_t stream_value,
-                         const std::function<void(const std::vector<void *> &)> &forward_fn)
+                         const std::function<void(std::span<const irt::BufferView>)> &forward_fn)
     {
         auto input_bindings  = prepareInputBindingsV2(inputs, stream_value);
         auto output_bindings = prepareOutputBindingsV2(outputs, output_names, stream_value);
@@ -1627,12 +1665,12 @@ PYBIND11_MODULE(inferrt_model_py, m)
     /** Python 侧 InferRT 异常类型，对应 C++ `irt::Exception`。 */
     py::register_exception<irt::Exception>(m, "InferRTError");
 
-    py::enum_<nvinfer1::ILogger::Severity>(m, "LogLevel", "TensorRT 日志级别。")
-        .value("INTERNAL_ERROR", nvinfer1::ILogger::Severity::kINTERNAL_ERROR)
-        .value("ERROR", nvinfer1::ILogger::Severity::kERROR)
-        .value("WARNING", nvinfer1::ILogger::Severity::kWARNING)
-        .value("INFO", nvinfer1::ILogger::Severity::kINFO)
-        .value("VERBOSE", nvinfer1::ILogger::Severity::kVERBOSE);
+    py::enum_<irt::model::LogLevel>(m, "LogLevel", "InferRT 日志级别。")
+        .value("INTERNAL_ERROR", irt::model::LogLevel::InternalError)
+        .value("ERROR", irt::model::LogLevel::Error)
+        .value("WARNING", irt::model::LogLevel::Warning)
+        .value("INFO", irt::model::LogLevel::Info)
+        .value("VERBOSE", irt::model::LogLevel::Verbose);
 
     py::class_<irt::model::ModelRuntime>(m, "ModelRuntime", "模型推理后端与设备的统一运行目标。")
         .def(py::init<>(), "默认使用 tensorrt:0。")
@@ -1668,9 +1706,7 @@ PYBIND11_MODULE(inferrt_model_py, m)
                     throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                                          "input_shape must contain exactly 4 dimensions");
                 }
-                self.setInputShape(nvinfer1::Dims4{static_cast<int32_t>(shape.at(0)), static_cast<int32_t>(shape.at(1)),
-                                                   static_cast<int32_t>(shape.at(2)),
-                                                   static_cast<int32_t>(shape.at(3))});
+                self.setInputShape(vectorToShape(shape));
             },
             "第一个输入张量形状，按 NCHW 顺序。")
         .def_property(
@@ -1686,8 +1722,8 @@ PYBIND11_MODULE(inferrt_model_py, m)
             },
             [](irt::model::IModelConfig &self, const std::vector<std::vector<int64_t>> &shapes)
             {
-                std::vector<nvinfer1::Dims4> dims_list;
-                dims_list.reserve(shapes.size());
+                std::vector<irt::Shape> shape_list;
+                shape_list.reserve(shapes.size());
                 for (const auto &shape : shapes)
                 {
                     if (shape.size() != 4)
@@ -1695,11 +1731,9 @@ PYBIND11_MODULE(inferrt_model_py, m)
                         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                                              "Each input shape must contain 4 dimensions");
                     }
-                    dims_list.push_back(nvinfer1::Dims4{static_cast<int32_t>(shape[0]), static_cast<int32_t>(shape[1]),
-                                                        static_cast<int32_t>(shape[2]),
-                                                        static_cast<int32_t>(shape[3])});
+                    shape_list.push_back(vectorToShape(shape));
                 }
-                self.setInputShapes(std::move(dims_list));
+                self.setInputShapes(std::move(shape_list));
             },
             "所有输入张量形状列表。")
         .def_property("input_tensor_names", &irt::model::IModelConfig::inputTensorNames,

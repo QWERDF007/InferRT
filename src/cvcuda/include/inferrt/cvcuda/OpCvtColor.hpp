@@ -17,16 +17,21 @@ public:
 
     ~CvtColor();
 
+    CvtColor(const CvtColor &)            = delete;
+    CvtColor &operator=(const CvtColor &) = delete;
+    CvtColor(CvtColor &&) noexcept;
+    CvtColor &operator=(CvtColor &&) noexcept;
+
     [[nodiscard]] IRTStatus operator()(const T *d_src, T *d_dst, cv::Size size, const int code,
                                        cudaStream_t stream = nullptr);
 
     virtual OperatorHandle handle() const noexcept override
     {
-        return impl_;
+        return impl_.get();
     }
 
 private:
-    OperatorHandle impl_;
+    OperatorImplPtr impl_;
 };
 
 } // namespace irt::cvcuda

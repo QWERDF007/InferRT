@@ -194,7 +194,7 @@ TEST(RoiSearchTest, SearchBeforeBuildThrowsInvalidOperation)
     irt::features::RoiSearch search(config);
 
     expectIrtExceptionCode([&] { search.search("query.jpg", {0.0f, 0.0f, 10.0f, 10.0f}); },
-                           irt::Status::ERROR_INVALID_OPERATION);
+                           irt::Status::INVALID_OPERATION);
 }
 
 TEST(RoiSearchTest, LoadRequiresExplicitIndexFile)

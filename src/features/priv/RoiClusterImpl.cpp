@@ -33,7 +33,7 @@ void reportProgress(const RoiClusterProgressCallback &callback, RoiClusterStage 
 
 RoiClusterItem normalizeItem(const RoiClusterItem &item)
 {
-    validateRoi(item.roi);
+    priv::validateRoi(item.roi);
     return RoiClusterItem{item.roi_id, priv::normalizeImageFilePath(item.image_path, "RoiCluster"), item.roi};
 }
 
@@ -107,7 +107,8 @@ RoiClusterResult RoiCluster::Impl::cluster(const fs::path &weights_file,
                            batch_count, processed_count, normalized_items.size());
         });
 
-    const auto expected_size = normalized_items.size() * static_cast<size_t>(feature_dim_);
+    const auto expected_size = irt::checkedSizeMul(normalized_items.size(), static_cast<size_t>(feature_dim_),
+                                                   "ROI cluster feature matrix elements");
     if (features.size() != expected_size)
     {
         throw irt::Exception(irt::Status::ERROR_INTERNAL, "ROI cluster feature matrix size mismatch");

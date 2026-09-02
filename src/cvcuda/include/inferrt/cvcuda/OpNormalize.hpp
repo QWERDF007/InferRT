@@ -22,16 +22,25 @@ public:
     Normalize();
     ~Normalize() override;
 
+    Normalize(const Normalize &)            = delete;
+    Normalize &operator=(const Normalize &) = delete;
+    Normalize(Normalize &&) noexcept;
+    Normalize &operator=(Normalize &&) noexcept;
+
     [[nodiscard]] IRTStatus operator()(const uint8_t *d_src, float *d_dst, cv::Size size, int channels,
                                        const float *mean, const float *stddev, cudaStream_t stream = nullptr);
 
+    [[nodiscard]] IRTStatus operator()(const uint8_t *d_src, float *d_dst, cv::Size size, int channels,
+                                       const float *mean, const float *stddev, float scale,
+                                       cudaStream_t stream = nullptr);
+
     OperatorHandle handle() const noexcept override
     {
-        return impl_;
+        return impl_.get();
     }
 
 private:
-    OperatorHandle impl_{nullptr};
+    OperatorImplPtr impl_;
 };
 
 } // namespace irt::cvcuda

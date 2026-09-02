@@ -98,10 +98,11 @@ nvinfer1::ITensor *addLinear3DNoBias(nvinfer1::INetworkDefinition *network, cons
                                      nvinfer1::ITensor &input, const std::string &prefix, int in_features,
                                      int out_features)
 {
+    const int64_t weight_count = checkedWeightProduct({out_features, in_features}, "DINO Linear weight");
     auto *weight = network
                        ->addConstant(nvinfer1::Dims3{1, out_features, in_features},
                                      requireWeight(weights_map, prefix + ".weight",
-                                                   static_cast<int64_t>(out_features) * in_features))
+                                                   weight_count))
                        ->getOutput(0);
     auto *matmul = network->addMatrixMultiply(input, M::kNONE, *weight, M::kTRANSPOSE);
     return matmul->getOutput(0);
@@ -134,11 +135,15 @@ nvinfer1::Weights makeSplitQkvBias(const WeightsMap &weights_map, const std::str
     const auto &q_bias = requireWeight(weights_map, prefix + ".attn.q_bias", embed_dim);
     const auto &v_bias = requireWeight(weights_map, prefix + ".attn.v_bias", embed_dim);
 
-    std::vector<float> values(static_cast<size_t>(3 * embed_dim), 0.0F);
+    const size_t embed_size = irt::checkedInt64ToSize(embed_dim, "DINO embed_dim");
+    const size_t qkv_count  = irt::checkedSizeProduct({3U, embed_size}, "DINO qkv bias");
+    std::vector<float> values(qkv_count, 0.0F);
     for (int i = 0; i < embed_dim; ++i)
     {
         values[static_cast<size_t>(i)]                 = weightValue(q_bias, i);
-        values[static_cast<size_t>(2 * embed_dim + i)] = weightValue(v_bias, i);
+        values[irt::checkedSizeAdd(irt::checkedSizeMul(2U, embed_size, "DINO qkv bias"), static_cast<size_t>(i),
+                                   "DINO qkv bias")]
+            = weightValue(v_bias, i);
     }
     return ownedFloatVector(std::move(values));
 }
@@ -148,14 +153,17 @@ nvinfer1::Weights makeSplitQkvBias(const WeightsMap &weights_map, const std::str
  */
 nvinfer1::Weights makeFullQkvBias(const nvinfer1::Weights &bias, int embed_dim, bool mask_k_bias)
 {
-    std::vector<float> values(static_cast<size_t>(3 * embed_dim));
-    for (int i = 0; i < 3 * embed_dim; ++i)
+    const size_t embed_size = irt::checkedInt64ToSize(embed_dim, "DINO embed_dim");
+    const size_t qkv_count  = irt::checkedSizeProduct({3U, embed_size}, "DINO qkv bias");
+    std::vector<float> values(qkv_count);
+    for (size_t i = 0; i < qkv_count; ++i)
     {
-        values[static_cast<size_t>(i)] = weightValue(bias, i);
+        values[i] = weightValue(bias, irt::checkedSizeToInt64(i, "DINO qkv bias index"));
     }
     if (mask_k_bias)
     {
-        std::fill(values.begin() + embed_dim, values.begin() + 2 * embed_dim, 0.0F);
+        std::fill(values.begin() + embed_size, values.begin() + irt::checkedSizeMul(2U, embed_size, "DINO qkv bias"),
+                  0.0F);
     }
     return ownedFloatVector(std::move(values));
 }
@@ -175,8 +183,10 @@ nvinfer1::ITensor *addQkvProjection(nvinfer1::INetworkDefinition *network, const
     if (hasWeight(weights_map, qkv_bias_key))
     {
         const bool mask_k_bias = spec.version == DINOVersion::V3 && hasWeight(weights_map, qkv_bias_key + "_mask");
-        bias_weights = makeFullQkvBias(requireWeight(weights_map, qkv_bias_key, 3 * spec.embed_dim), spec.embed_dim,
-                                       mask_k_bias);
+        bias_weights = makeFullQkvBias(
+            requireWeight(weights_map, qkv_bias_key,
+                          checkedWeightProduct({3, spec.embed_dim}, "DINO qkv bias weight")),
+            spec.embed_dim, mask_k_bias);
     }
     else if (hasWeight(weights_map, prefix + ".attn.q_bias") || hasWeight(weights_map, prefix + ".attn.v_bias"))
     {
@@ -223,7 +233,10 @@ std::vector<float> resolveRopePeriods(const WeightsMap &weights_map, const DINOI
  */
 std::vector<float> makeRopeTable(const DINOInputGeometry &geometry, const std::vector<float> &periods, bool make_sin)
 {
-    std::vector<float> table(static_cast<size_t>(geometry.num_patches * geometry.head_dim));
+    const size_t table_size = irt::checkedSizeProduct({static_cast<size_t>(geometry.num_patches),
+                                                       static_cast<size_t>(geometry.head_dim)},
+                                                      "DINO RoPE table");
+    std::vector<float> table(table_size);
     size_t             offset = 0;
 
     for (int y = 0; y < geometry.grid_h; ++y)
@@ -460,10 +473,10 @@ DINOInputGeometry resolveInputGeometry(const DINOTransformerSpec &spec, const IM
 {
     const auto       &shape = config.inputShape();
     DINOInputGeometry geometry{};
-    geometry.batch    = static_cast<int>(shape.d[0]);
-    geometry.channels = static_cast<int>(shape.d[1]);
-    geometry.height   = static_cast<int>(shape.d[2]);
-    geometry.width    = static_cast<int>(shape.d[3]);
+    geometry.batch    = static_cast<int>(shape[0]);
+    geometry.channels = static_cast<int>(shape[1]);
+    geometry.height   = static_cast<int>(shape[2]);
+    geometry.width    = static_cast<int>(shape[3]);
 
     if (geometry.batch <= 0)
     {
@@ -515,7 +528,8 @@ nvinfer1::ITensor *addPatchEmbedding(const DINOTransformer &impl, nvinfer1::INet
     auto *patch = network->addConvolutionNd(
         *input, spec.embed_dim, nvinfer1::DimsHW{spec.patch_size, spec.patch_size},
         requireWeight(weights_map, "patch_embed.proj.weight",
-                      static_cast<int64_t>(spec.embed_dim) * geometry.channels * spec.patch_size * spec.patch_size),
+                      checkedWeightProduct({spec.embed_dim, geometry.channels, spec.patch_size, spec.patch_size},
+                                           "DINO patch embedding weight")),
         requireWeight(weights_map, "patch_embed.proj.bias", spec.embed_dim));
     patch->setStrideNd(nvinfer1::DimsHW{spec.patch_size, spec.patch_size});
 
@@ -538,7 +552,8 @@ nvinfer1::ITensor *addExtraTokens(nvinfer1::INetworkDefinition *network, const W
     }
 
     const auto &weights = requireAnyWeight(weights_map, {"register_tokens", "reg_token", "storage_tokens"},
-                                           static_cast<int64_t>(spec.extra_tokens) * spec.embed_dim);
+                                           checkedWeightProduct({spec.extra_tokens, spec.embed_dim},
+                                                                "DINO extra token weight"));
     auto *tokens = network->addConstant(nvinfer1::Dims3{1, spec.extra_tokens, spec.embed_dim}, weights)->getOutput(0);
     return broadcastFirstDimLike(network, *tokens, batch_like);
 }
@@ -1061,10 +1076,11 @@ void DINOTransformer::normalizeModelConfig(IModelConfig &config) const
 
     const auto &shape = config.inputShape();
     const bool  is_default_image_config
-        = shape.d[0] == 1 && shape.d[1] == 3 && shape.d[2] == kDefaultImageSize && shape.d[3] == kDefaultImageSize;
+        = shape.rank() == 4 && shape[0] == 1 && shape[1] == 3 && shape[2] == kDefaultImageSize
+        && shape[3] == kDefaultImageSize;
     if (is_default_image_config)
     {
-        config.setInputShape(nvinfer1::Dims4{1, 3, spec_.image_size, spec_.image_size});
+        config.setInputShape(irt::Shape{1, 3, spec_.image_size, spec_.image_size});
     }
 }
 

@@ -5,6 +5,7 @@
  * @brief 图像检索公共 API、配置类型与 ``ImageSearch`` 类声明。
  */
 
+#include <inferrt/core/PreprocessSpec.hpp>
 #include <inferrt/features/Export.h>
 #include <inferrt/model/IModelConfig.hpp>
 
@@ -144,6 +145,12 @@ struct ImageSearchConfig
 
     ///< 预处理执行后端。
     ImageSearchPreprocessBackend preprocess_backend{ImageSearchPreprocessBackend::CPU};
+
+    /**
+     * 完整图像预处理规格。输入宽高为 0 时表示从实际模型输入形状推导；
+     * 颜色、布局、归一化和 padding 字段仍由此对象统一拥有。
+     */
+    irt::PreprocessSpec preprocess{};
 
     ///< 推理特征归一化方式。
     ImageSearchFeatureNorm norm{ImageSearchFeatureNorm::L2};

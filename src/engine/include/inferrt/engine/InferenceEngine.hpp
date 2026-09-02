@@ -143,6 +143,20 @@ struct INFERRT_ENGINE_API EngineMetricsSnapshot
     StageLatencySnapshot cpu_preprocess_latency;
     StageLatencySnapshot gpu_latency;
     StageLatencySnapshot cpu_postprocess_latency;
+
+    // Lifecycle resource counts used to prove failed-start and shutdown
+    // invariants without exposing Engine::Impl internals.
+    size_t active_requests{0};
+    size_t slot_count{0};
+    size_t idle_slot_count{0};
+    size_t active_slot_count{0};
+    size_t prepare_queue_size{0};
+    size_t gpu_queue_size{0};
+    size_t postprocess_queue_size{0};
+    size_t input_ticket_count{0};
+    size_t output_ticket_count{0};
+    size_t thread_count{0};
+    size_t joinable_thread_count{0};
 };
 
 /**

@@ -1,18 +1,11 @@
-/**
- * @file Status.cpp
- *
- * @brief 转发设置线程状态到内部实现 priv:: 的相关函数中
- */
-
-#pragma once
-
 #include "priv/Status.hpp"
-
-#include "priv/Exception.hpp"
+#include "priv/TLS.hpp"
 
 #include <inferrt/core/Status.h>
+#include <inferrt/core/Status.hpp>
 
-#include <iostream>
+#include <cstdarg>
+#include <cstdio>
 
 namespace irt {
 
@@ -41,45 +34,28 @@ IRTStatus PeekAtLastErrorMessage(char *msg, int32_t len)
     return core::priv::PeekAtLastThreadError(msg, len);
 }
 
-/**
- * @note \ref priv::ProtectCall 会在捕获异常时设置线程状态，包括错误码和错误信息
- */
 void SetThreadStatus(IRTStatus status, const char *fmt, ...)
 {
     va_list va;
     va_start(va, fmt);
-
-    IRTStatus ret = core::priv::ProtectCall(
-        [&]
-        {
-            if (fmt)
-            {
-                throw core::priv::Exception(status, fmt, va);
-            }
-            else
-            {
-                throw core::priv::Exception(status);
-            }
-        });
-    (void)ret;
+    SetThreadStatusVarArgList(status, fmt, va);
     va_end(va);
 }
 
 void SetThreadStatusVarArgList(IRTStatus status, const char *fmt, va_list va)
 {
-    IRTStatus ret = core::priv::ProtectCall(
-        [&]
-        {
-            if (fmt)
-            {
-                throw core::priv::Exception(status, fmt, va);
-            }
-            else
-            {
-                throw core::priv::Exception(status);
-            }
-        });
-    (void)ret;
+    core::priv::CoreTLS &tls           = core::priv::GetCoreTLS();
+    tls.last_error_status              = status;
+    const int error_msg_len            = static_cast<int>(sizeof(tls.last_error_message)) - 1;
+    if (fmt != nullptr)
+    {
+        vsnprintf(tls.last_error_message, sizeof(tls.last_error_message), fmt, va);
+    }
+    else
+    {
+        tls.last_error_message[0] = '\0';
+    }
+    tls.last_error_message[error_msg_len] = '\0';
 }
 
 } // namespace irt

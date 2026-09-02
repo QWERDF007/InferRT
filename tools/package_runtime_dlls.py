@@ -7,22 +7,42 @@ import os
 import sys
 from pathlib import Path
 
-from dependency_utils import (
-    build_dll_variant_sets,
-    cmake_config_name,
-    copy_file,
-    dependency_matches_config,
-    dependency_patterns,
-    dll_matches_config,
-    expand_dependency_pattern,
-    load_dependencies,
-    platform_key,
-    read_cmake_cache_value,
-    resolve_dependency_root,
-    resolve_project_path,
-    unique_paths,
-    warn,
-)
+try:
+    from dependency_utils import (
+        build_dll_variant_sets,
+        cmake_config_name,
+        copy_file,
+        dependency_enabled,
+        dependency_matches_config,
+        dependency_patterns,
+        dll_matches_config,
+        expand_dependency_pattern,
+        load_dependencies,
+        platform_key,
+        read_cmake_cache_value,
+        resolve_dependency_root,
+        resolve_project_path,
+        unique_paths,
+        warn,
+    )
+except ModuleNotFoundError:
+    from .dependency_utils import (
+        build_dll_variant_sets,
+        cmake_config_name,
+        copy_file,
+        dependency_enabled,
+        dependency_matches_config,
+        dependency_patterns,
+        dll_matches_config,
+        expand_dependency_pattern,
+        load_dependencies,
+        platform_key,
+        read_cmake_cache_value,
+        resolve_dependency_root,
+        resolve_project_path,
+        unique_paths,
+        warn,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -39,6 +59,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--install-bin-dir", "-InstallBinDir", default="")
     parser.add_argument("--dependencies", default="tools/dependencies.yaml")
     parser.add_argument("--skip-dependencies", action="store_true")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Fail when an enabled dependency root or manifest pattern is missing.",
+    )
     return parser.parse_args()
 
 
@@ -49,13 +74,13 @@ def default_install_dir(build_dir: Path) -> Path:
         build_dir: CMake 构建目录。
 
     Returns:
-        Path: ``CMAKE_INSTALL_PREFIX`` 或仓库下的 ``InferRT-0.0.1``。
+        Path: ``CMAKE_INSTALL_PREFIX`` 或仓库下的 ``InferRT-0.0.2``。
     """
 
     install_prefix = read_cmake_cache_value(build_dir / "CMakeCache.txt", "CMAKE_INSTALL_PREFIX")
     if install_prefix:
         return resolve_project_path(install_prefix)
-    return resolve_project_path("InferRT-0.0.1")
+    return resolve_project_path("InferRT-0.0.2")
 
 
 def resolve_install_bin_dir(build_dir: Path, install_dir_arg: str, install_bin_dir_arg: str) -> Path:
@@ -76,12 +101,13 @@ def resolve_install_bin_dir(build_dir: Path, install_dir_arg: str, install_bin_d
     return install_dir / "bin"
 
 
-def project_runtime_files(build_dir: Path, config: str) -> list[Path]:
+def project_runtime_files(build_dir: Path, config: str, strict: bool = False) -> list[Path]:
     """收集 InferRT 自身运行时产物。
 
     Args:
         build_dir: CMake 构建目录。
         config: 构建配置。
+        strict: 构建产物缺失时是否直接失败。
 
     Returns:
         list[Path]: ``inferrt*.dll`` 和 ``inferrt*_py*.pyd`` 文件列表。
@@ -89,21 +115,35 @@ def project_runtime_files(build_dir: Path, config: str) -> list[Path]:
 
     bin_dir = build_dir / "bin"
     if not bin_dir.is_dir():
-        warn(f"skip project runtime files, missing {bin_dir}")
+        message = f"project runtime output directory is missing: {bin_dir}"
+        if strict:
+            raise RuntimeError(message)
+        warn(f"skip {message}")
         return []
 
     candidates = list(bin_dir.glob("inferrt*.dll"))
-    candidates.extend(bin_dir.glob("inferrt*_py*.pyd"))
+    python_modules = list(bin_dir.glob("inferrt*_py*.pyd"))
+    python_extension = read_cmake_cache_value(build_dir / "CMakeCache.txt", "PYTHON_MODULE_EXTENSION")
+    if python_extension:
+        normalized_extension = python_extension.strip().lower()
+        python_modules = [
+            path for path in python_modules
+            if path.name.lower().endswith(normalized_extension)
+        ]
+    candidates.extend(python_modules)
     debug_names, release_names = build_dll_variant_sets(candidates)
     result: list[Path] = []
     for path in sorted(candidates, key=lambda item: item.name.lower()):
         if path.suffix.lower() == ".dll" and not dll_matches_config(path, config, debug_names, release_names):
             continue
         result.append(path)
-    return unique_paths(result)
+    result = unique_paths(result)
+    if strict and not result:
+        raise RuntimeError(f"no project runtime files matched {config} in {bin_dir}")
+    return result
 
 
-def dependency_files(build_dir: Path, dependency_file: Path, config: str) -> list[Path]:
+def dependency_files(build_dir: Path, dependency_file: Path, config: str, strict: bool = False) -> list[Path]:
     """按 YAML 清单收集第三方运行时依赖文件。
 
     Args:
@@ -120,20 +160,33 @@ def dependency_files(build_dir: Path, dependency_file: Path, config: str) -> lis
     for dep in load_dependencies(dependency_file):
         if not dependency_matches_config(dep, config):
             continue
+        if not dependency_enabled(dep, build_dir):
+            continue
 
-        root = resolve_dependency_root(dep, build_dir)
+        root = resolve_dependency_root(dep, build_dir, platform=platform)
         if root is None:
-            warn(f"skip dependency {dep.get('name', '<unnamed>')}, root {dep.get('root')} was not found")
+            message = f"dependency {dep.get('name', '<unnamed>')} root {dep.get('root')} was not found"
+            if strict:
+                raise RuntimeError(message)
+            warn(f"skip {message}")
             continue
         if not root.exists():
-            warn(f"skip dependency {dep.get('name', '<unnamed>')}, missing root: {root}")
+            message = f"dependency {dep.get('name', '<unnamed>')} root is missing: {root}"
+            if strict:
+                raise RuntimeError(message)
+            warn(f"skip {message}")
             continue
 
         matched: list[Path] = []
         for pattern in dependency_patterns(dep, platform, config):
             matches = expand_dependency_pattern(root, pattern)
             if not matches and "*" not in pattern and "?" not in pattern:
-                warn(f"dependency file was not found: {root / pattern}")
+                message = f"dependency file was not found: {root / pattern}"
+                if strict:
+                    raise RuntimeError(message)
+                warn(message)
+            elif not matches and strict:
+                raise RuntimeError(f"dependency pattern matched no files: {root / pattern}")
             matched.extend(matches)
 
         debug_names, release_names = build_dll_variant_sets(matched)
@@ -158,13 +211,19 @@ def copy_runtime_files(files: list[Path], destination: Path) -> int:
 
     destination.mkdir(parents=True, exist_ok=True)
     processed = 0
-    seen_names: set[str] = set()
+    seen_sources: dict[str, Path] = {}
     for source in files:
         key = source.name.lower()
-        if key in seen_names:
+        resolved_source = source.resolve(strict=True)
+        previous = seen_sources.get(key)
+        if previous is not None:
+            if previous != resolved_source:
+                raise RuntimeError(
+                    f"runtime file name collision for {source.name}: {previous} vs {resolved_source}"
+                )
             continue
         copy_file(source, destination / source.name)
-        seen_names.add(key)
+        seen_sources[key] = resolved_source
         processed += 1
     return processed
 
@@ -182,13 +241,16 @@ def main() -> int:
     dependency_file = resolve_project_path(args.dependencies)
     install_bin_dir = resolve_install_bin_dir(build_dir, args.install_dir, args.install_bin_dir)
 
-    files = project_runtime_files(build_dir, config)
+    files = project_runtime_files(build_dir, config, args.strict)
     if args.skip_dependencies:
         print("skip dependencies")
     elif dependency_file.is_file():
-        files.extend(dependency_files(build_dir, dependency_file, config))
+        files.extend(dependency_files(build_dir, dependency_file, config, args.strict))
     else:
-        warn(f"skip dependencies, missing {dependency_file}")
+        message = f"dependency manifest is missing: {dependency_file}"
+        if args.strict:
+            raise RuntimeError(message)
+        warn(f"skip {message}")
 
     processed = copy_runtime_files(unique_paths(files), install_bin_dir)
     print(f"runtime package complete. Files processed: {processed}")

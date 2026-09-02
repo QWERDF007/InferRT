@@ -248,7 +248,8 @@ public:
         model_config->setRuntime(
             {irt::model::ModelRuntime::Backend::TensorRT, irt::model::ModelRuntime::Device::GPU, config_.device_id});
         model_config->setInputShape(
-            nvinfer1::Dims4{1, config_.input_channels, config_.input_height, config_.input_width});
+            irt::Shape{1, config_.preprocess.input_channels, config_.preprocess.input_height,
+                       config_.preprocess.input_width});
         if (!config_.output_tensor_names.empty())
         {
             model_config->setOutputTensorNames(config_.output_tensor_names);
@@ -265,34 +266,39 @@ public:
         }
         model_->load(config_.engine_file.string());
 
-        const auto inputs = model_->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
-        outputs_          = model_->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+        const auto inputs = model_->ioTensorNames(irt::TensorIOMode::Input);
+        outputs_          = model_->ioTensorNames(irt::TensorIOMode::Output);
         if (inputs.size() != 1 || outputs_.empty())
         {
             throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED,
                                  "Sample supports one input and at least one output");
         }
         model_->setTensorShape(inputs.front(),
-                               nvinfer1::Dims4{1, config_.input_channels, config_.input_height, config_.input_width});
+                               irt::Shape{1, config_.preprocess.input_channels, config_.preprocess.input_height,
+                                          config_.preprocess.input_width});
 
-        const size_t input_elements = static_cast<size_t>(config_.input_channels)
-                                    * static_cast<size_t>(config_.input_height)
-                                    * static_cast<size_t>(config_.input_width);
-        device_input_.resize(input_elements, nvinfer1::DataType::kFLOAT);
-        buffers_.push_back(device_input_.data());
+        const size_t input_elements = irt::checkedSizeProduct(
+            {static_cast<size_t>(config_.preprocess.input_channels),
+             static_cast<size_t>(config_.preprocess.input_height), static_cast<size_t>(config_.preprocess.input_width)},
+            "RF-DETR benchmark input elements");
+        device_input_.resize(input_elements, irt::TensorDataType::F32);
+        buffers_.push_back(irt::BufferView::fromBytes(device_input_.data(), device_input_.sizeBytes(),
+                                                      irt::MemoryKind::DEVICE, inputs.front()));
 
         device_outputs_.reserve(outputs_.size());
         host_outputs_.reserve(outputs_.size());
         for (const auto &name : outputs_)
         {
-            if (model_->tensorDataType(name) != nvinfer1::DataType::kFLOAT)
+            if (model_->tensorDataType(name) != irt::TensorDataType::F32)
             {
                 throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED, "Sample supports float32 outputs only");
             }
             const size_t elements = elementCount(model_->tensorShape(name));
-            device_outputs_.emplace_back(elements, nvinfer1::DataType::kFLOAT);
+            device_outputs_.emplace_back(elements, irt::TensorDataType::F32);
             host_outputs_.emplace_back(elements);
-            buffers_.push_back(device_outputs_.back().data());
+            buffers_.push_back(irt::BufferView::fromBytes(device_outputs_.back().data(),
+                                                          device_outputs_.back().sizeBytes(), irt::MemoryKind::DEVICE,
+                                                          name));
         }
     }
 
@@ -320,7 +326,7 @@ private:
     irt::model::DeviceBuffer              device_input_;
     std::vector<irt::model::DeviceBuffer> device_outputs_;
     std::vector<std::vector<float>>       host_outputs_;
-    std::vector<void *>                   buffers_;
+    std::vector<irt::BufferView>          buffers_;
 };
 
 template<typename Run>
@@ -446,8 +452,8 @@ int main(int argc, char **argv)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--input-size must be positive");
         }
-        config.input_width    = input_size;
-        config.input_height   = input_size;
+        config.preprocess.input_width    = input_size;
+        config.preprocess.input_height   = input_size;
         config.min_batch_size = args["batch-min"].as<int>();
         config.opt_batch_size = args["batch-opt"].as<int>();
         config.max_batch_size = args["batch-max"].as<int>();

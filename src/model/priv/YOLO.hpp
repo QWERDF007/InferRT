@@ -35,6 +35,17 @@ class YOLOModelBase : public priv::IModelImpl
 {
 public:
     /**
+     * @brief 获取 YOLO 建图的 engine 缓存契约版本。
+     *
+     * YOLO 的手写 TensorRT 图会随 head、feature-only 输出和布局实现一起演进；
+     * 递增该版本可避免 ``build_or_load`` 复用不再匹配当前图结构的旧 engine。
+     */
+    std::string engineCacheVersion() const noexcept override
+    {
+        return "yolo-v2";
+    }
+
+    /**
      * @brief YOLO 网络仅将 batch 维作为动态维，空间尺寸仍由配置固定。
      */
     bool supportsDynamicBatch() const noexcept override
@@ -52,7 +63,7 @@ protected:
     /**
      * @brief 校验 YOLO 检测网络支持的输入/输出配置。
      */
-    void validateDetectionConfig() const;
+    void validateDetectionConfig(bool allow_feature_only = false) const;
 };
 
 /**

@@ -26,6 +26,12 @@ namespace irt::features::priv {
 namespace fs = std::filesystem;
 namespace {
 
+bool isValidRoi(const RoiFeatureBox &roi) noexcept
+{
+    return std::isfinite(roi.x1) && std::isfinite(roi.y1) && std::isfinite(roi.x2) && std::isfinite(roi.y2)
+        && roi.x2 > roi.x1 && roi.y2 > roi.y1;
+}
+
 /**
  * @brief 对特征向量做 L2 归一化。
  */
@@ -70,40 +76,16 @@ void l1Normalize(float *values, size_t count)
     }
 }
 
-/**
- * @brief 为小图库构建精确的内积索引。
- *
- * IVF-PQ 需要足够多的训练样本；在只有少量图片时，聚类既没有收益，
- * 还会触发 Faiss 的小样本训练边界。IndexFlatIP 对小图库更快且结果精确。
- */
-std::unique_ptr<faiss::Index> buildRamFlatIndex(
-    size_t vector_count, int feature_dim, size_t requested_batch_size,
-    const LoadFeatureCallback &load_feature, const LoadFeatureBatchCallback &load_feature_batch,
-    const ImageSearchBuildProgressCallback &progress_callback)
+} // namespace
+
+void validateRoi(const RoiFeatureBox &roi)
 {
-    if (vector_count == 0 || feature_dim <= 0)
+    if (!isValidRoi(roi))
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "Flat Faiss index requires non-empty features");
+                             "ROI must be finite and satisfy x2 > x1, y2 > y1");
     }
-
-    auto index = std::make_unique<faiss::IndexFlatIP>(feature_dim);
-    const auto batch_size = chooseFaissIndexBuildBatchSize(requested_batch_size, vector_count, feature_dim);
-    size_t     batch_index = 0;
-    for (size_t begin = 0; begin < vector_count; begin += batch_size)
-    {
-        const size_t count = std::min(batch_size, vector_count - begin);
-        const auto features
-            = load_feature_batch ? loadFeatureBatch(begin, count, feature_dim, load_feature_batch)
-                                  : loadFeatureBatch(begin, count, feature_dim, load_feature);
-        index->add(static_cast<faiss::idx_t>(count), features.data());
-        reportBuildProgress(progress_callback, ImageSearchBuildStage::BuildingIndex, batch_index++, begin, count,
-                            begin + count, vector_count);
-    }
-    return index;
 }
-
-} // namespace
 
 void processFeatureBatches(size_t item_count, size_t batch_size, int feature_dim,
                            const FeatureBatchLoader &loader, const FeatureBatchConsumer &consumer,
@@ -119,7 +101,9 @@ void processFeatureBatches(size_t item_count, size_t batch_size, int feature_dim
     {
         const size_t count    = std::min(batch_size, item_count - begin);
         const auto   features = loader(begin, count);
-        if (features.size() != count * static_cast<size_t>(feature_dim))
+        const auto expected_elements = irt::checkedSizeMul(count, static_cast<size_t>(feature_dim),
+                                                           "Feature batch elements");
+        if (features.size() != expected_elements)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Feature batch size mismatch");
         }
@@ -190,10 +174,12 @@ FeatureStore::FeatureStore(std::filesystem::path path, size_t item_count, int fe
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to create feature store: %s",
                              path_.string().c_str());
     }
-    const auto byte_count = item_count_ * static_cast<size_t>(feature_dim_) * sizeof(float);
+    const auto element_count = irt::checkedSizeMul(item_count_, static_cast<size_t>(feature_dim_),
+                                                   "Feature store elements");
+    const auto byte_count = irt::checkedSizeMul(element_count, sizeof(float), "Feature store bytes");
     if (byte_count > 0)
     {
-        output_.seekp(static_cast<std::streamoff>(byte_count - 1), std::ios::beg);
+        output_.seekp(irt::checkedSizeToStreamoff(byte_count - 1, "Feature store size"), std::ios::beg);
         output_.put('\0');
         output_.seekp(0, std::ios::beg);
     }
@@ -222,7 +208,7 @@ void FeatureStore::writeBatch(size_t begin, size_t count, const std::vector<floa
 {
     if (writing_finished_ || !output_ || begin != next_write_index_)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "Feature store is not writable");
+        throw irt::Exception(irt::Status::INVALID_OPERATION, "Feature store is not writable");
     }
     writeBatchAt(begin, count, features);
     next_write_index_ += count;
@@ -232,10 +218,12 @@ void FeatureStore::writeBatchAt(size_t begin, size_t count, const std::vector<fl
 {
     if (writing_finished_ || !output_)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "Feature store is not writable");
+        throw irt::Exception(irt::Status::INVALID_OPERATION, "Feature store is not writable");
     }
     validateRange(begin, count);
-    if (features.size() != count * static_cast<size_t>(feature_dim_))
+    const auto expected_elements = irt::checkedSizeMul(count, static_cast<size_t>(feature_dim_),
+                                                       "Feature store batch elements");
+    if (features.size() != expected_elements)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Feature store batch size mismatch");
     }
@@ -244,14 +232,17 @@ void FeatureStore::writeBatchAt(size_t begin, size_t count, const std::vector<fl
     {
         if (written_[index] != 0)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "Feature store range was already written");
+            throw irt::Exception(irt::Status::INVALID_OPERATION, "Feature store range was already written");
         }
     }
 
-    const auto offset = static_cast<std::streamoff>(begin * static_cast<size_t>(feature_dim_) * sizeof(float));
-    output_.seekp(offset, std::ios::beg);
+    const auto offset_elements = irt::checkedSizeMul(begin, static_cast<size_t>(feature_dim_),
+                                                     "Feature store write offset");
+    const auto offset_bytes = irt::checkedSizeMul(offset_elements, sizeof(float), "Feature store write offset");
+    output_.seekp(irt::checkedSizeToStreamoff(offset_bytes, "Feature store write offset"), std::ios::beg);
+    const auto write_bytes = irt::checkedSizeMul(features.size(), sizeof(float), "Feature store write bytes");
     output_.write(reinterpret_cast<const char *>(features.data()),
-                  static_cast<std::streamsize>(features.size() * sizeof(float)));
+                  irt::checkedSizeToStreamsize(write_bytes, "Feature store write bytes"));
     if (!output_)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to write feature store: %s",
@@ -268,7 +259,7 @@ void FeatureStore::finishWriting()
 {
     if (writing_finished_ || written_count_ != item_count_)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "Feature store is incomplete");
+        throw irt::Exception(irt::Status::INVALID_OPERATION, "Feature store is incomplete");
     }
     output_.close();
     writing_finished_ = true;
@@ -284,7 +275,7 @@ std::vector<float> FeatureStore::readBatch(size_t begin, size_t count) const
     validateRange(begin, count);
     if (!writing_finished_)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "Feature store is not ready for reading");
+        throw irt::Exception(irt::Status::INVALID_OPERATION, "Feature store is not ready for reading");
     }
 
     std::ifstream input(path_, std::ios::binary);
@@ -294,10 +285,15 @@ std::vector<float> FeatureStore::readBatch(size_t begin, size_t count) const
                              path_.string().c_str());
     }
 
-    const auto offset = static_cast<std::streamoff>(begin * static_cast<size_t>(feature_dim_) * sizeof(float));
-    input.seekg(offset, std::ios::beg);
-    std::vector<float> features(count * static_cast<size_t>(feature_dim_));
-    input.read(reinterpret_cast<char *>(features.data()), static_cast<std::streamsize>(features.size() * sizeof(float)));
+    const auto offset_elements = irt::checkedSizeMul(begin, static_cast<size_t>(feature_dim_),
+                                                     "Feature store read offset");
+    const auto offset_bytes = irt::checkedSizeMul(offset_elements, sizeof(float), "Feature store read offset");
+    input.seekg(irt::checkedSizeToStreamoff(offset_bytes, "Feature store read offset"), std::ios::beg);
+    const auto element_count = irt::checkedSizeMul(count, static_cast<size_t>(feature_dim_),
+                                                   "Feature store read elements");
+    std::vector<float> features(element_count);
+    const auto read_bytes = irt::checkedSizeMul(features.size(), sizeof(float), "Feature store read bytes");
+    input.read(reinterpret_cast<char *>(features.data()), irt::checkedSizeToStreamsize(read_bytes, "Feature store read bytes"));
     if (!input)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to read feature store: %s",
@@ -310,7 +306,7 @@ std::vector<float> FeatureStore::readBatch(const std::vector<size_t> &indices) c
 {
     if (!writing_finished_)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "Feature store is not ready for reading");
+        throw irt::Exception(irt::Status::INVALID_OPERATION, "Feature store is not ready for reading");
     }
 
     std::ifstream input(path_, std::ios::binary);
@@ -322,14 +318,18 @@ std::vector<float> FeatureStore::readBatch(const std::vector<size_t> &indices) c
 
     const auto feature_size = static_cast<size_t>(feature_dim_);
     std::vector<float> features;
-    features.reserve(indices.size() * feature_size);
+    features.reserve(irt::checkedSizeMul(indices.size(), feature_size, "Feature store indexed read elements"));
     std::vector<float> batch(feature_size);
     for (const size_t index : indices)
     {
         validateRange(index, 1);
-        const auto offset = static_cast<std::streamoff>(index * feature_size * sizeof(float));
-        input.seekg(offset, std::ios::beg);
-        input.read(reinterpret_cast<char *>(batch.data()), static_cast<std::streamsize>(batch.size() * sizeof(float)));
+        const auto offset_elements = irt::checkedSizeMul(index, feature_size, "Feature store indexed read offset");
+        const auto offset_bytes = irt::checkedSizeMul(offset_elements, sizeof(float),
+                                                      "Feature store indexed read offset");
+        input.seekg(irt::checkedSizeToStreamoff(offset_bytes, "Feature store indexed read offset"), std::ios::beg);
+        const auto read_bytes = irt::checkedSizeMul(batch.size(), sizeof(float), "Feature store indexed read bytes");
+        input.read(reinterpret_cast<char *>(batch.data()),
+                   irt::checkedSizeToStreamsize(read_bytes, "Feature store indexed read bytes"));
         if (!input)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to read feature store: %s",
@@ -356,7 +356,16 @@ void validateFeatureSearchConfig(const ImageSearchConfig &config, const char *ow
     const char *owner = owner_name == nullptr ? "FeatureSearch" : owner_name;
 
     config.model_runtime.validate();
+    // Geometry may be deferred until the model descriptor is loaded, but all
+    // remaining preprocessing semantics must already be a valid contract.
+    config.preprocess.validate(false);
 
+    if (config.preprocess_backend == ImageSearchPreprocessBackend::CPU
+        && config.preprocess.backend == irt::PreprocessBackend::CUDA)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "%s selects CUDA PreprocessSpec with a CPU preprocessing backend", owner);
+    }
     switch (config.model_precision)
     {
     case irt::model::ModelPrecision::FP32:

@@ -1,18 +1,21 @@
 # OpenVINO Runtime 发现与导入：
 # - 定位 OpenVINO CMake package；
 # - 确保 openvino::runtime 目标可用；
-# - tools/*.py 也会读取 INFERRT_OPENVINO_ROOT，用同一份配置收集运行时 DLL。
 set(INFERRT_OPENVINO_PROVIDER "required")
-set(INFERRT_OPENVINO_ROOT "/home/pc/workspace/openvino_2026.2.0" CACHE PATH "OpenVINO toolkit root directory" FORCE)
 
-# 清除历史缓存，避免修改 INFERRT_OPENVINO_ROOT 后仍沿用旧路径。
-unset(INFERRT_OPENVINO_BIN_ROOT CACHE)
-unset(INFERRT_OPENVINO_TBB_BIN_DIR CACHE)
+if(NOT DEFINED INFERRT_OPENVINO_ROOT)
+    if(DEFINED ENV{INFERRT_OPENVINO_ROOT})
+        set(INFERRT_OPENVINO_ROOT "$ENV{INFERRT_OPENVINO_ROOT}" CACHE PATH "OpenVINO toolkit root directory")
+    elseif(DEFINED OpenVINO_ROOT)
+        set(INFERRT_OPENVINO_ROOT "${OpenVINO_ROOT}" CACHE PATH "OpenVINO toolkit root directory")
+    elseif(DEFINED ENV{OpenVINO_ROOT})
+        set(INFERRT_OPENVINO_ROOT "$ENV{OpenVINO_ROOT}" CACHE PATH "OpenVINO toolkit root directory")
+    endif()
+endif()
 
 # 未显式设置 OpenVINO_DIR 时，从 toolkit 根目录推导 CMake package 路径。
-if(NOT OpenVINO_DIR AND EXISTS "${INFERRT_OPENVINO_ROOT}/runtime/cmake/OpenVINOConfig.cmake")
-    set(OpenVINO_DIR "${INFERRT_OPENVINO_ROOT}/runtime/cmake" CACHE PATH
-        "OpenVINO CMake package directory" FORCE)
+if(NOT OpenVINO_DIR AND DEFINED INFERRT_OPENVINO_ROOT AND EXISTS "${INFERRT_OPENVINO_ROOT}/runtime/cmake/OpenVINOConfig.cmake")
+    set(OpenVINO_DIR "${INFERRT_OPENVINO_ROOT}/runtime/cmake" CACHE PATH "OpenVINO CMake package directory")
 endif()
 
 # 优先复用已有目标，否则通过 find_package 加载。
@@ -29,24 +32,27 @@ else()
     endif()
 endif()
 
-# OpenVINO 是强制依赖，未找到时中止配置。
+# OpenVINO 检查
 if(NOT TARGET openvino::runtime)
-    message(FATAL_ERROR
-        "OpenVINO Runtime is required. "
-        "Set INFERRT_OPENVINO_ROOT to a toolkit root containing runtime/cmake, "
-        "or set OpenVINO_DIR to an installed OpenVINO Runtime CMake package. "
-        "Current INFERRT_OPENVINO_ROOT=${INFERRT_OPENVINO_ROOT}; OpenVINO_DIR=${OpenVINO_DIR}")
+    if(INFERRT_BUILD_OPENVINO)
+        message(FATAL_ERROR
+            "OpenVINO Runtime is required when INFERRT_BUILD_OPENVINO=ON. "
+            "Set INFERRT_OPENVINO_ROOT to a toolkit root containing runtime/cmake, "
+            "or set OpenVINO_DIR to an installed OpenVINO Runtime CMake package. "
+            "Current INFERRT_OPENVINO_ROOT=${INFERRT_OPENVINO_ROOT}; OpenVINO_DIR=${OpenVINO_DIR}")
+    else()
+        return()
+    endif()
 endif()
 
-# OpenVINO binary packages ship TBB next to the runtime. The OpenVINO CMake package
-# records it as an imported dependent library, but consumers still need it on the
-# executable link line so ld can resolve libopenvino.so's TBB symbols.
-set(_INFERRT_OPENVINO_TBB_DIR "${INFERRT_OPENVINO_ROOT}/runtime/3rdparty/tbb/lib/cmake/TBB")
-if(NOT TARGET TBB::tbb AND EXISTS "${_INFERRT_OPENVINO_TBB_DIR}/TBBConfig.cmake")
-    find_package(TBB CONFIG QUIET PATHS "${_INFERRT_OPENVINO_TBB_DIR}" NO_DEFAULT_PATH)
-endif()
+if(DEFINED INFERRT_OPENVINO_ROOT)
+    set(_INFERRT_OPENVINO_TBB_DIR "${INFERRT_OPENVINO_ROOT}/runtime/3rdparty/tbb/lib/cmake/TBB")
+    if(NOT TARGET TBB::tbb AND EXISTS "${_INFERRT_OPENVINO_TBB_DIR}/TBBConfig.cmake")
+        find_package(TBB CONFIG QUIET PATHS "${_INFERRT_OPENVINO_TBB_DIR}" NO_DEFAULT_PATH)
+    endif()
 
-if(TARGET TBB::tbb)
-    target_link_libraries(openvino::runtime INTERFACE TBB::tbb)
+    if(TARGET TBB::tbb)
+        target_link_libraries(openvino::runtime INTERFACE TBB::tbb)
+    endif()
+    unset(_INFERRT_OPENVINO_TBB_DIR)
 endif()
-unset(_INFERRT_OPENVINO_TBB_DIR)

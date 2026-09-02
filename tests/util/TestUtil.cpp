@@ -235,6 +235,7 @@ TEST(CheckErrorUtilTest, FormatErrorMessageCombinesParts)
     EXPECT_NE(text.find("allocation failed"), std::string::npos);
 }
 
+#ifdef INFERRT_ENABLE_CUDA
 /**
  * @brief CUDA 错误码应映射为预期的 InferRT 状态码。
  */
@@ -307,6 +308,7 @@ TEST(CheckErrorUtilTest, CheckLogReturnsTrueOnSuccessStatus)
     const std::string stderr_text = testing::internal::GetCapturedStderr();
     EXPECT_TRUE(stderr_text.empty());
 }
+#endif
 
 
 /**

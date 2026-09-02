@@ -19,12 +19,27 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
+#include <inferrt/core/Tensor.hpp>
+
 namespace irt::engine {
+
+using irt::TensorDataType;
+using irt::DType;
+using irt::TensorLayout;
+using irt::Layout;
+using irt::MemoryKind;
+using irt::Shape;
+using irt::TensorDesc;
+using irt::TensorView;
+using irt::dataTypeSize;
+using irt::dataTypeToString;
 
 enum class ExecutionKind
 {
@@ -40,55 +55,6 @@ enum class PipelineStage
     CUDA_PREPROCESS,
     CUDA_POSTPROCESS,
     CPU_POSTPROCESS,
-};
-
-enum class TensorDataType
-{
-    U8,
-    F32,
-    I32,
-    I64,
-};
-
-enum class TensorLayout
-{
-    HWC,
-    NCHW,
-};
-
-enum class MemoryKind
-{
-    HOST,
-    DEVICE,
-};
-
-/**
- * @brief 单张图像或单个请求对应的固定张量描述。
- *
- * batch 维由 ExecutionSlot 的 max batch 统一管理，故不在本描述中重复存储。
- */
-struct INFERRT_ENGINE_API TensorDesc
-{
-    TensorDataType data_type{TensorDataType::U8};
-    TensorLayout   layout{TensorLayout::HWC};
-    MemoryKind     memory_kind{MemoryKind::HOST};
-    int            width{0};
-    int            height{0};
-    int            channels{0};
-
-    [[nodiscard]] size_t bytesPerRequest() const;
-    void                 validate(const std::string &name) const;
-};
-
-/** @brief 一个逻辑张量在某个 ExecutionSlot 中的实际视图。 */
-struct INFERRT_ENGINE_API TensorView
-{
-    void      *data{nullptr};
-    TensorDesc desc;
-    size_t     bytes_per_request{0};
-
-    [[nodiscard]] void       *dataForRequest(int request_index);
-    [[nodiscard]] const void *dataForRequest(int request_index) const;
 };
 
 using TensorViewMap  = std::unordered_map<std::string, TensorView>;
@@ -131,6 +97,11 @@ struct INFERRT_ENGINE_API OperatorContext
     TensorViewMap        &tensors;
     ResultMap            &results;
     const TensorInputMap *inputs{nullptr};
+    // Scratch storage is owned by the operator instance and remains valid for
+    // the instance lifetime. CUDA operators must not enqueue work that uses
+    // host scratch after the operator is destroyed.
+    void                 *scratch{nullptr};
+    size_t                scratch_bytes{0};
 };
 
 class INFERRT_ENGINE_API IOperator
@@ -143,9 +114,49 @@ public:
     virtual void prepare() {}
 
     virtual void execute(OperatorContext &context) = 0;
+
+    /**
+     * @brief Execute through the engine contract.
+     *
+     * Pipeline workers normally own one operator instance each. The wrapper
+     * still serializes non-thread-safe instances so a future scheduler may
+     * safely share an instance without silently violating its contract.
+     */
+    void executeWithContract(OperatorContext &context, const OperatorContract &declared_contract)
+    {
+        if (declared_contract.thread_safe)
+        {
+            execute(context);
+            return;
+        }
+
+        std::lock_guard lock(execution_mutex_);
+        execute(context);
+    }
+
+    /** @brief Allocate persistent host scratch described by the node contract. */
+    void prepareScratch(size_t bytes)
+    {
+        scratch_.resize(bytes);
+    }
+
+    [[nodiscard]] void *scratchData() noexcept
+    {
+        return scratch_.empty() ? nullptr : scratch_.data();
+    }
+
+    [[nodiscard]] size_t scratchBytes() const noexcept
+    {
+        return scratch_.size();
+    }
+
+private:
+    std::vector<std::byte> scratch_;
+    std::mutex             execution_mutex_;
 };
 
-using OperatorCreator = std::function<std::unique_ptr<IOperator>(const NodeConfig &)>;
+using OperatorCreator   = std::function<std::unique_ptr<IOperator>(const NodeConfig &)>;
+using OperatorValidator = std::function<void(const NodeConfig &)>;
 
 /**
  * @brief 显式注册的算子工厂集合。
@@ -156,16 +167,27 @@ using OperatorCreator = std::function<std::unique_ptr<IOperator>(const NodeConfi
 class INFERRT_ENGINE_API OperatorRegistry final
 {
 public:
-    bool registerCreator(std::string type, OperatorCreator creator);
+    bool registerCreator(std::string type, OperatorContract contract, OperatorCreator creator,
+                         OperatorValidator validator = nullptr);
     void freeze();
 
-    [[nodiscard]] std::unique_ptr<IOperator> create(std::string_view type, const NodeConfig &config) const;
-    [[nodiscard]] std::vector<std::string>   types() const;
-    [[nodiscard]] bool                       frozen() const noexcept;
+    [[nodiscard]] std::unique_ptr<IOperator>      create(std::string_view type, const NodeConfig &config) const;
+    void                                          validate(std::string_view type, const NodeConfig &config) const;
+    [[nodiscard]] bool                            contains(std::string_view type) const;
+    [[nodiscard]] std::optional<OperatorContract> contract(std::string_view type) const;
+    [[nodiscard]] std::vector<std::string>        types() const;
+    [[nodiscard]] bool                            frozen() const noexcept;
 
 private:
-    std::unordered_map<std::string, OperatorCreator> creators_;
-    bool                                             frozen_{false};
+    struct Entry
+    {
+        OperatorContract  contract;
+        OperatorCreator   creator;
+        OperatorValidator validator;
+    };
+
+    std::unordered_map<std::string, Entry> creators_;
+    bool                                   frozen_{false};
 };
 
 class PipelinePlan;

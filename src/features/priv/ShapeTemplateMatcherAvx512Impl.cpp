@@ -546,7 +546,7 @@ static std::unique_ptr<ShapeTemplateMatcherKernel> makeV2Kernel()
 {
     if (!cv::checkHardwareSupport(CV_CPU_AVX_512F) || !cv::checkHardwareSupport(CV_CPU_AVX_512BW))
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION,
+        throw irt::Exception(irt::Status::INVALID_OPERATION,
                              "The v2 shape template matcher requires AVX512F and AVX512BW support");
     }
     return std::make_unique<ShapeTemplateMatcherAvx512KernelImpl>();
@@ -559,7 +559,7 @@ namespace {
 /** @brief 未编译 AVX512 时保留明确的 v2 构造错误。 */
 static std::unique_ptr<ShapeTemplateMatcherKernel> makeV2Kernel()
 {
-    throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION,
+    throw irt::Exception(irt::Status::INVALID_OPERATION,
                          "The v2 shape template matcher was built without AVX512 support");
 }
 

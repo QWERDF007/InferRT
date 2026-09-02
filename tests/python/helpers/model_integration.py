@@ -6,6 +6,7 @@ import importlib.util
 import os
 import sys
 from pathlib import Path
+from collections.abc import Sequence
 
 import pytest
 
@@ -63,6 +64,37 @@ def require_file(path: Path, label: str) -> Path:
     if not path.exists():
         pytest.skip(f"{label} not found: {path}")
     return path
+
+
+def resolve_model_file(model_root: Path, relative_candidates: Sequence[str], label: str) -> Path:
+    """Resolve a model artifact from the supported layouts under one model root.
+
+    The model directory is the source of truth for downloaded checkpoints and
+    generated artifacts.  Callers provide an ordered list so a canonical
+    layout is preferred while older local layouts remain discoverable without
+    duplicating path probing in each integration test.
+
+    Args:
+        model_root: Root directory containing model family subdirectories.
+        relative_candidates: Candidate paths relative to ``model_root``.
+        label: Human-readable artifact name for a skip message.
+
+    Returns:
+        The first existing candidate, resolved to an absolute path.
+
+    Raises:
+        ValueError: If no relative candidates are provided.
+    """
+
+    root = model_root.expanduser().resolve()
+    candidates = tuple(root / relative for relative in relative_candidates)
+    if not candidates:
+        raise ValueError(f"At least one candidate is required for {label}")
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    checked = ", ".join(str(path) for path in candidates)
+    pytest.skip(f"{label} not found; checked: {checked}")
 
 
 def require_sample(build_dir: Path, name: str) -> Path:

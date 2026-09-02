@@ -13,6 +13,7 @@
 #include <inferrt/engine/BuiltinOperators.hpp>
 #include <inferrt/engine/EngineConfig.hpp>
 #include <inferrt/engine/Pipeline.hpp>
+#include <inferrt/model/Utils.hpp>
 
 #include <opencv2/core.hpp>
 
@@ -38,68 +39,9 @@ inline bool usesLetterbox(const std::string_view model_name)
  */
 inline std::vector<float> preprocessForDirect(const irt::engine::EngineConfig &config, const cv::Mat &image)
 {
-    cv::Mat bgr;
-    if (image.channels() == 3)
-    {
-        bgr = image;
-    }
-    else if (image.channels() == 1)
-    {
-        cv::cvtColor(image, bgr, cv::COLOR_GRAY2BGR);
-    }
-    else if (image.channels() == 4)
-    {
-        cv::cvtColor(image, bgr, cv::COLOR_BGRA2BGR);
-    }
-    else
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported image channel count: %d",
-                             image.channels());
-    }
-
-    cv::Mat rgb;
-    cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
-
-    cv::Mat resized;
-    if (usesLetterbox(config.model_name))
-    {
-        const double   scale = std::min(static_cast<double>(config.input_width) / rgb.cols,
-                                        static_cast<double>(config.input_height) / rgb.rows);
-        const cv::Size resized_size(
-            std::min(config.input_width, std::max(1, static_cast<int>(std::round(rgb.cols * scale)))),
-            std::min(config.input_height, std::max(1, static_cast<int>(std::round(rgb.rows * scale)))));
-        cv::resize(rgb, resized, resized_size, 0.0, 0.0, cv::INTER_LINEAR);
-
-        cv::Mat        letterboxed(config.input_height, config.input_width, CV_8UC3, cv::Scalar(114, 114, 114));
-        const cv::Rect content((config.input_width - resized.cols) / 2, (config.input_height - resized.rows) / 2,
-                               resized.cols, resized.rows);
-        resized.copyTo(letterboxed(content));
-        resized = std::move(letterboxed);
-    }
-    else
-    {
-        cv::resize(rgb, resized, cv::Size(config.input_width, config.input_height), 0.0, 0.0, cv::INTER_LINEAR);
-    }
-    resized.convertTo(resized, CV_32FC3, 1.0 / 255.0);
-
-    const size_t       plane = static_cast<size_t>(config.input_width) * static_cast<size_t>(config.input_height);
-    std::vector<float> tensor(3 * plane);
-    for (int y = 0; y < config.input_height; ++y)
-    {
-        const auto *row = resized.ptr<cv::Vec3f>(y);
-        for (int x = 0; x < config.input_width; ++x)
-        {
-            const size_t offset
-                = static_cast<size_t>(y) * static_cast<size_t>(config.input_width) + static_cast<size_t>(x);
-            for (int channel = 0; channel < 3; ++channel)
-            {
-                tensor[static_cast<size_t>(channel) * plane + offset]
-                    = (row[x][channel] - config.mean[static_cast<size_t>(channel)])
-                    / config.stddev[static_cast<size_t>(channel)];
-            }
-        }
-    }
-    return tensor;
+    const auto spec = config.preprocessSpec();
+    spec.validate();
+    return irt::model::ImageNetUtil::imageToTensorCHW(irt::model::ImageNetUtil::preprocess(image, spec));
 }
 
 inline irt::engine::EngineConfig makeConfig(const std::string_view example, std::filesystem::path engine_file,
@@ -113,11 +55,11 @@ inline irt::engine::EngineConfig makeConfig(const std::string_view example, std:
     if (example == "resnet18")
     {
         config.model_name     = "resnet18";
-        config.input_width    = 224;
-        config.input_height   = 224;
+        config.preprocess.input_width    = 224;
+        config.preprocess.input_height   = 224;
         config.min_batch_size = 1;
-        config.opt_batch_size = 4;
-        config.max_batch_size = 8;
+        config.opt_batch_size = 1;
+        config.max_batch_size = 1;
         config.max_wait       = std::chrono::microseconds(2000);
         config.execution_slots = 3;
         config.queue_capacity  = 64;
@@ -125,22 +67,22 @@ inline irt::engine::EngineConfig makeConfig(const std::string_view example, std:
     else if (example == "yolov8n")
     {
         config.model_name     = "yolov8n";
-        config.input_width    = 640;
-        config.input_height   = 640;
+        config.preprocess.input_width    = 640;
+        config.preprocess.input_height   = 640;
         config.min_batch_size = 1;
-        config.opt_batch_size = 4;
-        config.max_batch_size = 8;
+        config.opt_batch_size = 1;
+        config.max_batch_size = 1;
         config.max_wait       = std::chrono::microseconds(2000);
         config.execution_slots = 3;
         config.queue_capacity  = 64;
-        config.mean            = {0.0F, 0.0F, 0.0F};
-        config.stddev          = {1.0F, 1.0F, 1.0F};
+        config.preprocess.mean            = {0.0F, 0.0F, 0.0F};
+        config.preprocess.stddev          = {1.0F, 1.0F, 1.0F};
     }
     else if (example == "dinov2_vits14")
     {
         config.model_name          = "dinov2_vits14";
-        config.input_width         = 518;
-        config.input_height        = 518;
+        config.preprocess.input_width         = 518;
+        config.preprocess.input_height        = 518;
         config.output_tensor_names = {"x_norm_clstoken"};
         config.feature_tensor_names = {"x_norm_clstoken"};
         config.feature_only         = true;
@@ -150,12 +92,12 @@ inline irt::engine::EngineConfig makeConfig(const std::string_view example, std:
     else if (example == "rfdetr_nano")
     {
         config.model_name          = "rfdetr_nano";
-        config.input_width         = 1024;
-        config.input_height        = 1024;
+        config.preprocess.input_width         = 1024;
+        config.preprocess.input_height        = 1024;
         config.output_tensor_names = {"dets", "labels"};
         config.min_batch_size      = 1;
-        config.opt_batch_size      = 8;
-        config.max_batch_size      = 8;
+        config.opt_batch_size      = 1;
+        config.max_batch_size      = 1;
         config.max_wait            = std::chrono::microseconds(2000);
         config.execution_slots     = 1;
         config.queue_capacity      = 64;
@@ -169,8 +111,8 @@ inline irt::engine::EngineConfig makeConfig(const std::string_view example, std:
 
     if (input_size > 0)
     {
-        config.input_width  = input_size;
-        config.input_height = input_size;
+        config.preprocess.input_width  = input_size;
+        config.preprocess.input_height = input_size;
     }
     if (batch_min > 0)
     {
@@ -185,6 +127,8 @@ inline irt::engine::EngineConfig makeConfig(const std::string_view example, std:
         config.max_batch_size = batch_max;
     }
 
+    config.preprocess.padding_mode = usesLetterbox(config.model_name) ? irt::PaddingMode::Letterbox
+                                                                      : irt::PaddingMode::DirectResize;
     config.validate();
     return config;
 }
@@ -208,43 +152,56 @@ makePipeline(const irt::engine::EngineConfig &config, const cv::Size source_size
     auto registry = std::make_shared<OperatorRegistry>();
     registerBuiltinOperators(*registry);
 
+    auto preprocess = config.preprocessSpec();
+    preprocess.backend = cuda_preprocess ? irt::PreprocessBackend::CUDA : irt::PreprocessBackend::CPU;
+    if (cuda_preprocess)
+    {
+        preprocess.source_width  = source_size.width;
+        preprocess.source_height = source_size.height;
+    }
+    preprocess.validate();
+
     PipelineBuilder builder;
     builder
         .addTensor("model_input", makeTensor(TensorDataType::F32, TensorLayout::NCHW, MemoryKind::DEVICE,
-                                               config.input_width, config.input_height, config.input_channels))
+                                               preprocess.input_width, preprocess.input_height,
+                                               preprocess.input_channels))
         .setModelInput("model_input");
 
     if (!cuda_preprocess)
     {
         builder.addTensor("host_input", makeTensor(TensorDataType::F32, TensorLayout::NCHW, MemoryKind::HOST,
-                                                     config.input_width, config.input_height, config.input_channels));
+                                                     preprocess.input_width, preprocess.input_height,
+                                                     preprocess.input_channels));
         builder.addNode("cpu.image_to_tensor",
-                        {{}, {"host_input"}, CpuImageToTensorOptions{config.mean, config.stddev,
-                                                                        usesLetterbox(config.model_name)}});
+                        {{}, {"host_input"}, CpuImageToTensorOptions{preprocess}});
         builder.addNode("cuda.upload", {{"host_input"}, {"model_input"}, {}});
         return builder.build(std::move(registry));
     }
 
+    const int source_channels = irt::colorChannels(preprocess.src_color);
     auto source = makeTensor(TensorDataType::U8, TensorLayout::HWC, MemoryKind::HOST, source_size.width,
-                             source_size.height, config.input_channels);
+                             source_size.height, source_channels);
     builder.addTensor("host_image", source);
     source.memory_kind = MemoryKind::DEVICE;
     builder.addTensor("device_image", source);
     builder.addNode("cpu.copy_image", {{}, {"host_image"}, {}});
     builder.addNode("cuda.upload", {{"host_image"}, {"device_image"}, {}});
 
-    if (usesLetterbox(config.model_name))
+    if (preprocess.padding_mode == irt::PaddingMode::Letterbox)
     {
-        builder.addNode("cvcuda.letterbox", {{"device_image"}, {"model_input"}, {}});
+        builder.addNode("cvcuda.letterbox", {{"device_image"}, {"model_input"}, LetterBoxOptions{preprocess}});
     }
     else
     {
         const auto resized = makeTensor(TensorDataType::U8, TensorLayout::HWC, MemoryKind::DEVICE,
-                                        config.input_width, config.input_height, config.input_channels);
+                                        preprocess.input_width, preprocess.input_height, preprocess.input_channels);
         builder.addTensor("resized_bgr", resized).addTensor("rgb", resized);
-        builder.addNode("cvcuda.resize", {{"device_image"}, {"resized_bgr"}, ResizeOptions{}});
-        builder.addNode("cvcuda.cvt_color", {{"resized_bgr"}, {"rgb"}, CvtColorOptions{}});
-        builder.addNode("cvcuda.normalize", {{"rgb"}, {"model_input"}, NormalizeOptions{config.mean, config.stddev}});
+        builder.addNode("cvcuda.resize", {{"device_image"}, {"resized_bgr"}, ResizeOptions{preprocess}});
+        auto color_spec      = preprocess;
+        color_spec.dst_color = irt::ColorFormat::RGB;
+        builder.addNode("cvcuda.cvt_color", {{"resized_bgr"}, {"rgb"}, CvtColorOptions{color_spec}});
+        builder.addNode("cvcuda.normalize", {{"rgb"}, {"model_input"}, NormalizeOptions{preprocess}});
     }
     return builder.build(std::move(registry));
 }

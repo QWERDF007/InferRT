@@ -4,25 +4,66 @@
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
-#include <array>
+#include <cctype>
+#include <initializer_list>
 #include <limits>
 #include <string>
+#include <vector>
 
 namespace irt::engine {
 namespace {
 
-std::array<float, 3> readTriplet(const YAML::Node &node, const char *name, const std::array<float, 3> &fallback)
+bool isPresent(const YAML::Node &node)
 {
-    if (!node)
+    if (!node.IsDefined())
+    {
+        return false;
+    }
+    return node.Type() != YAML::NodeType::Null && node.Type() != YAML::NodeType::Undefined;
+}
+
+std::string lower(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(), [](const unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    return value;
+}
+
+YAML::Node firstPresent(std::initializer_list<YAML::Node> nodes)
+{
+    for (const auto &node : nodes)
+    {
+        if (isPresent(node))
+        {
+            return node;
+        }
+    }
+    return {};
+}
+
+YAML::Node optionalMap(const YAML::Node &node)
+{
+    if (isPresent(node) && node.IsMap())
+    {
+        return node;
+    }
+    return YAML::Node(YAML::NodeType::Map);
+}
+
+std::vector<float> readFloatVector(const YAML::Node &node, const char *name, const std::vector<float> &fallback)
+{
+    if (!isPresent(node))
     {
         return fallback;
     }
     if (!node.IsSequence() || node.size() != fallback.size())
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "%s must contain exactly three values", name);
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "%s must contain exactly %zu values", name,
+                             fallback.size());
     }
 
-    std::array<float, 3> values{};
+    std::vector<float> values(fallback.size());
     for (size_t index = 0; index < values.size(); ++index)
     {
         values[index] = node[index].as<float>();
@@ -33,7 +74,7 @@ std::array<float, 3> readTriplet(const YAML::Node &node, const char *name, const
 const YAML::Node requireMap(const YAML::Node &root, const char *name)
 {
     const auto node = root[name];
-    if (!node || !node.IsMap())
+    if (!isPresent(node) || !node.IsMap())
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Missing mapping: %s", name);
     }
@@ -42,17 +83,17 @@ const YAML::Node requireMap(const YAML::Node &root, const char *name)
 
 PreprocessBackend readPreprocessBackend(const YAML::Node &node)
 {
-    if (!node)
+    if (!isPresent(node))
     {
         return PreprocessBackend::CPU;
     }
 
-    const auto backend = node.as<std::string>();
+    const auto backend = lower(node.as<std::string>());
     if (backend == "cpu")
     {
         return PreprocessBackend::CPU;
     }
-    if (backend == "cuda")
+    if (backend == "cuda" || backend == "gpu")
     {
         return PreprocessBackend::CUDA;
     }
@@ -62,7 +103,7 @@ PreprocessBackend readPreprocessBackend(const YAML::Node &node)
 
 QueuePolicy readQueuePolicy(const YAML::Node &node)
 {
-    if (!node)
+    if (!isPresent(node))
     {
         return QueuePolicy::Reject;
     }
@@ -91,7 +132,7 @@ QueuePolicy readQueuePolicy(const YAML::Node &node)
 
 StaticBatchPolicy readStaticBatchPolicy(const YAML::Node &node)
 {
-    if (!node)
+    if (!isPresent(node))
     {
         return StaticBatchPolicy::Pad;
     }
@@ -109,7 +150,171 @@ StaticBatchPolicy readStaticBatchPolicy(const YAML::Node &node)
                          "runtime.static_batch_policy must be reject or pad, got: %s", policy.c_str());
 }
 
+irt::ColorFormat readColorFormat(const YAML::Node &node, const char *name, const irt::ColorFormat fallback)
+{
+    if (!isPresent(node))
+    {
+        return fallback;
+    }
+
+    const auto value = lower(node.as<std::string>());
+    if (value == "bgr")
+    {
+        return irt::ColorFormat::BGR;
+    }
+    if (value == "rgb")
+    {
+        return irt::ColorFormat::RGB;
+    }
+    if (value == "gray" || value == "grey" || value == "gray8" || value == "grey8")
+    {
+        return irt::ColorFormat::GRAY;
+    }
+    if (value == "bgra")
+    {
+        return irt::ColorFormat::BGRA;
+    }
+    if (value == "rgba")
+    {
+        return irt::ColorFormat::RGBA;
+    }
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                         "%s must be bgr, rgb, gray, bgra, or rgba, got: %s", name, value.c_str());
+}
+
+irt::Interpolation readInterpolation(const YAML::Node &node, const irt::Interpolation fallback)
+{
+    if (!isPresent(node))
+    {
+        return fallback;
+    }
+
+    const auto value = lower(node.as<std::string>());
+    if (value == "nearest" || value == "nearest_neighbor")
+    {
+        return irt::Interpolation::Nearest;
+    }
+    if (value == "linear" || value == "bilinear")
+    {
+        return irt::Interpolation::Linear;
+    }
+    if (value == "cubic" || value == "bicubic")
+    {
+        return irt::Interpolation::Cubic;
+    }
+    if (value == "area")
+    {
+        return irt::Interpolation::Area;
+    }
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                         "preprocess.interpolation must be nearest, linear, cubic, or area, got: %s",
+                         value.c_str());
+}
+
+irt::PaddingMode readPaddingMode(const YAML::Node &node, const irt::PaddingMode fallback)
+{
+    if (!isPresent(node))
+    {
+        return fallback;
+    }
+
+    const auto value = lower(node.as<std::string>());
+    if (value == "resize" || value == "direct" || value == "direct_resize")
+    {
+        return irt::PaddingMode::DirectResize;
+    }
+    if (value == "letterbox" || value == "letter_box")
+    {
+        return irt::PaddingMode::Letterbox;
+    }
+    if (value == "center_crop" || value == "centercrop" || value == "crop")
+    {
+        return irt::PaddingMode::CenterCrop;
+    }
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                         "preprocess.padding_mode must be direct_resize, letterbox, or center_crop, got: %s",
+                         value.c_str());
+}
+
+irt::PaddingAlignment readPaddingAlignment(const YAML::Node &node, const irt::PaddingAlignment fallback)
+{
+    if (!isPresent(node))
+    {
+        return fallback;
+    }
+
+    const auto value = lower(node.as<std::string>());
+    if (value == "center" || value == "centre")
+    {
+        return irt::PaddingAlignment::Center;
+    }
+    if (value == "top_left" || value == "topleft" || value == "top-left")
+    {
+        return irt::PaddingAlignment::TopLeft;
+    }
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                         "preprocess.padding_alignment must be center or top_left, got: %s", value.c_str());
+}
+
+irt::TensorLayout readOutputLayout(const YAML::Node &node, const irt::TensorLayout fallback)
+{
+    if (!isPresent(node))
+    {
+        return fallback;
+    }
+
+    const auto value = lower(node.as<std::string>());
+    if (value == "nchw")
+    {
+        return irt::TensorLayout::NCHW;
+    }
+    if (value == "chw")
+    {
+        return irt::TensorLayout::CHW;
+    }
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                         "preprocess.output_layout must be nchw or chw, got: %s", value.c_str());
+}
+
+irt::TensorDataType readOutputDtype(const YAML::Node &node, const irt::TensorDataType fallback)
+{
+    if (!isPresent(node))
+    {
+        return fallback;
+    }
+
+    const auto value = lower(node.as<std::string>());
+    if (value == "float32" || value == "f32" || value == "fp32")
+    {
+        return irt::TensorDataType::F32;
+    }
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                         "preprocess.output_dtype must be float32/f32, got: %s", value.c_str());
+}
+
+template<typename T>
+void readScalarIfPresent(const YAML::Node &node, const char *name, T &target)
+{
+    if (isPresent(node))
+    {
+        try
+        {
+            target = node.as<T>();
+        }
+        catch (const YAML::Exception &error)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "%s has an invalid value: %s", name,
+                                 error.what());
+        }
+    }
+}
+
 } // namespace
+
+const irt::PreprocessSpec &EngineConfig::preprocessSpec() const noexcept
+{
+    return preprocess;
+}
 
 EngineConfig EngineConfig::load(const std::filesystem::path &path)
 {
@@ -162,27 +367,136 @@ EngineConfig EngineConfig::load(const std::filesystem::path &path)
         config.device_id = runtime.deviceId();
     }
 
-    config.input_width  = input["width"].as<int>();
-    config.input_height = input["height"].as<int>();
-    if (input["channels"])
+    try
     {
-        config.input_channels = input["channels"].as<int>();
+        config.preprocess.input_width  = input["width"].as<int>();
+        config.preprocess.input_height = input["height"].as<int>();
     }
-    config.mean   = readTriplet(input["mean"], "input.mean", config.mean);
-    config.stddev = readTriplet(input["std"], "input.std", config.stddev);
+    catch (const YAML::Exception &error)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "input.width and input.height are required: %s",
+                             error.what());
+    }
 
-    if (root["preprocess"])
+    const auto preprocess_node = root["preprocess"];
+    if (isPresent(preprocess_node) && !preprocess_node.IsMap())
     {
-        const auto preprocess = root["preprocess"];
-        if (!preprocess.IsMap())
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "preprocess must be a mapping");
-        }
-        config.preprocess_backend = readPreprocessBackend(preprocess["backend"]);
-        config.letterbox          = preprocess["letterbox"].as<bool>(config.letterbox);
-        config.source_width       = preprocess["source_width"].as<int>(config.source_width);
-        config.source_height      = preprocess["source_height"].as<int>(config.source_height);
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "preprocess must be a mapping");
     }
+    if (isPresent(preprocess_node) && isPresent(preprocess_node["normalize"])
+        && !preprocess_node["normalize"].IsMap())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "preprocess.normalize must be a mapping");
+    }
+    if (isPresent(preprocess_node) && isPresent(preprocess_node["output"])
+        && !preprocess_node["output"].IsMap())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "preprocess.output must be a mapping");
+    }
+    const auto preprocess_map = optionalMap(preprocess_node);
+    const auto normalize_candidate = preprocess_map["normalize"];
+    const auto output_candidate = preprocess_map["output"];
+    const auto normalize_node = optionalMap(normalize_candidate);
+    const auto output_node = optionalMap(output_candidate);
+
+    const auto channels_node = firstPresent({preprocess_map["input_channels"], preprocess_map["channels"],
+                                              input["channels"]});
+    readScalarIfPresent(channels_node, "input.channels", config.preprocess.input_channels);
+
+    const auto source_channels_node
+        = firstPresent({preprocess_map["source_channels"], input["source_channels"]});
+    readScalarIfPresent(source_channels_node, "preprocess.source_channels", config.preprocess.source_channels);
+
+    const auto src_color_node = firstPresent({preprocess_map["src_color"], preprocess_map["source_color"],
+                                               input["src_color"], input["source_color"]});
+    const auto dst_color_node = firstPresent({preprocess_map["dst_color"], preprocess_map["destination_color"],
+                                               input["dst_color"], input["destination_color"]});
+    const bool has_explicit_colors = static_cast<bool>(src_color_node) || static_cast<bool>(dst_color_node);
+    config.preprocess.src_color = readColorFormat(src_color_node, "preprocess.src_color", config.preprocess.src_color);
+    config.preprocess.dst_color = readColorFormat(dst_color_node, "preprocess.dst_color", config.preprocess.dst_color);
+    if (!has_explicit_colors)
+    {
+        if (config.preprocess.input_channels == 1)
+        {
+            config.preprocess.src_color = irt::ColorFormat::GRAY;
+            config.preprocess.dst_color = irt::ColorFormat::GRAY;
+        }
+        else if (config.preprocess.input_channels == 4)
+        {
+            config.preprocess.src_color = irt::ColorFormat::BGRA;
+            config.preprocess.dst_color = irt::ColorFormat::RGBA;
+        }
+    }
+
+    const auto mean_node = firstPresent({preprocess_map["mean"], normalize_node["mean"], input["mean"]});
+    const auto stddev_node = firstPresent({preprocess_map["stddev"], preprocess_map["std"],
+                                           normalize_node["stddev"], normalize_node["std"], input["stddev"],
+                                           input["std"]});
+    if (config.preprocess.mean.size() != static_cast<size_t>(config.preprocess.input_channels))
+    {
+        config.preprocess.mean.assign(static_cast<size_t>(config.preprocess.input_channels), 0.0F);
+    }
+    if (config.preprocess.stddev.size() != static_cast<size_t>(config.preprocess.input_channels))
+    {
+        config.preprocess.stddev.assign(static_cast<size_t>(config.preprocess.input_channels), 1.0F);
+    }
+    if (!mean_node)
+    {
+        if (config.preprocess.input_channels == 3 && config.preprocess.dst_color == irt::ColorFormat::RGB)
+        {
+            config.preprocess.mean = {0.485F, 0.456F, 0.406F};
+        }
+    }
+    if (!stddev_node)
+    {
+        if (config.preprocess.input_channels == 3 && config.preprocess.dst_color == irt::ColorFormat::RGB)
+        {
+            config.preprocess.stddev = {0.229F, 0.224F, 0.225F};
+        }
+    }
+    config.preprocess.mean = readFloatVector(mean_node, "preprocess.mean", config.preprocess.mean);
+    config.preprocess.stddev = readFloatVector(stddev_node, "preprocess.stddev", config.preprocess.stddev);
+
+    config.preprocess.backend = readPreprocessBackend(preprocess_map["backend"]);
+    config.preprocess.interpolation = readInterpolation(preprocess_map["interpolation"],
+                                                        config.preprocess.interpolation);
+    const auto padding_node = firstPresent({preprocess_map["padding_mode"], preprocess_map["padding"]});
+    const bool has_padding_mode = static_cast<bool>(padding_node);
+    if (has_padding_mode)
+    {
+        config.preprocess.padding_mode = readPaddingMode(padding_node, config.preprocess.padding_mode);
+    }
+    if (preprocess_map["letterbox"])
+    {
+        const bool letterbox = preprocess_map["letterbox"].as<bool>();
+        const auto requested = letterbox ? irt::PaddingMode::Letterbox : irt::PaddingMode::DirectResize;
+        if (has_padding_mode && config.preprocess.padding_mode != requested)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "preprocess.letterbox conflicts with preprocess.padding_mode");
+        }
+        config.preprocess.padding_mode = requested;
+    }
+    config.preprocess.padding_alignment = readPaddingAlignment(
+        firstPresent({preprocess_map["padding_alignment"], preprocess_map["alignment"]}),
+        config.preprocess.padding_alignment);
+    readScalarIfPresent(firstPresent({preprocess_map["source_width"], input["source_width"]}),
+                        "preprocess.source_width", config.preprocess.source_width);
+    readScalarIfPresent(firstPresent({preprocess_map["source_height"], input["source_height"]}),
+                        "preprocess.source_height", config.preprocess.source_height);
+    readScalarIfPresent(firstPresent({preprocess_map["pad_value"], input["pad_value"]}),
+                        "preprocess.pad_value", config.preprocess.pad_value);
+    readScalarIfPresent(firstPresent({preprocess_map["pad_after_normalize"],
+                                      preprocess_map["padding_after_normalize"]}),
+                        "preprocess.pad_after_normalize", config.preprocess.pad_after_normalize);
+    readScalarIfPresent(firstPresent({preprocess_map["scale"], normalize_node["scale"], input["scale"]}),
+                        "preprocess.scale", config.preprocess.scale);
+    config.preprocess.output_layout = readOutputLayout(
+        firstPresent({preprocess_map["output_layout"], output_node["layout"], input["output_layout"]}),
+        config.preprocess.output_layout);
+    config.preprocess.output_dtype = readOutputDtype(
+        firstPresent({preprocess_map["output_dtype"], output_node["dtype"], input["output_dtype"]}),
+        config.preprocess.output_dtype);
 
     const auto batch      = requireMap(root, "batch");
     config.min_batch_size = batch["min"].as<int>(1);
@@ -235,6 +549,9 @@ EngineConfig EngineConfig::load(const std::filesystem::path &path)
 
 void EngineConfig::validate() const
 {
+    const auto &preprocess_spec = preprocessSpec();
+    preprocess_spec.validate();
+
     if (model_name.empty())
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "model_name must not be empty");
@@ -289,10 +606,10 @@ void EngineConfig::validate() const
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "device_ids must not contain duplicates");
         }
     }
-    if (input_width <= 0 || input_height <= 0 || input_channels != 3)
+    if (preprocess_spec.input_width <= 0 || preprocess_spec.input_height <= 0 || preprocess_spec.input_channels <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "input width/height must be positive and channels must be 3");
+                             "input width/height/channels must be positive");
     }
     if (min_batch_size <= 0 || min_batch_size > opt_batch_size || opt_batch_size > max_batch_size)
     {
@@ -329,18 +646,6 @@ void EngineConfig::validate() const
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                                  "preferred batch size must be in [1, max_batch_size]");
         }
-    }
-    for (const float value : stddev)
-    {
-        if (value == 0.0F)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "input.std must not contain zero");
-        }
-    }
-    if ((source_width == 0) != (source_height == 0) || source_width < 0 || source_height < 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "preprocess.source_width and preprocess.source_height must both be positive or omitted");
     }
 }
 

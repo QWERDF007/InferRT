@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from helpers.model_integration import conversion_artifact_dir
+from helpers.model_integration import conversion_artifact_dir, resolve_model_file
 
 
 def test_conversion_artifact_dir_uses_checkpoint_stem_under_model_root(tmp_path: Path) -> None:
@@ -39,3 +39,36 @@ def test_conversion_artifact_dir_rejects_checkpoint_outside_model_root(tmp_path:
 
     with pytest.raises(ValueError, match="Checkpoint must be under model root"):
         conversion_artifact_dir(model_root, outside_checkpoint)
+
+
+def test_resolve_model_file_uses_first_existing_candidate(tmp_path: Path) -> None:
+    model_root = tmp_path / "models"
+    fallback = model_root / "resnet" / "resnet18-f37072fd" / "resnet18.wts"
+    fallback.parent.mkdir(parents=True)
+    fallback.write_bytes(b"weights")
+
+    resolved = resolve_model_file(
+        model_root,
+        ("resnet/resnet18.wts", "resnet/resnet18-f37072fd/resnet18.wts"),
+        "ResNet18 weights",
+    )
+
+    assert resolved == fallback
+
+
+def test_resolve_model_file_prefers_canonical_candidate(tmp_path: Path) -> None:
+    model_root = tmp_path / "models"
+    canonical = model_root / "sam1" / "sam_vit_b_01ec64.pth"
+    legacy = model_root / "sam" / "sam_vit_b_01ec64.pth"
+    canonical.parent.mkdir(parents=True)
+    legacy.parent.mkdir(parents=True)
+    canonical.write_bytes(b"canonical")
+    legacy.write_bytes(b"legacy")
+
+    resolved = resolve_model_file(
+        model_root,
+        ("sam1/sam_vit_b_01ec64.pth", "sam/sam_vit_b_01ec64.pth"),
+        "SAM ViT-B checkpoint",
+    )
+
+    assert resolved == canonical

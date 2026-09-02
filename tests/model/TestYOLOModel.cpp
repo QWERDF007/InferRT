@@ -17,10 +17,10 @@ namespace {
 void expectInputShape(const irt::model::IModel &model, int n, int c, int h, int w)
 {
     const auto &shape = model.modelConfig().inputShape();
-    EXPECT_EQ(shape.d[0], n);
-    EXPECT_EQ(shape.d[1], c);
-    EXPECT_EQ(shape.d[2], h);
-    EXPECT_EQ(shape.d[3], w);
+    EXPECT_EQ(shape[0], n);
+    EXPECT_EQ(shape[1], c);
+    EXPECT_EQ(shape[2], h);
+    EXPECT_EQ(shape[3], w);
 }
 
 /**
@@ -132,7 +132,7 @@ TEST(YOLOModelConfigTest, PreservesExplicitDetectionConfig)
 {
     auto config = std::make_unique<irt::model::IModelConfig>();
     config->setInputTensorNames({"images"});
-    config->setInputShape(nvinfer1::Dims4{1, 3, 320, 320});
+    config->setInputShape(irt::Shape{1, 3, 320, 320});
     config->setNumClasses(3);
     config->setOutputTensorNames({"p3", "p4", "p5"});
 
@@ -152,7 +152,7 @@ TEST(YOLOModelConfigTest, PreservesExplicitSegmentationConfig)
 {
     auto config = std::make_unique<irt::model::IModelConfig>();
     config->setInputTensorNames({"images"});
-    config->setInputShape(nvinfer1::Dims4{1, 3, 320, 320});
+    config->setInputShape(irt::Shape{1, 3, 320, 320});
     config->setNumClasses(3);
     config->setOutputTensorNames({"p3", "p4", "p5", "proto"});
 
@@ -174,7 +174,7 @@ TEST(YOLOModelBuildTest, BuildRejectsInputShapeNotDivisibleByStride)
     ASSERT_NE(model, nullptr);
 
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setInputShape(nvinfer1::Dims4{1, 3, 641, 640});
+    config->setInputShape(irt::Shape{1, 3, 641, 640});
     model->setModelConfig(std::move(config));
 
     const TempWeightsFile weights("inferrt_yolov5_test_");
@@ -190,7 +190,7 @@ TEST(YOLOModelBuildTest, BuildRejectsInvalidChannelCount)
     ASSERT_NE(model, nullptr);
 
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setInputShape(nvinfer1::Dims4{1, 1, 640, 640});
+    config->setInputShape(irt::Shape{1, 1, 640, 640});
     model->setModelConfig(std::move(config));
 
     const TempWeightsFile weights("inferrt_yolov8_test_");
@@ -207,9 +207,10 @@ TEST(YOLOModelBuildTest, BuildRejectsMultipleInputShapes)
 
     auto config = std::make_unique<irt::model::IModelConfig>();
     config->setInputShapes({
-        nvinfer1::Dims4{1, 3, 640, 640},
-        nvinfer1::Dims4{1, 3, 640, 640}
+        irt::Shape{1, 3, 640, 640},
+        irt::Shape{1, 3, 640, 640}
     });
+    config->setInputTensorNames({"images", "auxiliary"});
     config->setOutputTensorNames({"output0", "output1", "output2"});
     model->setModelConfig(std::move(config));
 
@@ -226,7 +227,7 @@ TEST(YOLOModelBuildTest, BuildRejectsWrongOutputTensorCount)
     ASSERT_NE(model, nullptr);
 
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setInputShape(nvinfer1::Dims4{1, 3, 640, 640});
+    config->setInputShape(irt::Shape{1, 3, 640, 640});
     config->setOutputTensorNames({"output0", "output1"});
     model->setModelConfig(std::move(config));
 
@@ -243,7 +244,7 @@ TEST(YOLOModelBuildTest, BuildRejectsWrongSegmentationOutputTensorCount)
     ASSERT_NE(model, nullptr);
 
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setInputShape(nvinfer1::Dims4{1, 3, 640, 640});
+    config->setInputShape(irt::Shape{1, 3, 640, 640});
     config->setOutputTensorNames({"output0", "output1", "output2"});
     model->setModelConfig(std::move(config));
 

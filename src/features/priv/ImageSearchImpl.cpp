@@ -59,6 +59,33 @@ std::string explicitPathListMetadataValue()
     return "<explicit_path_list>";
 }
 
+std::string preprocessSpecMetadata(const irt::PreprocessSpec &spec)
+{
+    std::string value = std::to_string(spec.input_width) + "," + std::to_string(spec.input_height) + ","
+                      + std::to_string(spec.input_channels) + "," + std::to_string(spec.source_channels) + ","
+                      + std::to_string(static_cast<int>(spec.src_color)) + ","
+                      + std::to_string(static_cast<int>(spec.dst_color)) + ","
+                      + std::to_string(static_cast<int>(spec.interpolation)) + ","
+                      + std::to_string(static_cast<int>(spec.padding_mode)) + ","
+                      + std::to_string(static_cast<int>(spec.padding_alignment)) + ","
+                      + std::to_string(static_cast<int>(spec.backend)) + "," + std::to_string(spec.source_width) + ","
+                      + std::to_string(spec.source_height) + "," + std::to_string(spec.pad_value) + ","
+                      + (spec.pad_after_normalize ? "1" : "0") + "," + std::to_string(spec.scale) + ","
+                      + std::to_string(static_cast<int>(spec.output_layout)) + ","
+                      + std::to_string(static_cast<int>(spec.output_dtype));
+    value += ":mean=";
+    for (const auto item : spec.mean)
+    {
+        value += std::to_string(item) + ",";
+    }
+    value += ":std=";
+    for (const auto item : spec.stddev)
+    {
+        value += std::to_string(item) + ",";
+    }
+    return value;
+}
+
 std::vector<ImageSearchItem> normalizeImageItems(const std::vector<ImageSearchItem> &gallery_items)
 {
     if (gallery_items.empty())
@@ -139,6 +166,7 @@ irt::util::ManifestEntries imageSearchManifestEntries(const fs::path &index_path
         {     "model_runtime",           config.model_runtime.toString()},
         {   "model_precision", irt::model::modelPrecisionName(config.model_precision)},
         {"preprocess_backend", priv::preprocessBackendName(config.preprocess_backend)},
+        {"preprocess_spec",                 preprocessSpecMetadata(config.preprocess)},
         {              "norm",                     priv::featureNormName(config.norm)},
         {     "faiss_backend",           priv::faissBackendName(config.faiss_backend)},
         {     "index_storage",           priv::indexStorageName(config.index_storage)},
@@ -243,6 +271,7 @@ bool existingIndexMatchesConfig(const fs::path &index_path, const fs::path &gall
                                           irt::model::modelPrecisionName(config.model_precision))
         && irt::util::manifestValueEquals(manifest, "preprocess_backend",
                                           priv::preprocessBackendName(config.preprocess_backend))
+        && irt::util::manifestValueEquals(manifest, "preprocess_spec", preprocessSpecMetadata(config.preprocess))
         && irt::util::manifestValueEquals(manifest, "faiss_backend", priv::faissBackendName(config.faiss_backend))
         && irt::util::manifestValueEquals(manifest, "model_batch_size", std::to_string(config.model_batch_size))
         && irt::util::manifestValueEquals(manifest, "norm", priv::featureNormName(config.norm))
@@ -286,7 +315,9 @@ priv::FaissIndexBundle buildIndexFromStore(const std::vector<ImageSearchItem> &g
                                            const ImageSearchBuildProgressCallback &progress_callback)
 {
     const size_t item_count = gallery_items.size();
-    const size_t total_work = priv::useCpuDiskIndex(config) ? item_count * 2 : item_count;
+    const size_t total_work = priv::useCpuDiskIndex(config)
+                                ? irt::checkedSizeMul(item_count, 2U, "ImageSearch build progress")
+                                : item_count;
     reportStage(progress_callback, ImageSearchBuildStage::BuildingIndex, 0, total_work);
 
     auto load_feature = [&](size_t index) { return store.read(index); };
@@ -438,7 +469,9 @@ void ImageSearch::Impl::buildWithImages(const fs::path &weights_file, const fs::
                  std::move(extractor));
     saveImageSearchManifest(index_path_, metadata_gallery_value, config_, gallery_ids_);
 
-    const size_t total_work = priv::useCpuDiskIndex(config_) ? gallery_ids_.size() * 2 : gallery_ids_.size();
+    const size_t total_work = priv::useCpuDiskIndex(config_)
+                                ? irt::checkedSizeMul(gallery_ids_.size(), 2U, "ImageSearch build progress")
+                                : gallery_ids_.size();
     reportStage(progress_callback, ImageSearchBuildStage::BuildingIndex, total_work, total_work);
 }
 
@@ -468,7 +501,7 @@ std::vector<ImageSearchResult> ImageSearch::Impl::search(const fs::path &query_i
 {
     if (!index_)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "ImageSearch index is not ready");
+        throw irt::Exception(irt::Status::INVALID_OPERATION, "ImageSearch index is not ready");
     }
     if (top_k <= 0)
     {
@@ -476,7 +509,7 @@ std::vector<ImageSearchResult> ImageSearch::Impl::search(const fs::path &query_i
     }
     if (index_->ntotal <= 0)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "ImageSearch index is empty");
+        throw irt::Exception(irt::Status::INVALID_OPERATION, "ImageSearch index is empty");
     }
 
     ensureExtractor();

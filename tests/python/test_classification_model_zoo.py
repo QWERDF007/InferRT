@@ -132,6 +132,16 @@ def test_list_supported_torchhub_models_includes_official_dinov2_keys() -> None:
     assert "dinov3_vitb16" not in names
 
 
+def test_dino_model_zoo_lists_reg4_aliases() -> None:
+    """DINO 专用入口必须与通用 model-zoo 接受相同的 ``reg4`` 别名。"""
+
+    from dino_model_zoo import list_supported_models as list_dino_models
+
+    names = list_dino_models("torchhub")
+
+    assert "dinov2_vitb14_reg4" in names
+
+
 def test_list_supported_transformers_models_includes_official_dinov3_keys() -> None:
     """transformers 后端应列出 Hugging Face DINOv3 backbone key。"""
 
@@ -203,6 +213,25 @@ def test_create_torchhub_dinov2_uses_official_repo_by_default(monkeypatch: pytes
     assert captured["pretrained"] is True
     assert captured["trust_repo"] is True
     assert captured["skip_validation"] is True
+
+
+def test_create_torchhub_dinov2_normalizes_reg4_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    """模型目录中的 ``*_reg4`` 别名必须映射到官方 Hub 的 ``*_reg`` key。"""
+
+    captured: dict[str, object] = {}
+
+    def fake_hub_load(repo_or_dir: str, model: str, **kwargs: object) -> object:
+        captured["repo_or_dir"] = repo_or_dir
+        captured["model"] = model
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr("torch.hub.load", fake_hub_load)
+
+    create_model("dinov2_vitb14_reg4", "torchhub")
+
+    assert captured["repo_or_dir"] == "facebookresearch/dinov2"
+    assert captured["model"] == "dinov2_vitb14_reg"
 
 
 def test_create_transformers_dinov3_uses_huggingface_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:

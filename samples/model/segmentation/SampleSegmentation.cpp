@@ -193,54 +193,43 @@ std::string className(int class_id, const std::vector<std::string> &labels)
  */
 std::vector<float> preprocessLetterbox(const cv::Mat &bgr_image, int input_w, int input_h, LetterboxInfo &info)
 {
-    info.original_w = bgr_image.cols;
-    info.original_h = bgr_image.rows;
-    info.input_w    = input_w;
-    info.input_h    = input_h;
-    info.scale      = std::min(static_cast<float>(input_w) / static_cast<float>(bgr_image.cols),
-                               static_cast<float>(input_h) / static_cast<float>(bgr_image.rows));
+    irt::PreprocessSpec spec;
+    spec.input_width     = input_w;
+    spec.input_height    = input_h;
+    spec.input_channels  = 3;
+    spec.source_channels = 3;
+    spec.src_color       = irt::ColorFormat::BGR;
+    spec.dst_color       = irt::ColorFormat::RGB;
+    spec.padding_mode    = irt::PaddingMode::Letterbox;
+    spec.pad_value       = 114.0F;
+    spec.mean            = {0.0F, 0.0F, 0.0F};
+    spec.stddev          = {1.0F, 1.0F, 1.0F};
+    spec.scale            = 1.0F / 255.0F;
 
-    const int resized_w = static_cast<int>(std::round(static_cast<float>(bgr_image.cols) * info.scale));
-    const int resized_h = static_cast<int>(std::round(static_cast<float>(bgr_image.rows) * info.scale));
-    info.pad_x          = (input_w - resized_w) / 2;
-    info.pad_y          = (input_h - resized_h) / 2;
-
-    cv::Mat resized;
-    cv::resize(bgr_image, resized, cv::Size(resized_w, resized_h), 0.0, 0.0, cv::INTER_LINEAR);
-
-    cv::Mat canvas(input_h, input_w, CV_8UC3, cv::Scalar(114, 114, 114));
-    resized.copyTo(canvas(cv::Rect(info.pad_x, info.pad_y, resized_w, resized_h)));
-
-    cv::Mat rgb;
-    cv::cvtColor(canvas, rgb, cv::COLOR_BGR2RGB);
-    rgb.convertTo(rgb, CV_32FC3, 1.0 / 255.0);
-
-    std::vector<cv::Mat> channels;
-    cv::split(rgb, channels);
-
-    std::vector<float> chw(static_cast<size_t>(3 * input_h * input_w));
-    const size_t       plane_size = static_cast<size_t>(input_h * input_w);
-    for (int c = 0; c < 3; ++c)
-    {
-        std::memcpy(chw.data() + static_cast<size_t>(c) * plane_size, channels[c].ptr<float>(),
-                    plane_size * sizeof(float));
-    }
-    return chw;
+    const auto result = irt::model::ImageNetUtil::preprocessWithGeometry(bgr_image, spec);
+    info.original_w   = result.geometry.original_width;
+    info.original_h   = result.geometry.original_height;
+    info.input_w      = input_w;
+    info.input_h      = input_h;
+    info.scale        = result.geometry.scale;
+    info.pad_x        = result.geometry.pad_left;
+    info.pad_y        = result.geometry.pad_top;
+    return irt::model::ImageNetUtil::imageToTensorCHW(result.image);
 }
 
 /**
  * @brief 使用 RF-DETR 官方 ImageNet 归一化预处理，并按 NCHW 展平。
  */
-std::vector<float> preprocessRFDETR(const cv::Mat &bgr_image, const nvinfer1::Dims &input_dims)
+std::vector<float> preprocessRFDETR(const cv::Mat &bgr_image, const irt::Shape &input_dims)
 {
-    if (input_dims.nbDims != 4 || input_dims.d[1] != 3 || input_dims.d[2] <= 0 || input_dims.d[3] <= 0)
+    if (input_dims.rank() != 4 || input_dims[1] != 3 || input_dims[2] <= 0 || input_dims[3] <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "RF-DETR-Seg expects Nx3xHxW input, got %s",
                              dimsToCsv(input_dims).c_str());
     }
 
     const cv::Mat preprocessed = irt::model::ImageNetUtil::preprocess(
-        bgr_image, cv::Size(static_cast<int>(input_dims.d[3]), static_cast<int>(input_dims.d[2])));
+        bgr_image, cv::Size(static_cast<int>(input_dims[3]), static_cast<int>(input_dims[2])));
     return irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
 }
 
@@ -289,14 +278,14 @@ std::vector<Instance> nonMaximumSuppression(std::vector<Instance> instances, flo
 /**
  * @brief 解码 RF-DETR-Seg 的 boxes/logits/masks 输出。
  */
-std::vector<Instance> decodeRFDETRSegOutputs(const HostBuffer &boxes_output, const nvinfer1::Dims &boxes_dims,
-                                             const HostBuffer &logits_output, const nvinfer1::Dims &logits_dims,
-                                             const nvinfer1::Dims &masks_dims, const Arguments &args,
+std::vector<Instance> decodeRFDETRSegOutputs(const HostBuffer &boxes_output, const irt::Shape &boxes_dims,
+                                             const HostBuffer &logits_output, const irt::Shape &logits_dims,
+                                             const irt::Shape &masks_dims, const Arguments &args,
                                              const cv::Size &image_size)
 {
-    if (boxes_dims.nbDims != 3 || logits_dims.nbDims != 3 || masks_dims.nbDims != 4 || boxes_dims.d[0] != 1
-        || logits_dims.d[0] != 1 || masks_dims.d[0] != 1 || boxes_dims.d[1] != logits_dims.d[1]
-        || boxes_dims.d[1] != masks_dims.d[1] || boxes_dims.d[2] != 4)
+    if (boxes_dims.rank() != 3 || logits_dims.rank() != 3 || masks_dims.rank() != 4 || boxes_dims[0] != 1
+        || logits_dims[0] != 1 || masks_dims[0] != 1 || boxes_dims[1] != logits_dims[1]
+        || boxes_dims[1] != masks_dims[1] || boxes_dims[2] != 4)
     {
         throw irt::Exception(
             irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected RF-DETR-Seg output shapes: dets=%s labels=%s masks=%s",
@@ -305,8 +294,8 @@ std::vector<Instance> decodeRFDETRSegOutputs(const HostBuffer &boxes_output, con
 
     const auto *boxes   = static_cast<const float *>(boxes_output.data());
     const auto *logits  = static_cast<const float *>(logits_output.data());
-    const int   queries = static_cast<int>(boxes_dims.d[1]);
-    const int   classes = static_cast<int>(logits_dims.d[2]);
+    const int   queries = static_cast<int>(boxes_dims[1]);
+    const int   classes = static_cast<int>(logits_dims[2]);
 
     std::vector<Instance> instances;
     instances.reserve(static_cast<size_t>(queries));
@@ -365,7 +354,7 @@ void remapToOriginalImage(Instance &instance, const LetterboxInfo &letterbox)
  * @brief 解码 YOLOv8-Seg 的 DFL distance、class logits 和 mask coefficients。
  */
 std::vector<Instance> decodeYoloV8SegOutputs(const std::vector<HostBuffer>     &outputs,
-                                             const std::vector<nvinfer1::Dims> &output_dims,
+                                             const std::vector<irt::Shape> &output_dims,
                                              const std::array<size_t, 3> &branch_indices, const Arguments &args,
                                              const LetterboxInfo &letterbox)
 {
@@ -379,7 +368,7 @@ std::vector<Instance> decodeYoloV8SegOutputs(const std::vector<HostBuffer>     &
         const int   grid_w            = letterbox.input_w / stride;
         const int   grid              = grid_h * grid_w;
         const int   expected_channels = 4 + args.num_classes + kYoloMaskChannels;
-        if (dims.nbDims != 3 || dims.d[0] != 1 || dims.d[1] != expected_channels || dims.d[2] != grid)
+        if (dims.rank() != 3 || dims[0] != 1 || dims[1] != expected_channels || dims[2] != grid)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                                  "Unexpected YOLOv8-Seg output shape for branch %zu: %s", branch,
@@ -439,18 +428,18 @@ std::vector<Instance> decodeYoloV8SegOutputs(const std::vector<HostBuffer>     &
  * @brief 根据 YOLOv8-Seg proto 和实例 mask coefficients 生成原图尺寸 mask logits。
  */
 std::vector<cv::Mat> buildYoloV8SegMasks(const std::vector<Instance> &instances, const HostBuffer &proto_output,
-                                         const nvinfer1::Dims &proto_dims, const LetterboxInfo &letterbox)
+                                         const irt::Shape &proto_dims, const LetterboxInfo &letterbox)
 {
-    if (proto_dims.nbDims != 4 || proto_dims.d[0] != 1 || proto_dims.d[1] != kYoloMaskChannels || proto_dims.d[2] <= 0
-        || proto_dims.d[3] <= 0)
+    if (proto_dims.rank() != 4 || proto_dims[0] != 1 || proto_dims[1] != kYoloMaskChannels || proto_dims[2] <= 0
+        || proto_dims[3] <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected YOLOv8-Seg proto shape: %s",
                              dimsToCsv(proto_dims).c_str());
     }
 
     const auto    *proto     = static_cast<const float *>(proto_output.data());
-    const int      proto_h   = static_cast<int>(proto_dims.d[2]);
-    const int      proto_w   = static_cast<int>(proto_dims.d[3]);
+    const int      proto_h   = static_cast<int>(proto_dims[2]);
+    const int      proto_w   = static_cast<int>(proto_dims[3]);
     const int      area      = proto_h * proto_w;
     const int      resized_w = static_cast<int>(std::round(static_cast<float>(letterbox.original_w) * letterbox.scale));
     const int      resized_h = static_cast<int>(std::round(static_cast<float>(letterbox.original_h) * letterbox.scale));
@@ -515,21 +504,21 @@ void printInstances(const std::vector<Instance> &instances, const std::vector<st
  * @brief 将实例 mask 叠加到原图，并绘制检测框和类别标签。
  */
 void drawInstances(const cv::Mat &image, const std::vector<Instance> &instances, const HostBuffer &mask_buffer,
-                   const nvinfer1::Dims &mask_dims, const std::vector<std::string> &labels, float mask_threshold,
+                   const irt::Shape &mask_dims, const std::vector<std::string> &labels, float mask_threshold,
                    const fs::path &output_path)
 {
     if (output_path.empty())
     {
         return;
     }
-    if (mask_dims.nbDims != 4)
+    if (mask_dims.rank() != 4)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "RF-DETR-Seg masks output must be 4D");
     }
 
     const auto *masks  = static_cast<const float *>(mask_buffer.data());
-    const int   mask_h = static_cast<int>(mask_dims.d[2]);
-    const int   mask_w = static_cast<int>(mask_dims.d[3]);
+    const int   mask_h = static_cast<int>(mask_dims[2]);
+    const int   mask_w = static_cast<int>(mask_dims[3]);
 
     cv::Mat visual;
     image.convertTo(visual, CV_32FC3);
@@ -777,7 +766,7 @@ int main(int argc, char *argv[])
         config->setRuntime(args.runtime);
         if (args.input_size_explicit)
         {
-            config->setInputShape(nvinfer1::Dims4{1, 3, args.input_size, args.input_size});
+            config->setInputShape(irt::Shape{1, 3, args.input_size, args.input_size});
         }
         if (args.family == SegmentationFamily::YOLOV8)
         {
@@ -790,7 +779,7 @@ int main(int argc, char *argv[])
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to create model: %s",
                                  args.model_name.c_str());
         }
-        model->setLogLevel(nvinfer1::ILogger::Severity::kINFO);
+        model->setLogLevel(irt::model::LogLevel::Info);
 
         std::cout << "Building or loading " << modelFamilyName(args.family) << " model..." << std::endl;
         const auto build_start = Clock::now();
@@ -805,8 +794,8 @@ int main(int argc, char *argv[])
                                  image_path.string().c_str());
         }
 
-        const auto   input_names      = model->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
-        const auto   output_names     = model->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+        const auto   input_names      = model->ioTensorNames(irt::TensorIOMode::Input);
+        const auto   output_names     = model->ioTensorNames(irt::TensorIOMode::Output);
         const size_t expected_outputs = args.family == SegmentationFamily::RFDETR ? 3U : 4U;
         if (input_names.size() != 1 || output_names.size() != expected_outputs)
         {
@@ -835,7 +824,7 @@ int main(int argc, char *argv[])
 
         const auto input_dims       = model->tensorShape(input_names.front());
         const auto preprocess_start = Clock::now();
-        if (input_dims.nbDims != 4 || input_dims.d[1] != 3 || input_dims.d[2] <= 0 || input_dims.d[3] <= 0)
+        if (input_dims.rank() != 4 || input_dims[1] != 3 || input_dims[2] <= 0 || input_dims[3] <= 0)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "%s expects Nx3xHxW input, got %s",
                                  modelFamilyName(args.family), dimsToCsv(input_dims).c_str());
@@ -843,14 +832,14 @@ int main(int argc, char *argv[])
         LetterboxInfo letterbox;
         auto          input_tensor   = args.family == SegmentationFamily::RFDETR
                                          ? preprocessRFDETR(image, input_dims)
-                                         : preprocessLetterbox(image, static_cast<int>(input_dims.d[3]),
-                                                               static_cast<int>(input_dims.d[2]), letterbox);
+                                         : preprocessLetterbox(image, static_cast<int>(input_dims[3]),
+                                                               static_cast<int>(input_dims[2]), letterbox);
         const auto    preprocess_end = Clock::now();
 
-        const auto   stream = model->resolveExecutionStream();
-        DeviceBuffer device_input(elementCount(input_dims), nvinfer1::DataType::kFLOAT);
+        const cudaStream_t stream = reinterpret_cast<cudaStream_t>(model->resolveExecutionStream());
+        DeviceBuffer device_input(elementCount(input_dims), irt::TensorDataType::F32);
 
-        std::vector<nvinfer1::Dims> output_dims;
+        std::vector<irt::Shape> output_dims;
         std::vector<DeviceBuffer>   device_outputs;
         std::vector<HostBuffer>     host_outputs;
         output_dims.reserve(output_names.size());
@@ -860,7 +849,7 @@ int main(int argc, char *argv[])
         {
             const auto dims = model->tensorShape(output_name);
             const auto type = model->tensorDataType(output_name);
-            if (type != nvinfer1::DataType::kFLOAT)
+            if (type != irt::TensorDataType::F32)
             {
                 throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                                      "Segmentation sample expects float32 outputs");
@@ -871,12 +860,14 @@ int main(int argc, char *argv[])
             std::cout << "Output " << output_name << " dims=[" << dimsToCsv(dims) << "]" << std::endl;
         }
 
-        std::vector<void *> buffers;
+        std::vector<irt::BufferView> buffers;
         buffers.reserve(1 + output_names.size());
-        buffers.push_back(device_input.data());
-        for (auto &buffer : device_outputs)
+        buffers.push_back(irt::BufferView::fromBytes(device_input.data(), device_input.sizeBytes(),
+                                                     irt::MemoryKind::DEVICE, input_names.front()));
+        for (size_t index = 0; index < device_outputs.size(); ++index)
         {
-            buffers.push_back(buffer.data());
+            buffers.push_back(irt::BufferView::fromBytes(device_outputs[index].data(), device_outputs[index].sizeBytes(),
+                                                         irt::MemoryKind::DEVICE, output_names[index]));
         }
 
         auto run_inference_once = [&]() -> IterationTiming
@@ -892,7 +883,7 @@ int main(int argc, char *argv[])
             timing.h2d_ms      = elapsedMs(h2d_start, h2d_end);
 
             const auto inference_start = Clock::now();
-            model->infer(buffers, stream, true);
+            model->infer(buffers, reinterpret_cast<std::uintptr_t>(stream), true);
             checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(RF-DETR-Seg inference)");
             const auto inference_end = Clock::now();
             timing.inference_ms      = elapsedMs(inference_start, inference_end);

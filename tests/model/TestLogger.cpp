@@ -2,6 +2,8 @@
 
 #include <inferrt/model/Logging.hpp>
 
+#include "priv/TRTLogging.hpp"
+
 #include <sstream>
 #include <string>
 
@@ -59,7 +61,8 @@ struct CapturedStdStreams
 TEST(LoggerTest, DefaultSeverityIsWarning)
 {
     Logger logger("TestLogger");
-    EXPECT_EQ(logger.getReportableSeverity(), Severity::kWARNING);
+    EXPECT_EQ(logger.name(), "TestLogger");
+    EXPECT_EQ(logger.level(), LogLevel::Warning);
 }
 
 /**
@@ -67,8 +70,8 @@ TEST(LoggerTest, DefaultSeverityIsWarning)
  */
 TEST(LoggerTest, CustomSeverityInConstructor)
 {
-    Logger logger("TestLogger", Severity::kVERBOSE);
-    EXPECT_EQ(logger.getReportableSeverity(), Severity::kVERBOSE);
+    Logger logger("TestLogger", LogLevel::Verbose);
+    EXPECT_EQ(logger.level(), LogLevel::Verbose);
 }
 
 /**
@@ -77,8 +80,8 @@ TEST(LoggerTest, CustomSeverityInConstructor)
 TEST(LoggerTest, SetReportableSeverityTakesEffect)
 {
     Logger logger("TestLogger");
-    logger.setReportableSeverity(Severity::kERROR);
-    EXPECT_EQ(logger.getReportableSeverity(), Severity::kERROR);
+    logger.setLevel(LogLevel::Error);
+    EXPECT_EQ(logger.level(), LogLevel::Error);
 }
 
 /**
@@ -86,7 +89,7 @@ TEST(LoggerTest, SetReportableSeverityTakesEffect)
  */
 TEST(LoggerTest, GetTRTLoggerReturnsSelf)
 {
-    Logger logger("TestLogger");
+    TRTLogger logger("TestLogger");
     auto  &trt_logger = logger.getTRTLogger();
     EXPECT_EQ(&trt_logger, &logger);
 }
@@ -188,7 +191,7 @@ TEST(LogStreamConsumerTest, DynamicReportableSeverityChangeEnablesOutput)
 TEST(LogMacroTest, VerboseMacroOutputsPrefixAndMessage)
 {
     CapturedStdStreams captured;
-    Logger logger("TestLogger", Severity::kVERBOSE);
+    TRTLogger logger("TestLogger", Severity::kVERBOSE);
     LOG_VERBOSE(logger) << "verbose message" << std::endl;
 
     EXPECT_NE(captured.cout_redirect.captured().find("[V] "), std::string::npos);
@@ -201,7 +204,7 @@ TEST(LogMacroTest, VerboseMacroOutputsPrefixAndMessage)
 TEST(LogMacroTest, InfoMacroSuppressedWhenReportableIsError)
 {
     CapturedStdStreams captured;
-    Logger logger("TestLogger", Severity::kERROR);
+    TRTLogger logger("TestLogger", Severity::kERROR);
     LOG_INFO(logger) << "suppressed info" << std::endl;
 
     EXPECT_EQ(captured.cout_redirect.captured().find("suppressed info"), std::string::npos);
@@ -214,7 +217,7 @@ TEST(LogMacroTest, InfoMacroSuppressedWhenReportableIsError)
 TEST(LogMacroTest, WarnMacroOutputsPrefixAndMessage)
 {
     CapturedStdStreams captured;
-    Logger logger("TestLogger", Severity::kWARNING);
+    TRTLogger logger("TestLogger", Severity::kWARNING);
     LOG_WARN(logger) << "warning message" << std::endl;
 
     EXPECT_NE(captured.cerr_redirect.captured().find("[W] "), std::string::npos);
@@ -228,7 +231,7 @@ TEST(LogMacroTest, WarnMacroOutputsPrefixAndMessage)
 TEST(LogMacroTest, ErrorAndFatalMacrosUseExpectedPrefixes)
 {
     CapturedStdStreams captured;
-    Logger logger("TestLogger", Severity::kVERBOSE);
+    TRTLogger logger("TestLogger", Severity::kVERBOSE);
 
     LOG_ERROR(logger) << "error message" << std::endl;
     LOG_FATAL(logger) << "fatal message" << std::endl;
@@ -247,7 +250,7 @@ TEST(LogMacroTest, ErrorAndFatalMacrosUseExpectedPrefixes)
 TEST(LoggerOutputTest, LoggerNameAppearsInOutput)
 {
     CapturedStdStreams captured;
-    Logger logger("MyModel", Severity::kVERBOSE);
+    TRTLogger logger("MyModel", Severity::kVERBOSE);
     logger.log(Severity::kINFO, "test message");
 
     EXPECT_NE(captured.cout_redirect.captured().find("[MyModel]"), std::string::npos);

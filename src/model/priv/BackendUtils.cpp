@@ -10,7 +10,7 @@ size_t TensorElementCount(const nvinfer1::Dims &dims, const std::string &tensor_
 {
     if (dims.nbDims < 0)
     {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Tensor rank is invalid: %s", tensor_name.c_str());
+        throw irt::Exception(Status::INVALID_OPERATION, "Tensor rank is invalid: %s", tensor_name.c_str());
     }
 
     size_t count = 1;
@@ -18,10 +18,10 @@ size_t TensorElementCount(const nvinfer1::Dims &dims, const std::string &tensor_
     {
         if (dims.d[i] <= 0)
         {
-            throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Tensor shape is not fully resolved: %s dim[%d]=%d",
+            throw irt::Exception(Status::INVALID_OPERATION, "Tensor shape is not fully resolved: %s dim[%d]=%d",
                                  tensor_name.c_str(), i, dims.d[i]);
         }
-        count *= static_cast<size_t>(dims.d[i]);
+        count = irt::checkedSizeMul(count, static_cast<size_t>(dims.d[i]), "Tensor element count");
     }
     return count;
 }
@@ -30,7 +30,7 @@ std::vector<int64_t> DimsToInt64Shape(const nvinfer1::Dims &dims, const std::str
 {
     if (dims.nbDims < 0)
     {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Tensor rank is invalid: %s", tensor_name.c_str());
+        throw irt::Exception(Status::INVALID_OPERATION, "Tensor rank is invalid: %s", tensor_name.c_str());
     }
 
     std::vector<int64_t> shape;
@@ -39,7 +39,7 @@ std::vector<int64_t> DimsToInt64Shape(const nvinfer1::Dims &dims, const std::str
     {
         if (dims.d[i] <= 0)
         {
-            throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Tensor shape is not fully resolved: %s dim[%d]=%d",
+            throw irt::Exception(Status::INVALID_OPERATION, "Tensor shape is not fully resolved: %s dim[%d]=%d",
                                  tensor_name.c_str(), i, dims.d[i]);
         }
         shape.push_back(static_cast<int64_t>(dims.d[i]));
@@ -51,7 +51,7 @@ std::vector<size_t> DimsToSizeTShape(const nvinfer1::Dims &dims, const std::stri
 {
     if (dims.nbDims < 0)
     {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Tensor rank is invalid: %s", tensor_name.c_str());
+        throw irt::Exception(Status::INVALID_OPERATION, "Tensor rank is invalid: %s", tensor_name.c_str());
     }
 
     std::vector<size_t> shape;
@@ -60,7 +60,7 @@ std::vector<size_t> DimsToSizeTShape(const nvinfer1::Dims &dims, const std::stri
     {
         if (dims.d[i] <= 0)
         {
-            throw irt::Exception(Status::ERROR_INVALID_OPERATION, "Tensor shape is not fully resolved: %s dim[%d]=%d",
+            throw irt::Exception(Status::INVALID_OPERATION, "Tensor shape is not fully resolved: %s dim[%d]=%d",
                                  tensor_name.c_str(), i, dims.d[i]);
         }
         shape.push_back(static_cast<size_t>(dims.d[i]));
@@ -81,9 +81,9 @@ nvinfer1::Dims Int64ShapeToDims(const std::vector<int64_t> &shape)
     for (size_t i = 0; i < shape.size(); ++i)
     {
         const auto value = shape[i];
-        if (value > std::numeric_limits<int32_t>::max())
+        if (value <= 0 || value > std::numeric_limits<int32_t>::max())
         {
-            throw irt::Exception(Status::ERROR_NOT_IMPLEMENTED, "Tensor dimension exceeds int32: %lld",
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Tensor dimension must be positive and fit int32: %lld",
                                  static_cast<long long>(value));
         }
         dims.d[i] = static_cast<int32_t>(value);

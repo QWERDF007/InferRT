@@ -180,9 +180,9 @@ class RegisteredModelsTest : public ::testing::TestWithParam<RegisteredModelCase
  * @param count buffer 数量。
  * @return 指针均为空的 buffer 列表。
  */
-inline std::vector<void *> MakeNullBuffers(size_t count)
+inline std::vector<irt::BufferView> MakeNullBuffers(size_t count)
 {
-    return std::vector<void *>(count, nullptr);
+    return std::vector<irt::BufferView>(count);
 }
 
 /**

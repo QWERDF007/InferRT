@@ -19,8 +19,10 @@ namespace {
 
 using irt::cvcuda::test::AssertInferRTSuccess;
 
+template<size_t ParameterCount>
 std::vector<float> makeReference(const std::vector<uint8_t> &source, int width, int height, int channels,
-                                 const std::array<float, 3> &mean, const std::array<float, 3> &stddev)
+                                 const std::array<float, ParameterCount> &mean,
+                                 const std::array<float, ParameterCount> &stddev)
 {
     const int pixels = width * height;
     std::vector<float> output(static_cast<size_t>(pixels) * channels);
@@ -37,9 +39,10 @@ std::vector<float> makeReference(const std::vector<uint8_t> &source, int width, 
     return output;
 }
 
-template<typename Caller>
-void runNormalizeTest(const int width, const int height, const int channels, const std::array<float, 3> &mean,
-                      const std::array<float, 3> &stddev, Caller caller)
+template<typename Caller, size_t ParameterCount>
+void runNormalizeTest(const int width, const int height, const int channels,
+                      const std::array<float, ParameterCount> &mean,
+                      const std::array<float, ParameterCount> &stddev, Caller caller)
 {
     const size_t source_elements = static_cast<size_t>(width) * height * channels;
     std::vector<uint8_t> source(source_elements);
@@ -92,6 +95,47 @@ TEST(NormalizeClassTest, SupportsSingleChannelImages)
                      [&op](const uint8_t *source, float *output, cv::Size size, int channels, const float *mean_values,
                            const float *stddev_values, cudaStream_t stream)
                      { return op(source, output, size, channels, mean_values, stddev_values, stream); });
+}
+
+TEST(NormalizeFunctionTest, ConvertsBgraHwcToNchwAndNormalizes)
+{
+    const std::array<float, 4> mean{0.1F, 0.2F, 0.3F, 0.4F};
+    const std::array<float, 4> stddev{0.5F, 0.6F, 0.7F, 0.8F};
+    runNormalizeTest(13, 7, 4, mean, stddev,
+                     [](const uint8_t *source, float *output, cv::Size size, int channels, const float *mean_values,
+                        const float *stddev_values, cudaStream_t stream)
+                     {
+                         return irt::cvcuda::normalize(source, output, size, channels, mean_values, stddev_values,
+                                                        stream);
+                     });
+}
+
+TEST(NormalizeFunctionTest, HonorsExplicitPreprocessScale)
+{
+    const std::vector<uint8_t> source{10U, 20U, 30U, 40U, 50U, 60U};
+    const std::array<float, 3> mean{0.0F, 0.0F, 0.0F};
+    const std::array<float, 3> stddev{1.0F, 1.0F, 1.0F};
+    const std::vector<float> expected{5.0F, 20.0F, 10.0F, 25.0F, 15.0F, 30.0F};
+
+    uint8_t *d_source = nullptr;
+    float   *d_output = nullptr;
+    ASSERT_EQ(cudaMalloc(&d_source, source.size()), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_output, expected.size() * sizeof(float)), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy(d_source, source.data(), source.size(), cudaMemcpyHostToDevice), cudaSuccess);
+
+    ASSERT_TRUE(AssertInferRTSuccess(irt::cvcuda::normalize(d_source, d_output, cv::Size(2, 1), 3, mean.data(),
+                                                             stddev.data(), 0.5F, nullptr)));
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    std::vector<float> output(expected.size());
+    ASSERT_EQ(cudaMemcpy(output.data(), d_output, output.size() * sizeof(float), cudaMemcpyDeviceToHost), cudaSuccess);
+    for (size_t index = 0; index < output.size(); ++index)
+    {
+        EXPECT_FLOAT_EQ(output[index], expected[index]) << "at index " << index;
+    }
+
+    cudaFree(d_source);
+    cudaFree(d_output);
 }
 
 TEST(NormalizeFunctionEdgeCaseTest, RejectsZeroStddev)

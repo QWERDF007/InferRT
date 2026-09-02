@@ -26,18 +26,17 @@ template INFERRT_CVCUDA_API IRTStatus resize<float>(const float *, float *, cv::
 template<typename T>
 Resize<T>::Resize()
 {
-    impl_ = new priv::ResizeImpl<T>();
+    impl_ = std::make_unique<priv::ResizeImpl<T>>();
 }
 
 template<typename T>
-Resize<T>::~Resize()
-{
-    if (impl_)
-    {
-        delete impl_;
-        impl_ = nullptr;
-    }
-}
+Resize<T>::~Resize() = default;
+
+template<typename T>
+Resize<T>::Resize(Resize &&) noexcept = default;
+
+template<typename T>
+Resize<T> &Resize<T>::operator=(Resize &&) noexcept = default;
 
 template<typename T>
 IRTStatus Resize<T>::operator()(const T *d_src, T *d_dst, cv::Size ssize, cv::Size dsize, const int CH,
@@ -59,7 +58,7 @@ IRTStatus Resize<T>::operator()(const T *d_src, T *d_dst, cv::Size ssize, cv::Si
             int dstride = dsize.width * CH;
 
             // 动态转换到具体类型
-            auto *resizeImpl = static_cast<priv::ResizeImpl<T> *>(impl_);
+            auto *resizeImpl = static_cast<priv::ResizeImpl<T> *>(impl_.get());
             (*resizeImpl)(d_src, d_dst, _ssize, sstride, _dsize, dstride, CH, interpolation, stream);
         });
     return status;

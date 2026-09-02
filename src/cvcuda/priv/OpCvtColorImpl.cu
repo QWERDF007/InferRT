@@ -140,6 +140,49 @@ __global__ void bgr2bgra_kernel(T *src, T *dst, const int H, const int W, const 
     dst[dst_base + 3] = ColorChannel<T>::max();
 }
 
+template<typename T>
+__global__ void bgra2bgr_kernel(T *src, T *dst, const int H, const int W, const int N)
+{
+    const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= N)
+        return;
+
+    const int src_base = tid * 4;
+    const int dst_base = tid * 3;
+    dst[dst_base]     = src[src_base];
+    dst[dst_base + 1] = src[src_base + 1];
+    dst[dst_base + 2] = src[src_base + 2];
+}
+
+template<typename T>
+__global__ void bgra2rgb_kernel(T *src, T *dst, const int H, const int W, const int N)
+{
+    const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= N)
+        return;
+
+    const int src_base = tid * 4;
+    const int dst_base = tid * 3;
+    dst[dst_base]     = src[src_base + 2];
+    dst[dst_base + 1] = src[src_base + 1];
+    dst[dst_base + 2] = src[src_base];
+}
+
+template<typename T>
+__global__ void bgra2rgba_kernel(T *src, T *dst, const int H, const int W, const int N)
+{
+    const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= N)
+        return;
+
+    const int src_base = tid * 4;
+    const int dst_base = tid * 4;
+    dst[dst_base]     = src[src_base + 2];
+    dst[dst_base + 1] = src[src_base + 1];
+    dst[dst_base + 2] = src[src_base];
+    dst[dst_base + 3] = src[src_base + 3];
+}
+
 #define CV_DESCALE(x, n) (((x) + (1 << ((n) - 1))) >> (n))
 
 static constexpr float B2YF = 0.114f;
@@ -1272,6 +1315,18 @@ void CvtColorImpl<T>::RunCvtColor(const T *d_src, T *d_dst, const int2 size, con
     else if (code == cv::COLOR_BGR2BGRA || code == cv::COLOR_RGB2RGBA)
     {
         IRT_CVCUDA_LAUNCH_CVTCOLOR(bgr2bgra_kernel);
+    }
+    else if (code == cv::COLOR_BGRA2BGR || code == cv::COLOR_RGBA2RGB)
+    {
+        IRT_CVCUDA_LAUNCH_CVTCOLOR(bgra2bgr_kernel);
+    }
+    else if (code == cv::COLOR_BGRA2RGB || code == cv::COLOR_RGBA2BGR)
+    {
+        IRT_CVCUDA_LAUNCH_CVTCOLOR(bgra2rgb_kernel);
+    }
+    else if (code == cv::COLOR_BGRA2RGBA || code == cv::COLOR_RGBA2BGRA)
+    {
+        IRT_CVCUDA_LAUNCH_CVTCOLOR(bgra2rgba_kernel);
     }
     else if (code == cv::COLOR_BGR2GRAY)
     {

@@ -1,6 +1,8 @@
 #pragma once
 
-#include "BackendRuntime.hpp"
+#include <inferrt/model/IModelConfig.hpp>
+
+#include <NvInfer.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -44,6 +46,12 @@ std::vector<size_t> DimsToSizeTShape(const nvinfer1::Dims &dims, const std::stri
  */
 nvinfer1::Dims Int64ShapeToDims(const std::vector<int64_t> &shape);
 
+/** Convert the public backend-neutral shape at the TensorRT adapter boundary. */
+inline nvinfer1::Dims ShapeToDims(const irt::Shape &shape)
+{
+    return Int64ShapeToDims(shape.dims);
+}
+
 /**
  * @brief 判断模型配置是否仍为默认主输出设置。
  * @param config 待检查的模型配置。
@@ -60,12 +68,12 @@ bool IsDefaultOutputConfig(const IModelConfig &config);
  *
  * @tparam TensorInfoMap value 类型需包含 ``shape`` 与 ``dynamic_batch`` 字段。
  * @param output_info 输出张量元数据表。
- * @param input_dims 已解析的输入张量形状。
+ * @param input_shape 已解析的输入张量形状。
  */
 template<typename TensorInfoMap>
-void PropagateResolvedBatchDimToDynamicOutputs(TensorInfoMap &output_info, const nvinfer1::Dims &input_dims)
+void PropagateResolvedBatchDimToDynamicOutputs(TensorInfoMap &output_info, const irt::Shape &input_shape)
 {
-    if (input_dims.nbDims <= 0 || input_dims.d[0] <= 0)
+    if (input_shape.empty() || input_shape[0] <= 0)
     {
         return;
     }
@@ -73,9 +81,9 @@ void PropagateResolvedBatchDimToDynamicOutputs(TensorInfoMap &output_info, const
     for (auto &entry : output_info)
     {
         auto &info = entry.second;
-        if (info.dynamic_batch && info.shape.nbDims > 0)
+        if (info.dynamic_batch && !info.shape.empty())
         {
-            info.shape.d[0] = input_dims.d[0];
+            info.shape[0] = input_shape[0];
         }
     }
 }

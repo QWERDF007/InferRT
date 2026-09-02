@@ -1,10 +1,13 @@
 #pragma once
 
+#include "TRTUtils.hpp"
+
 #include <NvInfer.h>
 #include <inferrt/core/Exception.hpp>
-#include <inferrt/model/Utils.hpp>
+#include <inferrt/core/Tensor.hpp>
 
 #include <cstdint>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -20,6 +23,22 @@ namespace irt::model {
 inline bool hasWeight(const WeightsMap &weights_map, const std::string &key)
 {
     return weights_map.find(key) != weights_map.end();
+}
+
+/** Build a checked non-negative weight element count from model dimensions. */
+inline int64_t checkedWeightProduct(std::initializer_list<int64_t> dimensions, const char *what)
+{
+    size_t product = 1;
+    for (const int64_t dimension : dimensions)
+    {
+        if (dimension < 0)
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "%s dimension must not be negative",
+                                 what ? what : "Weight");
+        }
+        product = irt::checkedSizeMul(product, irt::checkedInt64ToSize(dimension, what), what);
+    }
+    return irt::checkedSizeToInt64(product, what);
 }
 
 /**

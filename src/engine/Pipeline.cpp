@@ -7,25 +7,16 @@
 namespace irt::engine {
 namespace {
 
-size_t elementSize(const TensorDataType data_type)
-{
-    switch (data_type)
-    {
-    case TensorDataType::U8:
-        return sizeof(uint8_t);
-    case TensorDataType::F32:
-        return sizeof(float);
-    case TensorDataType::I32:
-        return sizeof(int32_t);
-    case TensorDataType::I64:
-        return sizeof(int64_t);
-    }
-    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported tensor data type");
-}
-
 int stageOrder(const PipelineStage stage)
 {
     return static_cast<int>(stage);
+}
+
+bool sameContract(const OperatorContract &lhs, const OperatorContract &rhs) noexcept
+{
+    return lhs.kind == rhs.kind && lhs.stage == rhs.stage && lhs.input_count == rhs.input_count
+        && lhs.output_count == rhs.output_count && lhs.in_place == rhs.in_place
+        && lhs.thread_safe == rhs.thread_safe && lhs.scratch_bytes == rhs.scratch_bytes;
 }
 
 bool isModelTensor(const std::string &name)
@@ -118,57 +109,67 @@ void validateStageMemory(const PipelinePlan::Node &node, const std::unordered_ma
 
 } // namespace
 
-size_t TensorDesc::bytesPerRequest() const
-{
-    validate("tensor");
-    return static_cast<size_t>(width) * static_cast<size_t>(height) * static_cast<size_t>(channels)
-         * elementSize(data_type);
-}
-
-void TensorDesc::validate(const std::string &name) const
-{
-    if (width <= 0 || height <= 0 || channels <= 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "Tensor %s must have positive width, height, and channels", name.c_str());
-    }
-    if (layout == TensorLayout::NCHW && channels <= 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Tensor %s has invalid NCHW channels", name.c_str());
-    }
-}
-
-void *TensorView::dataForRequest(const int request_index)
-{
-    if (request_index < 0 || data == nullptr)
-    {
-        return nullptr;
-    }
-    return static_cast<uint8_t *>(data) + static_cast<size_t>(request_index) * bytes_per_request;
-}
-
-const void *TensorView::dataForRequest(const int request_index) const
-{
-    if (request_index < 0 || data == nullptr)
-    {
-        return nullptr;
-    }
-    return static_cast<const uint8_t *>(data) + static_cast<size_t>(request_index) * bytes_per_request;
-}
-
-bool OperatorRegistry::registerCreator(std::string type, OperatorCreator creator)
+bool OperatorRegistry::registerCreator(std::string type, OperatorContract contract, OperatorCreator creator,
+                                        OperatorValidator validator)
 {
     if (frozen_ || type.empty() || !creator || creators_.contains(type))
     {
         return false;
     }
-    creators_.emplace(std::move(type), std::move(creator));
+    creators_.emplace(std::move(type), Entry{contract, std::move(creator), std::move(validator)});
     return true;
+}
+
+void OperatorRegistry::validate(const std::string_view type, const NodeConfig &config) const
+{
+    const auto found = creators_.find(std::string(type));
+    if (found == creators_.end())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unknown operator type: %s", std::string(type).c_str());
+    }
+    const auto &contract = found->second.contract;
+    if (contract.input_count != config.inputs.size() || contract.output_count != config.outputs.size())
+    {
+        throw irt::Exception(
+            irt::Status::ERROR_INVALID_ARGUMENT,
+            "Operator '%s' has incompatible input/output count: expected (%zu in, %zu out), got (%zu in, %zu out)",
+            std::string(type).c_str(), contract.input_count, contract.output_count,
+            config.inputs.size(), config.outputs.size());
+    }
+    if (contract.kind == ExecutionKind::CPU && contract.stage != PipelineStage::CPU_PREPROCESS
+        && contract.stage != PipelineStage::CPU_POSTPROCESS)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "CPU pipeline operator has an invalid execution stage");
+    }
+    if (contract.kind == ExecutionKind::CUDA && contract.stage != PipelineStage::H2D
+        && contract.stage != PipelineStage::CUDA_PREPROCESS && contract.stage != PipelineStage::CUDA_POSTPROCESS)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "CUDA pipeline operator has an invalid execution stage");
+    }
+    if (found->second.validator)
+    {
+        found->second.validator(config);
+    }
 }
 
 void OperatorRegistry::freeze()
 {
     frozen_ = true;
+}
+
+bool OperatorRegistry::contains(const std::string_view type) const
+{
+    return creators_.find(std::string(type)) != creators_.end();
+}
+
+std::optional<OperatorContract> OperatorRegistry::contract(const std::string_view type) const
+{
+    const auto found = creators_.find(std::string(type));
+    if (found == creators_.end())
+    {
+        return std::nullopt;
+    }
+    return found->second.contract;
 }
 
 std::unique_ptr<IOperator> OperatorRegistry::create(const std::string_view type, const NodeConfig &config) const
@@ -179,7 +180,7 @@ std::unique_ptr<IOperator> OperatorRegistry::create(const std::string_view type,
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unknown pipeline operator: %.*s",
                              static_cast<int>(type.size()), type.data());
     }
-    auto op = found->second(config);
+    auto op = found->second.creator(config);
     if (!op)
     {
         throw irt::Exception(irt::Status::ERROR_INTERNAL, "Pipeline operator creator returned null: %.*s",
@@ -239,9 +240,13 @@ PipelineBuilder &PipelineBuilder::addResult(std::string tensor_name, std::string
     {
         result_name = tensor_name;
     }
-    if (result_name.empty())
+    for (const auto &existing : results_)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Pipeline result name must not be empty");
+        if (existing.second == result_name)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Duplicate pipeline result name: %s",
+                                 result_name.c_str());
+        }
     }
     results_.emplace_back(std::move(tensor_name), std::move(result_name));
     return *this;
@@ -397,28 +402,77 @@ std::shared_ptr<const PipelinePlan> PipelineBuilder::build(std::shared_ptr<Opera
 
     std::vector<OperatorContract> contracts;
     contracts.reserve(nodes_.size());
-    for (const auto &node : nodes_)
+
+    for (size_t index = 0; index < nodes_.size(); ++index)
     {
-        auto op       = registry->create(node.type, node.config);
-        auto contract = op->contract();
-        if (contract.input_count != node.config.inputs.size() || contract.output_count != node.config.outputs.size())
+        const auto &node = nodes_[index];
+        registry->validate(node.type, node.config);
+        const auto sc = registry->contract(node.type);
+        if (!sc.has_value())
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "Pipeline operator %s has incompatible input/output count", node.type.c_str());
+                                 "Pipeline operator %s has no registered static contract", node.type.c_str());
         }
-        if (contract.kind == ExecutionKind::CPU && contract.stage != PipelineStage::CPU_PREPROCESS
-            && contract.stage != PipelineStage::CPU_POSTPROCESS)
+        contracts.push_back(*sc);
+
+        // An input/output name overlap is an explicit in-place operation. A
+        // non-in-place contract must be rejected before any creator runs so
+        // the graph cannot accidentally overwrite a live tensor.
+        if (!sc->in_place)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "CPU pipeline operator has an invalid execution stage");
+            for (const auto &input : node.config.inputs)
+            {
+                if (std::find(node.config.outputs.begin(), node.config.outputs.end(), input)
+                    != node.config.outputs.end())
+                {
+                    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                         "Operator '%s' aliases input/output tensor '%s' but is not in-place",
+                                         node.type.c_str(), input.c_str());
+                }
+            }
         }
-        if (contract.kind == ExecutionKind::CUDA && contract.stage != PipelineStage::H2D
-            && contract.stage != PipelineStage::CUDA_PREPROCESS && contract.stage != PipelineStage::CUDA_POSTPROCESS)
+    }
+
+    std::unordered_map<std::string, bool> result_name_map;
+    for (const auto &binding : results)
+    {
+        result_name_map.emplace(binding.result_name, true);
+    }
+    for (size_t index = 0; index < nodes_.size(); ++index)
+    {
+        PipelinePlan::Node temp_node{nodes_[index].type, nodes_[index].config, contracts[index]};
+        validateStageMemory(temp_node, tensors_, result_name_map);
+    }
+
+    // 前置检查 DAG 是否存在环，确保在实例化任何算子前拦截环结构
+    {
+        std::vector<size_t> indegree_check = indegree;
+        std::vector<size_t> ready_check;
+        for (size_t index = 0; index < indegree_check.size(); ++index)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "CUDA pipeline operator has an invalid execution stage");
+            if (indegree_check[index] == 0)
+            {
+                ready_check.push_back(index);
+            }
         }
-        contracts.push_back(contract);
+        size_t visited_nodes = 0;
+        while (!ready_check.empty())
+        {
+            const size_t curr = ready_check.back();
+            ready_check.pop_back();
+            ++visited_nodes;
+            for (const size_t next : edges[curr])
+            {
+                if (--indegree_check[next] == 0)
+                {
+                    ready_check.push_back(next);
+                }
+            }
+        }
+        if (visited_nodes != nodes_.size())
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Pipeline DAG contains cycles");
+        }
     }
 
     std::vector<size_t> ready;
@@ -430,14 +484,14 @@ std::shared_ptr<const PipelinePlan> PipelineBuilder::build(std::shared_ptr<Opera
         }
     }
 
-    std::vector<PipelinePlan::Node> sorted;
-    sorted.reserve(nodes_.size());
+    std::vector<size_t> sorted_indices;
+    sorted_indices.reserve(nodes_.size());
     int previous_stage = -1;
     while (!ready.empty())
     {
-        const auto   found = std::min_element(ready.begin(), ready.end(),
-                                              [&contracts](const size_t lhs, const size_t rhs)
-                                              {
+        const auto found = std::min_element(ready.begin(), ready.end(),
+                                            [&contracts](const size_t lhs, const size_t rhs)
+                                            {
                                                 const int lhs_stage = stageOrder(contracts[lhs].stage);
                                                 const int rhs_stage = stageOrder(contracts[rhs].stage);
                                                 return lhs_stage == rhs_stage ? lhs < rhs : lhs_stage < rhs_stage;
@@ -452,7 +506,7 @@ std::shared_ptr<const PipelinePlan> PipelineBuilder::build(std::shared_ptr<Opera
                                  "Pipeline DAG crosses execution stages backwards; declare transfers explicitly");
         }
         previous_stage = stageOrder(contract.stage);
-        sorted.push_back({nodes_[index].type, nodes_[index].config, contract});
+        sorted_indices.push_back(index);
 
         for (const size_t next : edges[index])
         {
@@ -462,19 +516,17 @@ std::shared_ptr<const PipelinePlan> PipelineBuilder::build(std::shared_ptr<Opera
             }
         }
     }
-    if (sorted.size() != nodes_.size())
+    if (sorted_indices.size() != nodes_.size())
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Pipeline graph contains a cycle");
     }
 
-    std::unordered_map<std::string, bool> result_name_map;
-    for (const auto &binding : results)
+    std::vector<PipelinePlan::Node> sorted;
+    sorted.reserve(sorted_indices.size());
+    for (const size_t index : sorted_indices)
     {
-        result_name_map.emplace(binding.result_name, true);
-    }
-    for (const auto &node : sorted)
-    {
-        validateStageMemory(node, tensors_, result_name_map);
+        const auto &node = nodes_[index];
+        sorted.push_back({node.type, node.config, contracts[index]});
     }
 
     registry->freeze();
@@ -527,6 +579,13 @@ std::vector<std::unique_ptr<IOperator>> PipelinePlan::createOperators() const
     for (const auto &node : nodes_)
     {
         auto op = registry_->create(node.type, node.config);
+        if (!sameContract(op->contract(), node.contract))
+        {
+            throw irt::Exception(irt::Status::INVALID_OPERATION,
+                                 "Pipeline operator '%s' returned a contract different from its registry declaration",
+                                 node.type.c_str());
+        }
+        op->prepareScratch(node.contract.scratch_bytes);
         op->prepare();
         operators.push_back(std::move(op));
     }

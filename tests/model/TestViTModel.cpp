@@ -48,10 +48,10 @@ TEST(ViTModelConfigTest, UsesVariantDefaultInputShapeFor384Model)
     ASSERT_NE(model, nullptr);
 
     const auto &shape = model->modelConfig().inputShape();
-    EXPECT_EQ(shape.d[0], 1);
-    EXPECT_EQ(shape.d[1], 3);
-    EXPECT_EQ(shape.d[2], 384);
-    EXPECT_EQ(shape.d[3], 384);
+    EXPECT_EQ(shape[0], 1);
+    EXPECT_EQ(shape[1], 3);
+    EXPECT_EQ(shape[2], 384);
+    EXPECT_EQ(shape[3], 384);
 }
 
 /**
@@ -60,16 +60,16 @@ TEST(ViTModelConfigTest, UsesVariantDefaultInputShapeFor384Model)
 TEST(ViTModelConfigTest, PreservesExplicitNonDefaultInputShape)
 {
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setInputShape(nvinfer1::Dims4{1, 3, 512, 512});
+    config->setInputShape(irt::Shape{1, 3, 512, 512});
 
     auto model = irt::model::CreateModel("vit_base_patch16_384", std::move(config));
     ASSERT_NE(model, nullptr);
 
     const auto &shape = model->modelConfig().inputShape();
-    EXPECT_EQ(shape.d[0], 1);
-    EXPECT_EQ(shape.d[1], 3);
-    EXPECT_EQ(shape.d[2], 512);
-    EXPECT_EQ(shape.d[3], 512);
+    EXPECT_EQ(shape[0], 1);
+    EXPECT_EQ(shape[1], 3);
+    EXPECT_EQ(shape[2], 512);
+    EXPECT_EQ(shape[3], 512);
 }
 
 /**
@@ -81,7 +81,7 @@ TEST(ViTModelBuildTest, BuildRejectsInputShapeNotDivisibleByPatchSize)
     ASSERT_NE(model, nullptr);
 
     auto config = std::make_unique<irt::model::IModelConfig>();
-    config->setInputShape(nvinfer1::Dims4{1, 3, 225, 224});
+    config->setInputShape(irt::Shape{1, 3, 225, 224});
     model->setModelConfig(std::move(config));
 
     const TempWeightsFile weights("inferrt_vit_test_");

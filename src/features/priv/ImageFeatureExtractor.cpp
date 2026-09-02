@@ -10,6 +10,7 @@
 #include <inferrt/model/Utils.hpp>
 #include <opencv2/core/utility.hpp>
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -20,8 +21,47 @@ namespace fs = std::filesystem;
 namespace irt::features::priv {
 
 using irt::model::checkCuda;
-using irt::model::dimsToCsv;
-using irt::model::elementCount;
+
+namespace {
+
+cv::Mat loadImageForPreprocess(const fs::path &path, const irt::PreprocessSpec &spec)
+{
+    int flags = cv::IMREAD_COLOR;
+    switch (spec.src_color)
+    {
+    case irt::ColorFormat::GRAY:
+        flags = cv::IMREAD_GRAYSCALE;
+        break;
+    case irt::ColorFormat::BGRA:
+    case irt::ColorFormat::RGBA:
+        flags = cv::IMREAD_UNCHANGED;
+        break;
+    case irt::ColorFormat::BGR:
+    case irt::ColorFormat::RGB:
+        flags = cv::IMREAD_COLOR;
+        break;
+    }
+
+    cv::Mat image = cv::imread(path.string(), flags);
+    if (image.empty())
+    {
+        return image;
+    }
+
+    // OpenCV decodes colour images as BGR/BGRA.  Convert the decoded storage
+    // to the declared source order before the shared preprocessing routine.
+    if (spec.src_color == irt::ColorFormat::RGB && image.channels() == 3)
+    {
+        cv::cvtColor(image, image, cv::COLOR_BGR2RGB);
+    }
+    else if (spec.src_color == irt::ColorFormat::RGBA && image.channels() == 4)
+    {
+        cv::cvtColor(image, image, cv::COLOR_BGRA2RGBA);
+    }
+    return image;
+}
+
+} // namespace
 
 ImageFeatureExtractor::ImageFeatureExtractor(std::string model_name, std::string feature_name,
                                              const fs::path &weights_file, ImageSearchConfig config)
@@ -51,14 +91,14 @@ ImageFeatureExtractor::ImageFeatureExtractor(std::string model_name, std::string
                              runtime_model_name.c_str());
     }
 
-    model_->setLogLevel(nvinfer1::ILogger::Severity::kINFO);
+    model_->setLogLevel(irt::model::LogLevel::Info);
     model_->buildOrLoad(weights_file.string());
     if (usesTensorRtModelBackend(config_))
     {
         irt::model::setCudaDevice(config_.model_runtime.deviceId());
     }
 
-    const auto input_tensor_names = model_->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
+    const auto input_tensor_names = model_->ioTensorNames(irt::TensorIOMode::Input);
     if (input_tensor_names.empty())
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
@@ -68,22 +108,23 @@ ImageFeatureExtractor::ImageFeatureExtractor(std::string model_name, std::string
     input_name_            = input_tensor_names.front();
     const auto input_shape = model_->tensorShape(input_name_);
     const auto input_type  = model_->tensorDataType(input_tensor_names.front());
-    if (input_type != nvinfer1::DataType::kFLOAT)
+    if (input_type != irt::TensorDataType::F32)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageFeatureExtractor expects float32 input tensor");
     }
-    input_shape_ = resolveInputShape(input_shape);
+    input_shape_ = resolveInputShape(toTensorRtDims(input_shape));
+    resolvePreprocessSpec();
 
-    const auto output_tensor_names = model_->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+    const auto output_tensor_names = model_->ioTensorNames(irt::TensorIOMode::Output);
     if (output_tensor_names.empty())
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "ImageFeatureExtractor model must expose at least one output tensor");
     }
     output_name_ = output_tensor_names.front();
-    output_dims_ = model_->tensorShape(output_name_);
+    output_dims_ = toTensorRtDims(model_->tensorShape(output_name_));
     output_type_ = model_->tensorDataType(output_name_);
-    if (output_type_ != nvinfer1::DataType::kFLOAT)
+    if (output_type_ != irt::TensorDataType::F32)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "Expected float feature tensor for %s, got unsupported data type", output_name_.c_str());
@@ -97,13 +138,17 @@ ImageFeatureExtractor::ImageFeatureExtractor(std::string model_name, std::string
     max_batch_size_            = static_cast<size_t>(input_shape_.d[0]);
     input_height_              = static_cast<int>(input_shape_.d[2]);
     input_width_               = static_cast<int>(input_shape_.d[3]);
-    input_elements_per_sample_ = elementCount(input_shape_) / max_batch_size_;
-    feature_dim_               = elementCount(output_dims_) / max_batch_size_;
+    input_elements_per_sample_ = tensorElementCount(input_shape_) / max_batch_size_;
+    feature_dim_               = tensorElementCount(output_dims_) / max_batch_size_;
     if (usesTensorRtModelBackend(config_))
     {
         irt::model::setCudaDevice(config_.model_runtime.deviceId());
-        device_input_.resize(max_batch_size_ * input_elements_per_sample_, nvinfer1::DataType::kFLOAT);
-        device_output_.resize(max_batch_size_ * feature_dim_, nvinfer1::DataType::kFLOAT);
+        device_input_.resize(irt::checkedSizeMul(max_batch_size_, input_elements_per_sample_,
+                                                 "Feature device input elements"),
+                             irt::TensorDataType::F32);
+        device_output_.resize(irt::checkedSizeMul(max_batch_size_, feature_dim_,
+                                                  "Feature device output elements"),
+                              irt::TensorDataType::F32);
     }
 }
 
@@ -116,6 +161,11 @@ ImageFeatureExtractor::~ImageFeatureExtractor()
 int ImageFeatureExtractor::featureDim() const noexcept
 {
     return static_cast<int>(feature_dim_);
+}
+
+const irt::PreprocessSpec &ImageFeatureExtractor::preprocessSpec() const noexcept
+{
+    return preprocess_spec_;
 }
 
 int ImageFeatureExtractor::inputWidth() const noexcept
@@ -158,7 +208,7 @@ std::vector<float> ImageFeatureExtractor::extractBatch(const std::vector<fs::pat
     if (count > max_batch_size_)
     {
         std::vector<float> features;
-        features.reserve(count * feature_dim_);
+        features.reserve(irt::checkedSizeMul(count, feature_dim_, "Feature batch output elements"));
         for (size_t offset = 0; offset < count; offset += max_batch_size_)
         {
             const size_t chunk_count = std::min(max_batch_size_, count - offset);
@@ -169,7 +219,8 @@ std::vector<float> ImageFeatureExtractor::extractBatch(const std::vector<fs::pat
     }
 
     auto tensor = extractFeatureTensorBatch(image_paths, begin, count);
-    if (tensor.data.size() != count * feature_dim_)
+    const auto expected_elements = irt::checkedSizeMul(count, feature_dim_, "Feature output elements");
+    if (tensor.data.size() != expected_elements)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Feature output size does not match flattened batch");
     }
@@ -225,31 +276,60 @@ FeatureTensorBatch ImageFeatureExtractor::extractFeatureTensorBatch(const std::v
         irt::model::setCudaDevice(config_.model_runtime.deviceId());
     }
     const auto output_dims     = setRuntimeBatchSize(count);
-    const auto output_elements = elementCount(output_dims);
-    if (output_elements != count * feature_dim_)
+    const auto output_elements = tensorElementCount(output_dims);
+    const auto expected_elements = irt::checkedSizeMul(count, feature_dim_, "Feature runtime output elements");
+    if (output_elements != expected_elements)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Feature output size does not match runtime batch");
     }
 
     std::vector<float> features(output_elements);
+    const auto input_names  = model_->ioTensorNames(irt::TensorIOMode::Input);
+    const auto output_names = model_->ioTensorNames(irt::TensorIOMode::Output);
+    if (input_names.size() != 1 || output_names.size() != 1)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "ImageFeatureExtractor requires one model input and one feature output");
+    }
     if (usesTensorRtModelBackend(config_))
     {
-        std::vector<void *> buffers{device_input_.data(), device_output_.data()};
-        const auto          stream = model_->resolveExecutionStream();
+        std::vector<irt::BufferView> buffers{
+            irt::BufferView::fromBytes(device_input_.data(), device_input_.sizeBytes(), irt::MemoryKind::DEVICE,
+                                       input_names.front()),
+            irt::BufferView::fromBytes(device_output_.data(), device_output_.sizeBytes(), irt::MemoryKind::DEVICE,
+                                       output_names.front())};
+        const auto stream_handle = model_->resolveExecutionStream();
+        const auto stream        = reinterpret_cast<cudaStream_t>(stream_handle);
+        if (stream == nullptr)
+        {
+            throw irt::Exception(irt::Status::INVALID_OPERATION,
+                                 "TensorRT feature extraction requires a valid CUDA stream");
+        }
 
         checkCuda(cudaMemcpyAsync(device_input_.data(), input_batch.input_data.data(),
-                                  input_batch.input_data.size() * sizeof(float), cudaMemcpyHostToDevice, stream),
+                                  irt::checkedSizeMul(input_batch.input_data.size(), sizeof(float),
+                                                      "Feature H2D bytes"),
+                                  cudaMemcpyHostToDevice, stream),
                   "cudaMemcpyAsync(H2D input)");
-        model_->forwardFeatures(buffers, stream, true);
-        checkCuda(cudaMemcpyAsync(features.data(), device_output_.data(), features.size() * sizeof(float),
+        model_->forwardFeatures(buffers, stream_handle, true);
+        checkCuda(cudaMemcpyAsync(features.data(), device_output_.data(),
+                                  irt::checkedSizeMul(features.size(), sizeof(float), "Feature D2H bytes"),
                                   cudaMemcpyDeviceToHost, stream),
                   "cudaMemcpyAsync(D2H feature)");
         checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(feature extraction)");
     }
     else
     {
-        std::vector<void *> buffers{input_batch.input_data.data(), features.data()};
-        model_->forwardFeatures(buffers, nullptr, false);
+        std::vector<irt::BufferView> buffers{
+            irt::BufferView::fromBytes(input_batch.input_data.data(),
+                                       irt::checkedSizeMul(input_batch.input_data.size(), sizeof(float),
+                                                           "Feature host input bytes"),
+                                       irt::MemoryKind::HOST, input_names.front()),
+            irt::BufferView::fromBytes(features.data(),
+                                       irt::checkedSizeMul(features.size(), sizeof(float),
+                                                           "Feature host output bytes"),
+                                       irt::MemoryKind::HOST, output_names.front())};
+        model_->forwardFeatures(buffers, 0, false);
     }
 
     FeatureTensorBatch output;
@@ -261,25 +341,33 @@ FeatureTensorBatch ImageFeatureExtractor::extractFeatureTensorBatch(const std::v
 
 nvinfer1::Dims ImageFeatureExtractor::resolveInputShape(nvinfer1::Dims input_shape)
 {
-    if (input_shape.nbDims != 4 || input_shape.d[1] != 3 || input_shape.d[2] <= 0 || input_shape.d[3] <= 0)
+    if (input_shape.nbDims != 4 || input_shape.d[1] <= 0 || input_shape.d[2] <= 0 || input_shape.d[3] <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "ImageFeatureExtractor expects input shape Nx3xHxW, got %s",
-                             dimsToCsv(input_shape).c_str());
+                             "ImageFeatureExtractor expects input shape NxCxHxW, got %s",
+                             tensorDimsToCsv(input_shape).c_str());
+    }
+
+    if (config_.preprocess.input_channels > 0 && input_shape.d[1] != config_.preprocess.input_channels)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "ImageFeatureExtractor input channels (%d) do not match PreprocessSpec (%d)",
+                             input_shape.d[1], config_.preprocess.input_channels);
     }
 
     if (input_shape.d[0] < 0)
     {
         input_shape.d[0] = static_cast<int32_t>(config_.model_batch_size);
-        model_->setTensorShape(input_name_, input_shape);
-        return model_->tensorShape(input_name_);
+        model_->setTensorShape(input_name_,
+                               toCoreShape(input_shape));
+        return toTensorRtDims(model_->tensorShape(input_name_));
     }
 
     if (input_shape.d[0] <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "ImageFeatureExtractor expects input shape Nx3xHxW, got %s",
-                             dimsToCsv(input_shape).c_str());
+                              tensorDimsToCsv(input_shape).c_str());
     }
 
     const auto runtime_batch = static_cast<size_t>(input_shape.d[0]);
@@ -300,15 +388,42 @@ nvinfer1::Dims ImageFeatureExtractor::resolveInputShape(nvinfer1::Dims input_sha
                              "export the ONNX/OpenVINO model with dynamic batch",
                              config_.model_batch_size);
     }
-    model_->setTensorShape(input_name_, input_shape);
-    return model_->tensorShape(input_name_);
+    model_->setTensorShape(input_name_, toCoreShape(input_shape));
+    return toTensorRtDims(model_->tensorShape(input_name_));
+}
+
+void ImageFeatureExtractor::resolvePreprocessSpec()
+{
+    preprocess_spec_ = config_.preprocess;
+    if (preprocess_spec_.input_width == 0)
+    {
+        preprocess_spec_.input_width = input_shape_.d[3];
+    }
+    else if (preprocess_spec_.input_width != input_shape_.d[3])
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "ImageFeatureExtractor input width (%d) does not match PreprocessSpec (%d)",
+                             input_shape_.d[3], preprocess_spec_.input_width);
+    }
+    if (preprocess_spec_.input_height == 0)
+    {
+        preprocess_spec_.input_height = input_shape_.d[2];
+    }
+    else if (preprocess_spec_.input_height != input_shape_.d[2])
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "ImageFeatureExtractor input height (%d) does not match PreprocessSpec (%d)",
+                             input_shape_.d[2], preprocess_spec_.input_height);
+    }
+    preprocess_spec_.validate();
+    config_.preprocess = preprocess_spec_;
 }
 
 ImageFeatureExtractor::PreprocessedBatch ImageFeatureExtractor::preprocessBatch(
     const std::vector<fs::path> &image_paths, size_t begin, size_t count) const
 {
     PreprocessedBatch batch;
-    batch.input_data.resize(count * input_elements_per_sample_);
+    batch.input_data.resize(irt::checkedSizeMul(count, input_elements_per_sample_, "Feature preprocess elements"));
     batch.image_sizes.resize(count);
 
     if (config_.preprocess_backend == ImageSearchPreprocessBackend::GPU)
@@ -322,13 +437,14 @@ ImageFeatureExtractor::PreprocessedBatch ImageFeatureExtractor::preprocessBatch(
     // 和 RoiSearch 使用。
     std::atomic<size_t> failed_index{count};
     std::atomic<bool>   invalid_tensor{false};
-    cv::parallel_for_(cv::Range(0, static_cast<int>(count)), [&](const cv::Range &range)
+    cv::parallel_for_(cv::Range(0, irt::checkedSizeToInt(count, "Feature preprocess batch")),
+                      [&](const cv::Range &range)
     {
         for (int offset = range.start; offset < range.end; ++offset)
         {
             const auto index      = static_cast<size_t>(offset);
             const auto &image_path = image_paths[begin + index];
-            cv::Mat     image       = cv::imread(image_path.string(), cv::IMREAD_COLOR);
+            cv::Mat     image       = loadImageForPreprocess(image_path, preprocess_spec_);
             if (image.empty())
             {
                 size_t expected = failed_index.load(std::memory_order_relaxed);
@@ -340,8 +456,7 @@ ImageFeatureExtractor::PreprocessedBatch ImageFeatureExtractor::preprocessBatch(
             }
 
             batch.image_sizes[index] = ImageSize{image.cols, image.rows};
-            const auto preprocessed
-                = irt::model::ImageNetUtil::preprocess(image, cv::Size(input_width_, input_height_));
+            const auto preprocessed = irt::model::ImageNetUtil::preprocess(image, preprocess_spec_);
             const auto single = irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
             if (single.size() != input_elements_per_sample_)
             {
@@ -349,7 +464,9 @@ ImageFeatureExtractor::PreprocessedBatch ImageFeatureExtractor::preprocessBatch(
                 continue;
             }
             std::copy(single.begin(), single.end(),
-                      batch.input_data.begin() + static_cast<std::ptrdiff_t>(index * input_elements_per_sample_));
+                      batch.input_data.begin()
+                          + static_cast<std::ptrdiff_t>(irt::checkedSizeMul(index, input_elements_per_sample_,
+                                                                            "Feature preprocess offset")));
         }
     });
 
@@ -372,9 +489,9 @@ nvinfer1::Dims ImageFeatureExtractor::setRuntimeBatchSize(size_t batch_size)
 {
     auto dims = input_shape_;
     dims.d[0] = static_cast<int32_t>(batch_size);
-    model_->setTensorShape(input_name_, dims);
+    model_->setTensorShape(input_name_, toCoreShape(dims));
 
-    auto output_dims = model_->tensorShape(output_name_);
+    auto output_dims = toTensorRtDims(model_->tensorShape(output_name_));
     if (output_dims.nbDims <= 0 || output_dims.d[0] != dims.d[0])
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,

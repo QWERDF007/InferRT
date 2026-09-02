@@ -90,7 +90,7 @@ def link_dependencies(build_dir: Path, dependency_file: Path, config: str, mode:
             warn(f"skip dependency {dep.get('name', '<unnamed>')}, no destinations configured")
             continue
 
-        root = resolve_dependency_root(dep, build_dir)
+        root = resolve_dependency_root(dep, build_dir, platform=platform)
         if root is None:
             warn(f"skip dependency {dep.get('name', '<unnamed>')}, root {dep.get('root')} was not found")
             continue

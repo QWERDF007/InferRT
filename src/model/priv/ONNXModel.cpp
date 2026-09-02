@@ -29,11 +29,14 @@ void ValidateConfig(const ONNXModel &model)
     for (size_t i = 0; i < shapes.size(); ++i)
     {
         const auto &shape = shapes[i];
-        if (shape.d[0] <= 0 || shape.d[1] <= 0 || shape.d[2] <= 0 || shape.d[3] <= 0)
+        if (shape.rank() != 4 || shape[0] <= 0 || shape[1] <= 0 || shape[2] <= 0 || shape[3] <= 0)
         {
             throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
-                                 "input shape at index %zu must be positive, got N=%d C=%d H=%d W=%d", i, shape.d[0],
-                                 shape.d[1], shape.d[2], shape.d[3]);
+                                 "input shape at index %zu must be positive, got N=%lld C=%lld H=%lld W=%lld", i,
+                                 static_cast<long long>(shape.rank() > 0 ? shape[0] : 0),
+                                 static_cast<long long>(shape.rank() > 1 ? shape[1] : 0),
+                                 static_cast<long long>(shape.rank() > 2 ? shape[2] : 0),
+                                 static_cast<long long>(shape.rank() > 3 ? shape[3] : 0));
         }
     }
 
@@ -51,13 +54,13 @@ void ValidateConfig(const ONNXModel &model)
 
     if (!config.featureTensorNames().empty())
     {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION,
+        throw irt::Exception(Status::INVALID_OPERATION,
                              "ONNXModel does not support selecting intermediate feature tensors");
     }
 
     if (config.featureOnly())
     {
-        throw irt::Exception(Status::ERROR_INVALID_OPERATION, "ONNXModel does not support featureOnly configuration");
+        throw irt::Exception(Status::INVALID_OPERATION, "ONNXModel does not support featureOnly configuration");
     }
 }
 
@@ -69,31 +72,31 @@ void SyncModelMetadataFromEngine(ONNXModel &model)
     auto        input_names    = current_config.inputTensorNames();
     auto        output_names   = current_config.outputTensorNames();
 
-    const auto engine_input_names  = model.ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
-    const auto engine_output_names = model.ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+    const auto engine_input_names  = model.ioTensorNames(irt::TensorIOMode::Input);
+    const auto engine_output_names = model.ioTensorNames(irt::TensorIOMode::Output);
 
     if (!engine_input_names.empty())
     {
         input_names = engine_input_names;
 
-        std::vector<nvinfer1::Dims4> engine_input_shapes;
+        std::vector<irt::Shape> engine_input_shapes;
         engine_input_shapes.reserve(input_names.size());
         for (const auto &input_name : input_names)
         {
-            const auto input_dims = model.tensorShape(input_name);
-            if (input_dims.nbDims >= 3)
+            const auto input_shape = model.tensorShape(input_name);
+            if (input_shape.rank() >= 3)
             {
                 int batch = 1;
-                if (input_dims.nbDims >= 4 && input_dims.d[input_dims.nbDims - 4] > 0)
+                if (input_shape.rank() >= 4 && input_shape[input_shape.rank() - 4] > 0)
                 {
-                    batch = static_cast<int>(input_dims.d[input_dims.nbDims - 4]);
+                    batch = static_cast<int>(input_shape[input_shape.rank() - 4]);
                 }
-                const int c = static_cast<int>(input_dims.d[input_dims.nbDims - 3]);
-                const int h = static_cast<int>(input_dims.d[input_dims.nbDims - 2]);
-                const int w = static_cast<int>(input_dims.d[input_dims.nbDims - 1]);
+                const int c = static_cast<int>(input_shape[input_shape.rank() - 3]);
+                const int h = static_cast<int>(input_shape[input_shape.rank() - 2]);
+                const int w = static_cast<int>(input_shape[input_shape.rank() - 1]);
                 if (c > 0 && h > 0 && w > 0)
                 {
-                    engine_input_shapes.emplace_back(batch, c, h, w);
+                    engine_input_shapes.emplace_back(irt::Shape{batch, c, h, w});
                 }
             }
         }
@@ -131,7 +134,7 @@ void ONNXModel::buildNetwork(nvinfer1::INetworkDefinition *network, const Weight
 {
     static_cast<void>(network);
     static_cast<void>(weights_map);
-    throw irt::Exception(Status::ERROR_INVALID_OPERATION, "ONNXModel does not use manual buildNetwork");
+    throw irt::Exception(Status::INVALID_OPERATION, "ONNXModel does not use manual buildNetwork");
 }
 
 void ONNXModel::build(const std::string &onnx_file)

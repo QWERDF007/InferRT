@@ -4,8 +4,11 @@
  */
 
 #include <cuda_runtime_api.h>
+#include <NvInfer.h>
 #include <inferrt/core/Exception.hpp>
+#include <inferrt/core/Tensor.hpp>
 #include <inferrt/features/SAMImagePredictor.hpp>
+#include "priv/ModelShapeAdapter.hpp"
 #include <inferrt/model/Buffers.hpp>
 #include <inferrt/model/IModel.h>
 #include <inferrt/model/ModelFactory.h>
@@ -27,8 +30,6 @@ namespace {
 
 using irt::model::checkCuda;
 using irt::model::DeviceBuffer;
-using irt::model::dimsToCsv;
-using irt::model::elementCount;
 
 constexpr std::array<const char *, 5> kSamInputNames{
     "image", "point_coords", "point_labels", "mask_input", "has_mask_input",
@@ -118,20 +119,6 @@ void validateOptions(const SAMImagePredictOptions &options)
 }
 
 /**
- * @brief 按最长边缩放规则计算 padding 前尺寸。
- * @param original_height 原图高度。
- * @param original_width 原图宽度。
- * @param target_size 目标最长边大小。
- * @return padding 前的高度和宽度。
- */
-std::pair<int, int> computeResizeShape(int original_height, int original_width, int target_size)
-{
-    const float scale = static_cast<float>(target_size) / static_cast<float>(std::max(original_height, original_width));
-    return {static_cast<int>(std::floor(static_cast<float>(original_height) * scale + 0.5F)),
-            static_cast<int>(std::floor(static_cast<float>(original_width) * scale + 0.5F))};
-}
-
-/**
  * @brief 校验 SAM 图像输入张量形状。
  * @param dims 图像输入张量形状。
  */
@@ -140,12 +127,13 @@ void validateImageInputShape(const nvinfer1::Dims &dims)
     if (dims.nbDims != 4 || dims.d[0] != 1 || dims.d[1] != 3 || dims.d[2] <= 0 || dims.d[3] <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "SAMImagePredictor expects image input shape 1x3xHxW, got %s", dimsToCsv(dims).c_str());
+                             "SAMImagePredictor expects image input shape 1x3xHxW, got %s",
+                             priv::tensorDimsToCsv(dims).c_str());
     }
     if (dims.d[2] != dims.d[3])
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "SAMImagePredictor expects square image input, got %s", dimsToCsv(dims).c_str());
+                              "SAMImagePredictor expects square image input, got %s", priv::tensorDimsToCsv(dims).c_str());
     }
 }
 
@@ -159,7 +147,7 @@ void validatePromptInputShape(const nvinfer1::Dims &dims, const char *name)
     if (dims.nbDims != 4 || dims.d[0] != 1 || dims.d[1] <= 0 || dims.d[2] <= 0 || dims.d[3] <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM input %s has unsupported shape %s", name,
-                             dimsToCsv(dims).c_str());
+                             priv::tensorDimsToCsv(dims).c_str());
     }
 }
 
@@ -173,73 +161,46 @@ void validatePromptInputShape(const nvinfer1::Dims &dims, const char *name)
  */
 PreprocessedSAMImage preprocessImage(const cv::Mat &image, int input_height, int input_width, SAMImageResizeMode mode)
 {
-    if (image.empty())
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Cannot preprocess empty SAM image");
-    }
-
-    cv::Mat rgb;
-    cv::cvtColor(image, rgb, cv::COLOR_BGR2RGB);
-
     PreprocessedSAMImage output;
     output.original_width  = image.cols;
     output.original_height = image.rows;
 
+    irt::PreprocessSpec spec;
+    spec.input_width       = input_width;
+    spec.input_height      = input_height;
+    spec.input_channels    = 3;
+    spec.source_channels   = 3;
+    spec.src_color         = irt::ColorFormat::BGR;
+    spec.dst_color         = irt::ColorFormat::RGB;
+    spec.interpolation     = irt::Interpolation::Linear;
+    spec.output_layout     = irt::TensorLayout::CHW;
+    spec.output_dtype      = irt::TensorDataType::F32;
+    spec.padding_alignment = irt::PaddingAlignment::TopLeft;
+
     if (mode == SAMImageResizeMode::StretchSquare)
     {
-        static constexpr std::array<float, 3> kMean{0.485F, 0.456F, 0.406F};
-        static constexpr std::array<float, 3> kStd{0.229F, 0.224F, 0.225F};
-
-        cv::Mat resized;
-        cv::resize(rgb, resized, cv::Size(input_width, input_height), 0, 0, cv::INTER_LINEAR);
-        output.resized_width  = input_width;
-        output.resized_height = input_height;
-        output.tensor.resize(static_cast<size_t>(3) * input_height * input_width);
-
-        for (int y = 0; y < input_height; ++y)
-        {
-            const auto *row = resized.ptr<cv::Vec3b>(y);
-            for (int x = 0; x < input_width; ++x)
-            {
-                for (int c = 0; c < 3; ++c)
-                {
-                    const size_t offset = static_cast<size_t>(c) * input_height * input_width
-                                        + static_cast<size_t>(y) * input_width + static_cast<size_t>(x);
-                    output.tensor[offset] = (static_cast<float>(row[x][c]) / 255.0F - kMean[c]) / kStd[c];
-                }
-            }
-        }
-        return output;
+        spec.padding_mode = irt::PaddingMode::DirectResize;
+        spec.mean         = {0.485F, 0.456F, 0.406F};
+        spec.stddev       = {0.229F, 0.224F, 0.225F};
+        spec.scale        = 1.0F / 255.0F;
     }
-
-    if (mode != SAMImageResizeMode::ResizeLongestSide)
+    else if (mode == SAMImageResizeMode::ResizeLongestSide)
+    {
+        spec.padding_mode       = irt::PaddingMode::Letterbox;
+        spec.pad_after_normalize = true;
+        spec.mean               = {123.675F, 116.28F, 103.53F};
+        spec.stddev             = {58.395F, 57.12F, 57.375F};
+        spec.scale              = 1.0F;
+    }
+    else
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported SAMImagePredictor resize mode");
     }
 
-    static constexpr std::array<float, 3> kMean{123.675F, 116.28F, 103.53F};
-    static constexpr std::array<float, 3> kStd{58.395F, 57.12F, 57.375F};
-
-    const auto [resized_height, resized_width] = computeResizeShape(image.rows, image.cols, input_height);
-    cv::Mat resized;
-    cv::resize(rgb, resized, cv::Size(resized_width, resized_height), 0, 0, cv::INTER_LINEAR);
-
-    output.resized_width  = resized_width;
-    output.resized_height = resized_height;
-    output.tensor.assign(static_cast<size_t>(3) * input_height * input_width, 0.0F);
-    for (int y = 0; y < resized_height; ++y)
-    {
-        const auto *row = resized.ptr<cv::Vec3b>(y);
-        for (int x = 0; x < resized_width; ++x)
-        {
-            for (int c = 0; c < 3; ++c)
-            {
-                const size_t offset = static_cast<size_t>(c) * input_height * input_width
-                                    + static_cast<size_t>(y) * input_width + static_cast<size_t>(x);
-                output.tensor[offset] = (static_cast<float>(row[x][c]) - kMean[c]) / kStd[c];
-            }
-        }
-    }
+    const auto processed = irt::model::ImageNetUtil::preprocessWithGeometry(image, spec);
+    output.resized_width  = processed.geometry.resized_width;
+    output.resized_height = processed.geometry.resized_height;
+    output.tensor         = irt::model::ImageNetUtil::imageToTensorCHW(processed.image);
     return output;
 }
 
@@ -269,7 +230,12 @@ float scaleCoordinate(float value, int original_size, int resized_size, SAMPromp
  */
 std::vector<float> makePointCoords(const SAMImagePrompt &prompt, const PreprocessedSAMImage &image, int max_points)
 {
-    std::vector<float> coords(static_cast<size_t>(max_points) * 2, 0.0F);
+    if (max_points <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM max point count must be positive");
+    }
+    std::vector<float> coords(irt::checkedSizeMul(static_cast<size_t>(max_points), 2U, "SAM point coordinates"),
+                              0.0F);
     int                index = 0;
 
     auto add_point = [&](float x, float y)
@@ -392,22 +358,31 @@ MaskChannelSlice resolveMaskChannelSlice(int mask_count, SAMMaskOutputMode mode)
 std::vector<float> selectMaskChannels(const std::vector<float> &values, int source_count, int height, int width,
                                       MaskChannelSlice slice)
 {
-    if (slice.offset < 0 || slice.count <= 0 || slice.offset + slice.count > source_count)
+    if (slice.offset < 0 || slice.count <= 0 || slice.offset > source_count - slice.count)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Invalid SAM mask channel slice offset=%d count=%d",
                              slice.offset, slice.count);
     }
-    const size_t plane_size = static_cast<size_t>(height) * width;
-    const size_t expected   = static_cast<size_t>(source_count) * plane_size;
+    if (height <= 0 || width <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM mask plane dimensions must be positive");
+    }
+    const size_t plane_size = irt::checkedSizeMul(static_cast<size_t>(height), static_cast<size_t>(width),
+                                                  "SAM mask plane");
+    const size_t expected   = irt::checkedSizeMul(static_cast<size_t>(source_count), plane_size, "SAM mask tensor");
     if (values.size() != expected)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM low_res_masks has %zu values, expected %zu",
                              values.size(), expected);
     }
 
-    std::vector<float> selected(static_cast<size_t>(slice.count) * plane_size);
-    const auto         first = values.begin() + static_cast<std::ptrdiff_t>(slice.offset) * plane_size;
-    const auto         last  = first + static_cast<std::ptrdiff_t>(slice.count) * plane_size;
+    const size_t selected_size = irt::checkedSizeMul(static_cast<size_t>(slice.count), plane_size,
+                                                     "SAM selected mask tensor");
+    std::vector<float> selected(selected_size);
+    const auto         first = values.begin()
+                        + static_cast<std::ptrdiff_t>(irt::checkedSizeMul(static_cast<size_t>(slice.offset),
+                                                                          plane_size, "SAM mask offset"));
+    const auto         last = first + static_cast<std::ptrdiff_t>(selected_size);
     std::copy(first, last, selected.begin());
     return selected;
 }
@@ -449,7 +424,7 @@ void validateOutputMaskShape(const nvinfer1::Dims &dims, const char *name)
     if (dims.nbDims != 4 || dims.d[0] != 1 || dims.d[1] <= 0 || dims.d[2] <= 0 || dims.d[3] <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "SAM output %s must be 1xCxHxW, got %s", name,
-                             dimsToCsv(dims).c_str());
+                             priv::tensorDimsToCsv(dims).c_str());
     }
 }
 
@@ -556,7 +531,8 @@ void applyLowResMaskCleanup(std::vector<float> &masks, int mask_count, int heigh
         return;
     }
 
-    const size_t plane_size = static_cast<size_t>(height) * width;
+    const size_t plane_size = irt::checkedSizeMul(static_cast<size_t>(height), static_cast<size_t>(width),
+                                                  "SAM cleanup mask plane");
     for (int mask_index = 0; mask_index < mask_count; ++mask_index)
     {
         auto   *data = masks.data() + static_cast<size_t>(mask_index) * plane_size;
@@ -582,9 +558,14 @@ void applyLowResMaskCleanup(std::vector<float> &masks, int mask_count, int heigh
 std::vector<float> resizeMasks(const std::vector<float> &low_res_masks, int mask_count, int low_res_height,
                                int low_res_width, const SAMMaskPostprocessGeometry &geometry)
 {
-    const size_t       output_plane = static_cast<size_t>(geometry.original_height) * geometry.original_width;
-    std::vector<float> output(static_cast<size_t>(mask_count) * output_plane);
-    const size_t       low_res_plane = static_cast<size_t>(low_res_height) * low_res_width;
+    const size_t       output_plane = irt::checkedSizeMul(static_cast<size_t>(geometry.original_height),
+                                                          static_cast<size_t>(geometry.original_width),
+                                                          "SAM output mask plane");
+    const size_t       output_size = irt::checkedSizeMul(static_cast<size_t>(mask_count), output_plane,
+                                                         "SAM output masks");
+    std::vector<float> output(output_size);
+    const size_t       low_res_plane = irt::checkedSizeMul(static_cast<size_t>(low_res_height),
+                                                           static_cast<size_t>(low_res_width), "SAM low-res mask plane");
 
     for (int mask_index = 0; mask_index < mask_count; ++mask_index)
     {
@@ -665,10 +646,10 @@ public:
                                  runtime_model_name.c_str());
         }
 
-        model_->setLogLevel(nvinfer1::ILogger::Severity::kINFO);
+        model_->setLogLevel(irt::model::LogLevel::Info);
         model_->buildOrLoad(weights_file.string());
 
-        input_names_ = model_->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
+        input_names_ = model_->ioTensorNames(irt::TensorIOMode::Input);
         if (input_names_.size() != kSamInputNames.size())
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
@@ -684,19 +665,19 @@ public:
             }
         }
 
-        output_names_ = model_->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+        output_names_ = model_->ioTensorNames(irt::TensorIOMode::Output);
         if (output_names_.size() < 2)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                                  "SAMImagePredictor expects SAM mask and IoU outputs");
         }
 
-        image_dims_ = model_->tensorShape(input_names_[0]);
+        image_dims_ = priv::toTensorRtDims(model_->tensorShape(input_names_[0]));
         validateImageInputShape(image_dims_);
-        prompt_coords_dims_ = model_->tensorShape(input_names_[1]);
-        prompt_labels_dims_ = model_->tensorShape(input_names_[2]);
-        mask_input_dims_    = model_->tensorShape(input_names_[3]);
-        has_mask_dims_      = model_->tensorShape(input_names_[4]);
+        prompt_coords_dims_ = priv::toTensorRtDims(model_->tensorShape(input_names_[1]));
+        prompt_labels_dims_ = priv::toTensorRtDims(model_->tensorShape(input_names_[2]));
+        mask_input_dims_    = priv::toTensorRtDims(model_->tensorShape(input_names_[3]));
+        has_mask_dims_      = priv::toTensorRtDims(model_->tensorShape(input_names_[4]));
         validatePromptInputShape(prompt_coords_dims_, input_names_[1].c_str());
         validatePromptInputShape(prompt_labels_dims_, input_names_[2].c_str());
         validatePromptInputShape(mask_input_dims_, input_names_[3].c_str());
@@ -731,7 +712,7 @@ public:
         validateOptions(options);
         if (!ready_ || !model_)
         {
-            throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION,
+            throw irt::Exception(irt::Status::INVALID_OPERATION,
                                  "SAMImagePredictor must be loaded before predict");
         }
 
@@ -750,9 +731,10 @@ public:
         auto      point_coords = makePointCoords(prompt, preprocessed, max_points);
         auto      point_labels = makePointLabels(prompt, max_points);
 
-        const size_t       mask_input_count = elementCount(mask_input_dims_);
+        const size_t       mask_input_count = priv::tensorElementCount(mask_input_dims_);
         std::vector<float> mask_input(mask_input_count, 0.0F);
-        std::vector<float> has_mask_input(elementCount(has_mask_dims_), prompt.mask_input.empty() ? 0.0F : 1.0F);
+        std::vector<float> has_mask_input(priv::tensorElementCount(has_mask_dims_),
+                                          prompt.mask_input.empty() ? 0.0F : 1.0F);
         if (!prompt.mask_input.empty())
         {
             if (prompt.mask_input.size() != mask_input_count)
@@ -770,7 +752,7 @@ public:
         std::vector<std::vector<float>> output_vectors(output_names_.size());
         for (size_t i = 0; i < output_names_.size(); ++i)
         {
-            output_vectors[i].resize(elementCount(model_->tensorShape(output_names_[i])));
+            output_vectors[i].resize(priv::tensorElementCount(priv::toTensorRtDims(model_->tensorShape(output_names_[i]))));
         }
 
         runModel(input_vectors, output_vectors);
@@ -781,7 +763,8 @@ public:
         const size_t low_res_output_index
             = output_names_.size() > 2 ? tensorIndexOrDefault(output_names_, kSamOutputNames[2], 2) : mask_output_index;
 
-        const auto low_res_dims = model_->tensorShape(output_names_[low_res_output_index]);
+        const auto low_res_dims =
+            priv::toTensorRtDims(model_->tensorShape(output_names_[low_res_output_index]));
         validateOutputMaskShape(low_res_dims, output_names_[low_res_output_index].c_str());
         const int mask_count     = static_cast<int>(low_res_dims.d[1]);
         const int low_res_height = static_cast<int>(low_res_dims.d[2]);
@@ -828,57 +811,85 @@ private:
     void runModel(const std::vector<std::vector<float> *> &input_vectors,
                   std::vector<std::vector<float>>         &output_vectors)
     {
+        const auto input_names  = model_->ioTensorNames(irt::TensorIOMode::Input);
+        const auto output_names = model_->ioTensorNames(irt::TensorIOMode::Output);
+        if (input_names.size() != input_vectors.size() || output_names.size() != output_vectors.size())
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "SAM model I/O count does not match predictor bindings");
+        }
+
         const bool use_trt = usesTensorRt(config_.model_runtime);
         if (!use_trt)
         {
-            std::vector<void *> buffers;
+            std::vector<irt::BufferView> buffers;
             buffers.reserve(input_vectors.size() + output_vectors.size());
-            for (const auto *input : input_vectors)
+            for (size_t index = 0; index < input_vectors.size(); ++index)
             {
-                buffers.push_back(const_cast<float *>(input->data()));
+                const auto *input = input_vectors[index];
+                buffers.push_back(irt::BufferView::fromBytes(
+                    const_cast<float *>(input->data()),
+                    irt::checkedSizeMul(input->size(), sizeof(float), "SAM host input bytes"),
+                    irt::MemoryKind::HOST, input_names[index]));
             }
-            for (auto &output : output_vectors)
+            for (size_t index = 0; index < output_vectors.size(); ++index)
             {
-                buffers.push_back(output.data());
+                auto &output = output_vectors[index];
+                buffers.push_back(irt::BufferView::fromBytes(
+                    output.data(), irt::checkedSizeMul(output.size(), sizeof(float), "SAM host output bytes"),
+                    irt::MemoryKind::HOST, output_names[index]));
             }
-            model_->infer(buffers, nullptr, false);
+            model_->infer(buffers, 0, false);
             return;
         }
 
         irt::model::setCudaDevice(config_.model_runtime.deviceId());
-        const auto                stream = model_->resolveExecutionStream();
+        const auto stream_handle = model_->resolveExecutionStream();
+        const auto stream        = reinterpret_cast<cudaStream_t>(stream_handle);
+        if (stream == nullptr)
+        {
+            throw irt::Exception(irt::Status::INVALID_OPERATION,
+                                 "TensorRT SAM prediction requires a valid CUDA stream");
+        }
         std::vector<DeviceBuffer> device_inputs;
         std::vector<DeviceBuffer> device_outputs;
-        std::vector<void *>       buffers;
+        std::vector<irt::BufferView> buffers;
         device_inputs.reserve(input_vectors.size());
         device_outputs.reserve(output_vectors.size());
         buffers.reserve(input_vectors.size() + output_vectors.size());
 
-        for (const auto *input : input_vectors)
+        for (size_t index = 0; index < input_vectors.size(); ++index)
         {
-            device_inputs.emplace_back(input->size(), nvinfer1::DataType::kFLOAT);
-            buffers.push_back(device_inputs.back().data());
+            const auto *input = input_vectors[index];
+            device_inputs.emplace_back(input->size(), irt::TensorDataType::F32);
+            buffers.push_back(irt::BufferView::fromBytes(device_inputs.back().data(), device_inputs.back().sizeBytes(),
+                                                         irt::MemoryKind::DEVICE, input_names[index]));
         }
-        for (const auto &output : output_vectors)
+        for (size_t index = 0; index < output_vectors.size(); ++index)
         {
-            device_outputs.emplace_back(output.size(), nvinfer1::DataType::kFLOAT);
-            buffers.push_back(device_outputs.back().data());
+            const auto &output = output_vectors[index];
+            device_outputs.emplace_back(output.size(), irt::TensorDataType::F32);
+            buffers.push_back(irt::BufferView::fromBytes(device_outputs.back().data(),
+                                                         device_outputs.back().sizeBytes(), irt::MemoryKind::DEVICE,
+                                                         output_names[index]));
         }
 
         for (size_t i = 0; i < input_vectors.size(); ++i)
         {
             const auto *input = input_vectors[i];
-            checkCuda(cudaMemcpyAsync(device_inputs[i].data(), input->data(), input->size() * sizeof(float),
+            checkCuda(cudaMemcpyAsync(device_inputs[i].data(), input->data(),
+                                      irt::checkedSizeMul(input->size(), sizeof(float), "SAM H2D bytes"),
                                       cudaMemcpyHostToDevice, stream),
                       "cudaMemcpyAsync(SAM predictor input)");
         }
 
-        model_->infer(buffers, stream, true);
+        model_->infer(buffers, stream_handle, true);
 
         for (size_t i = 0; i < output_vectors.size(); ++i)
         {
             auto &output = output_vectors[i];
-            checkCuda(cudaMemcpyAsync(output.data(), device_outputs[i].data(), output.size() * sizeof(float),
+            checkCuda(cudaMemcpyAsync(output.data(), device_outputs[i].data(),
+                                      irt::checkedSizeMul(output.size(), sizeof(float), "SAM D2H bytes"),
                                       cudaMemcpyDeviceToHost, stream),
                       "cudaMemcpyAsync(SAM predictor output)");
         }

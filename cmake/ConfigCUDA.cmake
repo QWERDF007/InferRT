@@ -13,10 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(INFERRT_CUDA_ROOT "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.8" CACHE PATH
-    "CUDA Toolkit root directory used by CMake and runtime packaging scripts")
-if(INFERRT_CUDA_ROOT)
-    set(CUDAToolkit_ROOT "${INFERRT_CUDA_ROOT}" CACHE PATH "CUDA Toolkit root directory" FORCE)
+if(NOT DEFINED INFERRT_CUDA_ROOT)
+    if(DEFINED ENV{CUDA_PATH})
+        set(INFERRT_CUDA_ROOT "$ENV{CUDA_PATH}" CACHE PATH "CUDA Toolkit root directory")
+    elseif(DEFINED ENV{CUDA_TOOLKIT_ROOT_DIR})
+        set(INFERRT_CUDA_ROOT "$ENV{CUDA_TOOLKIT_ROOT_DIR}" CACHE PATH "CUDA Toolkit root directory")
+    endif()
+endif()
+if(INFERRT_CUDA_ROOT AND NOT DEFINED CUDAToolkit_ROOT)
+    set(CUDAToolkit_ROOT "${INFERRT_CUDA_ROOT}" CACHE PATH "CUDA Toolkit root directory")
 endif()
 
 string(REPLACE "." ";" CUDA_VERSION_LIST ${CMAKE_CUDA_COMPILER_VERSION})
@@ -49,16 +54,12 @@ if(CMAKE_CUDA_COMPILER_VERSION VERSION_LESS "11.8")
     message(FATAL_ERROR "Minimum CUDA version supported is 11.8")
 endif()
 
-set(CMAKE_CUDA_STANDARD ${CMAKE_CXX_STANDARD})
-
-# Compress kernels to generate smaller executables
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xfatbin=--compress-all")
-
-# Enable device lambdas
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --extended-lambda")
+# CUDA-specific options are applied per InferRT target by
+# inferrt_apply_compile_options().
+set(INFERRT_CUDA_TOOLKIT_OPTIONS -Xfatbin=--compress-all --extended-lambda)
 
 # see https://developer.nvidia.com/cuda-gpus
-if(NOT USE_CMAKE_CUDA_ARCHITECTURES)
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR CMAKE_CUDA_ARCHITECTURES STREQUAL "")
     set(CMAKE_CUDA_ARCHITECTURES "$ENV{CUDAARCHS}")
 
     if(ARCH_X86_64)
@@ -120,7 +121,7 @@ if(NOT USE_CMAKE_CUDA_ARCHITECTURES)
 
     # We must set the cache to the correct values, or else cmake will write its default there,
     # which is the old architecture supported by nvcc. We don't want that.
-    set(CMAKE_CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}" CACHE STRING "CUDA architectures to build for" FORCE)
+    set(CMAKE_CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}" CACHE STRING "CUDA architectures to build for")
 endif()
 
 find_library(CUDNN_LIB cudnn HINTS ${CUDAToolkit_LIBRARY_DIR})

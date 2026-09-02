@@ -10,8 +10,8 @@ namespace irt::core::priv {
  */
 struct CoreTLS
 {
-    IRTStatus last_error_status;
-    char      last_error_message[IRT_MAX_STATUS_MESSAGE_LENGTH];
+    IRTStatus last_error_status{IRT_SUCCESS};
+    char      last_error_message[IRT_MAX_STATUS_MESSAGE_LENGTH]{"success"};
 };
 
 /**

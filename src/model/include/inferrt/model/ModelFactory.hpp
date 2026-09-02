@@ -8,9 +8,12 @@
 namespace irt::model {
 
 /**
- * @brief 模型内部实现对象的创建函数类型。
+ * @brief 公共模型对象的创建函数类型。
+ *
+ * 具体模型实现只在库内通过注册宏包装为 `IModel`，注册表不暴露私有
+ * 实现类型或后端句柄。
  */
-using ModelCreator = std::unique_ptr<priv::IModelImpl> (*)();
+using ModelCreator = std::unique_ptr<IModel> (*)();
 
 /**
  * @brief 模型注册器。

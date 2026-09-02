@@ -1,10 +1,5 @@
 
-# 将 C++ 标准设置为 20
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-# 在 RelWithDebInfo 模式下给 C/C++ 编译器添加 O3 和 ggdb 参数
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -O3 -ggdb")
-set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_RELWITHDEBINFO} -O3 -ggdb")
+# RelWithDebInfo 优化选项由目标 helper 注入，避免污染第三方目标。
 
 
 if(WARNINGS_AS_ERRORS)
@@ -28,29 +23,68 @@ if (MSVC)
     # /EHa: 启用 C++ 异常处理和 SEH 异常（跨 DLL 异常传播所需）
     # /utf-8: 将源文件和执行字符集设置为 UTF-8
     # /wd4251: 关闭 STL 成员经 DLL 导出时的接口警告
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /EHa /utf-8 /bigobj /arch:AVX2")
-    set(C_WARNING_FLAGS "-W4 /wd4251")
+    set(INFERRT_CXX_COMPILE_OPTIONS /EHa /utf-8 /bigobj /W4 /wd4251)
+    set(INFERRT_C_COMPILE_OPTIONS /W4)
+    set(INFERRT_CUDA_COMPILE_OPTIONS)
     # set(CXX_WARNING_FLAGS "/permissive-")
 else ()
-    # -mavx2: 启用 AVX2 指令集，供模板匹配等 SIMD 实现使用。
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2")
-    set(C_WARNING_FLAGS "-Wall -Wno-unknown-pragmas -Wpointer-arith -Wmissing-declarations -Wredundant-decls -Wmultichar -Wno-unused-local-typedefs -Wunused")
+    set(INFERRT_CXX_COMPILE_OPTIONS ${C_WARNING_ERROR_FLAG} -Wall -Wno-unknown-pragmas -Wpointer-arith -Wmissing-declarations -Wredundant-decls -Wmultichar -Wno-unused-local-typedefs -Wunused -Wsuggest-override)
+    set(INFERRT_C_COMPILE_OPTIONS ${C_WARNING_ERROR_FLAG} -Wall -Wno-unknown-pragmas -Wpointer-arith -Wmissing-declarations -Wredundant-decls -Wmultichar -Wno-unused-local-typedefs -Wunused)
+    set(INFERRT_CUDA_COMPILE_OPTIONS ${CUDA_WARNING_ERROR_FLAG} -Wall -Wno-unknown-pragmas -Wpointer-arith -Wmissing-declarations -Wredundant-decls -Wmultichar -Wno-unused-local-typedefs -Wunused -Wsuggest-override -Wno-tautological-compare)
     # 派生类中的虚函数声明中建议使用 override 关键字
     set(CXX_WARNING_FLAGS "-Wsuggest-override")
     # 禁止编译器在比较两个常量时发出警告
     set(CUDA_WARNING_FLAGS "-Wno-tautological-compare")
 endif ()
 
-# 设置 C++ 和 C 编译标志
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${C_WARNING_ERROR_FLAG} ${C_WARNING_FLAGS} ${CXX_WARNING_FLAGS}")
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${C_WARNING_ERROR_FLAG} ${C_WARNING_FLAGS}")
-# 设置 CUDA 编译标志
-if (MSVC)
-    add_definitions(-DNOMINMAX)
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} ${CUDA_WARNING_ERROR_FLAG} ${CUDA_WARNING_FLAGS}")
-else ()
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} ${CUDA_WARNING_ERROR_FLAG} ${C_WARNING_FLAGS} ${CXX_WARNING_FLAGS} ${CUDA_WARNING_FLAGS}")
-endif ()
+function(inferrt_apply_compile_options target)
+    target_compile_features(${target} PRIVATE cxx_std_20)
+    set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    foreach(option IN LISTS INFERRT_CXX_COMPILE_OPTIONS)
+        target_compile_options(${target} PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${option}>")
+    endforeach()
+    foreach(option IN LISTS INFERRT_C_COMPILE_OPTIONS)
+        target_compile_options(${target} PRIVATE "$<$<COMPILE_LANGUAGE:C>:${option}>")
+    endforeach()
+    foreach(option IN LISTS INFERRT_SANITIZER_COMPILE_OPTIONS)
+        target_compile_options(${target} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:${option}>")
+    endforeach()
+    if(INFERRT_SANITIZER_LINK_OPTIONS)
+        target_link_options(${target} PRIVATE ${INFERRT_SANITIZER_LINK_OPTIONS})
+        target_compile_definitions(${target} PRIVATE ENABLE_SANITIZER=1)
+    endif()
+    if(NOT MSVC)
+        target_compile_options(${target} PRIVATE
+            "$<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:RelWithDebInfo>>:-O3>"
+            "$<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:RelWithDebInfo>>:-ggdb>"
+        )
+    endif()
+    if(CMAKE_CUDA_COMPILER)
+        set_target_properties(${target} PROPERTIES
+            CUDA_STANDARD 17
+            CUDA_STANDARD_REQUIRED ON
+        )
+        foreach(option IN LISTS INFERRT_CUDA_COMPILE_OPTIONS INFERRT_CUDA_TOOLKIT_OPTIONS)
+            target_compile_options(${target} PRIVATE "$<$<COMPILE_LANGUAGE:CUDA>:${option}>")
+        endforeach()
+    endif()
+    if(${PROJECT_NAME_UPPER}_ENABLE_CUDA)
+        target_compile_definitions(${target} PRIVATE INFERRT_ENABLE_CUDA=1)
+    endif()
+    if(${PROJECT_NAME_UPPER}_BUILD_ONNX)
+        target_compile_definitions(${target} PRIVATE INFERRT_BUILD_ONNX=1)
+    else()
+        target_compile_definitions(${target} PRIVATE INFERRT_BUILD_ONNX=0)
+    endif()
+    if(${PROJECT_NAME_UPPER}_BUILD_OPENVINO)
+        target_compile_definitions(${target} PRIVATE INFERRT_BUILD_OPENVINO=1)
+    else()
+        target_compile_definitions(${target} PRIVATE INFERRT_BUILD_OPENVINO=0)
+    endif()
+    if(MSVC)
+        target_compile_definitions(${target} PRIVATE NOMINMAX)
+    endif()
+endfunction()
 
 # 如果使用 GCC, 确保版本不低于 GCC 9.4, 否则给出错误并终止配置
 # if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 9.4)
@@ -81,19 +115,15 @@ if(${PROJECT_NAME_UPPER}_ENABLE_SANITIZER AND CMAKE_CXX_COMPILER_ID STREQUAL "GN
 # -fsanitize=undefined：检测未定义行为。
 # -fno-sanitize-recover=all：禁用所有 sanitizer 的恢复机制。
 # -static-liblsan 和 -static-libubsan：静态链接 liblsan 和 libubsan 库。
-    set(COMPILER_SANITIZER_FLAGS
+    set(INFERRT_SANITIZER_COMPILE_OPTIONS
         -fsanitize=address
         -fsanitize-address-use-after-scope
-        -fsanitize=leak
         -fsanitize=undefined
         -fno-sanitize-recover=all
-        # not properly supported, see https://gcc.gnu.org/bugzilla/show_bug.cgi?id=64234
-        #-static-libasan
-        -static-liblsan
-        -static-libubsan)
-    string(REPLACE ";" " " COMPILER_SANITIZER_FLAGS "${COMPILER_SANITIZER_FLAGS}" )
-
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${COMPILER_SANITIZER_FLAGS}")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${COMPILER_SANITIZER_FLAGS}")
+        -fno-omit-frame-pointer)
+    set(INFERRT_SANITIZER_LINK_OPTIONS
+        -fsanitize=address
+        -fsanitize=undefined
+        -fno-sanitize-recover=all)
 endif()
 

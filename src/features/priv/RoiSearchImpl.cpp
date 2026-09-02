@@ -38,7 +38,7 @@ namespace {
  */
 RoiSearchItem normalizeItem(const RoiSearchItem &item)
 {
-    validateRoi(item.roi);
+    priv::validateRoi(item.roi);
     return RoiSearchItem{item.roi_id, priv::normalizeImageFilePath(item.image_path, "RoiSearch"), item.roi};
 }
 
@@ -442,7 +442,10 @@ void RoiSearch::Impl::buildWithItems(const fs::path &weights_file, std::vector<R
             batch_items.push_back(gallery_items[roi_index]);
         }
         const auto features = extractor->extractItems(batch_items);
-        if (features.size() != batch_items.size() * static_cast<size_t>(final_feature_dim))
+        const auto expected_feature_elements
+            = irt::checkedSizeMul(batch_items.size(), static_cast<size_t>(final_feature_dim),
+                                  "ROI feature batch elements");
+        if (features.size() != expected_feature_elements)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI feature batch size mismatch");
         }
@@ -458,8 +461,12 @@ void RoiSearch::Impl::buildWithItems(const fs::path &weights_file, std::vector<R
                 ++run_count;
             }
             std::vector<float> run_features(
-                features.begin() + static_cast<std::ptrdiff_t>(run_begin * feature_dim),
-                features.begin() + static_cast<std::ptrdiff_t>((run_begin + run_count) * feature_dim));
+                features.begin() + static_cast<std::ptrdiff_t>(irt::checkedSizeMul(run_begin, feature_dim,
+                                                                                    "ROI feature run offset")),
+                features.begin() + static_cast<std::ptrdiff_t>(irt::checkedSizeMul(
+                                                                    irt::checkedSizeAdd(run_begin, run_count,
+                                                                                        "ROI feature run range"),
+                                                                    feature_dim, "ROI feature run end")));
             feature_store.writeBatchAt(packed_roi_indices[run_begin], run_count, run_features);
             run_begin += run_count;
         }
@@ -484,7 +491,9 @@ void RoiSearch::Impl::buildWithItems(const fs::path &weights_file, std::vector<R
     process_packed();
     feature_store.finishWriting();
 
-    const size_t build_total = priv::useCpuDiskIndex(config_) ? gallery_items.size() * 2 : gallery_items.size();
+    const size_t build_total = priv::useCpuDiskIndex(config_)
+                                 ? irt::checkedSizeMul(gallery_items.size(), 2U, "ROI search build progress")
+                                 : gallery_items.size();
     priv::reportBuildProgress(progress_callback, ImageSearchBuildStage::BuildingIndex, 0, 0, 0, 0, build_total);
     auto built = priv::buildConfiguredFaissIndex(
         gallery_items.size(), final_feature_dim, index_file, config_,
@@ -523,7 +532,7 @@ std::vector<RoiSearchResult> RoiSearch::Impl::search(const fs::path &query_image
 {
     if (!index_)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "RoiSearch index is not ready");
+        throw irt::Exception(irt::Status::INVALID_OPERATION, "RoiSearch index is not ready");
     }
     if (top_k <= 0)
     {
@@ -531,7 +540,7 @@ std::vector<RoiSearchResult> RoiSearch::Impl::search(const fs::path &query_image
     }
     if (index_->ntotal <= 0)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_OPERATION, "RoiSearch index is empty");
+        throw irt::Exception(irt::Status::INVALID_OPERATION, "RoiSearch index is empty");
     }
 
     const auto query_item = normalizeItem(RoiSearchItem{0, query_image, roi});

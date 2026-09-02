@@ -385,54 +385,43 @@ Arguments parseArguments(int argc, char *argv[])
  */
 std::vector<float> preprocessLetterbox(const cv::Mat &bgr_image, int input_w, int input_h, LetterboxInfo &info)
 {
-    info.original_w = bgr_image.cols;
-    info.original_h = bgr_image.rows;
-    info.input_w    = input_w;
-    info.input_h    = input_h;
-    info.scale      = std::min(static_cast<float>(input_w) / static_cast<float>(bgr_image.cols),
-                               static_cast<float>(input_h) / static_cast<float>(bgr_image.rows));
+    irt::PreprocessSpec spec;
+    spec.input_width     = input_w;
+    spec.input_height    = input_h;
+    spec.input_channels  = 3;
+    spec.source_channels = 3;
+    spec.src_color       = irt::ColorFormat::BGR;
+    spec.dst_color       = irt::ColorFormat::RGB;
+    spec.padding_mode    = irt::PaddingMode::Letterbox;
+    spec.pad_value       = 114.0F;
+    spec.mean            = {0.0F, 0.0F, 0.0F};
+    spec.stddev          = {1.0F, 1.0F, 1.0F};
+    spec.scale            = 1.0F / 255.0F;
 
-    const int resized_w = static_cast<int>(std::round(static_cast<float>(bgr_image.cols) * info.scale));
-    const int resized_h = static_cast<int>(std::round(static_cast<float>(bgr_image.rows) * info.scale));
-    info.pad_x          = (input_w - resized_w) / 2;
-    info.pad_y          = (input_h - resized_h) / 2;
-
-    cv::Mat resized;
-    cv::resize(bgr_image, resized, cv::Size(resized_w, resized_h), 0.0, 0.0, cv::INTER_LINEAR);
-
-    cv::Mat canvas(input_h, input_w, CV_8UC3, cv::Scalar(114, 114, 114));
-    resized.copyTo(canvas(cv::Rect(info.pad_x, info.pad_y, resized_w, resized_h)));
-
-    cv::Mat rgb;
-    cv::cvtColor(canvas, rgb, cv::COLOR_BGR2RGB);
-    rgb.convertTo(rgb, CV_32FC3, 1.0 / 255.0);
-
-    std::vector<cv::Mat> channels;
-    cv::split(rgb, channels);
-
-    std::vector<float> chw(static_cast<size_t>(3 * input_h * input_w));
-    const size_t       plane_size = static_cast<size_t>(input_h * input_w);
-    for (int c = 0; c < 3; ++c)
-    {
-        std::memcpy(chw.data() + static_cast<size_t>(c) * plane_size, channels[c].ptr<float>(),
-                    plane_size * sizeof(float));
-    }
-    return chw;
+    const auto result = irt::model::ImageNetUtil::preprocessWithGeometry(bgr_image, spec);
+    info.original_w   = result.geometry.original_width;
+    info.original_h   = result.geometry.original_height;
+    info.input_w      = input_w;
+    info.input_h      = input_h;
+    info.scale        = result.geometry.scale;
+    info.pad_x        = result.geometry.pad_left;
+    info.pad_y        = result.geometry.pad_top;
+    return irt::model::ImageNetUtil::imageToTensorCHW(result.image);
 }
 
 /**
  * @brief 使用 RF-DETR 官方 ImageNet 归一化预处理，并按 NCHW 展平。
  */
-std::vector<float> preprocessRFDETR(const cv::Mat &bgr_image, const nvinfer1::Dims &input_dims)
+std::vector<float> preprocessRFDETR(const cv::Mat &bgr_image, const irt::Shape &input_dims)
 {
-    if (input_dims.nbDims != 4 || input_dims.d[1] != 3 || input_dims.d[2] <= 0 || input_dims.d[3] <= 0)
+    if (input_dims.rank() != 4 || input_dims[1] != 3 || input_dims[2] <= 0 || input_dims[3] <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "RF-DETR expects Nx3xHxW input, got %s",
                              dimsToCsv(input_dims).c_str());
     }
 
     const cv::Mat preprocessed = irt::model::ImageNetUtil::preprocess(
-        bgr_image, cv::Size(static_cast<int>(input_dims.d[3]), static_cast<int>(input_dims.d[2])));
+        bgr_image, cv::Size(static_cast<int>(input_dims[3]), static_cast<int>(input_dims[2])));
     return irt::model::ImageNetUtil::imageToTensorCHW(preprocessed);
 }
 
@@ -486,29 +475,29 @@ std::vector<Detection> nonMaximumSuppression(std::vector<Detection> detections, 
 /**
  * @brief 判断输出是否为旧版 YOLOv5 raw anchor head。
  */
-bool isLegacyYoloV5Output(const nvinfer1::Dims &dims, int num_classes)
+bool isLegacyYoloV5Output(const irt::Shape &dims, int num_classes)
 {
-    return dims.nbDims == 4 && dims.d[0] > 0 && dims.d[1] == 3 * (num_classes + 5) && dims.d[2] > 0 && dims.d[3] > 0;
+    return dims.rank() == 4 && dims[0] > 0 && dims[1] == 3 * (num_classes + 5) && dims[2] > 0 && dims[3] > 0;
 }
 
 /**
  * @brief 判断输出是否为 YOLOv5u/YOLOv8 DFL head。
  */
-bool isDflOutput(const nvinfer1::Dims &dims, int num_classes)
+bool isDflOutput(const irt::Shape &dims, int num_classes)
 {
-    return dims.nbDims == 3 && dims.d[0] > 0 && dims.d[1] == num_classes + 4 && dims.d[2] > 0;
+    return dims.rank() == 3 && dims[0] > 0 && dims[1] == num_classes + 4 && dims[2] > 0;
 }
 
 /**
  * @brief 解码旧版 YOLOv5 raw anchor head。
  */
-void decodeLegacyYoloV5Output(const float *data, const nvinfer1::Dims &dims, int branch_index, int num_classes,
+void decodeLegacyYoloV5Output(const float *data, const irt::Shape &dims, int branch_index, int num_classes,
                               float conf_threshold, const LetterboxInfo &letterbox,
                               const std::array<std::array<float, 6>, 3> &anchors, std::vector<Detection> &detections)
 {
-    const int channels = static_cast<int>(dims.d[1]);
-    const int grid_h   = static_cast<int>(dims.d[2]);
-    const int grid_w   = static_cast<int>(dims.d[3]);
+    const int channels = static_cast<int>(dims[1]);
+    const int grid_h   = static_cast<int>(dims[2]);
+    const int grid_w   = static_cast<int>(dims[3]);
     const int info_len = num_classes + 5;
     if (channels != 3 * info_len)
     {
@@ -523,7 +512,7 @@ void decodeLegacyYoloV5Output(const float *data, const nvinfer1::Dims &dims, int
     {
         const float anchor_w = anchors[branch_index][static_cast<size_t>(2 * anchor_idx)];
         const float anchor_h = anchors[branch_index][static_cast<size_t>(2 * anchor_idx + 1)];
-        for (int b = 0; b < dims.d[0]; ++b)
+        for (int b = 0; b < dims[0]; ++b)
         {
             const size_t batch_base = static_cast<size_t>(b) * static_cast<size_t>(channels) * grid_h * grid_w;
             for (int y = 0; y < grid_h; ++y)
@@ -584,21 +573,21 @@ void decodeLegacyYoloV5Output(const float *data, const nvinfer1::Dims &dims, int
 /**
  * @brief 解码 YOLOv5u/YOLOv8 的 DFL distance + class head。
  */
-void decodeDflOutput(const float *data, const nvinfer1::Dims &dims, int branch_index, int num_classes,
+void decodeDflOutput(const float *data, const irt::Shape &dims, int branch_index, int num_classes,
                      float conf_threshold, const LetterboxInfo &letterbox, std::vector<Detection> &detections)
 {
     const int stride = kYoloStrides[static_cast<size_t>(branch_index)];
     const int grid_h = letterbox.input_h / stride;
     const int grid_w = letterbox.input_w / stride;
     const int grid   = grid_h * grid_w;
-    if (dims.d[2] != grid)
+    if (dims[2] != grid)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "DFL output grid mismatch for branch %d: expected %d, got %d", branch_index, grid,
-                             dims.d[2]);
+                             dims[2]);
     }
 
-    for (int b = 0; b < dims.d[0]; ++b)
+    for (int b = 0; b < dims[0]; ++b)
     {
         const size_t batch_base = static_cast<size_t>(b) * static_cast<size_t>(num_classes + 4) * grid;
         for (int idx = 0; idx < grid; ++idx)
@@ -645,7 +634,7 @@ void decodeDflOutput(const float *data, const nvinfer1::Dims &dims, int branch_i
  * @brief 根据模型输出形态选择 YOLO 后处理路径。
  */
 std::vector<Detection> postprocessYoloOutputs(const std::vector<HostBuffer>     &outputs,
-                                              const std::vector<nvinfer1::Dims> &output_dims, const Arguments &args,
+                                              const std::vector<irt::Shape> &output_dims, const Arguments &args,
                                               const LetterboxInfo &letterbox)
 {
     if (outputs.size() != 3 || output_dims.size() != 3)
@@ -695,7 +684,7 @@ std::vector<Detection> postprocessYoloOutputs(const std::vector<HostBuffer>     
  * @brief 解码 RF-DETR 原生 TensorRT 输出，boxes 为归一化 cxcywh，logits 为类别分数。
  */
 std::vector<Detection> postprocessRFDETROutputs(const std::vector<HostBuffer>     &outputs,
-                                                const std::vector<nvinfer1::Dims> &output_dims, const Arguments &args,
+                                                const std::vector<irt::Shape> &output_dims, const Arguments &args,
                                                 const cv::Size &image_size)
 {
     if (outputs.size() < 2 || output_dims.size() < 2)
@@ -706,8 +695,8 @@ std::vector<Detection> postprocessRFDETROutputs(const std::vector<HostBuffer>   
 
     const auto &boxes_dims  = output_dims[0];
     const auto &logits_dims = output_dims[1];
-    if (boxes_dims.nbDims != 3 || logits_dims.nbDims != 3 || boxes_dims.d[1] != logits_dims.d[1]
-        || boxes_dims.d[2] != 4)
+    if (boxes_dims.rank() != 3 || logits_dims.rank() != 3 || boxes_dims[1] != logits_dims[1]
+        || boxes_dims[2] != 4)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected RF-DETR output shapes: dets=%s labels=%s",
                              dimsToCsv(boxes_dims).c_str(), dimsToCsv(logits_dims).c_str());
@@ -715,9 +704,9 @@ std::vector<Detection> postprocessRFDETROutputs(const std::vector<HostBuffer>   
 
     const auto *boxes   = static_cast<const float *>(outputs[0].data());
     const auto *logits  = static_cast<const float *>(outputs[1].data());
-    const int   batch   = static_cast<int>(boxes_dims.d[0]);
-    const int   queries = static_cast<int>(boxes_dims.d[1]);
-    const int   classes = static_cast<int>(logits_dims.d[2]);
+    const int   batch   = static_cast<int>(boxes_dims[0]);
+    const int   queries = static_cast<int>(boxes_dims[1]);
+    const int   classes = static_cast<int>(logits_dims[2]);
 
     std::vector<Detection> detections;
     for (int b = 0; b < batch; ++b)
@@ -855,7 +844,7 @@ int main(int argc, char *argv[])
         {
             if (args.family == DetectionFamily::YOLO)
             {
-                config->setInputShape(nvinfer1::Dims4{args.batch_opt, 3, args.input_size, args.input_size});
+                config->setInputShape(irt::Shape{args.batch_opt, 3, args.input_size, args.input_size});
                 if (args.batch_min != args.batch_max)
                 {
                     config->setDynamicBatchRange(args.batch_min, args.batch_opt, args.batch_max);
@@ -869,7 +858,7 @@ int main(int argc, char *argv[])
             }
             if (args.family == DetectionFamily::RFDETR && !onnx_weights && args.input_size_explicit)
             {
-                config->setInputShape(nvinfer1::Dims4{args.batch_max, 3, args.input_size, args.input_size});
+                config->setInputShape(irt::Shape{args.batch_max, 3, args.input_size, args.input_size});
                 if (args.batch_max > 1)
                 {
                     config->setDynamicBatchRange(1, args.batch_opt, args.batch_max);
@@ -887,7 +876,7 @@ int main(int argc, char *argv[])
             std::cerr << "Failed to create model: " << runtime_model_name << std::endl;
             return -1;
         }
-        model->setLogLevel(nvinfer1::ILogger::Severity::kINFO);
+        model->setLogLevel(irt::model::LogLevel::Info);
 
         std::cout << "Building or loading model..." << std::endl;
         const auto build_start = Clock::now();
@@ -903,8 +892,8 @@ int main(int argc, char *argv[])
                                  image_path.string().c_str());
         }
 
-        const auto input_names  = model->ioTensorNames(nvinfer1::TensorIOMode::kINPUT);
-        const auto output_names = model->ioTensorNames(nvinfer1::TensorIOMode::kOUTPUT);
+        const auto input_names  = model->ioTensorNames(irt::TensorIOMode::Input);
+        const auto output_names = model->ioTensorNames(irt::TensorIOMode::Output);
         const bool output_contract_ok
             = args.family == DetectionFamily::RFDETR ? output_names.size() >= 2U : output_names.size() == 3U;
         if (input_names.size() != 1 || !output_contract_ok)
@@ -917,16 +906,16 @@ int main(int argc, char *argv[])
         if (args.family == DetectionFamily::YOLO)
         {
             model->setTensorShape(input_names.front(),
-                                  nvinfer1::Dims4{args.batch_size, 3, args.input_size, args.input_size});
+                                  irt::Shape{args.batch_size, 3, args.input_size, args.input_size});
         }
         else if (args.family == DetectionFamily::RFDETR && args.batch_max > 1)
         {
-            const nvinfer1::Dims engine_dims = model->tensorShape(input_names.front());
+            const irt::Shape engine_dims = model->tensorShape(input_names.front());
             model->setTensorShape(input_names.front(),
-                                  nvinfer1::Dims4{args.batch_size, 3, engine_dims.d[2], engine_dims.d[3]});
+                                  irt::Shape{args.batch_size, 3, engine_dims[2], engine_dims[3]});
         }
-        const nvinfer1::Dims input_dims = model->tensorShape(input_names.front());
-        if (input_dims.nbDims != 4 || input_dims.d[0] != args.batch_size || input_dims.d[1] != 3)
+        const irt::Shape input_dims = model->tensorShape(input_names.front());
+        if (input_dims.rank() != 4 || input_dims[0] != args.batch_size || input_dims[1] != 3)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                                  "Unexpected input shape: %s (expected batch=%d, 3 channels)", dimsToCsv(input_dims).c_str(),
@@ -937,8 +926,8 @@ int main(int argc, char *argv[])
         LetterboxInfo      letterbox;
         std::vector<float> single_tensor = args.family == DetectionFamily::RFDETR
                                                ? preprocessRFDETR(image, input_dims)
-                                               : preprocessLetterbox(image, static_cast<int>(input_dims.d[3]),
-                                                                     static_cast<int>(input_dims.d[2]), letterbox);
+                                               : preprocessLetterbox(image, static_cast<int>(input_dims[3]),
+                                                                     static_cast<int>(input_dims[2]), letterbox);
         std::vector<float> input_tensor;
         if (args.batch_size > 1)
         {
@@ -955,15 +944,15 @@ int main(int argc, char *argv[])
         const auto         preprocess_end = Clock::now();
 
         const bool uses_tensorrt = args.runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT;
-        const auto stream        = uses_tensorrt ? model->resolveExecutionStream() : nullptr;
+        const auto stream        = uses_tensorrt ? reinterpret_cast<cudaStream_t>(model->resolveExecutionStream()) : nullptr;
 
         DeviceBuffer device_input;
         if (uses_tensorrt)
         {
-            device_input.resize(elementCount(input_dims), nvinfer1::DataType::kFLOAT);
+            device_input.resize(elementCount(input_dims), irt::TensorDataType::F32);
         }
 
-        std::vector<nvinfer1::Dims> output_dims;
+        std::vector<irt::Shape> output_dims;
         std::vector<DeviceBuffer>   device_outputs;
         std::vector<HostBuffer>     host_outputs;
         output_dims.reserve(output_names.size());
@@ -974,7 +963,7 @@ int main(int argc, char *argv[])
         {
             const auto dims = model->tensorShape(output_name);
             const auto type = model->tensorDataType(output_name);
-            if (type != nvinfer1::DataType::kFLOAT)
+            if (type != irt::TensorDataType::F32)
             {
                 throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Detection sample expects float32 outputs");
             }
@@ -987,12 +976,20 @@ int main(int argc, char *argv[])
             std::cout << "Output " << output_name << " shape: " << dimsToCsv(dims) << std::endl;
         }
 
-        std::vector<void *> buffers;
+        std::vector<irt::BufferView> buffers;
         buffers.reserve(1 + output_names.size());
-        buffers.push_back(uses_tensorrt ? device_input.data() : input_tensor.data());
+        buffers.push_back(uses_tensorrt
+                              ? irt::BufferView::fromBytes(device_input.data(), device_input.sizeBytes(),
+                                                           irt::MemoryKind::DEVICE, input_names.front())
+                              : irt::BufferView::fromBytes(input_tensor.data(), input_tensor.size() * sizeof(float),
+                                                           irt::MemoryKind::HOST, input_names.front()));
         for (size_t i = 0; i < output_names.size(); ++i)
         {
-            buffers.push_back(uses_tensorrt ? device_outputs[i].data() : host_outputs[i].data());
+            buffers.push_back(uses_tensorrt
+                              ? irt::BufferView::fromBytes(device_outputs[i].data(), device_outputs[i].sizeBytes(),
+                                                               irt::MemoryKind::DEVICE, output_names[i])
+                              : irt::BufferView::fromBytes(host_outputs[i].data(), host_outputs[i].sizeBytes(),
+                                                               irt::MemoryKind::HOST, output_names[i]));
         }
 
         auto run_inference_once = [&]() -> IterationTiming
@@ -1011,7 +1008,7 @@ int main(int argc, char *argv[])
             timing.h2d_ms      = elapsedMs(h2d_start, h2d_end);
 
             const auto inference_start = Clock::now();
-            model->infer(buffers, stream, true);
+            model->infer(buffers, reinterpret_cast<std::uintptr_t>(stream), true);
             if (uses_tensorrt)
             {
                 checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(inference)");

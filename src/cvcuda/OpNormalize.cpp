@@ -12,21 +12,35 @@ IRTStatus normalize(const uint8_t *d_src, float *d_dst, const cv::Size size, con
                     const float *stddev, cudaStream_t stream)
 {
     Normalize op;
-    return op(d_src, d_dst, size, channels, mean, stddev, stream);
+    return op(d_src, d_dst, size, channels, mean, stddev, 1.0F / 255.0F, stream);
+}
+
+IRTStatus normalize(const uint8_t *d_src, float *d_dst, const cv::Size size, const int channels, const float *mean,
+                    const float *stddev, const float scale, cudaStream_t stream)
+{
+    Normalize op;
+    return op(d_src, d_dst, size, channels, mean, stddev, scale, stream);
 }
 
 Normalize::Normalize()
-    : impl_(new priv::NormalizeImpl())
+    : impl_(std::make_unique<priv::NormalizeImpl>())
 {
 }
 
-Normalize::~Normalize()
-{
-    delete impl_;
-}
+Normalize::~Normalize() = default;
+
+Normalize::Normalize(Normalize &&) noexcept = default;
+
+Normalize &Normalize::operator=(Normalize &&) noexcept = default;
 
 IRTStatus Normalize::operator()(const uint8_t *d_src, float *d_dst, const cv::Size size, const int channels,
                                 const float *mean, const float *stddev, cudaStream_t stream)
+{
+    return (*this)(d_src, d_dst, size, channels, mean, stddev, 1.0F / 255.0F, stream);
+}
+
+IRTStatus Normalize::operator()(const uint8_t *d_src, float *d_dst, const cv::Size size, const int channels,
+                                const float *mean, const float *stddev, const float scale, cudaStream_t stream)
 {
     return ProtectCall(
         [&]
@@ -37,8 +51,8 @@ IRTStatus Normalize::operator()(const uint8_t *d_src, float *d_dst, const cv::Si
             }
 
             const int2 image_size{size.width, size.height};
-            auto      *normalize_impl = static_cast<priv::NormalizeImpl *>(impl_);
-            (*normalize_impl)(d_src, d_dst, image_size, channels, mean, stddev, stream);
+            auto      *normalize_impl = static_cast<priv::NormalizeImpl *>(impl_.get());
+            (*normalize_impl)(d_src, d_dst, image_size, channels, mean, stddev, scale, stream);
         });
 }
 

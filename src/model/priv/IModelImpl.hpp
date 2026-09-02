@@ -1,13 +1,16 @@
-﻿#pragma once
+#pragma once
 
-#include "BackendRuntime.hpp"
+#include <inferrt/model/BackendRuntime.hpp>
+#include "TensorRTBackend.hpp"
+#include "TRTParams.hpp"
+#include "TRTUtils.hpp"
 
 #include <inferrt/model/IModelConfig.hpp>
-#include <inferrt/model/IParams.hpp>
-#include <inferrt/model/Utils.hpp>
 
 #include <functional>
+#include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -24,6 +27,8 @@ namespace irt::model::priv {
 class IModelImpl
 {
 public:
+    using BackendRuntimeFactory = std::unique_ptr<irt::model::IBackendRuntime> (*)(ModelRuntime::Backend);
+
     /// 构建期网络名称到 TensorRT 张量指针的映射表。
     using NamedTensorMap = std::unordered_map<std::string, nvinfer1::ITensor *>;
 
@@ -39,10 +44,14 @@ public:
     /**
      * @brief 使用默认模型配置构造内部实现对象。
      */
-    IModelImpl()
+    explicit IModelImpl(BackendRuntimeFactory backend_factory = &irt::model::CreateBackendRuntime)
         : config_(std::make_unique<IModelConfig>())
-        , backend_runtime_(CreateBackendRuntime(config_->runtime().backend()))
+        , backend_factory_(backend_factory != nullptr ? backend_factory : &irt::model::CreateBackendRuntime)
     {
+        // Route construction through the same checked factory path used by
+        // transactional reloads.  A backend factory that returns nullptr is
+        // a construction error, never a partially usable model state.
+        backend_runtime_ = createBackendRuntime(config_->runtime().backend());
     }
 
     /**
@@ -74,11 +83,8 @@ public:
         return ".engine";
     }
 
-    /**
-     * @brief 获取当前日志级别。
-     * @return TensorRT 日志严重性级别。
-     */
-    nvinfer1::ILogger::Severity logLevel() const noexcept;
+    /** @brief 获取当前 backend-neutral 日志级别。 */
+    LogLevel logLevel() const noexcept;
 
     /**
      * @brief 从权重文件构建模型。
@@ -137,7 +143,8 @@ public:
      * @param stream 调用方提供的 CUDA stream；为空时使用模型当前默认 stream。
      * @param non_blocking 为 true 时仅提交执行，不在函数内等待 stream 完成。
      */
-    virtual void infer(const std::vector<void *> &buffers, cudaStream_t stream = nullptr, bool non_blocking = false);
+    virtual void infer(std::span<const irt::BufferView> buffers, std::uintptr_t stream = 0,
+                       bool non_blocking = false);
 
     /**
      * @brief 在指定 CUDA stream 上执行一次特征提取前向。
@@ -145,7 +152,7 @@ public:
      * @param stream 调用方提供的 CUDA stream；为空时使用模型当前默认 stream。
      * @param non_blocking 为 true 时仅提交执行，不在函数内等待 stream 完成。
      */
-    virtual void forwardFeatures(const std::vector<void *> &buffers, cudaStream_t stream = nullptr,
+    virtual void forwardFeatures(std::span<const irt::BufferView> buffers, std::uintptr_t stream = 0,
                                  bool non_blocking = false);
 
     /**
@@ -167,34 +174,41 @@ public:
      * @param mode TensorRT 张量 I/O 类型。
      * @return 符合指定 I/O 类型的张量名称列表。
      */
-    std::vector<std::string> ioTensorNames(nvinfer1::TensorIOMode mode) const;
+    std::vector<std::string> ioTensorNames(irt::TensorIOMode mode) const;
+
+    /** @brief Return backend-owned I/O descriptors through the core contract. */
+    std::vector<irt::TensorInfo> inputs() const;
+    std::vector<irt::TensorInfo> outputs() const;
 
     /**
      * @brief 获取指定张量的运行时形状。
      * @param tensor_name 张量名称。
      * @return 张量维度。
      */
-    nvinfer1::Dims tensorShape(const std::string &tensor_name) const;
+    irt::Shape tensorShape(const std::string &tensor_name) const;
 
     /**
      * @brief 获取指定张量的数据类型。
      * @param tensor_name 张量名称。
      * @return TensorRT 数据类型。
      */
-    nvinfer1::DataType tensorDataType(const std::string &tensor_name) const;
+    irt::TensorDataType tensorDataType(const std::string &tensor_name) const;
+
+    /** @brief 获取当前后端 I/O buffer 要求的地址空间。 */
+    irt::MemoryKind ioMemoryKind(irt::TensorIOMode mode) const;
 
     /**
      * @brief 设置输入张量的运行时形状。
      * @param tensor_name 张量名称。
      * @param dims 运行时维度。
      */
-    void setTensorShape(const std::string &tensor_name, const nvinfer1::Dims &dims);
+    void setTensorShape(const std::string &tensor_name, const irt::Shape &shape);
 
     /**
      * @brief 设置模型默认使用的外部 CUDA stream。
      * @param stream 调用方提供的 CUDA stream。
      */
-    void setStream(cudaStream_t stream);
+    void setStream(std::uintptr_t stream);
 
     /**
      * @brief 清除模型默认外部 CUDA stream，恢复为内部自建 stream。
@@ -205,7 +219,7 @@ public:
      * @brief 设置日志级别。
      * @param severity TensorRT 日志严重性级别。
      */
-    void setLogLevel(nvinfer1::ILogger::Severity severity);
+    void setLogLevel(LogLevel level);
 
     /**
      * @brief 向网络中添加输入张量。
@@ -326,7 +340,7 @@ public:
      *
      * 优先级：stream_override > external_stream > 惰性创建的内部 stream。
      */
-    cudaStream_t resolveExecutionStream(cudaStream_t stream_override = nullptr);
+    std::uintptr_t resolveExecutionStream(std::uintptr_t stream_override = 0);
 
 protected:
     /**
@@ -342,16 +356,13 @@ protected:
     }
 
 private:
-    /**
-     * @brief 绑定当前 runtime 的张量地址并执行 enqueue。
-     */
-    void execute(const std::vector<void *> &buffers, cudaStream_t stream, bool non_blocking);
+    void execute(std::span<const irt::BufferView> buffers, std::uintptr_t stream, bool non_blocking);
+
+    [[nodiscard]] std::unique_ptr<irt::model::IBackendRuntime> createBackendRuntime(ModelRuntime::Backend backend) const;
 
     void buildBackendRuntimeFromFile(const std::string &model_file);
 
-    void ensureBackendRuntime();
-
-    void syncModelConfigFromBackendRuntime();
+    void syncModelConfigFromBackendRuntime(IModelConfig &config, const irt::model::IBackendRuntime &backend);
 
     TensorRTBackend &tensorRTBackend();
 
@@ -360,11 +371,14 @@ private:
     /// 模型配置对象。
     std::unique_ptr<IModelConfig> config_;
 
+    /// 后端创建策略；生产模型使用 CreateBackendRuntime，测试可注入最小后端实现。
+    BackendRuntimeFactory backend_factory_{&irt::model::CreateBackendRuntime};
+
     /// 当前 buildNetwork 正在构建的 engine 类型。
     BuildVariant build_variant_{BuildVariant::Primary};
 
     /// 当前后端运行时；由 modelConfig().runtime().backend() 决定具体派生实现。
-    std::unique_ptr<IBackendRuntime> backend_runtime_;
+    std::unique_ptr<irt::model::IBackendRuntime> backend_runtime_;
 };
 
 } // namespace irt::model::priv

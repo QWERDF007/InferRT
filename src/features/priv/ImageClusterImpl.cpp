@@ -100,7 +100,9 @@ std::vector<float> projectLocalPca(const std::vector<float> &rows, size_t row_co
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "ImageCluster PCA dim must not exceed channel count or local sample count");
     }
-    if (rows.size() != row_count * static_cast<size_t>(input_dim))
+    const auto expected_input_elements = irt::checkedSizeMul(row_count, static_cast<size_t>(input_dim),
+                                                             "ImageCluster PCA input elements");
+    if (rows.size() != expected_input_elements)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageCluster PCA input size mismatch");
     }
@@ -114,17 +116,22 @@ std::vector<float> projectLocalPca(const std::vector<float> &rows, size_t row_co
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageCluster PCA output shape mismatch");
     }
 
-    std::vector<float> projected(row_count * static_cast<size_t>(output_dim));
+    const auto projected_elements = irt::checkedSizeMul(row_count, static_cast<size_t>(output_dim),
+                                                        "ImageCluster PCA output elements");
+    std::vector<float> projected(projected_elements);
     if (output.isContinuous())
     {
-        std::memcpy(projected.data(), output.ptr<float>(), projected.size() * sizeof(float));
+        std::memcpy(projected.data(), output.ptr<float>(),
+                    irt::checkedSizeMul(projected.size(), sizeof(float), "ImageCluster PCA output bytes"));
     }
     else
     {
         for (size_t row = 0; row < row_count; ++row)
         {
             std::memcpy(projected.data() + row * static_cast<size_t>(output_dim),
-                        output.ptr<float>(static_cast<int>(row)), static_cast<size_t>(output_dim) * sizeof(float));
+                        output.ptr<float>(static_cast<int>(row)),
+                        irt::checkedSizeMul(static_cast<size_t>(output_dim), sizeof(float),
+                                            "ImageCluster PCA row bytes"));
         }
     }
     return projected;
@@ -150,7 +157,10 @@ public:
         if (dims.nbDims == 4 && dims.d[1] > 0 && dims.d[2] > 0 && dims.d[3] > 0)
         {
             layout_           = Layout::Nchw;
-            local_samples_    = static_cast<int>(dims.d[2] * dims.d[3]);
+            local_samples_    = irt::checkedSizeToInt(
+                irt::checkedSizeMul(static_cast<size_t>(dims.d[2]), static_cast<size_t>(dims.d[3]),
+                                    "ImageCluster local feature samples"),
+                "ImageCluster local feature samples");
             feature_channels_ = static_cast<int>(dims.d[1]);
         }
         else if (dims.nbDims == 3 && dims.d[1] > 0 && dims.d[2] > 0)
@@ -170,7 +180,10 @@ public:
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                                  "ImageCluster PCA dim must be positive and not exceed channel/sample count");
         }
-        feature_dim_ = config_.pca_dim * local_samples_;
+        feature_dim_ = irt::checkedSizeToInt(
+            irt::checkedSizeMul(static_cast<size_t>(config_.pca_dim), static_cast<size_t>(local_samples_),
+                                "ImageCluster feature dimension"),
+            "ImageCluster feature dimension");
     }
 
     int featureDim() const noexcept
@@ -197,7 +210,8 @@ public:
         if (count > image_extractor_.maxBatchSize())
         {
             std::vector<float> features;
-            features.reserve(count * static_cast<size_t>(feature_dim_));
+            features.reserve(irt::checkedSizeMul(count, static_cast<size_t>(feature_dim_),
+                                                 "ImageCluster batch feature elements"));
             for (size_t offset = 0; offset < count; offset += image_extractor_.maxBatchSize())
             {
                 const size_t chunk_count = std::min(image_extractor_.maxBatchSize(), count - offset);
@@ -214,7 +228,8 @@ public:
         }
 
         std::vector<float> features;
-        features.reserve(count * static_cast<size_t>(feature_dim_));
+        features.reserve(irt::checkedSizeMul(count, static_cast<size_t>(feature_dim_),
+                                             "ImageCluster batch feature elements"));
         for (size_t b = 0; b < count; ++b)
         {
             auto sample = layout_ == Layout::Nchw ? extractPcaNchwSample(tensor, b) : extractPcaRowsSample(tensor, b);
@@ -237,17 +252,19 @@ private:
         const int channels = static_cast<int>(tensor.dims.d[1]);
         const int height   = static_cast<int>(tensor.dims.d[2]);
         const int width    = static_cast<int>(tensor.dims.d[3]);
+        const auto sample_count = irt::checkedSizeMul(static_cast<size_t>(height), static_cast<size_t>(width),
+                                                      "ImageCluster feature map samples");
         if (batch_index >= static_cast<size_t>(batch) || channels != feature_channels_
-            || height * width != local_samples_)
+            || sample_count != static_cast<size_t>(local_samples_))
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ImageCluster NCHW feature shape mismatch");
         }
 
-        const auto sample_count = static_cast<size_t>(height) * static_cast<size_t>(width);
-        const auto sample_size  = static_cast<size_t>(channels) * sample_count;
+        const auto sample_size  = irt::checkedSizeMul(static_cast<size_t>(channels), sample_count,
+                                                      "ImageCluster feature map sample elements");
         const auto base         = tensor.data.data() + batch_index * sample_size;
 
-        std::vector<float> rows(sample_count * static_cast<size_t>(channels));
+        std::vector<float> rows(sample_size);
         for (int y = 0; y < height; ++y)
         {
             for (int x = 0; x < width; ++x)
@@ -265,7 +282,8 @@ private:
 
         const auto projected = projectLocalPca(rows, sample_count, channels, config_.pca_dim);
 
-        std::vector<float> flattened(static_cast<size_t>(config_.pca_dim) * sample_count);
+        std::vector<float> flattened(irt::checkedSizeMul(static_cast<size_t>(config_.pca_dim), sample_count,
+                                                         "ImageCluster projected feature elements"));
         for (int y = 0; y < height; ++y)
         {
             for (int x = 0; x < width; ++x)
@@ -295,7 +313,8 @@ private:
         }
 
         const auto         sample_count = static_cast<size_t>(rows);
-        const auto         sample_size  = sample_count * static_cast<size_t>(channels);
+        const auto         sample_size  = irt::checkedSizeMul(sample_count, static_cast<size_t>(channels),
+                                                               "ImageCluster row feature elements");
         const auto         base         = tensor.data.data() + batch_index * sample_size;
         std::vector<float> local_rows(base, base + sample_size);
         return projectLocalPca(local_rows, sample_count, channels, config_.pca_dim);
@@ -349,7 +368,8 @@ ImageClusterResult ImageCluster::Impl::cluster(const fs::path &weights_file, con
     reportProgress(progress_callback, ImageClusterStage::LoadingModel, 0, 0, 0, 1, 1);
 
     std::vector<float> features;
-    features.reserve(normalized_items.size() * static_cast<size_t>(feature_dim_));
+    features.reserve(irt::checkedSizeMul(normalized_items.size(), static_cast<size_t>(feature_dim_),
+                                         "ImageCluster feature elements"));
     reportProgress(progress_callback, ImageClusterStage::ExtractingFeatures, 0, 0, 0, 0, image_paths.size());
     priv::processFeatureBatches(
         image_paths.size(), extractor.maxBatchSize(), feature_dim_,

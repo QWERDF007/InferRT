@@ -1,5 +1,6 @@
 #include "OpRoIAlignImpl.hpp"
 
+#include <inferrt/core/Tensor.hpp>
 #include <inferrt/util/CheckError.hpp>
 
 #include <cmath>
@@ -43,11 +44,15 @@ __device__ float roi_align_bilinear_interpolate(const float *input, int batch, i
     const float hy = 1.0f - ly;
     const float hx = 1.0f - lx;
 
-    const size_t base = static_cast<size_t>((batch * channels + channel) * height * width);
-    const float  v1   = input[base + static_cast<size_t>(y_low * width + x_low)];
-    const float  v2   = input[base + static_cast<size_t>(y_low * width + x_high)];
-    const float  v3   = input[base + static_cast<size_t>(y_high * width + x_low)];
-    const float  v4   = input[base + static_cast<size_t>(y_high * width + x_high)];
+    const size_t channel_index = static_cast<size_t>(batch) * static_cast<size_t>(channels)
+                               + static_cast<size_t>(channel);
+    const size_t base = channel_index * static_cast<size_t>(height) * static_cast<size_t>(width);
+    const size_t row_low = static_cast<size_t>(y_low) * static_cast<size_t>(width);
+    const size_t row_high = static_cast<size_t>(y_high) * static_cast<size_t>(width);
+    const float  v1   = input[base + row_low + static_cast<size_t>(x_low)];
+    const float  v2   = input[base + row_low + static_cast<size_t>(x_high)];
+    const float  v3   = input[base + row_high + static_cast<size_t>(x_low)];
+    const float  v4   = input[base + row_high + static_cast<size_t>(x_high)];
 
     return hy * hx * v1 + hy * lx * v2 + ly * hx * v3 + ly * lx * v4;
 }
@@ -95,8 +100,8 @@ __global__ void roi_align_kernel(const float *input, const float *rois, float *o
     const bool exact_sampling = sampling_ratio > 0;
     const int  grid_h = exact_sampling ? sampling_ratio : static_cast<int>(ceilf(roi_height / pooled_height));
     const int  grid_w = exact_sampling ? sampling_ratio : static_cast<int>(ceilf(roi_width / pooled_width));
-    const int  grid_count = grid_h * grid_w;
-    const int  count      = grid_count > 1 ? grid_count : 1;
+    const size_t grid_count = static_cast<size_t>(grid_h) * static_cast<size_t>(grid_w);
+    const size_t count      = grid_count > 1 ? grid_count : 1;
 
     const int loop_grid_h = grid_h > 0 ? grid_h : 0;
     const int loop_grid_w = grid_w > 0 ? grid_w : 0;
@@ -126,9 +131,15 @@ void RoIAlignImpl::RunRoIAlign(const float *d_input, const float *d_rois, float 
         return;
     }
 
-    const size_t output_count = static_cast<size_t>(num_rois) * channels * output_size.y * output_size.x;
+    const size_t output_count = irt::checkedSizeProduct({static_cast<size_t>(num_rois), static_cast<size_t>(channels),
+                                                         static_cast<size_t>(output_size.y),
+                                                         static_cast<size_t>(output_size.x)},
+                                                        "RoIAlign output");
     const int    block_size   = 256;
-    const int    grid_size    = static_cast<int>((output_count + block_size - 1) / block_size);
+    const size_t grid_count = irt::checkedSizeAdd(output_count, static_cast<size_t>(block_size - 1),
+                                                  "RoIAlign launch grid")
+                            / static_cast<size_t>(block_size);
+    const int grid_size = irt::checkedSizeToInt(grid_count, "RoIAlign launch grid");
 
     roi_align_kernel<<<grid_size, block_size, 0, stream>>>(d_input, d_rois, d_output, batches, channels, input_size.y,
                                                            input_size.x, num_rois, output_size.y, output_size.x,
