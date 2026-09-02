@@ -10,11 +10,13 @@ set(INFERRT_BUILD_ONNX "@INFERRT_BUILD_ONNX@")
 set(INFERRT_BUILD_OPENVINO "@INFERRT_BUILD_OPENVINO@")
 
 set(_inferrt_requested_components ${InferRT_FIND_COMPONENTS})
+set(_inferrt_plain_package_request OFF)
 if(NOT _inferrt_requested_components)
     # A plain find_package() must remain usable for the dependency-free core
     # target.  Backend targets opt into their development dependencies by
     # naming the corresponding component.
     set(_inferrt_requested_components core)
+    set(_inferrt_plain_package_request ON)
 endif()
 
 set(_inferrt_need_cuda OFF)
@@ -23,6 +25,14 @@ set(_inferrt_need_tensorrt OFF)
 set(_inferrt_need_faiss OFF)
 set(_inferrt_need_onnx OFF)
 set(_inferrt_need_openvino OFF)
+
+# features is exported by every CUDA + TensorRT build.  Its public link
+# interface contains Faiss, so prepare that imported target for the plain
+# package entry point as well as for an explicit `features` component request.
+if(_inferrt_plain_package_request AND INFERRT_ENABLE_CUDA AND INFERRT_BUILD_TENSORRT)
+    set(_inferrt_need_faiss ON)
+endif()
+
 foreach(_inferrt_component IN LISTS _inferrt_requested_components)
     if(INFERRT_ENABLE_CUDA AND (_inferrt_component STREQUAL "util"
        OR _inferrt_component STREQUAL "cvcuda"
@@ -90,6 +100,7 @@ check_required_components(InferRT)
 
 unset(_inferrt_component)
 unset(_inferrt_requested_components)
+unset(_inferrt_plain_package_request)
 unset(_inferrt_need_cuda)
 unset(_inferrt_need_opencv)
 unset(_inferrt_need_tensorrt)
