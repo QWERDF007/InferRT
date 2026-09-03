@@ -74,13 +74,19 @@ def default_install_dir(build_dir: Path) -> Path:
         build_dir: CMake 构建目录。
 
     Returns:
-        Path: ``CMAKE_INSTALL_PREFIX`` 或仓库下的 ``InferRT-0.0.2``。
+        Path: CMake 配置生成的 ``CMAKE_INSTALL_PREFIX``。
+
+    Raises:
+        RuntimeError: 构建目录没有经过 CMake 配置。
     """
 
     install_prefix = read_cmake_cache_value(build_dir / "CMakeCache.txt", "CMAKE_INSTALL_PREFIX")
-    if install_prefix:
-        return resolve_project_path(install_prefix)
-    return resolve_project_path("InferRT-0.0.2")
+    if not install_prefix:
+        raise RuntimeError(
+            "CMakeCache.txt does not define CMAKE_INSTALL_PREFIX; configure the build "
+            "first or pass --install-dir explicitly"
+        )
+    return resolve_project_path(install_prefix)
 
 
 def resolve_install_bin_dir(build_dir: Path, install_dir_arg: str, install_bin_dir_arg: str) -> Path:

@@ -18,6 +18,7 @@ dependencies:
     requires: [INFERRT_ENABLE_CUDA, INFERRT_BUILD_TENSORRT]
     cmake: cmake/ConfigTensorRT.cmake
     root: TRT_ROOT
+    default: D:/Software/dev/TensorRT-10.16.1.11
     destinations:
       - build/bin
     windows:
@@ -34,6 +35,7 @@ dependencies:
     requires: [INFERRT_ENABLE_CUDA]
     cmake: cmake/ConfigOpenCV.cmake
     root: OpenCV_HOME
+    default: D:/Software/dev/opencv-4.8.0/build/x64/vc16
     windows_root: OpenCV_BIN_DIR
     destinations:
       - build/bin
@@ -48,6 +50,7 @@ dependencies:
     requires: [INFERRT_ENABLE_CUDA, INFERRT_BUILD_TENSORRT]
     cmake: cmake/ConfigFaiss.cmake
     root: Faiss_HOME
+    default: D:/Software/dev/Faiss-1.7.4
     destinations:
       - build/bin
     windows:

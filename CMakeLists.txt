@@ -57,6 +57,7 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake" )
 
 include(ConfigVersion)
+include(ConfigInstallPrefix)
 include(ConfigBuildTree)
 include(ConfigCompiler)
 if(${PROJECT_NAME_UPPER}_ENABLE_CUDA)

@@ -1,0 +1,81 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "core-only",
+      "displayName": "Core-only Release",
+      "description": "Build core, util and CPU operators without CUDA, TensorRT, OpenCV or Python.",
+      "binaryDir": "${sourceDir}/build/presets/core-only",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "INFERRT_INSTALL_CMAKEDIR": "lib/cmake/InferRT",
+        "INFERRT_ENABLE_CUDA": "OFF",
+        "INFERRT_BUILD_TENSORRT": "OFF",
+        "INFERRT_BUILD_TESTS": "ON",
+        "INFERRT_BUILD_SAMPLES": "OFF",
+        "INFERRT_BUILD_BENCHMARK": "OFF",
+        "INFERRT_BUILD_PYTHON": "OFF",
+        "INFERRT_BUILD_ONNX": "OFF",
+        "INFERRT_BUILD_OPENVINO": "OFF"
+      }
+    },
+    {
+      "name": "cuda",
+      "displayName": "CUDA Release",
+      "description": "Build CUDA, TensorRT, CVCUDA, model, engine and feature targets without Python or optional backends.",
+      "binaryDir": "${sourceDir}/build/presets/cuda",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "INFERRT_INSTALL_CMAKEDIR": "lib/cmake/InferRT",
+        "INFERRT_ENABLE_CUDA": "ON",
+        "INFERRT_BUILD_TENSORRT": "OFF",
+        "INFERRT_BUILD_TESTS": "ON",
+        "INFERRT_BUILD_SAMPLES": "ON",
+        "INFERRT_BUILD_BENCHMARK": "ON",
+        "INFERRT_BUILD_PYTHON": "OFF",
+        "INFERRT_BUILD_ONNX": "OFF",
+        "INFERRT_BUILD_OPENVINO": "OFF"
+      }
+    },
+    {
+      "name": "full",
+      "displayName": "Full Release",
+      "description": "Build all InferRT modules, Python bindings and optional ONNX Runtime/OpenVINO backends.",
+      "binaryDir": "${sourceDir}/build/presets/full",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "INFERRT_INSTALL_CMAKEDIR": "lib/cmake/InferRT",
+        "INFERRT_ENABLE_CUDA": "ON",
+        "INFERRT_BUILD_TENSORRT": "ON",
+        "INFERRT_BUILD_TESTS": "ON",
+        "INFERRT_BUILD_SAMPLES": "ON",
+        "INFERRT_BUILD_BENCHMARK": "ON",
+        "INFERRT_BUILD_PYTHON": "ON",
+        "INFERRT_BUILD_ONNX": "ON",
+        "INFERRT_BUILD_OPENVINO": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "core-only-release",
+      "configurePreset": "core-only",
+      "configuration": "Release"
+    },
+    {
+      "name": "cuda-release",
+      "configurePreset": "cuda",
+      "configuration": "Release"
+    },
+    {
+      "name": "full-release",
+      "configurePreset": "full",
+      "configuration": "Release"
+    }
+  ]
+}

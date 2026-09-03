@@ -91,7 +91,7 @@ function(add_plugin_library PLUGIN_NAME)
     # DIRECTORY path/to/dir/ - 只安装 dir 目录的内容（不包含 dir 本身）
     install(
         DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/${PROJECT_NAME_LOWER}/${PLUGIN_NAME}/ 
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME_LOWER}/${PLUGIN_NAME} # e.g. InferRT-0.0.2/include/inferrt/cvcuda
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME_LOWER}/${PLUGIN_NAME} # e.g. <install-prefix>/include/inferrt/cvcuda
         COMPONENT dev
         PATTERN "detail" EXCLUDE
     )

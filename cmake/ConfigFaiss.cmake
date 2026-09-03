@@ -1,25 +1,50 @@
+include("${CMAKE_CURRENT_LIST_DIR}/ConfigDependencyDefaults.cmake")
+
+set(Faiss_VERSION "1.7.4" CACHE STRING "Faiss version")
+
 if(NOT DEFINED Faiss_HOME OR Faiss_HOME STREQUAL "")
-    set(_faiss_root_hints)
+    set(_faiss_root_hint)
     if(DEFINED Faiss_ROOT AND NOT Faiss_ROOT STREQUAL "")
-        list(APPEND _faiss_root_hints "${Faiss_ROOT}")
-    endif()
-    foreach(_faiss_root_environment Faiss_HOME Faiss_ROOT FAISS_ROOT)
-        if(DEFINED ENV{${_faiss_root_environment}} AND NOT "$ENV{${_faiss_root_environment}}" STREQUAL "")
-            list(APPEND _faiss_root_hints "$ENV{${_faiss_root_environment}}")
-        endif()
-    endforeach()
-    if(CMAKE_PREFIX_PATH)
-        list(APPEND _faiss_root_hints ${CMAKE_PREFIX_PATH})
+        set(_faiss_root_hint "${Faiss_ROOT}")
+    else()
+        foreach(_faiss_root_environment IN ITEMS Faiss_HOME Faiss_ROOT FAISS_ROOT)
+            if(DEFINED ENV{${_faiss_root_environment}} AND NOT "$ENV{${_faiss_root_environment}}" STREQUAL "")
+                set(_faiss_root_hint "$ENV{${_faiss_root_environment}}")
+                break()
+            endif()
+        endforeach()
     endif()
 
-    find_path(_faiss_include_dir
-        NAMES faiss/Index.h
-        HINTS ${_faiss_root_hints}
-        PATH_SUFFIXES include)
-    if(_faiss_include_dir)
-        get_filename_component(Faiss_HOME "${_faiss_include_dir}" DIRECTORY)
+    if(_faiss_root_hint)
+        set(Faiss_HOME "${_faiss_root_hint}" CACHE PATH
+            "Faiss installation directory")
+    else()
+        find_path(_faiss_include_dir
+            NAMES faiss/Index.h
+            HINTS ${CMAKE_PREFIX_PATH}
+            PATH_SUFFIXES include)
+        if(_faiss_include_dir)
+            get_filename_component(_faiss_detected_home "${_faiss_include_dir}" DIRECTORY)
+            set(Faiss_HOME "${_faiss_detected_home}" CACHE PATH
+                "Faiss installation directory")
+        endif()
     endif()
+
+    if(NOT DEFINED Faiss_HOME OR Faiss_HOME STREQUAL "")
+        if(WIN32)
+            inferrt_dependency_default(faiss _faiss_default_root)
+            if(_faiss_default_root)
+                set(Faiss_HOME "${_faiss_default_root}" CACHE PATH
+                    "Faiss installation directory")
+            endif()
+        endif()
+    endif()
+
+    unset(_faiss_detected_home)
     unset(_faiss_include_dir CACHE)
+    unset(_faiss_include_dir)
+    unset(_faiss_root_hint)
+    unset(_faiss_default_root)
 endif()
 
 if(DEFINED Faiss_HOME)

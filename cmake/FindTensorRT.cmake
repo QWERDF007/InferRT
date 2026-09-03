@@ -78,6 +78,10 @@ if(NOT DEFINED TRT_ROOT OR TRT_ROOT STREQUAL "")
   if(CMAKE_PREFIX_PATH)
     list(APPEND _trt_root_hints ${CMAKE_PREFIX_PATH})
   endif()
+  if(DEFINED INFERRT_TENSORRT_DEFAULT_ROOT
+     AND NOT INFERRT_TENSORRT_DEFAULT_ROOT STREQUAL "")
+    list(APPEND _trt_root_hints "${INFERRT_TENSORRT_DEFAULT_ROOT}")
+  endif()
 
   find_path(_trt_include_dir
     NAMES NvInfer.h

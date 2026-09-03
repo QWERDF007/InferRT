@@ -1,0 +1,252 @@
+name: InferRT CI
+
+on:
+  push:
+    branches: [main, master, "feature/**", "fix/**"]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-only-linux:
+    name: Linux Core-Only Release
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: cmake --preset core-only
+
+      - name: Build
+        run: cmake --build --preset core-only-release --parallel
+
+      - name: Test
+        run: ctest --test-dir build/presets/core-only -C Release --output-on-failure
+
+  core-only-windows:
+    name: Windows Core-Only Release
+    runs-on: windows-2022
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: cmake --preset core-only
+
+      - name: Build
+        run: cmake --build --preset core-only-release --parallel
+
+      - name: Test
+        run: ctest --test-dir build/presets/core-only -C Release --output-on-failure
+
+  install-downstream-windows:
+    name: Windows Release Install and Relocation
+    runs-on: windows-2022
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: cmake --preset core-only
+
+      - name: Build
+        run: cmake --build --preset core-only-release --parallel
+
+      - name: Verify installed consumers and relocation
+        run: >
+          ctest --test-dir build/presets/core-only -C Release
+          --output-on-failure -R "^inferrt_package_relocation$"
+
+  quality-and-sanitizer-linux:
+    name: Linux Release Quality and Sanitizers
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install quality test dependencies
+        run: python -m pip install pytest PyYAML
+
+      - name: Test build and release contracts
+        run: python -m pytest tests/tools -v --tb=short
+
+      - name: Run source quality gates
+        run: python tools/quality_gates.py --json quality-gates.json
+
+      - name: Configure sanitized core-only Release
+        run: >
+          cmake -S . -B build/sanitizer
+          -DCMAKE_BUILD_TYPE=Release
+          -DINFERRT_ENABLE_SANITIZER=ON
+          -DINFERRT_ENABLE_CUDA=OFF
+          -DINFERRT_BUILD_TENSORRT=OFF
+          -DINFERRT_BUILD_PYTHON=OFF
+          -DINFERRT_BUILD_SAMPLES=OFF
+          -DINFERRT_BUILD_BENCHMARK=OFF
+          -DINFERRT_BUILD_ONNX=OFF
+          -DINFERRT_BUILD_OPENVINO=OFF
+
+      - name: Build sanitized core-only Release
+        run: cmake --build build/sanitizer --config Release --parallel
+
+      - name: Test sanitized core-only Release
+        run: >
+          ctest --test-dir build/sanitizer -C Release --output-on-failure
+          --output-junit sanitizer-ctest.xml
+
+      - name: Upload quality and sanitizer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-and-sanitizer-linux
+          path: |
+            quality-gates.json
+            build/sanitizer/sanitizer-ctest.xml
+
+  full-release-gpu-windows:
+    name: Windows Full Release GPU Gate
+    runs-on: [self-hosted, Windows, X64, GPU]
+    env:
+      INFERRT_PYTHON_EXE: ${{ vars.INFERRT_PYTHON_EXE }}
+      INFERRT_MODEL_ROOT: ${{ vars.INFERRT_MODEL_ROOT }}
+      INFERRT_LINGBOT_VISION_ROOT: ${{ vars.INFERRT_LINGBOT_VISION_ROOT }}
+      INFERRT_LINGBOT_VISION_REPO: ${{ vars.INFERRT_LINGBOT_VISION_REPO }}
+      INFERRT_ULTRALYTICS_REPO: ${{ vars.INFERRT_ULTRALYTICS_REPO }}
+      INFERRT_YOLOV5_REPO: ${{ vars.INFERRT_YOLOV5_REPO }}
+      INFERRT_RFDETR_ROOT: ${{ vars.INFERRT_RFDETR_ROOT }}
+      INFERRT_DINOV2_HUB_REPO: ${{ vars.INFERRT_DINOV2_HUB_REPO }}
+      INFERRT_SAM_ROOT: ${{ vars.INFERRT_SAM_ROOT }}
+      INFERRT_SAM2_ROOT: ${{ vars.INFERRT_SAM2_ROOT }}
+      INFERRT_EDGE_SAM_ROOT: ${{ vars.INFERRT_EDGE_SAM_ROOT }}
+      INFERRT_BENCHMARK_ENGINE: ${{ vars.INFERRT_BENCHMARK_ENGINE }}
+      INFERRT_BENCHMARK_IMAGE: ${{ vars.INFERRT_BENCHMARK_IMAGE }}
+      INFERRT_BENCHMARK_MODEL: ${{ vars.INFERRT_BENCHMARK_MODEL }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Validate release resources
+        shell: pwsh
+        run: |
+          $requiredFiles = @("INFERRT_PYTHON_EXE", "INFERRT_BENCHMARK_ENGINE", "INFERRT_BENCHMARK_IMAGE")
+          $requiredDirectories = @(
+            "INFERRT_MODEL_ROOT",
+            "INFERRT_LINGBOT_VISION_ROOT",
+            "INFERRT_LINGBOT_VISION_REPO",
+            "INFERRT_ULTRALYTICS_REPO",
+            "INFERRT_YOLOV5_REPO",
+            "INFERRT_RFDETR_ROOT",
+            "INFERRT_DINOV2_HUB_REPO",
+            "INFERRT_SAM_ROOT",
+            "INFERRT_SAM2_ROOT",
+            "INFERRT_EDGE_SAM_ROOT"
+          )
+          foreach ($name in $requiredFiles) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if ([string]::IsNullOrWhiteSpace($value) -or !(Test-Path -LiteralPath $value -PathType Leaf)) {
+              throw "Required release file is not configured: $name"
+            }
+          }
+          foreach ($name in $requiredDirectories) {
+            $value = [Environment]::GetEnvironmentVariable($name)
+            if ([string]::IsNullOrWhiteSpace($value) -or !(Test-Path -LiteralPath $value -PathType Container)) {
+              throw "Required release directory is not configured: $name"
+            }
+          }
+          & $env:INFERRT_PYTHON_EXE -c "import torch; assert torch.cuda.is_available()"
+
+      - name: Configure full Release
+        shell: pwsh
+        run: |
+          $pythonRoot = Split-Path -Parent $env:INFERRT_PYTHON_EXE
+          cmake --preset full "-DPython_ROOT_DIR=$pythonRoot"
+
+      - name: Build full Release
+        run: cmake --build --preset full-release --parallel
+
+      - name: Install full Release
+        run: cmake --install build/presets/full --config Release --prefix artifacts/release-gate/install
+
+      - name: Deploy runtime DLLs explicitly
+        run: >
+          & $env:INFERRT_PYTHON_EXE tools/package_runtime_dlls.py
+          --build-dir build/presets/full
+          --config Release
+          --install-dir artifacts/release-gate/install
+          --strict
+
+      - name: Run full Release CTest
+        run: >
+          ctest --test-dir build/presets/full -C Release --output-on-failure
+          --output-junit artifacts/release-gate/ctest.xml
+
+      - name: Run full backend and real-model Python gate
+        shell: pwsh
+        run: |
+          $env:PATH = "$PWD\artifacts\release-gate\install\bin;$PWD\build\presets\full\bin;$env:PATH"
+          & $env:INFERRT_PYTHON_EXE -m pytest tests/python -v --tb=short -ra `
+            --junitxml=artifacts/release-gate/pytest.xml `
+            --inferrt-build-dir=build/presets/full `
+            --inferrt-model-root="$env:INFERRT_MODEL_ROOT" `
+            --inferrt-dinov2-hub-repo="$env:INFERRT_DINOV2_HUB_REPO" `
+            --inferrt-compare-runtime=tensorrt,onnx,openvino `
+            --inferrt-compare-devices=cpu,gpu `
+            --inferrt-strict-skips
+
+      - name: Run NMS and Engine benchmarks
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/release-gate/benchmarks | Out-Null
+          $env:PATH = "$PWD\artifacts\release-gate\install\bin;$PWD\build\presets\full\bin;$env:PATH"
+          & build/presets/full/bin/inferrt_benchmark_cuda_ops.exe `
+            --benchmark_filter="^BM_NMS" `
+            --benchmark_min_time=0.1s `
+            --benchmark_out=artifacts/release-gate/benchmarks/nms.json `
+            --benchmark_out_format=json
+          $nms = Get-Content -LiteralPath artifacts/release-gate/benchmarks/nms.json -Raw | ConvertFrom-Json
+          $allocations = @($nms.benchmarks | Where-Object { [double]$_.steady_allocations -ne 0 })
+          if ($allocations.Count -ne 0) { throw "NMS steady-state allocation gate failed" }
+          & build/presets/full/bin/inferrt_benchmark_engine.exe `
+            --example="$env:INFERRT_BENCHMARK_MODEL" `
+            --engine="$env:INFERRT_BENCHMARK_ENGINE" `
+            --image="$env:INFERRT_BENCHMARK_IMAGE" `
+            --preprocess=both `
+            --warmup=10 `
+            --repeat=100 `
+            2>&1 | Tee-Object -FilePath artifacts/release-gate/benchmarks/engine.txt
+          if ($LASTEXITCODE -ne 0) { throw "Engine benchmark failed with exit code $LASTEXITCODE" }
+
+      - name: Run package quality gates
+        run: >
+          & $env:INFERRT_PYTHON_EXE tools/quality_gates.py
+          --root .
+          --install-dir artifacts/release-gate/install
+          --source-dir .
+          --build-dir build/presets/full
+          --json artifacts/release-gate/quality-gates.json
+
+      - name: Upload full Release evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-release-gpu-windows
+          path: artifacts/release-gate

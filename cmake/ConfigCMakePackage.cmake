@@ -33,6 +33,7 @@ endif()
 
 if(Faiss_FOUND)
     list(APPEND _INFERRT_PACKAGE_CONFIG_FILES "${CMAKE_CURRENT_LIST_DIR}/ConfigFaiss.cmake")
+    list(APPEND _INFERRT_PACKAGE_CONFIG_FILES "${CMAKE_CURRENT_LIST_DIR}/ConfigDependencyDefaults.cmake")
 endif()
 
 if(${PROJECT_NAME_UPPER}_BUILD_ONNX)

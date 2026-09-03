@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from tools.dependency_utils import resolve_dependency_root
-from tools.package_runtime_dlls import copy_runtime_files, dependency_files, project_runtime_files
+from tools.package_runtime_dlls import (
+    copy_runtime_files,
+    default_install_dir,
+    dependency_files,
+    project_runtime_files,
+)
 
 
 def write_cache(build_dir: Path, **values: str) -> None:
@@ -93,3 +98,20 @@ def test_platform_specific_dependency_root_is_used(tmp_path):
         tmp_path / "build",
         platform="windows",
     ) == runtime_root.resolve()
+
+
+def test_default_install_dir_uses_cmake_prefix(tmp_path):
+    build_dir = tmp_path / "build"
+    install_dir = tmp_path / "custom-install"
+    build_dir.mkdir()
+    (build_dir / "CMakeCache.txt").write_text(
+        f"CMAKE_INSTALL_PREFIX:PATH={install_dir.as_posix()}\n",
+        encoding="utf-8",
+    )
+
+    assert default_install_dir(build_dir) == install_dir.resolve()
+
+
+def test_default_install_dir_requires_configured_prefix(tmp_path):
+    with pytest.raises(RuntimeError, match="CMAKE_INSTALL_PREFIX"):
+        default_install_dir(tmp_path / "build")

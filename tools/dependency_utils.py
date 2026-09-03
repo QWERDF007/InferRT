@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, Iterable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PYTHON_ROOT = Path("D:/Software/anaconda3/envs/py312")
 CONFIG_DIR_NAMES = {"debug", "release", "relwithdebinfo", "minsizerel"}
 
 
@@ -128,7 +127,7 @@ def load_yaml_file(path: Path) -> dict[str, Any]:
     except ModuleNotFoundError as exc:
         raise RuntimeError(
             "PyYAML is required. Run these scripts with "
-            f"{DEFAULT_PYTHON_ROOT / 'python.exe'} or install pyyaml in your Python environment."
+            f"{Path(sys.executable)} or install pyyaml in your Python environment."
         ) from exc
 
     data = yaml.safe_load(path.read_text(encoding="utf-8"))

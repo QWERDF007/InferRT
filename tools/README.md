@@ -52,10 +52,9 @@ DLL；CTest 只把构建输出目录加入进程搜索路径。运行 CTest 或�
 请先完成下面对应的显式部署步骤。
 
 ```powershell
-cmake --install build\presets\full --config Release --prefix InferRT-0.0.2
+cmake --install build\presets\full --config Release
 & 'D:\Software\anaconda3\envs\py312\python.exe' tools\package_runtime_dlls.py `
     --build-dir build\presets\full `
-    --install-dir InferRT-0.0.2 `
     --config Release `
     --strict
 ```
@@ -91,8 +90,9 @@ CTest 运行前也要显式把同一套第三方运行库部署到构建输出�
 
 默认规则：
 
-- 安装目录优先读取 `build/CMakeCache.txt` 里的 `CMAKE_INSTALL_PREFIX`
-- 如果没有，回退到仓库根目录下的 `InferRT-0.0.2`
+- 未显式指定 `CMAKE_INSTALL_PREFIX` 时，CMake 使用 `InferRT-${PROJECT_VERSION}` 作为默认安装目录
+- 已显式指定的安装前缀在后续重新配置时保持不变
+- 运行库脚本读取已配置构建树中的 `CMAKE_INSTALL_PREFIX`；没有该缓存或变量时必须传入 `--install-dir`
 - 实际复制目标是安装目录下的 `bin`
 - 只复制 `build/bin` 下的 `inferrt*.dll` 和 `inferrt*_py*.pyd`
 - 如果构建缓存包含 `PYTHON_MODULE_EXTENSION`，Python 扩展只部署与该 ABI 匹配的 `.pyd`
