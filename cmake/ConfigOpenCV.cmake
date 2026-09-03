@@ -2,22 +2,36 @@ include("${CMAKE_CURRENT_LIST_DIR}/ConfigDependencyDefaults.cmake")
 
 set(_inferrt_opencv_home_from_default OFF)
 set(_inferrt_opencv_default_home)
+set(_inferrt_opencv_search_dir)
+
+if(DEFINED OpenCV_DIR AND "${OpenCV_DIR}" MATCHES "-NOTFOUND$")
+    unset(OpenCV_DIR CACHE)
+    unset(OpenCV_DIR)
+endif()
 
 if(NOT DEFINED OpenCV_DIR OR OpenCV_DIR STREQUAL "")
     if(DEFINED OpenCV_HOME AND NOT OpenCV_HOME STREQUAL "")
-        set(OpenCV_DIR "${OpenCV_HOME}/lib" CACHE PATH
-            "OpenCV CMake package directory")
+        set(_inferrt_opencv_search_dir "${OpenCV_HOME}/lib")
     elseif(DEFINED ENV{OpenCV_DIR} AND NOT "$ENV{OpenCV_DIR}" STREQUAL "")
-        set(OpenCV_DIR "$ENV{OpenCV_DIR}" CACHE PATH
-            "OpenCV CMake package directory")
+        set(_inferrt_opencv_search_dir "$ENV{OpenCV_DIR}")
     elseif(DEFINED ENV{OpenCV_HOME} AND NOT "$ENV{OpenCV_HOME}" STREQUAL "")
         set(OpenCV_HOME "$ENV{OpenCV_HOME}" CACHE PATH
             "OpenCV installation directory")
-        set(OpenCV_DIR "${OpenCV_HOME}/lib" CACHE PATH
-            "OpenCV CMake package directory")
+        set(_inferrt_opencv_search_dir "${OpenCV_HOME}/lib")
     elseif(WIN32)
         inferrt_dependency_default(opencv _inferrt_opencv_default_home)
+        if(_inferrt_opencv_default_home)
+            set(OpenCV_HOME "${_inferrt_opencv_default_home}" CACHE PATH
+                "OpenCV installation directory")
+            set(_inferrt_opencv_search_dir "${OpenCV_HOME}/lib")
+            set(_inferrt_opencv_home_from_default ON)
+        endif()
     endif()
+endif()
+
+if(_inferrt_opencv_search_dir)
+    set(OpenCV_DIR "${_inferrt_opencv_search_dir}" CACHE PATH
+        "OpenCV CMake package directory")
 endif()
 
 if(DEFINED OpenCV_DIR AND NOT OpenCV_DIR STREQUAL "")
@@ -25,15 +39,6 @@ if(DEFINED OpenCV_DIR AND NOT OpenCV_DIR STREQUAL "")
 endif()
 
 find_package(OpenCV QUIET)
-if(NOT OpenCV_FOUND AND _inferrt_opencv_default_home)
-    set(OpenCV_HOME "${_inferrt_opencv_default_home}" CACHE PATH
-        "OpenCV installation directory")
-    set(OpenCV_DIR "${OpenCV_HOME}/lib" CACHE PATH
-        "OpenCV CMake package directory")
-    set(OpenCV_LIBRARY_DIR "${OpenCV_DIR}")
-    set(_inferrt_opencv_home_from_default ON)
-    find_package(OpenCV QUIET)
-endif()
 if(NOT OpenCV_FOUND AND (${PROJECT_NAME_UPPER}_ENABLE_CUDA OR ${PROJECT_NAME_UPPER}_BUILD_SAMPLES OR ${PROJECT_NAME_UPPER}_BUILD_BENCHMARK))
     find_package(OpenCV REQUIRED)
 endif()
@@ -149,3 +154,4 @@ endif()
 
 unset(_inferrt_opencv_home_from_default)
 unset(_inferrt_opencv_default_home)
+unset(_inferrt_opencv_search_dir)

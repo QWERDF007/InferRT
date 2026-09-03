@@ -81,13 +81,22 @@ def test_project_default_install_prefix_is_versioned(tmp_path: Path) -> None:
     ).resolve()
 
 
-def _write_install_prefix_probe(source: Path, version: str) -> None:
+def _write_install_prefix_probe(
+    source: Path,
+    version: str,
+    stale_prefix: Path | None = None,
+) -> None:
     module = (ROOT / "cmake" / "ConfigInstallPrefix.cmake").as_posix()
     source.mkdir(parents=True, exist_ok=True)
+    stale_prefix_line = ""
+    if stale_prefix is not None:
+        stale_prefix_line = f'set(CMAKE_INSTALL_PREFIX "{stale_prefix.as_posix()}")\n'
     (source / "CMakeLists.txt").write_text(
         "cmake_minimum_required(VERSION 3.25)\n"
         f"project(InferRT VERSION {version} LANGUAGES NONE)\n"
+        f"{stale_prefix_line}"
         f'include("{module}")\n'
+        "include(GNUInstallDirs)\n"
         'file(WRITE "${CMAKE_BINARY_DIR}/install-prefix.txt"\n'
         '     "${PROJECT_VERSION}\n${CMAKE_INSTALL_PREFIX}\n")\n',
         encoding="utf-8",
@@ -116,13 +125,19 @@ def test_default_install_prefix_follows_version_across_reconfigure(tmp_path: Pat
     _write_install_prefix_probe(source, "1.2.3")
     first_version, first_prefix = _run_install_prefix_probe(source, build)
 
-    _write_install_prefix_probe(source, "1.2.4")
+    _write_install_prefix_probe(source, "1.2.4", first_prefix)
     second_version, second_prefix = _run_install_prefix_probe(source, build)
 
     assert first_version == "1.2.3"
     assert first_prefix.resolve() == (source / "InferRT-1.2.3").resolve()
     assert second_version == "1.2.4"
     assert second_prefix.resolve() == (source / "InferRT-1.2.4").resolve()
+    cache_prefix = next(
+        line.split("=", 1)[1]
+        for line in (build / "CMakeCache.txt").read_text(encoding="utf-8").splitlines()
+        if line.startswith("CMAKE_INSTALL_PREFIX:")
+    )
+    assert Path(cache_prefix).resolve() == (source / "InferRT-1.2.4").resolve()
 
 
 def test_explicit_install_prefix_survives_reconfigure(tmp_path: Path) -> None:
@@ -218,6 +233,68 @@ def test_cmake_default_reader_returns_manifest_values(tmp_path: Path) -> None:
         _manifest_default("tensorrt"),
     ]
     assert [Path(value).resolve() for value in actual] == [path.resolve() for path in expected]
+
+
+def test_opencv_config_applies_manifest_default_before_find(tmp_path: Path) -> None:
+    if not sys.platform.startswith("win"):
+        pytest.skip("The configured dependency defaults are Windows-specific")
+
+    fake_opencv = tmp_path / "opencv"
+    (fake_opencv / "lib").mkdir(parents=True)
+    (fake_opencv / "bin").mkdir()
+    (fake_opencv / "lib" / "OpenCVConfig.cmake").write_text(
+        "set(OpenCV_FOUND TRUE)\n"
+        "set(OpenCV_VERSION 4.8.0)\n"
+        "set(OpenCV_LIBS)\n"
+        "set(OpenCV_INCLUDE_DIRS)\n",
+        encoding="utf-8",
+    )
+
+    manifest = tmp_path / "dependencies.yaml"
+    manifest.write_text(
+        "dependencies:\n"
+        "  - name: opencv\n"
+        f"    default: {fake_opencv.as_posix()}\n",
+        encoding="utf-8",
+    )
+
+    source = tmp_path / "source"
+    build = tmp_path / "build"
+    source.mkdir()
+    config_module = (ROOT / "cmake" / "ConfigOpenCV.cmake").as_posix()
+    defaults_manifest = manifest.as_posix()
+    (source / "CMakeLists.txt").write_text(
+        "cmake_minimum_required(VERSION 3.25)\n"
+        "project(OpenCVDefaultProbe NONE)\n"
+        "set(PROJECT_NAME_UPPER INFERRT)\n"
+        "set(INFERRT_ENABLE_CUDA ON)\n"
+        "set(INFERRT_BUILD_SAMPLES OFF)\n"
+        "set(INFERRT_BUILD_BENCHMARK OFF)\n"
+        f'set(INFERRT_DEPENDENCY_MANIFEST "{defaults_manifest}")\n'
+        "set(CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH OFF)\n"
+        "set(CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH OFF)\n"
+        "set(CMAKE_FIND_USE_PACKAGE_REGISTRY OFF)\n"
+        "set(CMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY OFF)\n"
+        "set(CMAKE_FIND_USE_CMAKE_SYSTEM_PATH OFF)\n"
+        f'include("{config_module}")\n'
+        "if(NOT OpenCV_FOUND)\n"
+        "    message(FATAL_ERROR \"OpenCV default package was not found\")\n"
+        "endif()\n"
+        "file(WRITE \"${CMAKE_BINARY_DIR}/opencv-values.txt\" "
+        "\"${OpenCV_HOME}\\n${OpenCV_DIR}\\n\")\n",
+        encoding="utf-8",
+    )
+
+    subprocess.run(
+        ["cmake", "-S", str(source), "-B", str(build)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    home, package_dir = (build / "opencv-values.txt").read_text(encoding="utf-8").splitlines()
+    assert Path(home).resolve() == fake_opencv.resolve()
+    assert Path(package_dir).resolve() == (fake_opencv / "lib").resolve()
 
 
 def test_python_config_default_wins_over_parent_python3_hint(tmp_path: Path) -> None:
