@@ -67,6 +67,7 @@ dependencies:
     requires: [INFERRT_ENABLE_CUDA, INFERRT_BUILD_TENSORRT]
     cmake: cmake/ConfigFaiss.cmake
     root: MKL_ROOT
+    default: D:/Software/dev/mkl/mkl
     destinations:
       - build/bin
     windows:
@@ -74,14 +75,6 @@ dependencies:
       - bin/mkl_def.2.dll
       - bin/mkl_intel_thread.2.dll
       - bin/mkl_core.2.dll
-
-  - name: faiss-mkl-openmp-runtime
-    requires: [INFERRT_ENABLE_CUDA, INFERRT_BUILD_TENSORRT]
-    cmake: cmake/ConfigFaiss.cmake
-    root: MKL_ROOT
-    destinations:
-      - build/bin
-    windows:
       - ../compiler/bin/libiomp5md.dll
 
   - name: openvino-runtime

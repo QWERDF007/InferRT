@@ -31,7 +31,6 @@ public:
     bool isInputBatchDynamic(const std::string &tensor_name) const override;
     irt::TensorDataType tensorDataType(const std::string &tensor_name) const override;
     void setTensorShape(const std::string &tensor_name, const irt::Shape &shape) override;
-    void execute(std::span<const irt::BufferView> buffers, irt::ExecuteOptions options = {}) override;
     std::unique_ptr<irt::ITensorRuntimeSession> createSession() const override;
 
     void setStream(std::uintptr_t stream) override;
@@ -49,6 +48,9 @@ public:
 
     /** Mark whether this engine exposes feature outputs instead of primary outputs. */
     void setFeatureOnly(bool feature_only) noexcept;
+
+protected:
+    void executeNormalized(std::span<const irt::BufferView> buffers, irt::ExecuteOptions options) override;
 
 private:
     TRTParams params_;

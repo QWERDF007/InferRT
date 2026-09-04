@@ -1,31 +1,23 @@
-#include "priv/EngineExecution.hpp"
 #include "priv/EngineCompletionOrder.hpp"
-#include "priv/EngineLegacyPipeline.hpp"
 #include "priv/EngineMetricsFault.hpp"
 #include "priv/EngineScheduler.hpp"
 #include "priv/EngineSlot.hpp"
 #include "priv/EngineSlotExecutor.hpp"
-#include "priv/EngineStageQueue.hpp"
+#include "priv/EngineStageWorkers.hpp"
 #include "priv/EngineTicketPool.hpp"
 #include "priv/EngineTestHooks.hpp"
 #include "priv/EngineTypes.hpp"
 #include "priv/EngineRuntimePlan.hpp"
 
-#include <cuda_runtime_api.h>
 #include <inferrt/core/Exception.hpp>
-#include <inferrt/engine/BuiltinOperators.hpp>
 #include <inferrt/engine/InferenceEngine.hpp>
-#include <inferrt/model/Utils.hpp>
 
-#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <limits>
 #include <memory>
 #include <mutex>
-#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -117,29 +109,13 @@ private:
     struct StartResources;
     struct WorkerResources
     {
-        std::vector<std::thread>           &prepare_workers;
-        std::vector<std::thread>           &postprocess_workers;
-        std::unique_ptr<EngineScheduler>   &scheduler;
-        std::unique_ptr<TicketPool>        &ticket_pool;
-        std::unique_ptr<SlotExecutor>      &slot_executor;
+        EngineStageWorkers *stage_workers{nullptr};
+        EngineScheduler    *scheduler{nullptr};
+        TicketPool         *ticket_pool{nullptr};
+        SlotExecutor       *slot_executor{nullptr};
     };
 
     void stopWorkersAndJoin(WorkerResources resources, bool abort_pools);
-
-    void prepareLoop(std::vector<std::unique_ptr<IOperator>> operators);
-    void postprocessLoop(std::vector<std::unique_ptr<IOperator>> operators);
-
-    void executeStage(const std::vector<std::unique_ptr<IOperator>> &operators, PipelineStage stage,
-                      const BatchState &batch, int device_id, cudaStream_t stream, TensorViewMap &tensors,
-                      ResultMap &results) const;
-    void processPostprocess(const std::vector<std::unique_ptr<IOperator>> &operators, const BatchPtr &batch);
-
-    [[nodiscard]] bool prepareBatch(const BatchPtr &batch);
-    [[nodiscard]] bool removeInvalidBeforeSubmit(BatchState &batch);
-    void               finishBatch(const BatchPtr &batch);
-    void               recordBatchMetrics(const BatchState &batch);
-
-    void               failBatch(const BatchPtr &batch, std::exception_ptr error);
     void               transitionFailed();
     [[nodiscard]] bool isFailed() const;
     void               recordFault(FaultStage stage, int device_id, const RequestPtr &request, std::exception_ptr error,
@@ -149,7 +125,7 @@ private:
     std::shared_ptr<const PipelinePlan>                                 pipeline_;
     EngineMetricsFault                                                   metrics_fault_;
     CompletionOrder                                                       completion_order_;
-    std::unordered_map<int, std::shared_ptr<priv::IEngineRuntimePlan>> runtime_plans_;
+    std::unordered_map<int, std::shared_ptr<irt::IExecutionPlan>> runtime_plans_;
     int                                                                 fixed_batch_size_{0};
     size_t                                                              max_inflight_batches_{0};
 
@@ -157,8 +133,7 @@ private:
     mutable std::mutex                                                     mutex_;
     std::unique_ptr<EngineScheduler>                                      scheduler_;
     std::unique_ptr<SlotExecutor>                                        slot_executor_;
-    std::vector<std::thread>                                               prepare_workers_;
-    std::vector<std::thread>                                               postprocess_workers_;
+    std::unique_ptr<EngineStageWorkers>                                  stage_workers_;
     size_t                                                                 device_arena_bytes_{0};
     std::unordered_map<int, size_t>                                        device_arena_bytes_by_device_;
     size_t                                                                 pinned_memory_capacity_bytes_{0};
@@ -175,12 +150,11 @@ private:
 struct InferenceEngine::Impl::StartResources
 {
     Impl                                                                &impl;
-    std::unordered_map<int, std::shared_ptr<priv::IEngineRuntimePlan>> runtime_plans;
+    std::unordered_map<int, std::shared_ptr<irt::IExecutionPlan>> runtime_plans;
     std::vector<std::unique_ptr<Slot>>                                  slots;
     std::unique_ptr<TicketPool>                                         ticket_pool;
+    std::unique_ptr<EngineStageWorkers>                                 stage_workers;
     std::unique_ptr<SlotExecutor>                                      slot_executor;
-    std::vector<std::thread>                                            prepare_workers;
-    std::vector<std::thread>                                            postprocess_workers;
     std::unique_ptr<EngineScheduler>                                    scheduler;
     size_t                                                              device_arena_bytes{0};
     std::unordered_map<int, size_t>                                     device_arena_bytes_by_device;
@@ -196,9 +170,10 @@ struct InferenceEngine::Impl::StartResources
         if (!committed)
         {
             impl.stopWorkersAndJoin(
-                {prepare_workers, postprocess_workers, scheduler, ticket_pool, slot_executor},
+                {stage_workers.get(), scheduler.get(), ticket_pool.get(), slot_executor.get()},
                 true);
 
+            stage_workers.reset();
             slot_executor.reset();
             ticket_pool.reset();
             runtime_plans.clear();
@@ -211,8 +186,7 @@ struct InferenceEngine::Impl::StartResources
         committed                          = true;
         impl.runtime_plans_                = std::move(runtime_plans);
         impl.ticket_pool_                  = std::move(ticket_pool);
-        impl.prepare_workers_              = std::move(prepare_workers);
-        impl.postprocess_workers_          = std::move(postprocess_workers);
+        impl.stage_workers_                = std::move(stage_workers);
         impl.scheduler_                    = std::move(scheduler);
         impl.slot_executor_                = std::move(slot_executor);
         impl.device_arena_bytes_           = device_arena_bytes;
@@ -237,7 +211,6 @@ void InferenceEngine::Impl::start()
             throw irt::Exception(irt::Status::INVALID_OPERATION,
                                  "A stopped or failed InferenceEngine must be recreated");
         }
-        config_.validate();
         state_ = EngineState::Starting;
 
         device_arena_bytes_ = 0;
@@ -245,16 +218,18 @@ void InferenceEngine::Impl::start()
         pinned_memory_capacity_bytes_ = 0;
     }
 
-    std::vector<int> device_ids = config_.device_ids;
-    if (device_ids.empty())
-    {
-        device_ids.push_back(config_.device_id);
-    }
-
     StartResources resources{*this};
 
     try
     {
+        config_.validate();
+
+        std::vector<int> device_ids = config_.device_ids;
+        if (device_ids.empty())
+        {
+            device_ids.push_back(config_.device_id);
+        }
+
         for (const int device_id : device_ids)
         {
             if (!resources.runtime_plans.contains(device_id))
@@ -270,10 +245,11 @@ void InferenceEngine::Impl::start()
             throw irt::Exception(irt::Status::ERROR_INTERNAL, "Injected start failure at step 1 (runtime plans)");
         }
 
-        resources.fixed_batch_size = resources.runtime_plans.at(device_ids.front())->fixedBatchSize();
+        resources.fixed_batch_size
+            = resources.runtime_plans.at(device_ids.front())->capabilities().fixed_batch_size;
         for (const int device_id : device_ids)
         {
-            if (resources.runtime_plans.at(device_id)->fixedBatchSize() != resources.fixed_batch_size)
+            if (resources.runtime_plans.at(device_id)->capabilities().fixed_batch_size != resources.fixed_batch_size)
             {
                 throw irt::Exception(irt::Status::ERROR_INTERNAL,
                                      "TensorRT runtime plans disagree on fixed batch size");
@@ -307,37 +283,50 @@ void InferenceEngine::Impl::start()
         resources.pinned_memory_capacity_bytes = resources.ticket_pool->capacityBytes();
         resources.max_inflight_batches
             = config_.execution_slots + config_.cpu_preprocess_workers + config_.cpu_postprocess_workers;
-        resources.slot_executor = std::make_unique<SlotExecutor>(
-            *pipeline_, gpu_queue_, postprocess_queue_, *resources.ticket_pool, std::move(resources.slots), test_options_,
+        resources.stage_workers = std::make_unique<EngineStageWorkers>(
+            config_, pipeline_, prepare_queue_, gpu_queue_, postprocess_queue_, *resources.ticket_pool,
+            completion_order_, metrics_fault_, resources.fixed_batch_size, test_options_,
             [this] { return isFailed(); },
-            [this](const BatchPtr &batch, const std::exception_ptr error) { failBatch(batch, error); },
             [this](const FaultStage stage, const int device_id, const RequestPtr &request,
                    const std::exception_ptr error, const bool fatal) {
                 recordFault(stage, device_id, request, error, fatal);
             },
-            [this] { transitionFailed(); }, [this](const BatchPtr &batch) { finishBatch(batch); });
+            [this] {
+                if (scheduler_)
+                {
+                    scheduler_->notifyBatchFinished();
+                }
+            });
+        auto *stage_workers = resources.stage_workers.get();
+        resources.slot_executor = std::make_unique<SlotExecutor>(
+            *pipeline_, gpu_queue_, postprocess_queue_, *resources.ticket_pool, std::move(resources.slots), test_options_,
+            [this] { return isFailed(); },
+            [stage_workers](const BatchPtr &batch, const std::exception_ptr error)
+            { stage_workers->failBatch(batch, error); },
+            [this](const FaultStage stage, const int device_id, const RequestPtr &request,
+                   const std::exception_ptr error, const bool fatal) {
+                recordFault(stage, device_id, request, error, fatal);
+            },
+            [this] { transitionFailed(); },
+            [stage_workers](const BatchPtr &batch) { stage_workers->finishBatch(batch); });
         if (test_options_.start_fault_stage == 3)
         {
             throw irt::Exception(irt::Status::ERROR_INTERNAL, "Injected start failure at step 3 (tickets)");
         }
 
-        for (size_t index = 0; index < config_.cpu_preprocess_workers; ++index)
-        {
-            maybeInjectStartResourceFault(test_options_, priv::StartFaultPoint::PrepareWorker, index);
-            resources.prepare_workers.emplace_back([this, operators = pipeline_->createOperators()]() mutable
-                                                   { prepareLoop(std::move(operators)); });
-        }
+        resources.stage_workers->startPrepare(
+            config_.cpu_preprocess_workers,
+            [this](const size_t index)
+            { maybeInjectStartResourceFault(test_options_, priv::StartFaultPoint::PrepareWorker, index); });
         if (test_options_.start_fault_stage == 4)
         {
             throw irt::Exception(irt::Status::ERROR_INTERNAL, "Injected start failure at step 4 (prepare workers)");
         }
 
-        for (size_t index = 0; index < config_.cpu_postprocess_workers; ++index)
-        {
-            maybeInjectStartResourceFault(test_options_, priv::StartFaultPoint::PostprocessWorker, index);
-            resources.postprocess_workers.emplace_back([this, operators = pipeline_->createOperators()]() mutable
-                                                       { postprocessLoop(std::move(operators)); });
-        }
+        resources.stage_workers->startPostprocess(
+            config_.cpu_postprocess_workers,
+            [this](const size_t index)
+            { maybeInjectStartResourceFault(test_options_, priv::StartFaultPoint::PostprocessWorker, index); });
         if (test_options_.start_fault_stage == 5)
         {
             throw irt::Exception(irt::Status::ERROR_INTERNAL, "Injected start failure at step 5 (postprocess workers)");
@@ -430,210 +419,6 @@ bool InferenceEngine::Impl::cancel(const uint64_t request_id)
     return scheduler_->cancel(request_id);
 }
 
-bool InferenceEngine::Impl::removeInvalidBeforeSubmit(BatchState &batch)
-{
-    const auto now           = std::chrono::steady_clock::now();
-    auto       first_invalid = std::remove_if(batch.requests.begin(), batch.requests.end(),
-                                              [&](const RequestPtr &request)
-                                              {
-                                            if (request->cancelled.load())
-                                            {
-                                                completion_order_.completeFailure(request, cancelledError(), FailureKind::Cancelled);
-                                                return true;
-                                            }
-                                            if (request->deadline <= now)
-                                            {
-                                                completion_order_.completeFailure(request, timeoutError(), FailureKind::TimedOut);
-                                                return true;
-                                            }
-                                            return false;
-                                        });
-    batch.requests.erase(first_invalid, batch.requests.end());
-    return !batch.requests.empty();
-}
-
-bool InferenceEngine::Impl::prepareBatch(const BatchPtr &batch)
-{
-    if (!removeInvalidBeforeSubmit(*batch))
-    {
-        finishBatch(batch);
-        return false;
-    }
-    batch->actual_batch = static_cast<int>(batch->requests.size());
-    if (batch->actual_batch < config_.min_batch_size)
-    {
-        failBatch(batch, std::make_exception_ptr(irt::Exception(
-                             irt::Status::NOT_READY, "Not enough requests to satisfy the minimum batch size")));
-        finishBatch(batch);
-        return false;
-    }
-    if (fixed_batch_size_ > 0)
-    {
-        if (batch->actual_batch != fixed_batch_size_ && config_.static_batch_policy == StaticBatchPolicy::Reject)
-        {
-                    failBatch(batch, std::make_exception_ptr(irt::Exception(irt::Status::NOT_READY,
-                                                                    "Fixed TensorRT batch requires padding")));
-            finishBatch(batch);
-            return false;
-        }
-        batch->execution_batch = fixed_batch_size_;
-    }
-    else
-    {
-        batch->execution_batch = batch->actual_batch;
-    }
-    return true;
-}
-
-void InferenceEngine::Impl::prepareLoop(std::vector<std::unique_ptr<IOperator>> operators)
-{
-    for (;;)
-    {
-        BatchPtr batch;
-        batch = prepare_queue_.waitPop();
-        if (!batch)
-        {
-            return;
-        }
-        if (isFailed())
-        {
-            failBatch(batch, std::make_exception_ptr(
-                                 irt::Exception(irt::Status::INVALID_OPERATION, "Inference engine failed")));
-            finishBatch(batch);
-            continue;
-        }
-        if (!prepareBatch(batch))
-        {
-            continue;
-        }
-
-        try
-        {
-            auto *ticket = ticket_pool_ ? ticket_pool_->acquireInput() : nullptr;
-            if (ticket == nullptr)
-            {
-                throw irt::Exception(irt::Status::INVALID_OPERATION, "Pinned input pool is stopping");
-            }
-            batch->input_ticket           = ticket;
-            batch->cpu_preprocess_started = std::chrono::steady_clock::now();
-            ResultMap ignored;
-            executeStage(operators, PipelineStage::CPU_PREPROCESS, *batch, config_.device_id, nullptr, ticket->tensors,
-                         ignored);
-            batch->cpu_preprocess_finished = std::chrono::steady_clock::now();
-            if (!gpu_queue_.push(batch))
-            {
-                ticket_pool_->releaseInput(batch->input_ticket);
-                batch->input_ticket = nullptr;
-                failBatch(batch, std::make_exception_ptr(
-                                      irt::Exception(irt::Status::INVALID_OPERATION, "GPU queue is closed")));
-                finishBatch(batch);
-            }
-        }
-        catch (...)
-        {
-            const auto error = std::current_exception();
-            recordFault(FaultStage::CpuPreprocess, -1, batch->requests.empty() ? nullptr : batch->requests.front(),
-                        error);
-            ticket_pool_->releaseInput(batch->input_ticket);
-            batch->input_ticket = nullptr;
-            failBatch(batch, error);
-            finishBatch(batch);
-        }
-    }
-}
-
-void InferenceEngine::Impl::executeStage(const std::vector<std::unique_ptr<IOperator>> &operators,
-                                         const PipelineStage stage, const BatchState &batch, const int device_id,
-                                         const cudaStream_t stream, TensorViewMap &tensors, ResultMap &results) const
-{
-    executePipelineStage(operators, pipeline_->nodes(), stage, batch, device_id, stream, tensors, results);
-}
-
-void InferenceEngine::Impl::processPostprocess(const std::vector<std::unique_ptr<IOperator>> &operators,
-                                               const BatchPtr                                &batch)
-{
-    processPostprocessBatch(
-        operators, batch, *pipeline_,
-        [this](const RequestPtr &req, InferenceResult res) {
-            const bool duplicate = test_options_.duplicate_completion;
-            InferenceResult duplicate_result = res;
-            completion_order_.completeSuccess(req, std::move(res));
-            if (duplicate)
-            {
-                completion_order_.completeSuccess(req, std::move(duplicate_result));
-            }
-        },
-        [this](const RequestPtr &req, std::exception_ptr err, FailureKind kind) {
-            completion_order_.completeFailure(req, err, kind);
-            if (test_options_.duplicate_completion)
-            {
-                completion_order_.completeFailure(req, err, kind);
-            }
-        });
-}
-
-void InferenceEngine::Impl::postprocessLoop(std::vector<std::unique_ptr<IOperator>> operators)
-{
-    for (;;)
-    {
-        BatchPtr batch;
-        batch = postprocess_queue_.waitPop();
-        if (!batch)
-        {
-            return;
-        }
-        try
-        {
-            batch->cpu_postprocess_started = std::chrono::steady_clock::now();
-            processPostprocess(operators, batch);
-            batch->cpu_postprocess_finished = std::chrono::steady_clock::now();
-        }
-        catch (...)
-        {
-            const auto error = std::current_exception();
-            recordFault(FaultStage::CpuPostprocess, batch->device_id,
-                        batch->requests.empty() ? nullptr : batch->requests.front(), error);
-            failBatch(batch, error);
-            batch->cpu_postprocess_finished = std::chrono::steady_clock::now();
-        }
-        ticket_pool_->releaseOutput(batch->output_ticket);
-        batch->output_ticket = nullptr;
-        recordBatchMetrics(*batch);
-        finishBatch(batch);
-    }
-}
-
-void InferenceEngine::Impl::failBatch(const BatchPtr &batch, const std::exception_ptr error)
-{
-    if (!batch)
-    {
-        return;
-    }
-    for (const auto &request : batch->requests)
-    {
-        const bool cancelled = request->cancelled.load();
-        completion_order_.completeFailure(request, cancelled ? cancelledError() : error,
-                                          cancelled ? FailureKind::Cancelled : FailureKind::Failed);
-    }
-}
-
-void InferenceEngine::Impl::finishBatch(const BatchPtr &batch)
-{
-    if (!metrics_fault_.finishBatch(batch))
-    {
-        return;
-    }
-    if (scheduler_)
-    {
-        scheduler_->notifyBatchFinished();
-    }
-}
-
-void InferenceEngine::Impl::recordBatchMetrics(const BatchState &batch)
-{
-    metrics_fault_.recordBatchLatency(batch);
-}
-
 void InferenceEngine::Impl::transitionFailed()
 {
     {
@@ -679,17 +464,13 @@ void InferenceEngine::Impl::stopWorkersAndJoin(const WorkerResources resources, 
     }
 
     // Once no more batches can be produced, drain each stage in pipeline order.
-    prepare_queue_.close();
-    if (abort_pools && resources.ticket_pool)
+    if (resources.stage_workers)
+    {
+        resources.stage_workers->stopPrepare(abort_pools);
+    }
+    else if (abort_pools && resources.ticket_pool)
     {
         resources.ticket_pool->abort();
-    }
-    for (auto &worker : resources.prepare_workers)
-    {
-        if (worker.joinable())
-        {
-            worker.join();
-        }
     }
 
     if (resources.slot_executor)
@@ -697,15 +478,10 @@ void InferenceEngine::Impl::stopWorkersAndJoin(const WorkerResources resources, 
         resources.slot_executor->stop();
     }
 
-    postprocess_queue_.close();
-    for (auto &worker : resources.postprocess_workers)
+    if (resources.stage_workers)
     {
-        if (worker.joinable())
-        {
-            worker.join();
-        }
+        resources.stage_workers->stopPostprocess();
     }
-
 }
 
 void InferenceEngine::Impl::shutdown()
@@ -733,7 +509,7 @@ void InferenceEngine::Impl::shutdown()
         std::lock_guard lock(mutex_);
         abort_pools = state_ == EngineState::Failed;
     }
-    stopWorkersAndJoin({prepare_workers_, postprocess_workers_, scheduler_, ticket_pool_, slot_executor_},
+    stopWorkersAndJoin({stage_workers_.get(), scheduler_.get(), ticket_pool_.get(), slot_executor_.get()},
                        abort_pools);
 
     {
@@ -746,14 +522,13 @@ void InferenceEngine::Impl::shutdown()
         metrics_fault_.clearInflightBatches();
 
         slot_executor_.reset();
+        stage_workers_.reset();
         ticket_pool_.reset();
         runtime_plans_.clear();
         device_arena_bytes_by_device_.clear();
         device_arena_bytes_ = 0;
         pinned_memory_capacity_bytes_ = 0;
 
-        prepare_workers_.clear();
-        postprocess_workers_.clear();
     }
     completion_order_.shutdown();
 }
@@ -766,13 +541,14 @@ size_t InferenceEngine::Impl::pendingRequests() const
 
 EngineMetricsSnapshot InferenceEngine::Impl::metrics() const
 {
-    // Worker vectors and executor ownership are published/cleared by start and
+    // Executor and stage-worker ownership are published/cleared by start and
     // shutdown. Serialize the snapshot with those lifecycle transitions before
     // reading them, otherwise a concurrent metrics call could race with
     // destruction.
     std::unique_lock lifecycle_lock(shutdown_mutex_);
     const auto scheduler_snapshot = scheduler_ ? scheduler_->snapshot() : EngineScheduler::Snapshot{};
     const auto slot_snapshot      = slot_executor_ ? slot_executor_->snapshot() : SlotExecutor::Snapshot{};
+    const auto stage_snapshot = stage_workers_ ? stage_workers_->snapshot() : EngineStageWorkers::Snapshot{};
     std::lock_guard state_lock(mutex_);
     const auto ticket_snapshot = ticket_pool_ ? ticket_pool_->snapshot() : TicketPool::Snapshot{};
 
@@ -780,22 +556,15 @@ EngineMetricsSnapshot InferenceEngine::Impl::metrics() const
     const auto gpu_queue_snapshot         = gpu_queue_.snapshot();
     const auto postprocess_queue_snapshot = postprocess_queue_.snapshot();
 
-    const auto joinable = [](const std::thread &thread) { return thread.joinable() ? size_t{1} : size_t{0}; };
-    const size_t thread_count = prepare_workers_.size() + postprocess_workers_.size()
+    const size_t thread_count = stage_snapshot.prepare_worker_count + stage_snapshot.postprocess_worker_count
         + (slot_snapshot.dispatcher_joinable ? size_t{1} : size_t{0})
         + (slot_snapshot.completion_poller_joinable ? size_t{1} : size_t{0})
         + (scheduler_snapshot.joinable ? size_t{1} : size_t{0});
-    size_t joinable_thread_count = (slot_snapshot.dispatcher_joinable ? size_t{1} : size_t{0})
+    const size_t joinable_thread_count = stage_snapshot.joinable_prepare_workers
+        + stage_snapshot.joinable_postprocess_workers
+        + (slot_snapshot.dispatcher_joinable ? size_t{1} : size_t{0})
         + (slot_snapshot.completion_poller_joinable ? size_t{1} : size_t{0})
         + (scheduler_snapshot.joinable ? size_t{1} : size_t{0});
-    for (const auto &thread : prepare_workers_)
-    {
-        joinable_thread_count += joinable(thread);
-    }
-    for (const auto &thread : postprocess_workers_)
-    {
-        joinable_thread_count += joinable(thread);
-    }
 
     auto snapshot = metrics_fault_.snapshot();
     snapshot.queued_requests                = scheduler_snapshot.queued;
@@ -817,8 +586,8 @@ EngineMetricsSnapshot InferenceEngine::Impl::metrics() const
     snapshot.postprocess_queue_size = postprocess_queue_snapshot.size;
     snapshot.input_ticket_count     = ticket_snapshot.input_count;
     snapshot.output_ticket_count    = ticket_snapshot.output_count;
-    snapshot.thread_count           = thread_count;
-    snapshot.joinable_thread_count  = joinable_thread_count;
+    snapshot.thread_count          = thread_count;
+    snapshot.joinable_thread_count = joinable_thread_count;
     return snapshot;
 }
 
@@ -859,22 +628,12 @@ std::future<InferenceResult> RequestHandle::takeFuture() &&
     return std::move(future_);
 }
 
-InferenceEngine::InferenceEngine(EngineConfig config)
-    : InferenceEngine(config, priv::makeLegacyPipeline(config))
-{
-}
-
 InferenceEngine::InferenceEngine(EngineConfig config, std::shared_ptr<const PipelinePlan> pipeline)
     : impl_(std::make_unique<Impl>(std::move(config), std::move(pipeline)))
 {
 }
 
 InferenceEngine::~InferenceEngine() = default;
-
-std::unique_ptr<InferenceEngine> InferenceEngine::create(EngineConfig config)
-{
-    return std::make_unique<InferenceEngine>(std::move(config));
-}
 
 std::unique_ptr<InferenceEngine> InferenceEngine::create(EngineConfig                        config,
                                                          std::shared_ptr<const PipelinePlan> pipeline)

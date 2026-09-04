@@ -9,7 +9,7 @@ namespace irt::model {
 
 namespace {
 
-void ensureValid(const std::unique_ptr<priv::IModelImpl> &impl)
+void ensureValid(const IModel::ImplementationPtr &impl)
 {
     if (!impl)
     {
@@ -22,6 +22,11 @@ void ensureValid(const std::unique_ptr<priv::IModelImpl> &impl)
 IModel::IModel()
     : impl_(nullptr)
 {
+}
+
+void IModel::ImplementationDeleter::operator()(Implementation *implementation) const noexcept
+{
+    delete implementation;
 }
 
 IModel::~IModel() = default;
@@ -85,15 +90,13 @@ void IModel::buildOrLoad(const std::string &weights_file)
 void IModel::infer(std::span<const irt::BufferView> buffers, std::uintptr_t stream, bool non_blocking)
 {
     ensureValid(impl_);
-    auto normalized = normalizeExecutionBuffers(buffers);
-    impl_->infer(normalized, stream, non_blocking);
+    impl_->infer(buffers, stream, non_blocking);
 }
 
 void IModel::forwardFeatures(std::span<const irt::BufferView> buffers, std::uintptr_t stream, bool non_blocking)
 {
     ensureValid(impl_);
-    auto normalized = normalizeExecutionBuffers(buffers);
-    impl_->forwardFeatures(normalized, stream, non_blocking);
+    impl_->forwardFeatures(buffers, stream, non_blocking);
 }
 
 void IModel::setModelConfig(std::unique_ptr<IModelConfig> config)
@@ -162,12 +165,6 @@ void IModel::setLogLevel(LogLevel level)
     impl_->setLogLevel(level);
 }
 
-std::vector<irt::BufferView> IModel::normalizeExecutionBuffers(
-    const std::span<const irt::BufferView> buffers) const
-{
-    return irt::normalizeExecutionBuffers(buffers, inputs(), outputs());
-}
-
 std::vector<irt::TensorInfo> IModel::inputs() const
 {
     ensureValid(impl_);
@@ -180,21 +177,35 @@ std::vector<irt::TensorInfo> IModel::outputs() const
     return impl_->outputs();
 }
 
+irt::ExecutionCapabilities IModel::capabilities() const
+{
+    ensureValid(impl_);
+    return impl_->capabilities();
+}
+
 void IModel::setInputShape(const std::string &name, irt::Shape shape)
 {
     ensureValid(impl_);
-    if (shape.empty())
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Input shape must be non-empty and within backend rank");
-    }
-    impl_->setTensorShape(name, shape);
+    impl_->setInputShape(name, std::move(shape));
 }
 
 void IModel::execute(std::span<const irt::BufferView> buffers, irt::ExecuteOptions options)
 {
     ensureValid(impl_);
-    auto normalized = normalizeExecutionBuffers(buffers);
-    impl_->infer(normalized, options.stream, options.non_blocking);
+    impl_->execute(buffers, options);
+}
+
+std::unique_ptr<irt::ITensorRuntimeSession> IModel::createSession() const
+{
+    ensureValid(impl_);
+    return impl_->createSession();
+}
+
+void IModel::executeSession(irt::ITensorRuntimeSession &session, std::span<const irt::BufferView> buffers,
+                            irt::ExecuteOptions options) const
+{
+    ensureValid(impl_);
+    impl_->executeSession(session, buffers, options);
 }
 
 } // namespace irt::model

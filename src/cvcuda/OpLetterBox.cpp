@@ -89,7 +89,14 @@ IRTStatus letterBox(const uint8_t *d_src, float *d_dst, cv::Size ssize, cv::Size
                     const irt::PreprocessSpec &spec, cudaStream_t stream)
 {
     LetterBox letter_box_op;
-    return letter_box_op(d_src, d_dst, ssize, dsize, CH, spec, stream);
+    return letter_box_op(d_src, d_dst, ssize, dsize, CH, spec, 0, stream);
+}
+
+IRTStatus letterBox(const uint8_t *d_src, float *d_dst, cv::Size ssize, cv::Size dsize, const int CH,
+                    const irt::PreprocessSpec &spec, const std::size_t source_stride_bytes, cudaStream_t stream)
+{
+    LetterBox letter_box_op;
+    return letter_box_op(d_src, d_dst, ssize, dsize, CH, spec, source_stride_bytes, stream);
 }
 
 IRTStatus letter_box(const uint8_t *d_src, float *d_dst, cv::Size ssize, cv::Size dsize, const int CH,
@@ -112,11 +119,18 @@ LetterBox &LetterBox::operator=(LetterBox &&) noexcept = default;
 IRTStatus LetterBox::operator()(const uint8_t *d_src, float *d_dst, cv::Size ssize, cv::Size dsize, const int CH,
                                 cudaStream_t stream)
 {
-    return (*this)(d_src, d_dst, ssize, dsize, CH, defaultSpec(dsize, CH), stream);
+    return (*this)(d_src, d_dst, ssize, dsize, CH, defaultSpec(dsize, CH), 0, stream);
 }
 
 IRTStatus LetterBox::operator()(const uint8_t *d_src, float *d_dst, cv::Size ssize, cv::Size dsize, const int CH,
                                 const irt::PreprocessSpec &spec, cudaStream_t stream)
+{
+    return (*this)(d_src, d_dst, ssize, dsize, CH, spec, 0, stream);
+}
+
+IRTStatus LetterBox::operator()(const uint8_t *d_src, float *d_dst, cv::Size ssize, cv::Size dsize, const int CH,
+                                const irt::PreprocessSpec &spec, const std::size_t source_stride_bytes,
+                                cudaStream_t stream)
 {
     IRTStatus status = ProtectCall(
         [&]
@@ -131,8 +145,14 @@ IRTStatus LetterBox::operator()(const uint8_t *d_src, float *d_dst, cv::Size ssi
             {
                 throw Exception(Status::ERROR_INVALID_ARGUMENT, "LetterBox source/destination is invalid");
             }
-            const size_t stride = irt::checkedSizeMul(static_cast<size_t>(ssize.width), static_cast<size_t>(CH),
-                                                      "LetterBox source stride");
+            const size_t packed_stride = irt::checkedSizeMul(static_cast<size_t>(ssize.width),
+                                                             static_cast<size_t>(CH), "LetterBox source stride");
+            const size_t stride = source_stride_bytes == 0 ? packed_stride : source_stride_bytes;
+            if (stride < packed_stride)
+            {
+                throw Exception(Status::ERROR_INVALID_ARGUMENT,
+                                "LetterBox source stride is smaller than one packed source row");
+            }
             if (stride > static_cast<size_t>(std::numeric_limits<int>::max()))
             {
                 throw Exception(Status::ERROR_INVALID_ARGUMENT, "LetterBox source stride is too large");

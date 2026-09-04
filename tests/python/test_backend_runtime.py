@@ -11,7 +11,7 @@ import pytest
 np = pytest.importorskip("numpy")
 
 from helpers.manifest import assert_tensors_close
-from helpers.runtime import run_process_capture, sample_executable
+from helpers.runtime import run_process_capture, runtime_is_enabled, sample_executable
 
 
 FEATURE_NAMES = ["tiny_cls", "tiny_patch"]
@@ -31,7 +31,12 @@ def _runtime_spec(backend_attr: str, device: str = "cpu") -> str:
     return f"{backend}:{'0' if device.lower() == 'gpu' else 'cpu'}"
 
 
-@pytest.fixture(params=["ONNXRUNTIME", "OPENVINO"])
+@pytest.fixture(
+    params=[
+        pytest.param("ONNXRUNTIME", marks=pytest.mark.optional_backend),
+        pytest.param("OPENVINO", marks=pytest.mark.optional_backend),
+    ]
+)
 def graph_backend_attr(request: pytest.FixtureRequest, compare_runtimes: list[str], irt_module: object) -> str:
     """按 ``--inferrt-compare-runtime`` 选择当前要执行的图后端。
 
@@ -46,10 +51,8 @@ def graph_backend_attr(request: pytest.FixtureRequest, compare_runtimes: list[st
     backend_attr = str(request.param)
     if backend_attr not in compare_runtimes:
         pytest.skip(f"{backend_attr} is disabled; pass --inferrt-compare-runtime=onnx,openvino")
-    if backend_attr == "ONNXRUNTIME" and not irt_module.onnxruntime_enabled:
-        pytest.skip("ONNX Runtime backend was disabled at CMake configure time")
-    if backend_attr == "OPENVINO" and not irt_module.openvino_enabled:
-        pytest.skip("OpenVINO backend was disabled at CMake configure time")
+    if not runtime_is_enabled(irt_module, backend_attr):
+        pytest.skip(f"{backend_attr} backend was disabled at CMake configure time")
     return backend_attr
 
 
@@ -587,6 +590,7 @@ def test_image_search_sample_graph_backend_uses_dynamic_model_batch(
 
 @pytest.mark.integration
 @pytest.mark.slow
+@pytest.mark.optional_backend
 def test_feature_graph_backends_match_each_other(
     compare_runtimes: list[str],
     irt_module: object,
@@ -596,6 +600,8 @@ def test_feature_graph_backends_match_each_other(
 
     if not {"ONNXRUNTIME", "OPENVINO"}.issubset(compare_runtimes):
         pytest.skip("ONNX/OpenVINO cross-check requires --inferrt-compare-runtime=onnx,openvino")
+    if not all(runtime_is_enabled(irt_module, runtime) for runtime in ("ONNXRUNTIME", "OPENVINO")):
+        pytest.skip("ONNX/OpenVINO cross-check requires both backends enabled at CMake configure time")
 
     model = _make_tiny_feature_model()
     input_tensor = _make_feature_input()
@@ -619,6 +625,7 @@ def test_feature_graph_backends_match_each_other(
 
 @pytest.mark.integration
 @pytest.mark.slow
+@pytest.mark.optional_backend
 def test_openvino_ir_feature_model_matches_pytorch(
     compare_runtimes: list[str],
     irt_module: object,
@@ -626,7 +633,7 @@ def test_openvino_ir_feature_model_matches_pytorch(
 ) -> None:
     """验证导出的 OpenVINO IR 特征模型输出与 PyTorch 参考一致。"""
 
-    if "OPENVINO" not in compare_runtimes:
+    if "OPENVINO" not in compare_runtimes or not runtime_is_enabled(irt_module, "OPENVINO"):
         pytest.skip("OpenVINO IR parity is disabled; pass --inferrt-compare-runtime=openvino")
 
     model = _make_tiny_feature_model()

@@ -18,7 +18,10 @@ bool DeviceAllocator::operator()(void **ptr, size_t num_bytes) const noexcept
 
 void DeviceFree::operator()(void *ptr) const noexcept
 {
-    cudaFree(ptr);
+    if (ptr != nullptr)
+    {
+        cudaFree(ptr);
+    }
 }
 
 bool HostAllocator::operator()(void **ptr, size_t num_bytes) const noexcept
@@ -49,7 +52,10 @@ bool PinnedHostAllocator::operator()(void **ptr, size_t num_bytes) const noexcep
 
 void PinnedHostFree::operator()(void *ptr) const noexcept
 {
-    cudaFreeHost(ptr);
+    if (ptr != nullptr)
+    {
+        cudaFreeHost(ptr);
+    }
 }
 
 } // namespace irt::model

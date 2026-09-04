@@ -182,10 +182,14 @@ namespace detail {
 
 [[nodiscard]] inline int roundPreprocessDimension(const double value, const char *axis)
 {
-    if (!std::isfinite(value) || value < 1.0)
+    if (!std::isfinite(value) || value <= 0.0)
     {
         throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
                              "Preprocess %s resize dimension is invalid: %.9g", axis, value);
+    }
+    if (value < 1.0)
+    {
+        return 1;
     }
     const double rounded = std::round(value);
     if (rounded < 1.0 || rounded > static_cast<double>(std::numeric_limits<int>::max()))

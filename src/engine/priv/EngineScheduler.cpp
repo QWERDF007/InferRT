@@ -308,8 +308,7 @@ void EngineScheduler::failQueuedRequests(const std::vector<std::pair<RequestPtr,
             error = droppedError();
             break;
         case FailureKind::Failed:
-            error = std::make_exception_ptr(
-                irt::Exception(irt::Status::INVALID_OPERATION, "Inference engine failed"));
+            error = failedError();
             fatal = true;
             break;
         }

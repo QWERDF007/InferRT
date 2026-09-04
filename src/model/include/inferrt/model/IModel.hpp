@@ -9,12 +9,9 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
-
-namespace irt::model::priv {
-class IModelImpl;
-}
 
 namespace irt::model {
 
@@ -28,20 +25,38 @@ class INFERRT_MODEL_API IModel : public irt::IExecutableModel
 {
 public:
     /**
+     * @brief Opaque implementation seam owned by the model library.
+     *
+     * The concrete model adapters are defined only in private headers.  This
+     * declaration keeps the public wrapper independent from their namespace
+     * and backend types.
+    */
+    class Implementation;
+
+    struct ImplementationDeleter
+    {
+        void operator()(Implementation *implementation) const noexcept;
+    };
+
+    using ImplementationPtr = std::unique_ptr<Implementation, ImplementationDeleter>;
+
+    /**
      * @brief 构造一个空模型包装对象（处于 invalid 状态）。
      */
     IModel();
 
     /**
      * @brief 将库内具体模型实现包装为公共模型对象。
-     * @tparam Impl 继承自模型内部实现基类的具体类型。
-     * @param impl 已创建的具体模型实现。
+     * @param impl 已创建的模型库内部实现。
      * @return 持有该实现的公共模型对象。
      */
     template<typename Impl>
     static std::unique_ptr<IModel> fromImplementation(std::unique_ptr<Impl> impl)
     {
-        return std::unique_ptr<IModel>(new IModel(std::move(impl)));
+        static_assert(std::is_base_of_v<Implementation, Impl>,
+                      "IModel implementation must derive from IModel::Implementation");
+        ImplementationPtr implementation(impl.release());
+        return std::unique_ptr<IModel>(new IModel(std::move(implementation)));
     }
 
     /**
@@ -211,21 +226,21 @@ public:
     /** Backend-neutral I/O descriptors for new consumers. */
     std::vector<irt::TensorInfo> inputs() const override;
     std::vector<irt::TensorInfo> outputs() const override;
+    irt::ExecutionCapabilities capabilities() const override;
     void setInputShape(const std::string &name, irt::Shape shape) override;
     void execute(std::span<const irt::BufferView> buffers, irt::ExecuteOptions options = {}) override;
+    std::unique_ptr<irt::ITensorRuntimeSession> createSession() const override;
+    void executeSession(irt::ITensorRuntimeSession &session, std::span<const irt::BufferView> buffers,
+                        irt::ExecuteOptions options = {}) const override;
 
 private:
-    template<typename Impl>
-    explicit IModel(std::unique_ptr<Impl> impl)
+    explicit IModel(ImplementationPtr impl)
         : impl_(std::move(impl))
     {
     }
 
-    [[nodiscard]] std::vector<irt::BufferView> normalizeExecutionBuffers(
-        std::span<const irt::BufferView> buffers) const;
-
-    /// 模型内部实现对象。
-    std::unique_ptr<priv::IModelImpl> impl_;
+    /// 模型内部实现对象；具体类型仅存在于 model 库的私有实现中。
+    ImplementationPtr impl_;
 };
 
 } // namespace irt::model

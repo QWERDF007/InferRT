@@ -351,21 +351,35 @@ bool useCpuDiskIndex(const ImageSearchConfig &config) noexcept
         && config.index_storage == ImageSearchIndexStorage::Disk;
 }
 
-void validateFeatureSearchConfig(const ImageSearchConfig &config, const char *owner_name)
+void validateFeatureSearchConfig(ImageSearchConfig &config, const char *owner_name)
 {
     const char *owner = owner_name == nullptr ? "FeatureSearch" : owner_name;
 
     config.model_runtime.validate();
+
+    switch (config.preprocess_backend)
+    {
+    case ImageSearchPreprocessBackend::CPU:
+        if (config.preprocess.backend == irt::PreprocessBackend::CUDA)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "%s selects CUDA PreprocessSpec with a CPU preprocessing backend", owner);
+        }
+        break;
+    case ImageSearchPreprocessBackend::GPU:
+        // The public feature selector is the source of truth.  Materialize it
+        // in the shared spec so manifests and all extractors observe the same
+        // execution backend even when callers leave the low-level field at its
+        // default value.
+        config.preprocess.backend = irt::PreprocessBackend::CUDA;
+        break;
+    default:
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported %s preprocessing backend", owner);
+    }
+
     // Geometry may be deferred until the model descriptor is loaded, but all
     // remaining preprocessing semantics must already be a valid contract.
     config.preprocess.validate(false);
-
-    if (config.preprocess_backend == ImageSearchPreprocessBackend::CPU
-        && config.preprocess.backend == irt::PreprocessBackend::CUDA)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "%s selects CUDA PreprocessSpec with a CPU preprocessing backend", owner);
-    }
     switch (config.model_precision)
     {
     case irt::model::ModelPrecision::FP32:
@@ -373,16 +387,6 @@ void validateFeatureSearchConfig(const ImageSearchConfig &config, const char *ow
         break;
     default:
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported %s model precision", owner);
-    }
-
-    switch (config.preprocess_backend)
-    {
-    case ImageSearchPreprocessBackend::CPU:
-        break;
-    case ImageSearchPreprocessBackend::GPU:
-        throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED, "%s GPU preprocessing is not implemented", owner);
-    default:
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported %s preprocessing backend", owner);
     }
 
     switch (config.norm)

@@ -12,6 +12,46 @@ import numpy as np
 from helpers.vision import allocate_output_tensors, preprocess_image
 
 
+_RUNTIME_ENABLE_ATTRIBUTES = {
+    "TENSORRT": "tensorrt_enabled",
+    "ONNXRUNTIME": "onnxruntime_enabled",
+    "OPENVINO": "openvino_enabled",
+}
+
+
+def runtime_is_enabled(irt_module: object, runtime_attr: str) -> bool:
+    """Return whether the extension was built with a runtime backend."""
+
+    try:
+        attribute = _RUNTIME_ENABLE_ATTRIBUTES[runtime_attr]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported runtime attribute: {runtime_attr}") from exc
+    return bool(getattr(irt_module, attribute, False))
+
+
+def available_runtime_device_pairs(
+    irt_module: object,
+    compare_runtimes: list[str],
+    compare_devices: list[str],
+) -> list[tuple[str, str]]:
+    """Build runtime/device pairs from requested and configured backends.
+
+    TensorRT is a GPU-only path in these model integration tests. Optional
+    graph backends are included only when their CMake feature is enabled.
+    """
+
+    pairs: list[tuple[str, str]] = []
+    for runtime_attr in compare_runtimes:
+        if not runtime_is_enabled(irt_module, runtime_attr):
+            continue
+        if runtime_attr == "TENSORRT":
+            if "gpu" in compare_devices:
+                pairs.append((runtime_attr, "gpu"))
+            continue
+        pairs.extend((runtime_attr, device) for device in compare_devices)
+    return pairs
+
+
 def project_root() -> Path:
     """推断仓库根目录。
 

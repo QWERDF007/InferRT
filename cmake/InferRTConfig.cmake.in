@@ -9,59 +9,74 @@ set(INFERRT_BUILD_TENSORRT "@INFERRT_BUILD_TENSORRT@")
 set(INFERRT_BUILD_ONNX "@INFERRT_BUILD_ONNX@")
 set(INFERRT_BUILD_OPENVINO "@INFERRT_BUILD_OPENVINO@")
 
-set(_inferrt_requested_components ${InferRT_FIND_COMPONENTS})
-set(_inferrt_plain_package_request OFF)
-if(NOT _inferrt_requested_components)
-    # A plain find_package() must remain usable for the dependency-free core
-    # target.  Backend targets opt into their development dependencies by
-    # naming the corresponding component.
-    set(_inferrt_requested_components core)
-    set(_inferrt_plain_package_request ON)
+set(_inferrt_available_components core util ops)
+if(INFERRT_ENABLE_CUDA)
+    list(APPEND _inferrt_available_components cvcuda)
+    if(INFERRT_BUILD_TENSORRT)
+        list(APPEND _inferrt_available_components model engine features)
+    endif()
 endif()
+
+set(_inferrt_requested_components ${InferRT_FIND_COMPONENTS})
+if(NOT _inferrt_requested_components)
+    # The no-component form is a dependency-free core entry point.  Consumers
+    # of higher-level modules request those modules explicitly.
+    set(_inferrt_requested_components core)
+endif()
+
+set(_inferrt_load_components)
+foreach(_inferrt_requested_component IN LISTS _inferrt_requested_components)
+    list(FIND _inferrt_available_components "${_inferrt_requested_component}" _inferrt_component_index)
+    if(_inferrt_component_index EQUAL -1)
+        set(InferRT_${_inferrt_requested_component}_FOUND FALSE)
+        continue()
+    endif()
+
+    if(_inferrt_requested_component STREQUAL core)
+        list(APPEND _inferrt_load_components core)
+    elseif(_inferrt_requested_component STREQUAL util)
+        list(APPEND _inferrt_load_components core util)
+    elseif(_inferrt_requested_component STREQUAL ops)
+        list(APPEND _inferrt_load_components core ops)
+    elseif(_inferrt_requested_component STREQUAL cvcuda)
+        list(APPEND _inferrt_load_components core util cvcuda)
+    elseif(_inferrt_requested_component STREQUAL model)
+        list(APPEND _inferrt_load_components core util model)
+    elseif(_inferrt_requested_component STREQUAL engine)
+        list(APPEND _inferrt_load_components core util model engine)
+    elseif(_inferrt_requested_component STREQUAL features)
+        list(APPEND _inferrt_load_components core util ops model features)
+    endif()
+endforeach()
+list(REMOVE_DUPLICATES _inferrt_load_components)
 
 set(_inferrt_need_cuda OFF)
 set(_inferrt_need_opencv OFF)
 set(_inferrt_need_tensorrt OFF)
 set(_inferrt_need_faiss OFF)
-set(_inferrt_need_onnx OFF)
-set(_inferrt_need_openvino OFF)
-
-# features is exported by every CUDA + TensorRT build.  Its public link
-# interface contains Faiss, so prepare that imported target for the plain
-# package entry point as well as for an explicit `features` component request.
-if(_inferrt_plain_package_request AND INFERRT_ENABLE_CUDA AND INFERRT_BUILD_TENSORRT)
-    set(_inferrt_need_faiss ON)
-endif()
-
-foreach(_inferrt_component IN LISTS _inferrt_requested_components)
-    if(INFERRT_ENABLE_CUDA AND (_inferrt_component STREQUAL "util"
-       OR _inferrt_component STREQUAL "cvcuda"
-       OR _inferrt_component STREQUAL "model"
-       OR _inferrt_component STREQUAL "engine"
-       OR _inferrt_component STREQUAL "features"))
+foreach(_inferrt_component IN LISTS _inferrt_load_components)
+    if(_inferrt_component STREQUAL util
+       OR _inferrt_component STREQUAL cvcuda
+       OR _inferrt_component STREQUAL model
+       OR _inferrt_component STREQUAL engine
+       OR _inferrt_component STREQUAL features)
         set(_inferrt_need_cuda ON)
     endif()
-    if(_inferrt_component STREQUAL "cvcuda"
-       OR _inferrt_component STREQUAL "model"
-       OR _inferrt_component STREQUAL "engine"
-       OR _inferrt_component STREQUAL "features")
+    if(_inferrt_component STREQUAL cvcuda
+       OR _inferrt_component STREQUAL model
+       OR _inferrt_component STREQUAL engine
+       OR _inferrt_component STREQUAL features)
         set(_inferrt_need_opencv ON)
     endif()
-    if(_inferrt_component STREQUAL "model"
-       OR _inferrt_component STREQUAL "engine"
-       OR _inferrt_component STREQUAL "features")
+    if(_inferrt_component STREQUAL model
+       OR _inferrt_component STREQUAL engine
+       OR _inferrt_component STREQUAL features)
         set(_inferrt_need_tensorrt ON)
     endif()
-    if(_inferrt_component STREQUAL "features")
+    if(_inferrt_component STREQUAL features)
         set(_inferrt_need_faiss ON)
     endif()
 endforeach()
-if(_inferrt_need_tensorrt AND INFERRT_BUILD_ONNX)
-    set(_inferrt_need_onnx ON)
-endif()
-if(_inferrt_need_tensorrt AND INFERRT_BUILD_OPENVINO)
-    set(_inferrt_need_openvino ON)
-endif()
 
 if(_inferrt_need_cuda)
     find_dependency(CUDAToolkit)
@@ -75,11 +90,11 @@ if(_inferrt_need_opencv)
     find_dependency(OpenCV)
 endif()
 
-if(_inferrt_need_onnx)
+if(_inferrt_need_tensorrt AND INFERRT_BUILD_ONNX)
     include("${CMAKE_CURRENT_LIST_DIR}/ConfigONNXRuntime.cmake")
 endif()
 
-if(_inferrt_need_openvino)
+if(_inferrt_need_tensorrt AND INFERRT_BUILD_OPENVINO)
     include("${CMAKE_CURRENT_LIST_DIR}/ConfigOpenVINO.cmake")
 endif()
 
@@ -87,7 +102,9 @@ if(_inferrt_need_faiss)
     include("${CMAKE_CURRENT_LIST_DIR}/ConfigFaiss.cmake")
 endif()
 
-include("${CMAKE_CURRENT_LIST_DIR}/InferRTTargets.cmake")
+foreach(_inferrt_component IN LISTS _inferrt_load_components)
+    include("${CMAKE_CURRENT_LIST_DIR}/InferRT_${_inferrt_component}Targets.cmake")
+endforeach()
 
 foreach(_inferrt_component IN LISTS _inferrt_requested_components)
     if(TARGET InferRT::${_inferrt_component})
@@ -99,11 +116,12 @@ endforeach()
 check_required_components(InferRT)
 
 unset(_inferrt_component)
+unset(_inferrt_requested_component)
+unset(_inferrt_component_index)
+unset(_inferrt_available_components)
 unset(_inferrt_requested_components)
-unset(_inferrt_plain_package_request)
+unset(_inferrt_load_components)
 unset(_inferrt_need_cuda)
 unset(_inferrt_need_opencv)
 unset(_inferrt_need_tensorrt)
 unset(_inferrt_need_faiss)
-unset(_inferrt_need_onnx)
-unset(_inferrt_need_openvino)

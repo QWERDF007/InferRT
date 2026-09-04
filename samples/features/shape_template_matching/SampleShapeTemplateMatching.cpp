@@ -76,29 +76,10 @@ struct TimingArguments
 struct Arguments
 {
     Stage             stage{Stage::Train};
-    irt::features::ShapeTemplateMatcherVersion version{irt::features::ShapeTemplateMatcherVersion::V1};
     TrainingArguments training;
     MatchingArguments matching;
     TimingArguments   timing;
 };
-
-/** @brief 解析独立实现版本名称。 */
-irt::features::ShapeTemplateMatcherVersion parseMatcherVersion(const std::string &text)
-{
-    if (text == "v0")
-    {
-        return irt::features::ShapeTemplateMatcherVersion::V0;
-    }
-    if (text == "v1")
-    {
-        return irt::features::ShapeTemplateMatcherVersion::V1;
-    }
-    if (text == "v2")
-    {
-        return irt::features::ShapeTemplateMatcherVersion::V2;
-    }
-    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "--version must be v0, v1, or v2");
-}
 
 /**
  * @brief 从磁盘读取图像并在失败时抛出 InferRT 异常。
@@ -200,10 +181,6 @@ cxxopts::Options makeOptions(const char *program_name)
     options.add_options("Stage")("mode", "Stage to run: train or match (required)",
                                  cxxopts::value<std::string>()->default_value(""))("h,help", "Show help");
 
-    options.add_options("Implementation")(
-        "version", "Matcher implementation: v0 (scalar), v1 (AVX2), or v2 (AVX512F/BW)",
-        cxxopts::value<std::string>()->default_value("v1"));
-
     options.add_options("Timing")("warmup", "Warmup iterations for the selected stage; excluded from timing",
                                   cxxopts::value<int>()->default_value("3"))(
         "repeat", "Timed repetitions for the selected stage", cxxopts::value<int>()->default_value("10"));
@@ -231,21 +208,21 @@ cxxopts::Options makeOptions(const char *program_name)
         cxxopts::value<float>()->default_value("0"))(
         "template-scan-step", "Exact spatial scan step stored in the template file",
         cxxopts::value<int>()->default_value("1"))(
-        "train-parallelism", "v1/v2 training worker count; 0 chooses automatically, v0 always stays original serial",
+        "train-parallelism", "training worker count; 0 chooses automatically, 1 forces serial execution",
         cxxopts::value<int>()->default_value("0"))(
-        "gaussian-gradient", "v1 approximate preprocessing: apply 5x5 GaussianBlur before Sobel (default off)",
+        "gaussian-gradient", "optional preprocessing: apply 5x5 GaussianBlur before Sobel (default off)",
         cxxopts::value<bool>()->default_value("false")->implicit_value("true"))(
-        "orientation-histogram", "v1 approximate preprocessing: apply 3x3 orientation majority filter (default off)",
+        "orientation-histogram", "optional preprocessing: apply 3x3 orientation majority filter (default off)",
         cxxopts::value<bool>()->default_value("false")->implicit_value("true"))(
-        "edge-nms", "v1 approximate preprocessing: suppress non-maximum edge responses (default off)",
+        "edge-nms", "optional preprocessing: suppress non-maximum edge responses (default off)",
         cxxopts::value<bool>()->default_value("false")->implicit_value("true"))(
-        "edge-connectivity", "v1 approximate preprocessing: keep weak edges connected to strong seeds (default off)",
+        "edge-connectivity", "optional preprocessing: keep weak edges connected to strong seeds (default off)",
         cxxopts::value<bool>()->default_value("false")->implicit_value("true"))(
-        "polarity-invariant", "v1 approximate preprocessing: fold opposite gradient polarities (default off)",
+        "polarity-invariant", "optional preprocessing: fold opposite gradient polarities (default off)",
         cxxopts::value<bool>()->default_value("false")->implicit_value("true"))(
-        "spatial-spread", "v1 approximate preprocessing: spread labels to nearby weak pixels (default off)",
+        "spatial-spread", "optional preprocessing: spread labels to nearby weak pixels (default off)",
         cxxopts::value<bool>()->default_value("false")->implicit_value("true"))(
-        "reuse-base-features", "v1 approximate training: reuse base features for angle/scale variants (default off)",
+        "reuse-base-features", "optional training: reuse base features for angle/scale variants (default off)",
         cxxopts::value<bool>()->default_value("false")->implicit_value("true"))(
         "max-results", "Matching result limit saved in the template file; 0 means unlimited", cxxopts::value<int>()->default_value("0"))(
         "nms", "Matching NMS IoU threshold saved in the template file; negative disables NMS",
@@ -282,7 +259,6 @@ Arguments parseArguments(int argc, char *argv[])
     }
 
     Arguments args;
-    args.version       = parseMatcherVersion(result["version"].as<std::string>());
     args.timing.warmup = result["warmup"].as<int>();
     args.timing.repeat = result["repeat"].as<int>();
     if (args.timing.warmup < 0)
@@ -326,16 +302,6 @@ Arguments parseArguments(int argc, char *argv[])
         training.config.use_polarity_invariant = result["polarity-invariant"].as<bool>();
         training.config.use_spatial_spread = result["spatial-spread"].as<bool>();
         training.config.reuse_base_features_for_variants = result["reuse-base-features"].as<bool>();
-
-        if ((training.config.use_gaussian_gradient || training.config.use_orientation_histogram
-             || training.config.use_edge_nms || training.config.use_edge_connectivity
-             || training.config.use_polarity_invariant || training.config.use_spatial_spread
-             || training.config.reuse_base_features_for_variants)
-            && args.version != irt::features::ShapeTemplateMatcherVersion::V1)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "v1 approximate preprocessing/variant-reuse options require --version v1");
-        }
 
         // cxxopts 的 vector 值以逗号分隔，而 ROI 本身也使用逗号。保留字符串选项，
         // 再从原始参数顺序中收集每次出现的 --template-roi，避免将一个 ROI 拆成四项。
@@ -427,8 +393,7 @@ void drawMatches(cv::Mat &image, const std::vector<irt::features::ShapeTemplateM
 }
 
 /** @brief 执行模板训练、统计核心训练耗时并保存模板文件。 */
-void runTraining(const TrainingArguments &args, const TimingArguments &timing,
-                 irt::features::ShapeTemplateMatcherVersion version)
+void runTraining(const TrainingArguments &args, const TimingArguments &timing)
 {
     struct TemplateRoiInput
     {
@@ -506,7 +471,7 @@ void runTraining(const TrainingArguments &args, const TimingArguments &timing,
 
     for (int iteration = 0; iteration < timing.warmup; ++iteration)
     {
-        auto warmup_matcher = irt::features::createShapeTemplateMatcher(version, args.config);
+        auto warmup_matcher = irt::features::createShapeTemplateMatcher(args.config);
         (void)addAllTemplateVariants(*warmup_matcher);
     }
 
@@ -516,7 +481,7 @@ void runTraining(const TrainingArguments &args, const TimingArguments &timing,
     samples_ms.reserve(static_cast<size_t>(timing.repeat));
     for (int iteration = 0; iteration < timing.repeat; ++iteration)
     {
-        auto       matcher = irt::features::createShapeTemplateMatcher(version, args.config);
+        auto       matcher = irt::features::createShapeTemplateMatcher(args.config);
         const auto start   = std::chrono::steady_clock::now();
         auto ids = addAllTemplateVariants(*matcher);
         const auto stop = std::chrono::steady_clock::now();
@@ -532,7 +497,7 @@ void runTraining(const TrainingArguments &args, const TimingArguments &timing,
     trained_matcher->save(args.save_templates);
 
     std::cout << "stage: train" << std::endl;
-    std::cout << "version: " << irt::features::shapeTemplateMatcherVersionName(version) << std::endl;
+    std::cout << "implementation: automatic (CPU capability selected)" << std::endl;
     std::cout << "template input: " << fs::absolute(args.template_image).string() << std::endl;
     std::cout << "template rois: " << templates.size() << std::endl;
     for (size_t index = 0; index < templates.size(); ++index)
@@ -542,22 +507,16 @@ void runTraining(const TrainingArguments &args, const TimingArguments &timing,
                   << ")" << std::endl;
     }
     std::cout << "variants per roi: " << variants.size() << std::endl;
-    if (version == irt::features::ShapeTemplateMatcherVersion::V0)
+    if (args.config.max_training_parallelism == 0)
     {
-        std::cout << "training parallelism: 1 (v0 original serial path)" << std::endl;
-        std::cout << "training scheduler: per-roi original serial path" << std::endl;
-    }
-    else if (args.config.max_training_parallelism == 0)
-    {
-        std::cout << "training parallelism: auto (v1/v2 optimized path)" << std::endl;
+        std::cout << "training parallelism: auto" << std::endl;
         std::cout << "training scheduler: "
                   << (use_batch_training ? "global roi x variant task queue" : "single-input variant task queue")
                   << std::endl;
     }
     else
     {
-        std::cout << "training parallelism: " << args.config.max_training_parallelism
-                  << " (v1/v2 optimized path)" << std::endl;
+        std::cout << "training parallelism: " << args.config.max_training_parallelism << std::endl;
         std::cout << "training scheduler: "
                   << (use_batch_training ? "global roi x variant task queue" : "single-input variant task queue")
                   << std::endl;
@@ -578,10 +537,9 @@ void runTraining(const TrainingArguments &args, const TimingArguments &timing,
 }
 
 /** @brief 加载模板文件，统计匹配耗时并保存可视化结果。 */
-void runMatching(const MatchingArguments &args, const TimingArguments &timing,
-                 irt::features::ShapeTemplateMatcherVersion version)
+void runMatching(const MatchingArguments &args, const TimingArguments &timing)
 {
-    auto matcher = irt::features::createShapeTemplateMatcher(version);
+    auto matcher = irt::features::createShapeTemplateMatcher();
     matcher->load(args.load_templates);
 
     cv::Mat source = loadImage(args.source_image, cv::IMREAD_UNCHANGED, "source image");
@@ -625,7 +583,7 @@ void runMatching(const MatchingArguments &args, const TimingArguments &timing,
     }
 
     std::cout << "stage: match" << std::endl;
-    std::cout << "version: " << irt::features::shapeTemplateMatcherVersionName(version) << std::endl;
+    std::cout << "implementation: automatic (CPU capability selected)" << std::endl;
     std::cout << "templates: " << matcher->numTemplates() << std::endl;
     std::cout << "gaussian gradient: " << (matcher->config().use_gaussian_gradient ? "on" : "off") << std::endl;
     std::cout << "orientation histogram: " << (matcher->config().use_orientation_histogram ? "on" : "off") << std::endl;
@@ -666,11 +624,11 @@ int main(int argc, char *argv[])
         const auto args = parseArguments(argc, argv);
         if (args.stage == Stage::Train)
         {
-            runTraining(args.training, args.timing, args.version);
+            runTraining(args.training, args.timing);
         }
         else
         {
-            runMatching(args.matching, args.timing, args.version);
+            runMatching(args.matching, args.timing);
         }
         return 0;
     }

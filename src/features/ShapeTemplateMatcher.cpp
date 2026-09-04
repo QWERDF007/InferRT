@@ -1,25 +1,25 @@
 /**
  * @file ShapeTemplateMatcher.cpp
- * @brief v0 原始形状模板匹配器的公开入口。
+ * @brief 标量形状模板匹配内部适配器。
  */
 
 #include "priv/ShapeTemplateMatcherImpl.hpp"
 
-#include <inferrt/features/v0/ShapeTemplateMatcher.hpp>
+#include "priv/ShapeTemplateMatcherVariants.hpp"
 
 #include <memory>
 #include <utility>
 
-namespace irt::features::v0 {
+namespace irt::features::priv {
 
-ShapeTemplateMatcher::ShapeTemplateMatcher(ShapeTemplateMatcherConfig config)
-    : ::irt::features::detail::ShapeTemplateMatcherBase(
-          std::make_unique<detail::ShapeTemplateMatcherImpl>(std::move(config)))
+ScalarShapeTemplateMatcher::ScalarShapeTemplateMatcher(ShapeTemplateMatcherConfig config)
+    : ShapeTemplateMatcherAdapter(
+          std::make_unique<::irt::features::v0::detail::ShapeTemplateMatcherImpl>(std::move(config)))
 {
 }
 
-ShapeTemplateMatcher::~ShapeTemplateMatcher() = default;
-ShapeTemplateMatcher::ShapeTemplateMatcher(ShapeTemplateMatcher &&) noexcept = default;
-ShapeTemplateMatcher &ShapeTemplateMatcher::operator=(ShapeTemplateMatcher &&) noexcept = default;
+ScalarShapeTemplateMatcher::~ScalarShapeTemplateMatcher() = default;
+ScalarShapeTemplateMatcher::ScalarShapeTemplateMatcher(ScalarShapeTemplateMatcher &&) noexcept = default;
+ScalarShapeTemplateMatcher &ScalarShapeTemplateMatcher::operator=(ScalarShapeTemplateMatcher &&) noexcept = default;
 
-} // namespace irt::features::v0
+} // namespace irt::features::priv

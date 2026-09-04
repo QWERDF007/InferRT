@@ -27,7 +27,92 @@ jobs:
         run: cmake --build --preset core-only-release --parallel
 
       - name: Test
-        run: ctest --test-dir build/presets/core-only -C Release --output-on-failure
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/artifacts/core-only-linux"
+          ctest --test-dir build/presets/core-only -C Release --output-on-failure \
+            --no-tests=error \
+            --output-junit "$GITHUB_WORKSPACE/artifacts/core-only-linux/ctest.xml"
+          python tools/validate_test_report.py \
+            --report "$GITHUB_WORKSPACE/artifacts/core-only-linux/ctest.xml" \
+            --min-executed 4 \
+            --require-case inferrt_test_core \
+            --require-case inferrt_test_util \
+            --require-case inferrt_test_ops \
+            --require-case inferrt_package_relocation \
+            --json "$GITHUB_WORKSPACE/artifacts/core-only-linux/ctest-summary.json"
+
+      - name: Upload core-only evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-only-linux
+          path: artifacts/core-only-linux
+
+  cuda-linux:
+    name: Linux CUDA Release
+    runs-on: [self-hosted, Linux, X64, GPU]
+    env:
+      INFERRT_CUDA_ROOT: ${{ vars.INFERRT_LINUX_CUDA_ROOT }}
+      OpenCV_HOME: ${{ vars.INFERRT_LINUX_OPENCV_HOME }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Validate CUDA release environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${INFERRT_CUDA_ROOT:-}" && test -d "$INFERRT_CUDA_ROOT"
+          test -n "${OpenCV_HOME:-}" && test -d "$OpenCV_HOME"
+          command -v cmake
+          command -v nvcc
+          nvidia-smi
+
+      - name: Configure
+        run: cmake --preset cuda
+
+      - name: Build
+        run: cmake --build --preset cuda-release --parallel
+
+      - name: Test
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/artifacts/cuda-linux"
+          ctest --test-dir build/presets/cuda -C Release --output-on-failure \
+            --no-tests=error \
+            --output-junit "$GITHUB_WORKSPACE/artifacts/cuda-linux/ctest.xml"
+          python tools/validate_test_report.py \
+            --report "$GITHUB_WORKSPACE/artifacts/cuda-linux/ctest.xml" \
+            --min-executed 5 \
+            --require-case inferrt_test_core \
+            --require-case inferrt_test_util \
+            --require-case inferrt_test_ops \
+            --require-case inferrt_test_cvcuda \
+            --require-case inferrt_package_relocation \
+            --json "$GITHUB_WORKSPACE/artifacts/cuda-linux/ctest-summary.json"
+
+      - name: Run CUDA memory checker
+        shell: bash
+        run: |
+          set -euo pipefail
+          checker="$INFERRT_CUDA_ROOT/bin/compute-sanitizer"
+          test -x "$checker"
+          "$checker" \
+            --tool memcheck \
+            --error-exitcode=1 \
+            --target-processes all \
+            --log-file "$GITHUB_WORKSPACE/artifacts/cuda-linux/compute-sanitizer.log" \
+            "$GITHUB_WORKSPACE/build/presets/cuda/bin/inferrt_test_cvcuda"
+
+      - name: Upload CUDA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cuda-linux
+          path: artifacts/cuda-linux
 
   core-only-windows:
     name: Windows Core-Only Release
@@ -45,7 +130,27 @@ jobs:
         run: cmake --build --preset core-only-release --parallel
 
       - name: Test
-        run: ctest --test-dir build/presets/core-only -C Release --output-on-failure
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/core-only-windows | Out-Null
+          ctest --test-dir build/presets/core-only -C Release --output-on-failure `
+            --no-tests=error `
+            --output-junit "$env:GITHUB_WORKSPACE\artifacts\core-only-windows\ctest.xml"
+          python tools/validate_test_report.py `
+            --report "$env:GITHUB_WORKSPACE\artifacts\core-only-windows\ctest.xml" `
+            --min-executed 4 `
+            --require-case inferrt_test_core `
+            --require-case inferrt_test_util `
+            --require-case inferrt_test_ops `
+            --require-case inferrt_package_relocation `
+            --json "$env:GITHUB_WORKSPACE\artifacts\core-only-windows\ctest-summary.json"
+
+      - name: Upload core-only evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-only-windows
+          path: artifacts/core-only-windows
 
   install-downstream-windows:
     name: Windows Release Install and Relocation
@@ -63,9 +168,25 @@ jobs:
         run: cmake --build --preset core-only-release --parallel
 
       - name: Verify installed consumers and relocation
-        run: >
-          ctest --test-dir build/presets/core-only -C Release
-          --output-on-failure -R "^inferrt_package_relocation$"
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/install-downstream-windows | Out-Null
+          ctest --test-dir build/presets/core-only -C Release --output-on-failure `
+            --no-tests=error `
+            --output-junit "$env:GITHUB_WORKSPACE\artifacts\install-downstream-windows\ctest.xml" `
+            -R "^inferrt_package_relocation$"
+          python tools/validate_test_report.py `
+            --report "$env:GITHUB_WORKSPACE\artifacts\install-downstream-windows\ctest.xml" `
+            --min-executed 1 `
+            --require-case inferrt_package_relocation `
+            --json "$env:GITHUB_WORKSPACE\artifacts\install-downstream-windows\ctest-summary.json"
+
+      - name: Upload install evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-downstream-windows
+          path: artifacts/install-downstream-windows
 
   quality-and-sanitizer-linux:
     name: Linux Release Quality and Sanitizers
@@ -85,7 +206,19 @@ jobs:
         run: python -m pip install pytest PyYAML
 
       - name: Test build and release contracts
-        run: python -m pytest tests/tools -v --tb=short
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/artifacts/tools"
+          python -m pytest tests/tools -v --tb=short \
+            --junitxml=artifacts/tools/pytest.xml
+
+      - name: Validate tool test report
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/artifacts/tools"
+          python tools/validate_test_report.py \
+            --report "$GITHUB_WORKSPACE/artifacts/tools/pytest.xml" \
+            --min-executed 1 \
+            --allow-skip-regex "symbolic links are unavailable" \
+            --json "$GITHUB_WORKSPACE/artifacts/tools/pytest-summary.json"
 
       - name: Run source quality gates
         run: python tools/quality_gates.py --json quality-gates.json
@@ -107,9 +240,19 @@ jobs:
         run: cmake --build build/sanitizer --config Release --parallel
 
       - name: Test sanitized core-only Release
-        run: >
-          ctest --test-dir build/sanitizer -C Release --output-on-failure
-          --output-junit sanitizer-ctest.xml
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/artifacts/sanitizer"
+          ctest --test-dir build/sanitizer -C Release --output-on-failure \
+            --no-tests=error \
+            --output-junit "$GITHUB_WORKSPACE/artifacts/sanitizer/ctest.xml"
+          python tools/validate_test_report.py \
+            --report "$GITHUB_WORKSPACE/artifacts/sanitizer/ctest.xml" \
+            --min-executed 4 \
+            --require-case inferrt_test_core \
+            --require-case inferrt_test_util \
+            --require-case inferrt_test_ops \
+            --require-case inferrt_package_relocation \
+            --json "$GITHUB_WORKSPACE/artifacts/sanitizer/ctest-summary.json"
 
       - name: Upload quality and sanitizer evidence
         if: always()
@@ -118,7 +261,10 @@ jobs:
           name: quality-and-sanitizer-linux
           path: |
             quality-gates.json
-            build/sanitizer/sanitizer-ctest.xml
+            artifacts/tools/pytest.xml
+            artifacts/tools/pytest-summary.json
+            artifacts/sanitizer/ctest.xml
+            artifacts/sanitizer/ctest-summary.json
 
   full-release-gpu-windows:
     name: Windows Full Release GPU Gate
@@ -178,7 +324,7 @@ jobs:
         shell: pwsh
         run: |
           $pythonRoot = Split-Path -Parent $env:INFERRT_PYTHON_EXE
-          cmake --preset full "-DPython_ROOT_DIR=$pythonRoot"
+          cmake --preset full "-DPython_ROOT_DIR=$pythonRoot" "-DPython_EXECUTABLE=$env:INFERRT_PYTHON_EXE"
 
       - name: Build full Release
         run: cmake --build --preset full-release --parallel
@@ -195,9 +341,26 @@ jobs:
           --strict
 
       - name: Run full Release CTest
-        run: >
-          ctest --test-dir build/presets/full -C Release --output-on-failure
-          --output-junit artifacts/release-gate/ctest.xml
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/release-gate | Out-Null
+          ctest --test-dir build/presets/full -C Release --output-on-failure `
+            --no-tests=error `
+            --output-junit "$env:GITHUB_WORKSPACE\artifacts\release-gate\ctest.xml"
+          & $env:INFERRT_PYTHON_EXE tools/validate_test_report.py `
+            --report "$env:GITHUB_WORKSPACE\artifacts\release-gate\ctest.xml" `
+            --min-executed 9 `
+            --require-case inferrt_test_core `
+            --require-case inferrt_test_util `
+            --require-case inferrt_test_ops `
+            --require-case inferrt_test_cvcuda `
+            --require-case inferrt_test_model `
+            --require-case inferrt_test_engine `
+            --require-case inferrt_test_features `
+            --require-case inferrt_python_api `
+            --require-case inferrt_package_relocation `
+            --json "$env:GITHUB_WORKSPACE\artifacts\release-gate\ctest-summary.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run full backend and real-model Python gate
         shell: pwsh
@@ -211,6 +374,25 @@ jobs:
             --inferrt-compare-runtime=tensorrt,onnx,openvino `
             --inferrt-compare-devices=cpu,gpu `
             --inferrt-strict-skips
+
+      - name: Validate full Python test report
+        shell: pwsh
+        run: |
+          & $env:INFERRT_PYTHON_EXE tools/validate_test_report.py `
+            --report "$env:GITHUB_WORKSPACE\artifacts\release-gate\pytest.xml" `
+            --min-executed 1 `
+            --allow-skip-regex "backend (was|is) disabled" `
+            --allow-skip-regex "cross-check requires both backends" `
+            --allow-skip-regex "OpenVINO IR parity is disabled" `
+            --allow-skip-regex "LingBot-Vision (large|giant) checkpoint not found" `
+            --require-case "test_registered_models" `
+            --require-case "test_resnet18_dynamic_batch_infer_matches_pytorch" `
+            --require-case "test_model_root_checkpoints_export_and_match_pytorch" `
+            --require-case "test_dino_pybind_matches_pytorch_forward_and_features" `
+            --require-case "test_sam_v1_pybind_matches_official_pytorch_forward" `
+            --require-case "test_yolo_pybind_matches_ultralytics_forward[yolov8n]" `
+            --json "$env:GITHUB_WORKSPACE\artifacts\release-gate\pytest-summary.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run NMS and Engine benchmarks
         shell: pwsh

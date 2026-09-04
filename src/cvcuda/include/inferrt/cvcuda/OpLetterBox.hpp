@@ -8,6 +8,7 @@
 #include <inferrt/cvcuda/Export.h>
 #include <opencv2/opencv.hpp>
 
+#include <cstddef>
 #include <cstdint>
 
 namespace irt::cvcuda {
@@ -29,6 +30,11 @@ public:
 
     [[nodiscard]] IRTStatus operator()(const uint8_t *d_src, float *d_dst, cv::Size ssize, cv::Size dsize,
                                        const int CH, const irt::PreprocessSpec &spec,
+                                       cudaStream_t stream = nullptr);
+
+    /** Apply letterbox to a pitched HWC source buffer. Zero selects packed stride. */
+    [[nodiscard]] IRTStatus operator()(const uint8_t *d_src, float *d_dst, cv::Size ssize, cv::Size dsize,
+                                       const int CH, const irt::PreprocessSpec &spec, std::size_t source_stride_bytes,
                                        cudaStream_t stream = nullptr);
 
     virtual OperatorHandle handle() const noexcept override

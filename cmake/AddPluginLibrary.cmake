@@ -11,6 +11,7 @@ function(add_plugin_library PLUGIN_NAME)
     cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
     
     set(TARGET_NAME "${PROJECT_NAME_LOWER}_${PLUGIN_NAME}")
+    set(TARGET_EXPORT_SET "${PROJECT_NAME}_${PLUGIN_NAME}Targets")
 
     # 获取所有源文件的相对路径
     file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.cpp *.cu)
@@ -93,12 +94,18 @@ function(add_plugin_library PLUGIN_NAME)
         DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/${PROJECT_NAME_LOWER}/${PLUGIN_NAME}/ 
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${PROJECT_NAME_LOWER}/${PLUGIN_NAME} # e.g. <install-prefix>/include/inferrt/cvcuda
         COMPONENT dev
+        FILES_MATCHING
+            PATTERN "*.h"
+            PATTERN "*.hh"
+            PATTERN "*.hpp"
+            PATTERN "*.hxx"
+            PATTERN "*.cuh"
         PATTERN "detail" EXCLUDE
     )
 
     install(
         TARGETS ${TARGET_NAME}
-        EXPORT ${PROJECT_NAME}Targets
+        EXPORT ${TARGET_EXPORT_SET}
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

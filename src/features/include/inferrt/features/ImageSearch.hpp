@@ -90,7 +90,7 @@ inline const char *imageSearchBuildStageName(ImageSearchBuildStage stage) noexce
 enum class ImageSearchPreprocessBackend
 {
     CPU, ///< 使用 OpenCV 与 CPU 完成图像预处理。
-    GPU, ///< 预留 GPU 预处理配置；当前尚未实现。
+    GPU, ///< 使用 CVCUDA 在设备端完成图像预处理。
 };
 
 /**

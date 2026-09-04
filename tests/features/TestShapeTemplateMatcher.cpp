@@ -7,9 +7,8 @@
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/core/Status.h>
 #include <inferrt/features/ShapeTemplateMatcher.hpp>
-#include <inferrt/features/v0/ShapeTemplateMatcher.hpp>
-#include <inferrt/features/v1/ShapeTemplateMatcherFast.hpp>
-#include <inferrt/features/v2/ShapeTemplateMatcherAvx512.hpp>
+
+#include "ShapeTemplateMatcherFactory.hpp"
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -29,9 +28,80 @@ namespace fs = std::filesystem;
 
 namespace {
 
-using V0ShapeTemplateMatcher = irt::features::v0::ShapeTemplateMatcher;
-using V1ShapeTemplateMatcher = irt::features::v1::ShapeTemplateMatcherFast;
-using V2ShapeTemplateMatcher = irt::features::v2::ShapeTemplateMatcherAvx512;
+template<irt::features::priv::ShapeTemplateMatcherImplementation Implementation>
+class TestShapeTemplateMatcher final : public irt::features::IShapeTemplateMatcher
+{
+public:
+    explicit TestShapeTemplateMatcher(irt::features::ShapeTemplateMatcherConfig config = {})
+        : implementation_(irt::features::priv::createShapeTemplateMatcherForImplementation(Implementation,
+                                                                                             std::move(config)))
+    {
+    }
+
+    int addTemplate(const cv::Mat &image, const cv::Mat &object_mask = cv::Mat(),
+                    irt::features::ShapeTemplateVariant variant = {}) override
+    {
+        return implementation_->addTemplate(image, object_mask, variant);
+    }
+
+    int addTemplateFile(const std::filesystem::path &image_file, const std::filesystem::path &mask_file = {},
+                        irt::features::ShapeTemplateVariant variant = {}) override
+    {
+        return implementation_->addTemplateFile(image_file, mask_file, variant);
+    }
+
+    std::vector<int> addTemplateVariants(const cv::Mat &image, const cv::Mat &object_mask,
+                                         const std::vector<irt::features::ShapeTemplateVariant> &variants) override
+    {
+        return implementation_->addTemplateVariants(image, object_mask, variants);
+    }
+
+    std::vector<std::vector<int>>
+    addTemplateVariantsBatch(const std::vector<irt::features::ShapeTemplateTrainingInput> &inputs,
+                             const std::vector<irt::features::ShapeTemplateVariant> &variants) override
+    {
+        return implementation_->addTemplateVariantsBatch(inputs, variants);
+    }
+
+    std::vector<irt::features::ShapeTemplateMatch>
+    match(const cv::Mat &image, float threshold = -1.0f, const cv::Mat &search_mask = cv::Mat(),
+          irt::features::ShapeTemplateMatchOptions options = {}) const override
+    {
+        return implementation_->match(image, threshold, search_mask, options);
+    }
+
+    std::vector<irt::features::ShapeTemplateMatch>
+    matchFile(const std::filesystem::path &image_file, float threshold = -1.0f,
+              const std::filesystem::path &mask_file = {},
+              irt::features::ShapeTemplateMatchOptions options = {}) const override
+    {
+        return implementation_->matchFile(image_file, threshold, mask_file, options);
+    }
+
+    void clear() override { implementation_->clear(); }
+    bool empty() const noexcept override { return implementation_->empty(); }
+    int numTemplates() const noexcept override { return implementation_->numTemplates(); }
+    const irt::features::ShapeTemplateInfo &getTemplate(int template_id) const override
+    {
+        return implementation_->getTemplate(template_id);
+    }
+    const irt::features::ShapeTemplateMatcherConfig &config() const noexcept override
+    {
+        return implementation_->config();
+    }
+    void save(const std::filesystem::path &template_file) const override { implementation_->save(template_file); }
+    void load(const std::filesystem::path &template_file) override { implementation_->load(template_file); }
+
+private:
+    std::unique_ptr<irt::features::IShapeTemplateMatcher> implementation_;
+};
+
+using V0ShapeTemplateMatcher =
+    TestShapeTemplateMatcher<irt::features::priv::ShapeTemplateMatcherImplementation::Scalar>;
+using V1ShapeTemplateMatcher =
+    TestShapeTemplateMatcher<irt::features::priv::ShapeTemplateMatcherImplementation::Avx2>;
+using V2ShapeTemplateMatcher =
+    TestShapeTemplateMatcher<irt::features::priv::ShapeTemplateMatcherImplementation::Avx512>;
 
 /** @brief 当前 CPU 是否具备 v2 执行所需的 AVX512F/BW 指令集。 */
 bool supportsAvx512() noexcept
@@ -183,24 +253,32 @@ TEST(ShapeTemplateMatcherTest, DefaultConstructsEmptyMatcher)
     EXPECT_FLOAT_EQ(matcher.config().match_threshold, irt::features::kDefaultShapeTemplateMatchThreshold);
 }
 
-/** @brief 版本工厂应创建所有运行环境支持的独立实现。 */
-TEST(ShapeTemplateMatcherVersionTest, FactoryCreatesSupportedVersions)
+/** @brief 公共工厂应自动选择可执行实现，内部工厂供 parity 测试固定算法。 */
+TEST(ShapeTemplateMatcherFactoryTest, SelectsSupportedImplementation)
 {
-    auto v0 = irt::features::createShapeTemplateMatcher(irt::features::ShapeTemplateMatcherVersion::V0, fastConfig());
-    auto v1 = irt::features::createShapeTemplateMatcher(irt::features::ShapeTemplateMatcherVersion::V1, fastConfig());
+    auto automatic = irt::features::createShapeTemplateMatcher(fastConfig());
+    auto scalar    = irt::features::priv::createShapeTemplateMatcherForImplementation(
+        irt::features::priv::ShapeTemplateMatcherImplementation::Scalar, fastConfig());
+    auto avx2 = irt::features::priv::createShapeTemplateMatcherForImplementation(
+        irt::features::priv::ShapeTemplateMatcherImplementation::Avx2, fastConfig());
 
-    ASSERT_NE(v0, nullptr);
-    ASSERT_NE(v1, nullptr);
-    EXPECT_TRUE(v0->empty());
-    EXPECT_TRUE(v1->empty());
-    EXPECT_STREQ(irt::features::shapeTemplateMatcherVersionName(irt::features::ShapeTemplateMatcherVersion::V0), "v0");
-    EXPECT_STREQ(irt::features::shapeTemplateMatcherVersionName(irt::features::ShapeTemplateMatcherVersion::V1), "v1");
-    EXPECT_STREQ(irt::features::shapeTemplateMatcherVersionName(irt::features::ShapeTemplateMatcherVersion::V2), "v2");
+    ASSERT_NE(automatic, nullptr);
+    ASSERT_NE(scalar, nullptr);
+    ASSERT_NE(avx2, nullptr);
+    EXPECT_TRUE(automatic->empty());
+    EXPECT_TRUE(scalar->empty());
+    EXPECT_TRUE(avx2->empty());
+    EXPECT_STREQ(irt::features::priv::shapeTemplateMatcherImplementationName(
+                     irt::features::priv::ShapeTemplateMatcherImplementation::Scalar),
+                 "scalar");
+    EXPECT_STREQ(irt::features::priv::shapeTemplateMatcherImplementationName(
+                     irt::features::priv::ShapeTemplateMatcherImplementation::Avx2),
+                 "avx2");
 
     if (supportsAvx512())
     {
-        auto v2 = irt::features::createShapeTemplateMatcher(irt::features::ShapeTemplateMatcherVersion::V2,
-                                                             fastConfig());
+        auto v2 = irt::features::priv::createShapeTemplateMatcherForImplementation(
+            irt::features::priv::ShapeTemplateMatcherImplementation::Avx512, fastConfig());
         ASSERT_NE(v2, nullptr);
         EXPECT_TRUE(v2->empty());
     }
@@ -209,8 +287,8 @@ TEST(ShapeTemplateMatcherVersionTest, FactoryCreatesSupportedVersions)
         expectIrtExceptionCode(
             []
             {
-                (void)irt::features::createShapeTemplateMatcher(irt::features::ShapeTemplateMatcherVersion::V2,
-                                                                 fastConfig());
+                (void)irt::features::priv::createShapeTemplateMatcherForImplementation(
+                    irt::features::priv::ShapeTemplateMatcherImplementation::Avx512, fastConfig());
             },
             irt::Status::INVALID_OPERATION);
     }

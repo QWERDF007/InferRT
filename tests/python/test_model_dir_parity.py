@@ -17,6 +17,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
 from helpers.manifest import assert_tensors_close
 from helpers.model_integration import conversion_artifact_dir, is_fresh_against_all
+from helpers.runtime import available_runtime_device_pairs
 
 
 CHECKPOINT_EXTENSIONS = {".pt", ".pth", ".safetensors"}
@@ -973,27 +974,6 @@ def _runtime_spec(runtime_attr: str, device_attr: str) -> str:
     return f"{_runtime_label(runtime_attr)}:{device}"
 
 
-def _runtime_device_pairs(compare_runtimes: list[str], compare_devices: list[str]) -> list[tuple[str, str]]:
-    """根据 runtime 和 device 参数生成有效的后端/设备组合。
-
-    Args:
-        compare_runtimes: 用户选择的后端列表。
-        compare_devices: 用户选择的设备列表。
-
-    Returns:
-        ``(后端枚举名, 设备名)`` 组合列表。
-    """
-
-    pairs: list[tuple[str, str]] = []
-    for runtime_attr in compare_runtimes:
-        if runtime_attr == "TENSORRT":
-            if "gpu" in compare_devices:
-                pairs.append((runtime_attr, "gpu"))
-            continue
-        pairs.extend((runtime_attr, device) for device in compare_devices)
-    return pairs
-
-
 def _primary_output_tolerances(
     case: ModelDirCase,
     backend_attr: str,
@@ -1061,7 +1041,7 @@ def test_model_root_checkpoints_export_and_match_pytorch(
 
     if not compare_runtimes:
         pytest.skip("No runtimes selected; pass --inferrt-compare-runtime=TensorRT,onnx,openvino")
-    runtime_device_pairs = _runtime_device_pairs(compare_runtimes, compare_devices)
+    runtime_device_pairs = available_runtime_device_pairs(irt_module, compare_runtimes, compare_devices)
     if not runtime_device_pairs:
         pytest.skip("No compatible runtime/device pairs selected; TensorRT requires --inferrt-compare-devices=gpu")
 

@@ -195,7 +195,7 @@ struct Shape
     {
         if (dims.empty())
         {
-            return 0;
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Shape must not be empty");
         }
         size_t total = 1;
         for (const auto d : dims)

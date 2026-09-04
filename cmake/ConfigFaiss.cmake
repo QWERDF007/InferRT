@@ -2,49 +2,43 @@ include("${CMAKE_CURRENT_LIST_DIR}/ConfigDependencyDefaults.cmake")
 
 set(Faiss_VERSION "1.7.4" CACHE STRING "Faiss version")
 
-if(NOT DEFINED Faiss_HOME OR Faiss_HOME STREQUAL "")
-    set(_faiss_root_hint)
-    if(DEFINED Faiss_ROOT AND NOT Faiss_ROOT STREQUAL "")
-        set(_faiss_root_hint "${Faiss_ROOT}")
-    else()
-        foreach(_faiss_root_environment IN ITEMS Faiss_HOME Faiss_ROOT FAISS_ROOT)
-            if(DEFINED ENV{${_faiss_root_environment}} AND NOT "$ENV{${_faiss_root_environment}}" STREQUAL "")
-                set(_faiss_root_hint "$ENV{${_faiss_root_environment}}")
-                break()
-            endif()
-        endforeach()
-    endif()
+# Prefer a native Faiss package when one is available.  Different Faiss
+# distributions use different package/target spellings, so normalize them to
+# the target name exported by InferRT before falling back to root discovery.
+find_package(Faiss CONFIG QUIET)
+find_package(faiss CONFIG QUIET)
 
-    if(_faiss_root_hint)
-        set(Faiss_HOME "${_faiss_root_hint}" CACHE PATH
-            "Faiss installation directory")
-    else()
-        find_path(_faiss_include_dir
-            NAMES faiss/Index.h
-            HINTS ${CMAKE_PREFIX_PATH}
-            PATH_SUFFIXES include)
-        if(_faiss_include_dir)
-            get_filename_component(_faiss_detected_home "${_faiss_include_dir}" DIRECTORY)
-            set(Faiss_HOME "${_faiss_detected_home}" CACHE PATH
-                "Faiss installation directory")
-        endif()
+if(NOT TARGET Faiss::faiss)
+    if(TARGET faiss::faiss)
+        add_library(Faiss::faiss ALIAS faiss::faiss)
+    elseif(TARGET faiss)
+        add_library(Faiss::faiss ALIAS faiss)
     endif()
+endif()
 
-    if(NOT DEFINED Faiss_HOME OR Faiss_HOME STREQUAL "")
-        if(WIN32)
-            inferrt_dependency_default(faiss _faiss_default_root)
-            if(_faiss_default_root)
-                set(Faiss_HOME "${_faiss_default_root}" CACHE PATH
-                    "Faiss installation directory")
-            endif()
-        endif()
+if(TARGET Faiss::faiss)
+    get_target_property(_faiss_interface_includes Faiss::faiss INTERFACE_INCLUDE_DIRECTORIES)
+    if(_faiss_interface_includes AND NOT Faiss_INCLUDE_DIRS)
+        set(Faiss_INCLUDE_DIRS "${_faiss_interface_includes}")
     endif()
+    set(Faiss_LIBS Faiss::faiss)
+    set(Faiss_FOUND TRUE)
+    unset(_faiss_interface_includes)
+    return()
+endif()
 
-    unset(_faiss_detected_home)
-    unset(_faiss_include_dir CACHE)
-    unset(_faiss_include_dir)
-    unset(_faiss_root_hint)
-    unset(_faiss_default_root)
+inferrt_dependency_resolve_path(
+    _faiss_resolved_root _faiss_resolved_origin faiss
+    VARIABLES Faiss_HOME Faiss_ROOT
+    ENVIRONMENT_VARIABLES Faiss_HOME Faiss_ROOT FAISS_ROOT
+    PREFIX_PATHS ${CMAKE_PREFIX_PATH}
+    REQUIRED_FILES include/faiss/Index.h
+)
+if(_faiss_resolved_root)
+    inferrt_dependency_cache_set(
+        Faiss_HOME "${_faiss_resolved_root}" PATH
+        "Faiss installation directory"
+        INFERRT_DEPENDENCY_FAISS_HOME "${_faiss_resolved_origin}")
 endif()
 
 if(DEFINED Faiss_HOME)
@@ -53,19 +47,26 @@ if(DEFINED Faiss_HOME)
     set(Faiss_BIN_DIR "${Faiss_HOME}/bin")
 endif()
 
-if(NOT DEFINED MKL_ROOT)
-    if(DEFINED ENV{MKL_ROOT})
-        set(MKL_ROOT "$ENV{MKL_ROOT}" CACHE PATH "Intel MKL installation root")
-    elseif(DEFINED MKLROOT)
-        set(MKL_ROOT "${MKLROOT}" CACHE PATH "Intel MKL installation root")
-    elseif(DEFINED ENV{MKLROOT})
-        set(MKL_ROOT "$ENV{MKLROOT}" CACHE PATH "Intel MKL installation root")
-    endif()
+inferrt_dependency_resolve_path(
+    _inferrt_mkl_root _inferrt_mkl_origin faiss-mkl-runtime
+    VARIABLES MKL_ROOT MKLROOT
+    ENVIRONMENT_VARIABLES MKL_ROOT MKLROOT
+)
+if(_inferrt_mkl_root)
+    inferrt_dependency_cache_set(
+        MKL_ROOT "${_inferrt_mkl_root}" PATH
+        "Intel MKL installation root"
+        INFERRT_DEPENDENCY_MKL_ROOT "${_inferrt_mkl_origin}")
 endif()
 
 if(DEFINED MKL_ROOT)
     set(MKL_LIBRARY_DIR "${MKL_ROOT}/lib")
 endif()
+
+unset(_inferrt_mkl_root)
+unset(_inferrt_mkl_origin)
+unset(_faiss_resolved_root)
+unset(_faiss_resolved_origin)
 
 find_library(Faiss_LIB_RELEASE faiss HINTS ${Faiss_LIBRARY_DIR} PATH_SUFFIXES lib lib64)
 find_library(Faiss_LIB_DEBUG faissd HINTS ${Faiss_LIBRARY_DIR} PATH_SUFFIXES lib lib64)
@@ -142,8 +143,11 @@ if(NOT TARGET Faiss::faiss)
             INTERFACE_INCLUDE_DIRECTORIES "${Faiss_INCLUDE_DIRS}")
     endif()
 endif()
-if(Faiss_LIBS AND Faiss_INCLUDE_DIRS)
-    set(Faiss_FOUND TRUE)
-else()
+if(NOT Faiss_LIBS OR NOT Faiss_INCLUDE_DIRS)
     set(Faiss_FOUND FALSE)
+    message(FATAL_ERROR
+            "Faiss is required by InferRT::features but was not found. "
+            "Install Faiss and add its prefix to CMAKE_PREFIX_PATH, or set Faiss_HOME.")
+else()
+    set(Faiss_FOUND TRUE)
 endif()

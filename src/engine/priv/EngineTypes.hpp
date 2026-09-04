@@ -214,6 +214,11 @@ enum class FailureKind
     Dropped,
 };
 
+inline std::exception_ptr failedError()
+{
+    return std::make_exception_ptr(irt::Exception(irt::Status::INVALID_OPERATION, "Inference engine failed"));
+}
+
 struct Request
 {
     uint64_t                              id{0};
@@ -315,7 +320,7 @@ struct Slot
     }
 
     int                                              device_id;
-    std::shared_ptr<priv::IEngineRuntimePlan>        runtime_plan;
+    std::shared_ptr<irt::IExecutionPlan>             runtime_plan;
     std::unique_ptr<irt::ITensorRuntimeSession>      context;
     std::vector<std::pair<std::string, std::string>> model_inputs;
     std::vector<irt::TensorInfo>                      output_infos;

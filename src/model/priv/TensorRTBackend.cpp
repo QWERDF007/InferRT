@@ -446,6 +446,30 @@ void bindTensorAddresses(nvinfer1::IExecutionContext &context, const nvinfer1::I
     }
 }
 
+void executeTensorRT(nvinfer1::IExecutionContext &context, const nvinfer1::ICudaEngine &engine,
+                     std::span<const irt::BufferView> buffers, const std::uintptr_t stream, const bool non_blocking,
+                     const bool feature_only, const int device_id)
+{
+    setCudaDevice(device_id);
+    bindTensorAddresses(context, engine, buffers, feature_only);
+
+    const auto cuda_stream = reinterpret_cast<cudaStream_t>(stream);
+    if (!context.enqueueV3(cuda_stream))
+    {
+        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to execute TensorRT enqueue");
+    }
+
+    if (!non_blocking)
+    {
+        const auto status = cudaStreamSynchronize(cuda_stream);
+        if (status != cudaSuccess)
+        {
+            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to synchronize CUDA stream: %s",
+                                 cudaGetErrorString(status));
+        }
+    }
+}
+
 class TensorRTSession final : public irt::ITensorRuntimeSession
 {
 public:
@@ -499,22 +523,7 @@ public:
 
     void execute(std::span<const irt::BufferView> buffers, irt::ExecuteOptions options) override
     {
-        setCudaDevice(device_id_);
-        bindTensorAddresses(*context_, *engine_, buffers, false);
-        const auto stream = reinterpret_cast<cudaStream_t>(options.stream);
-        if (!context_->enqueueV3(stream))
-        {
-            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to execute TensorRT enqueue");
-        }
-        if (!options.non_blocking)
-        {
-            const auto status = cudaStreamSynchronize(stream);
-            if (status != cudaSuccess)
-            {
-                throw irt::Exception(Status::ERROR_INTERNAL, "Failed to synchronize CUDA stream: %s",
-                                     cudaGetErrorString(status));
-            }
-        }
+        executeTensorRT(*context_, *engine_, buffers, options.stream, options.non_blocking, false, device_id_);
     }
 
 private:
@@ -540,57 +549,9 @@ void TensorRTBackend::load(const std::string &engine_file, const IModelConfig &c
     auto new_logger = ResolveLogger(params_, model_name);
     LOG_INFO(*new_logger) << "Loading TensorRT engine from: " << engine_file << std::endl;
 
-    std::ifstream file(engine_file, std::ios::binary);
-    if (!file.is_open())
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Failed to open engine file: %s", engine_file.c_str());
-    }
-
-    file.seekg(0, std::ios::end);
-    const auto file_size = file.tellg();
-    if (file_size <= 0
-        || static_cast<std::uintmax_t>(file_size) > static_cast<std::uintmax_t>((std::numeric_limits<size_t>::max)())
-        || static_cast<std::uintmax_t>(file_size)
-               > static_cast<std::uintmax_t>((std::numeric_limits<std::streamsize>::max)()))
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "TensorRT engine file is empty or too large: %s",
-                             engine_file.c_str());
-    }
-    file.seekg(0, std::ios::beg);
-    if (!file)
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Failed to seek engine file: %s", engine_file.c_str());
-    }
-
-    const auto byte_count = static_cast<size_t>(file_size);
-    std::vector<char> engine_data(byte_count);
-    file.read(engine_data.data(), static_cast<std::streamsize>(byte_count));
-    if (file.gcount() != static_cast<std::streamsize>(byte_count))
-    {
-        throw irt::Exception(Status::ERROR_INVALID_ARGUMENT, "Failed to read TensorRT engine file: %s",
-                             engine_file.c_str());
-    }
-    file.close();
-
-    auto runtime = std::unique_ptr<nvinfer1::IRuntime>(nvinfer1::createInferRuntime(*new_logger));
-    if (!runtime)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create InferRuntime");
-    }
-
-    auto new_engine
-        = std::shared_ptr<nvinfer1::ICudaEngine>(runtime->deserializeCudaEngine(engine_data.data(), byte_count),
-                                                 [](nvinfer1::ICudaEngine *engine) { delete engine; });
-    if (!new_engine)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to deserialize CUDA engine");
-    }
-
-    auto new_context = std::unique_ptr<nvinfer1::IExecutionContext>(new_engine->createExecutionContext());
-    if (!new_context)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create execution context");
-    }
+    const auto engine_data = readBinaryFile(engine_file);
+    auto       new_engine  = deserializeCudaEngine(engine_data.data(), engine_data.size(), *new_logger);
+    auto       new_context = createTensorRTExecutionContext(new_engine);
 
     SetConfiguredInputShapes(*new_engine, *new_context, config);
 
@@ -708,31 +669,16 @@ void TensorRTBackend::setTensorShape(const std::string &tensor_name, const irt::
     }
 }
 
-void TensorRTBackend::execute(std::span<const irt::BufferView> buffers, irt::ExecuteOptions options)
+void TensorRTBackend::executeNormalized(std::span<const irt::BufferView> buffers, irt::ExecuteOptions options)
 {
-    setCudaDevice(device_id_);
     if (!params_.context)
     {
         throw irt::Exception(Status::INVALID_OPERATION, "Execution context is not initialized");
     }
-    bindTensorAddresses(*params_.context, *params_.engine, buffers, params_.feature_only);
 
     const auto stream = resolveExecutionStream(options.stream);
-    options.stream    = stream;
-    if (!params_.context->enqueueV3(reinterpret_cast<cudaStream_t>(stream)))
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to execute TensorRT enqueue");
-    }
-
-    if (!options.non_blocking)
-    {
-        const auto status = cudaStreamSynchronize(reinterpret_cast<cudaStream_t>(stream));
-        if (status != cudaSuccess)
-        {
-            throw irt::Exception(Status::ERROR_INTERNAL, "Failed to synchronize CUDA stream: %s",
-                                 cudaGetErrorString(status));
-        }
-    }
+    executeTensorRT(*params_.context, *params_.engine, buffers, stream, options.non_blocking, params_.feature_only,
+                    device_id_);
 }
 
 std::unique_ptr<irt::ITensorRuntimeSession> TensorRTBackend::createSession() const
@@ -741,11 +687,7 @@ std::unique_ptr<irt::ITensorRuntimeSession> TensorRTBackend::createSession() con
     {
         throw irt::Exception(Status::INVALID_OPERATION, "Engine is not initialized");
     }
-    auto context = std::unique_ptr<nvinfer1::IExecutionContext>(params_.engine->createExecutionContext());
-    if (!context)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create TensorRT execution context");
-    }
+    auto context = createTensorRTExecutionContext(params_.engine);
     return std::make_unique<TensorRTSession>(params_.engine, std::move(context), device_id_);
 }
 
@@ -876,24 +818,8 @@ void TensorRTBackend::buildFromNetwork(const std::string &source_file, const std
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to build serialized network");
     }
 
-    auto runtime = std::unique_ptr<IRuntime>(nvinfer1::createInferRuntime(*new_logger));
-    if (!runtime)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create InferRuntime");
-    }
-
-    auto new_engine = std::shared_ptr<ICudaEngine>(runtime->deserializeCudaEngine(buffer->data(), buffer->size()),
-                                                   [](ICudaEngine *engine) { delete engine; });
-    if (!new_engine)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to deserialize CUDA engine");
-    }
-
-    auto new_context = std::unique_ptr<IExecutionContext>(new_engine->createExecutionContext());
-    if (!new_context)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create execution context");
-    }
+    auto new_engine  = deserializeCudaEngine(buffer->data(), buffer->size(), *new_logger);
+    auto new_context = createTensorRTExecutionContext(new_engine);
 
     SetConfiguredInputShapes(*new_engine, *new_context, model_config);
 

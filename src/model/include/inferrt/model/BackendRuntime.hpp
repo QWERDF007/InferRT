@@ -21,7 +21,7 @@ namespace irt::model {
  * concrete adapters remain private to the model library while Engine uses
  * this installed contract to load and execute a backend plan.
  */
-class INFERRT_MODEL_API IBackendRuntime : public irt::IExecutableModel, public irt::IExecutionPlan
+class INFERRT_MODEL_API IBackendRuntime : public irt::IExecutableModel
 {
 public:
     virtual ~IBackendRuntime() = default;
@@ -29,6 +29,7 @@ public:
     /** Describe backend I/O through the shared core execution contract. */
     std::vector<irt::TensorInfo> inputs() const override;
     std::vector<irt::TensorInfo> outputs() const override;
+    irt::ExecutionCapabilities capabilities() const override;
 
     /** Return the selected backend. */
     virtual ModelRuntime::Backend backend() const noexcept = 0;
@@ -61,9 +62,14 @@ public:
     /** Core contract spelling for setting an input shape. */
     void setInputShape(const std::string &tensor_name, irt::Shape shape) override;
 
-    /** Execute through the backend's direct model path. */
-    virtual void execute(std::span<const irt::BufferView> buffers,
-                         irt::ExecuteOptions options = {}) override = 0;
+    /**
+     * Execute through the backend's direct model path.
+     *
+     * This entry point is the single binding boundary for direct execution:
+     * it validates and canonicalizes named buffers before dispatching to the
+     * backend adapter.
+     */
+    void execute(std::span<const irt::BufferView> buffers, irt::ExecuteOptions options = {}) final override;
 
     /** Create an isolated session for a concurrent consumer. */
     virtual std::unique_ptr<irt::ITensorRuntimeSession> createSession() const;
@@ -88,6 +94,10 @@ public:
     virtual void setLogLevel(LogLevel level);
 
 protected:
+    /** Execute a buffer set already canonicalized by execute(). */
+    virtual void executeNormalized(std::span<const irt::BufferView> buffers,
+                                   irt::ExecuteOptions options) = 0;
+
     LogLevel         log_level_{LogLevel::Warning};
     std::uintptr_t   external_stream_{0};
 };

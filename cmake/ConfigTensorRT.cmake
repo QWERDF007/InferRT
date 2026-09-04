@@ -5,23 +5,20 @@ include("${CMAKE_CURRENT_LIST_DIR}/ConfigDependencyDefaults.cmake")
 
 set(_inferrt_tensorrt_using_default_root OFF)
 
-if(NOT DEFINED TRT_ROOT OR TRT_ROOT STREQUAL "")
-    if(DEFINED TensorRT_ROOT AND NOT TensorRT_ROOT STREQUAL "")
-        set(TRT_ROOT "${TensorRT_ROOT}" CACHE PATH "TensorRT installation directory")
-    elseif(DEFINED ENV{TRT_ROOT} AND NOT "$ENV{TRT_ROOT}" STREQUAL "")
-        set(TRT_ROOT "$ENV{TRT_ROOT}" CACHE PATH "TensorRT installation directory")
-    elseif(DEFINED ENV{TensorRT_ROOT} AND NOT "$ENV{TensorRT_ROOT}" STREQUAL "")
-        set(TRT_ROOT "$ENV{TensorRT_ROOT}" CACHE PATH "TensorRT installation directory")
-    elseif(WIN32)
-        inferrt_dependency_default(tensorrt _inferrt_tensorrt_default_root)
-        if(_inferrt_tensorrt_default_root)
-            set(INFERRT_TENSORRT_DEFAULT_ROOT "${_inferrt_tensorrt_default_root}")
-            if(NOT CMAKE_PREFIX_PATH)
-                set(TRT_ROOT "${_inferrt_tensorrt_default_root}" CACHE PATH
-                    "TensorRT installation directory")
-                set(_inferrt_tensorrt_using_default_root ON)
-            endif()
-        endif()
+inferrt_dependency_resolve_path(
+    _inferrt_tensorrt_root _inferrt_tensorrt_origin tensorrt
+    VARIABLES TRT_ROOT TensorRT_ROOT
+    ENVIRONMENT_VARIABLES TRT_ROOT TensorRT_ROOT TENSORRT_ROOT
+    PREFIX_PATHS ${CMAKE_PREFIX_PATH}
+    REQUIRED_FILES include/NvInfer.h
+)
+if(_inferrt_tensorrt_root)
+    inferrt_dependency_cache_set(
+        TRT_ROOT "${_inferrt_tensorrt_root}" PATH
+        "TensorRT installation directory"
+        INFERRT_DEPENDENCY_TRT_ROOT "${_inferrt_tensorrt_origin}")
+    if(_inferrt_tensorrt_origin STREQUAL "project-default")
+        set(_inferrt_tensorrt_using_default_root ON)
     endif()
 endif()
 
@@ -38,5 +35,6 @@ if(TRT_ROOT)
 endif()
 
 unset(_inferrt_tensorrt_using_default_root)
-unset(_inferrt_tensorrt_default_root)
+unset(_inferrt_tensorrt_root)
+unset(_inferrt_tensorrt_origin)
 unset(INFERRT_TENSORRT_DEFAULT_ROOT)

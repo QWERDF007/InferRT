@@ -52,7 +52,7 @@ Use `--rebuild-index` when the gallery directory has changed and you want to inc
 - `--feature`: selects the feature tensor name used for retrieval, default is `layer4`
 - `--runtime`: combines the feature extraction backend and device, for example `tensorrt:0`, `onnxruntime:cpu`, `onnxruntime:0`, or `openvino:cpu`; shorthand `cpu`, `gpu:0`, and `cuda:0` is also supported
 - `--norm`: selects feature normalization, one of `l2`, `l1`, `none`; default is `l2`
-- `--preprocess-backend`: selects preprocessing backend, one of `cpu`, `gpu`; default is `cpu`; GPU preprocessing is reserved and currently reports not implemented
+- `--preprocess-backend`: selects preprocessing backend, one of `cpu`, `gpu`; default is `cpu`; GPU mode uses CVCUDA for device-side color conversion, resize, padding/crop, and normalization
 - `--faiss-backend`: selects Faiss backend, one of `cpu`, `gpu`; default is `cpu`
 - `--index-storage`: selects CPU Faiss search storage, one of `ram`, `disk`; default is `ram`; `disk` uses IVF with an on-disk inverted-list sidecar for large galleries; GPU Faiss currently keeps the default RAM behavior
 - `--model-batch-size`: controls both feature extraction and Faiss index build batch size; default is `1`; TensorRT uses a dynamic profile, while ONNX Runtime/OpenVINO require an exported graph with dynamic batch

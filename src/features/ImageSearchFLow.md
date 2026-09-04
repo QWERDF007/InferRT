@@ -22,7 +22,7 @@
   `openvino:1`，CPU 使用 `onnxruntime:cpu` 或 `openvino:cpu`。也支持裸设备简写 `cpu`、`gpu:0`、`cuda:0`。
   GPU Faiss 使用该目标的设备编号。
 - `model_precision`：底层模型构建/加载精度，支持 `FP32` 和 `FP16`；TensorRT 后端据此选择 engine，图后端精度由导出的图决定。
-- `preprocess_backend`：当前实现支持 CPU 预处理。
+- `preprocess_backend`：支持 CPU 或 GPU 预处理。GPU 路径使用 CVCUDA 在设备端执行颜色转换、缩放、Letterbox/CenterCrop 和归一化。
 - `norm`：特征归一化方式，默认 L2。
 - `faiss_backend`：Faiss 搜索后端，支持 CPU 或 GPU。
 - `index_storage`：CPU Faiss 搜索时索引常驻 RAM 或使用磁盘倒排列表。
@@ -63,7 +63,7 @@ searcher.buildOrLoad(weights_file, gallery_dir, index_file, rebuild_index, progr
 1. 构造 `IModelConfig`，开启 `featureOnly`，把 `feature_name` 设置为输出张量。
 2. 将 `model_precision` 传递到底层模型配置；TensorRT 后端会据此选择 FP16/FP32 构建精度。
 3. TensorRT 后端会用 `model_batch_size` 设置动态 batch profile。
-4. OpenCV 读取图片，使用 ImageNet 预处理转换为 NCHW float 输入。
+4. OpenCV 读取图片，使用共享 `PreprocessSpec` 执行预处理并转换为 NCHW float 输入；CPU 路径由 OpenCV 完成，GPU 路径由 CVCUDA 完成并直接写入 TensorRT 设备输入。
 5. 调用 `forwardFeatures` 得到指定中间层输出。
 6. 对每条特征按配置做 L1/L2/None 归一化。
 

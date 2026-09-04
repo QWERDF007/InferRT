@@ -424,6 +424,38 @@ std::vector<irt::TensorInfo> IModelImpl::outputs() const
     return backend_runtime_->outputs();
 }
 
+irt::ExecutionCapabilities IModelImpl::capabilities() const
+{
+    if (!backend_runtime_ || !config_)
+    {
+        throw irt::Exception(Status::INVALID_OPERATION, "Backend runtime is not initialized");
+    }
+
+    auto capabilities = backend_runtime_->capabilities();
+    capabilities.supports_feature_outputs = config_->featureOnly() || !config_->featureTensorNames().empty();
+    return capabilities;
+}
+
+std::unique_ptr<irt::ITensorRuntimeSession> IModelImpl::createSession() const
+{
+    if (!backend_runtime_)
+    {
+        throw irt::Exception(Status::INVALID_OPERATION, "Backend runtime is not initialized");
+    }
+    return backend_runtime_->createSession();
+}
+
+void IModelImpl::executeSession(irt::ITensorRuntimeSession &session,
+                                const std::span<const irt::BufferView> buffers,
+                                const irt::ExecuteOptions options) const
+{
+    if (!backend_runtime_)
+    {
+        throw irt::Exception(Status::INVALID_OPERATION, "Backend runtime is not initialized");
+    }
+    backend_runtime_->executeSession(session, buffers, options);
+}
+
 irt::Shape IModelImpl::tensorShape(const std::string &tensor_name) const
 {
     if (!backend_runtime_)
@@ -458,6 +490,11 @@ void IModelImpl::setTensorShape(const std::string &tensor_name, const irt::Shape
         throw irt::Exception(Status::INVALID_OPERATION, "Backend runtime is not initialized");
     }
     backend_runtime_->setInputShape(tensor_name, shape);
+}
+
+void IModelImpl::setInputShape(const std::string &tensor_name, irt::Shape shape)
+{
+    setTensorShape(tensor_name, shape);
 }
 
 void IModelImpl::setStream(const std::uintptr_t stream)
@@ -621,33 +658,13 @@ std::vector<nvinfer1::ITensor *> IModelImpl::resolveFeatureTensors(const NamedTe
 
 void IModelImpl::infer(std::span<const irt::BufferView> buffers, const std::uintptr_t stream, const bool non_blocking)
 {
-    if (!usesTensorRTBackend())
-    {
-        if (!backend_runtime_)
-        {
-            throw irt::Exception(Status::INVALID_OPERATION, "Backend runtime is not initialized");
-        }
-        backend_runtime_->execute(buffers, irt::ExecuteOptions{stream, non_blocking});
-        return;
-    }
-
-    execute(buffers, stream, non_blocking);
+    execute(buffers, irt::ExecuteOptions{stream, non_blocking});
 }
 
 void IModelImpl::forwardFeatures(std::span<const irt::BufferView> buffers, const std::uintptr_t stream,
                                  const bool non_blocking)
 {
-    if (!usesTensorRTBackend())
-    {
-        if (!backend_runtime_)
-        {
-            throw irt::Exception(Status::INVALID_OPERATION, "Backend runtime is not initialized");
-        }
-        backend_runtime_->execute(buffers, irt::ExecuteOptions{stream, non_blocking});
-        return;
-    }
-
-    execute(buffers, stream, non_blocking);
+    execute(buffers, irt::ExecuteOptions{stream, non_blocking});
 }
 void IModelImpl::buildRuntimeFromWeights(const std::string                                         &weights_file,
                                          const std::function<void(nvinfer1::INetworkDefinition *)> &build_fn)
@@ -825,10 +842,13 @@ std::uintptr_t IModelImpl::resolveExecutionStream(const std::uintptr_t stream_ov
     return backend_runtime_->resolveExecutionStream(stream_override);
 }
 
-void IModelImpl::execute(std::span<const irt::BufferView> buffers, const std::uintptr_t stream_override,
-                         const bool non_blocking)
+void IModelImpl::execute(std::span<const irt::BufferView> buffers, const irt::ExecuteOptions options)
 {
-    tensorRTBackend().execute(buffers, irt::ExecuteOptions{stream_override, non_blocking});
+    if (!backend_runtime_)
+    {
+        throw irt::Exception(Status::INVALID_OPERATION, "Backend runtime is not initialized");
+    }
+    backend_runtime_->execute(buffers, options);
 }
 
 void IModelImpl::build(const std::string &weights_file)

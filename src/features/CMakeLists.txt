@@ -29,6 +29,7 @@ add_plugin_library(features
 
     PRIVATE_LIBS
         yaml-cpp::yaml-cpp
+        inferrt_cvcuda
 
     PUBLIC_LIBS
         opencv_core opencv_imgcodecs opencv_imgproc

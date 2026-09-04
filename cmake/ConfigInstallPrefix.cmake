@@ -12,8 +12,8 @@ if(NOT DEFINED INFERRT_INSTALL_PREFIX_ORIGIN)
         set(CMAKE_INSTALL_PREFIX "${_inferrt_default_install_prefix}")
         set(_inferrt_project_owns_prefix ON)
     elseif(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
-        set(CMAKE_INSTALL_PREFIX "${_inferrt_default_install_prefix}"
-            CACHE PATH "Install path prefix" FORCE)
+        set_property(CACHE CMAKE_INSTALL_PREFIX PROPERTY VALUE
+                     "${_inferrt_default_install_prefix}")
         set(CMAKE_INSTALL_PREFIX "${_inferrt_default_install_prefix}")
         set(_inferrt_project_owns_prefix ON)
     endif()
@@ -57,12 +57,11 @@ elseif(INFERRT_INSTALL_PREFIX_ORIGIN STREQUAL "project-default")
         if(_inferrt_current_prefix STREQUAL _inferrt_previous_prefix
            OR (DEFINED _inferrt_last_install_prefix
                AND _inferrt_current_prefix STREQUAL _inferrt_last_install_prefix))
-            set(CMAKE_INSTALL_PREFIX "${_inferrt_default_install_prefix}"
-                CACHE PATH "Install path prefix" FORCE)
+            set_property(CACHE CMAKE_INSTALL_PREFIX PROPERTY VALUE
+                         "${_inferrt_default_install_prefix}")
             set(CMAKE_INSTALL_PREFIX "${_inferrt_default_install_prefix}")
-            set(INFERRT_INSTALL_PREFIX_PROJECT_DEFAULT
-                "${_inferrt_default_install_prefix}" CACHE INTERNAL
-                "Last project-generated install prefix" FORCE)
+            set_property(CACHE INFERRT_INSTALL_PREFIX_PROJECT_DEFAULT PROPERTY VALUE
+                         "${_inferrt_default_install_prefix}")
         else()
             set_property(CACHE INFERRT_INSTALL_PREFIX_ORIGIN PROPERTY VALUE "user")
         endif()
@@ -98,11 +97,11 @@ elseif(INFERRT_INSTALL_PREFIX_ORIGIN STREQUAL "user"
 
     if(_inferrt_current_prefix STREQUAL _inferrt_last_install_prefix
        AND _inferrt_previous_prefix STREQUAL _inferrt_current_default_prefix)
-        set(CMAKE_INSTALL_PREFIX "${_inferrt_default_install_prefix}"
-            CACHE PATH "Install path prefix" FORCE)
+        set_property(CACHE CMAKE_INSTALL_PREFIX PROPERTY VALUE
+                     "${_inferrt_default_install_prefix}")
         set(CMAKE_INSTALL_PREFIX "${_inferrt_default_install_prefix}")
-        set(INFERRT_INSTALL_PREFIX_ORIGIN "project-default"
-            CACHE INTERNAL "Origin of CMAKE_INSTALL_PREFIX" FORCE)
+        set_property(CACHE INFERRT_INSTALL_PREFIX_ORIGIN PROPERTY VALUE
+                     "project-default")
     endif()
 endif()
 

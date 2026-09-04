@@ -56,7 +56,7 @@ private:
     irt::Shape shape_{1, 3, 2, 2};
 };
 
-class FakeRuntimePlan final : public irt::engine::priv::IEngineRuntimePlan
+class FakeRuntimePlan final : public irt::IExecutionPlan
 {
 public:
     std::unique_ptr<irt::ITensorRuntimeSession> createSession() const override
@@ -81,9 +81,9 @@ public:
         return output_infos_;
     }
 
-    int fixedBatchSize() const noexcept override
+    irt::ExecutionCapabilities capabilities() const noexcept override
     {
-        return 0;
+        return {.supports_dynamic_batch = true, .supports_feature_outputs = false, .fixed_batch_size = 0};
     }
 
 private:
@@ -100,7 +100,7 @@ private:
 std::atomic<int> g_factory_calls{0};
 std::atomic<int> g_fail_on_call{0};
 
-std::shared_ptr<irt::engine::priv::IEngineRuntimePlan> fakeRuntimeFactory(
+std::shared_ptr<irt::IExecutionPlan> fakeRuntimeFactory(
     const EngineConfig &, int, const PipelinePlan *)
 {
     const int call = g_factory_calls.fetch_add(1) + 1;
@@ -208,7 +208,7 @@ public:
 
     void setTensorShape(const std::string &, const irt::Shape &) override {}
 
-    void execute(std::span<const irt::BufferView>, irt::ExecuteOptions) override {}
+    void executeNormalized(std::span<const irt::BufferView>, irt::ExecuteOptions) override {}
 
 private:
     const RuntimeShapeFixture &fixture_;
@@ -289,8 +289,7 @@ bool hasCudaDevice()
 
 TEST(EngineRuntimePlanContractTest, ExposesTheSharedCoreTensorDescriptorContract)
 {
-    static_assert(std::is_base_of_v<irt::IExecutionDescriptor, irt::engine::priv::IEngineRuntimePlan>);
-    static_assert(std::is_base_of_v<irt::IExecutionPlan, irt::engine::priv::IEngineRuntimePlan>);
+    static_assert(std::is_base_of_v<irt::IExecutionDescriptor, irt::IExecutionPlan>);
 
     RuntimeFactoryGuard guard(0);
     auto plan = irt::engine::priv::CreateEngineRuntimePlan(makeConfig(), 0, nullptr);
@@ -358,7 +357,7 @@ TEST(TensorRTRuntimePlanShapeTest, DetectsFixedBatchFromStaticEngineMetadata)
     RuntimeBackendFactoryGuard guard(&shapeContractBackendFactory);
 
     auto plan = irt::engine::priv::CreateEngineRuntimePlan(makeRuntimePlanConfig(1, 1, 1), 0, nullptr);
-    EXPECT_EQ(plan->fixedBatchSize(), 1);
+    EXPECT_EQ(plan->capabilities().fixed_batch_size, 1);
 
     g_runtime_shape_fixture = nullptr;
 }
@@ -414,7 +413,7 @@ TEST(TensorRTRuntimePlanShapeTest, LeavesDynamicEngineWithoutFixedBatch)
     RuntimeBackendFactoryGuard guard(&shapeContractBackendFactory);
 
     const auto plan = irt::engine::priv::CreateEngineRuntimePlan(makeRuntimePlanConfig(1, 4, 8), 0, nullptr);
-    EXPECT_EQ(plan->fixedBatchSize(), 0);
+    EXPECT_EQ(plan->capabilities().fixed_batch_size, 0);
 
     g_runtime_shape_fixture = nullptr;
 }

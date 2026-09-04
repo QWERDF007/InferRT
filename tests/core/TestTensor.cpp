@@ -7,6 +7,8 @@
 #include <vector>
 #include <span>
 #include <limits>
+#include <string>
+#include <type_traits>
 #include <utility>
 
 namespace {
@@ -40,7 +42,7 @@ TEST(TensorTest, ShapeElementCountValid)
     EXPECT_EQ(shape.elementCount(), 1U * 3U * 224U * 224U);
 
     Shape empty_shape{};
-    EXPECT_EQ(empty_shape.elementCount(), 0U);
+    EXPECT_THROW((void)empty_shape.elementCount(), irt::Exception);
 }
 
 TEST(TensorTest, ShapeRejectsNegativeOrZeroDimensions)
@@ -261,6 +263,7 @@ TEST(ModelContractTest, CoreExecutionContractUsesOpaqueStreamAndBuffers)
     public:
         std::vector<TensorInfo> inputs() const override { return {{"input", {}, TensorIOMode::Input}}; }
         std::vector<TensorInfo> outputs() const override { return {{"output", {}, TensorIOMode::Output}}; }
+        ExecutionCapabilities capabilities() const noexcept override { return {}; }
         void setInputShape(const std::string &, Shape shape) override { shape_ = std::move(shape); }
         void execute(std::span<const BufferView> buffers, ExecuteOptions options = {}) override
         {
@@ -268,6 +271,8 @@ TEST(ModelContractTest, CoreExecutionContractUsesOpaqueStreamAndBuffers)
             EXPECT_EQ(options.stream, 0U);
             executed_ = true;
         }
+        std::unique_ptr<ITensorRuntimeSession> createSession() const override { return nullptr; }
+        void executeSession(ITensorRuntimeSession &, std::span<const BufferView>, ExecuteOptions) const override {}
         Shape shape_;
         bool  executed_{false};
     } model;
@@ -278,6 +283,90 @@ TEST(ModelContractTest, CoreExecutionContractUsesOpaqueStreamAndBuffers)
     BufferView buffer{storage.data(), desc, desc.byteSize(), 1, desc.byteSize()};
     model.execute(std::span<const BufferView>(&buffer, 1));
     EXPECT_TRUE(model.executed_);
+}
+
+TEST(ModelContractTest, ExecutableModelsAndPlansShareOneCapabilityContract)
+{
+    static_assert(std::is_base_of_v<IExecutionPlan, IExecutableModel>);
+
+    class StubSession final : public ITensorRuntimeSession
+    {
+    public:
+        Shape tensorShape(const std::string &) const override { return Shape{1, 1}; }
+        TensorDataType tensorDataType(const std::string &) const override { return TensorDataType::F32; }
+        void setTensorShape(const std::string &, const Shape &) override {}
+        void execute(std::span<const BufferView>, ExecuteOptions) override {}
+    };
+
+    class StubModel final : public IExecutableModel
+    {
+    public:
+        std::vector<TensorInfo> inputs() const override
+        {
+            return {{"input", {TensorDataType::F32, TensorLayout::Opaque, MemoryKind::HOST, Shape{1, 1}},
+                     TensorIOMode::Input}};
+        }
+        std::vector<TensorInfo> outputs() const override
+        {
+            return {{"output", {TensorDataType::F32, TensorLayout::Opaque, MemoryKind::HOST, Shape{1, 1}},
+                     TensorIOMode::Output}};
+        }
+        ExecutionCapabilities capabilities() const noexcept override
+        {
+            return {.supports_dynamic_batch = true, .supports_feature_outputs = true, .fixed_batch_size = 0};
+        }
+        void setInputShape(const std::string &, Shape) override {}
+        void execute(std::span<const BufferView>, ExecuteOptions) override {}
+        std::unique_ptr<ITensorRuntimeSession> createSession() const override
+        {
+            return std::make_unique<StubSession>();
+        }
+        void executeSession(ITensorRuntimeSession &session, std::span<const BufferView> buffers,
+                            ExecuteOptions options) const override
+        {
+            session.execute(buffers, options);
+        }
+    } model;
+
+    static_assert(std::is_move_constructible_v<StubModel>);
+    static_assert(std::is_move_assignable_v<StubModel>);
+
+    const IExecutionPlan &plan = model;
+    const auto capabilities = plan.capabilities();
+    EXPECT_TRUE(capabilities.supports_dynamic_batch);
+    EXPECT_TRUE(capabilities.supports_feature_outputs);
+    EXPECT_EQ(capabilities.fixed_batch_size, 0);
+    EXPECT_NE(plan.createSession(), nullptr);
+}
+
+TEST(ModelContractTest, AcceptsConcreteBuffersForDeclaredDynamicDimensions)
+{
+    const std::vector<irt::TensorInfo> inputs{
+        {"input",
+         {irt::TensorDataType::F32, irt::TensorLayout::NCHW, irt::MemoryKind::HOST,
+          irt::Shape{-1, 3, -1, 2}},
+         irt::TensorIOMode::Input}};
+    const std::vector<irt::TensorInfo> outputs{
+        {"output",
+         {irt::TensorDataType::F32, irt::TensorLayout::NCHW, irt::MemoryKind::HOST,
+          irt::Shape{-1, 1}},
+         irt::TensorIOMode::Output}};
+
+    std::vector<float> input_storage(4U * 3U * 5U * 2U, 1.0F);
+    std::vector<float> output_storage(4U, 0.0F);
+    const irt::TensorDesc input_desc{irt::TensorDataType::F32, irt::TensorLayout::NCHW,
+                                     irt::MemoryKind::HOST, irt::Shape{4, 3, 5, 2}};
+    const irt::TensorDesc output_desc{irt::TensorDataType::F32, irt::TensorLayout::NCHW,
+                                      irt::MemoryKind::HOST, irt::Shape{4, 1}};
+    const std::vector<irt::BufferView> buffers{
+        {input_storage.data(), input_desc, input_desc.byteSize(), 1, input_desc.byteSize(), "input"},
+        {output_storage.data(), output_desc, output_desc.byteSize(), 1, output_desc.byteSize(), "output"},
+    };
+
+    const auto normalized = irt::normalizeExecutionBuffers(buffers, inputs, outputs);
+    ASSERT_EQ(normalized.size(), 2U);
+    EXPECT_EQ(normalized[0].tensor_name, "input");
+    EXPECT_EQ(normalized[1].tensor_name, "output");
 }
 
 } // namespace

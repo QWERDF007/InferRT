@@ -131,6 +131,7 @@ def test_create_model_without_build(irt_module: object) -> None:
     assert model.output_tensor_names()
 
 
+@pytest.mark.optional_backend
 def test_create_model_uses_runtime_from_config(irt_module: object) -> None:
     """验证 ``create_model`` 使用配置对象中的统一 runtime。
 

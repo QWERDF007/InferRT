@@ -177,17 +177,12 @@ public:
      */
     InferenceEngine(EngineConfig config, std::shared_ptr<const PipelinePlan> pipeline);
 
-    /** @brief 兼容构造：从旧版 EngineConfig 生成内置固定图像 Pipeline。 */
-    explicit InferenceEngine(EngineConfig config);
     ~InferenceEngine();
 
     InferenceEngine(const InferenceEngine &)            = delete;
     InferenceEngine &operator=(const InferenceEngine &) = delete;
     InferenceEngine(InferenceEngine &&)                 = delete;
     InferenceEngine &operator=(InferenceEngine &&)      = delete;
-
-    /** @brief 创建但不启动 engine。 */
-    static std::unique_ptr<InferenceEngine> create(EngineConfig config);
 
     /** @brief 创建但不启动使用代码定义 DAG 的 engine。 */
     static std::unique_ptr<InferenceEngine> create(EngineConfig config, std::shared_ptr<const PipelinePlan> pipeline);

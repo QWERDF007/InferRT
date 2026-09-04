@@ -232,16 +232,20 @@ TEST(ImageSearchTest, ConstructorRejectsTensorRtCpuDevice)
 }
 
 /**
- * @brief GPU 预处理当前只是预留配置项，应在构造时明确返回未实现。
+ * @brief GPU 预处理应作为有效配置进入图像搜索流程。
  */
-TEST(ImageSearchTest, ConstructorRejectsGpuPreprocessPlaceholder)
+TEST(ImageSearchTest, ConstructorAcceptsGpuPreprocessConfiguration)
 {
     irt::features::ImageSearchConfig config;
     config.model_name         = "resnet18";
     config.feature_name       = "layer4";
     config.preprocess_backend = irt::features::ImageSearchPreprocessBackend::GPU;
+    config.preprocess.backend  = irt::PreprocessBackend::CUDA;
 
-    expectIrtExceptionCode([&] { irt::features::ImageSearch search(config); }, irt::Status::ERROR_NOT_IMPLEMENTED);
+    EXPECT_NO_THROW({
+        const irt::features::ImageSearch search(config);
+        EXPECT_EQ(search.config().preprocess_backend, irt::features::ImageSearchPreprocessBackend::GPU);
+    });
 }
 
 /**

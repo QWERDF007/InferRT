@@ -9,29 +9,49 @@ if(DEFINED OpenCV_DIR AND "${OpenCV_DIR}" MATCHES "-NOTFOUND$")
     unset(OpenCV_DIR)
 endif()
 
-if(NOT DEFINED OpenCV_DIR OR OpenCV_DIR STREQUAL "")
-    if(DEFINED OpenCV_HOME AND NOT OpenCV_HOME STREQUAL "")
+inferrt_dependency_variable_is_explicit(
+    OpenCV_DIR INFERRT_DEPENDENCY_OPENCV_DIR _inferrt_opencv_dir_explicit)
+if(NOT _inferrt_opencv_dir_explicit)
+    unset(OpenCV_DIR CACHE)
+    unset(OpenCV_DIR)
+endif()
+
+if(_inferrt_opencv_dir_explicit)
+    set(_inferrt_opencv_search_dir "${OpenCV_DIR}")
+elseif(DEFINED ENV{OpenCV_DIR} AND NOT "$ENV{OpenCV_DIR}" STREQUAL "")
+    set(_inferrt_opencv_search_dir "$ENV{OpenCV_DIR}")
+    inferrt_dependency_cache_set(
+        OpenCV_DIR "${_inferrt_opencv_search_dir}" PATH
+        "OpenCV CMake package directory"
+        INFERRT_DEPENDENCY_OPENCV_DIR environment)
+else()
+    inferrt_dependency_resolve_path(
+        _inferrt_opencv_home _inferrt_opencv_home_origin opencv
+        VARIABLES OpenCV_HOME OpenCV_ROOT
+        ENVIRONMENT_VARIABLES OpenCV_HOME OpenCV_ROOT
+    )
+    if(_inferrt_opencv_home)
+        inferrt_dependency_cache_set(
+            OpenCV_HOME "${_inferrt_opencv_home}" PATH
+            "OpenCV installation directory"
+            INFERRT_DEPENDENCY_OPENCV_HOME "${_inferrt_opencv_home_origin}")
         set(_inferrt_opencv_search_dir "${OpenCV_HOME}/lib")
-    elseif(DEFINED ENV{OpenCV_DIR} AND NOT "$ENV{OpenCV_DIR}" STREQUAL "")
-        set(_inferrt_opencv_search_dir "$ENV{OpenCV_DIR}")
-    elseif(DEFINED ENV{OpenCV_HOME} AND NOT "$ENV{OpenCV_HOME}" STREQUAL "")
-        set(OpenCV_HOME "$ENV{OpenCV_HOME}" CACHE PATH
-            "OpenCV installation directory")
-        set(_inferrt_opencv_search_dir "${OpenCV_HOME}/lib")
-    elseif(WIN32)
-        inferrt_dependency_default(opencv _inferrt_opencv_default_home)
-        if(_inferrt_opencv_default_home)
-            set(OpenCV_HOME "${_inferrt_opencv_default_home}" CACHE PATH
-                "OpenCV installation directory")
-            set(_inferrt_opencv_search_dir "${OpenCV_HOME}/lib")
+        if(_inferrt_opencv_home_origin STREQUAL "project-default")
             set(_inferrt_opencv_home_from_default ON)
         endif()
     endif()
 endif()
 
 if(_inferrt_opencv_search_dir)
-    set(OpenCV_DIR "${_inferrt_opencv_search_dir}" CACHE PATH
-        "OpenCV CMake package directory")
+    if(_inferrt_opencv_dir_explicit)
+        set(OpenCV_DIR "${_inferrt_opencv_search_dir}")
+    elseif(NOT DEFINED OpenCV_DIR OR NOT OpenCV_DIR STREQUAL "${_inferrt_opencv_search_dir}")
+        inferrt_dependency_cache_set(
+            OpenCV_DIR "${_inferrt_opencv_search_dir}" PATH
+            "OpenCV CMake package directory"
+            INFERRT_DEPENDENCY_OPENCV_DIR
+            "${_inferrt_opencv_home_origin}")
+    endif()
 endif()
 
 if(DEFINED OpenCV_DIR AND NOT OpenCV_DIR STREQUAL "")
@@ -155,3 +175,6 @@ endif()
 unset(_inferrt_opencv_home_from_default)
 unset(_inferrt_opencv_default_home)
 unset(_inferrt_opencv_search_dir)
+unset(_inferrt_opencv_home)
+unset(_inferrt_opencv_home_origin)
+unset(_inferrt_opencv_dir_explicit)

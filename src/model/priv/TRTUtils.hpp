@@ -5,6 +5,7 @@
 #include <inferrt/model/Export.h>
 #include <cstddef>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,40 @@ using WeightsMap = std::map<std::string, nvinfer1::Weights>;
  * @return 解析后的权重映射表。
  */
 INFERRT_MODEL_API WeightsMap loadWeights(const std::string &file);
+
+namespace priv {
+
+/**
+ * @brief 读取一个完整的二进制文件。
+ *
+ * 所有 TensorRT engine 文件都通过此入口读取，以统一处理空文件、大小溢出和短读。
+ * @param file 文件路径。
+ * @return 文件内容。
+ * @throws irt::Exception 文件不可读、为空、过大或读取不完整时抛出。
+ */
+std::vector<char> readBinaryFile(const std::string &file);
+
+/**
+ * @brief 使用指定 TensorRT 日志对象反序列化 engine。
+ * @param data 序列化 engine 数据。
+ * @param byte_count 数据字节数。
+ * @param logger TensorRT 日志对象。
+ * @return 由共享指针持有的 TensorRT engine。
+ * @throws irt::Exception 数据无效、runtime 创建失败或反序列化失败时抛出。
+ */
+std::shared_ptr<nvinfer1::ICudaEngine>
+deserializeCudaEngine(const void *data, size_t byte_count, nvinfer1::ILogger &logger);
+
+/**
+ * @brief 为一个 TensorRT engine 创建独立 execution context。
+ * @param engine 已反序列化的 engine。
+ * @return 独立 execution context。
+ * @throws irt::Exception engine 为空或 context 创建失败时抛出。
+ */
+std::unique_ptr<nvinfer1::IExecutionContext>
+createTensorRTExecutionContext(const std::shared_ptr<nvinfer1::ICudaEngine> &engine);
+
+} // namespace priv
 
 /**
  * @brief 读取 ImageNet 1000 类标签文件。

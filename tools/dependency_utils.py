@@ -383,9 +383,10 @@ def resolve_dependency_root(
 ) -> Path | None:
     """解析依赖条目的根目录。
 
-    解析顺序为：直接路径、环境变量、``CMakeCache.txt``、YAML 指定的
-    CMake 配置文件、YAML ``default`` 字段。设置 ``<platform>_root`` 时，
-    该字段优先于通用 ``root``。
+    解析顺序为：直接路径、环境变量、YAML ``default`` 字段、
+    ``CMakeCache.txt``、YAML 指定的 CMake 配置文件。设置 ``<platform>_root``
+    时，该字段优先于通用 ``root``。清单默认值优先于无法静态展开的 CMake
+    表达式。
 
     Args:
         dep: 依赖条目。
@@ -410,6 +411,23 @@ def resolve_dependency_root(
         if value:
             return resolve_project_path(value, repo_root)
 
+    # A platform-specific root describes a different filesystem location than
+    # the dependency's generic installation root.  For example, OpenCV's
+    # CMake package lives beside ``bin`` while Windows runtime DLLs live in
+    # ``OpenCV_BIN_DIR``.  Once configure has resolved that location, the
+    # cache value is the authoritative platform root; applying the generic
+    # default here would point the runtime collector at the wrong directory.
+    if platform_root not in (None, ""):
+        cache_value = read_cmake_cache_value(build_dir / "CMakeCache.txt", root_spec)
+        if cache_value:
+            cache_root = resolve_project_path(cache_value, repo_root)
+            if cache_root.exists():
+                return cache_root
+
+    default_value = dep.get("default")
+    if default_value:
+        return resolve_project_path(str(default_value), repo_root)
+
     cache_value = read_cmake_cache_value(build_dir / "CMakeCache.txt", root_spec)
     if cache_value:
         return resolve_project_path(cache_value, repo_root)
@@ -418,10 +436,6 @@ def resolve_dependency_root(
     cmake_value = read_cmake_set_expanded(cmake_file, root_spec)
     if cmake_value:
         return resolve_project_path(cmake_value, repo_root)
-
-    default_value = dep.get("default")
-    if default_value:
-        return resolve_project_path(str(default_value), repo_root)
 
     return None
 

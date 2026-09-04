@@ -390,7 +390,7 @@ public:
         PropagateResolvedBatchDimToDynamicOutputs(output_info_, shape);
     }
 
-    void execute(std::span<const irt::BufferView> buffers, irt::ExecuteOptions options) override
+    void executeNormalized(std::span<const irt::BufferView> buffers, irt::ExecuteOptions options) override
     {
         ensureLoaded();
         ExecuteOpenVINO(infer_request_, input_names_, output_names_, input_info_, output_info_, buffers, options);

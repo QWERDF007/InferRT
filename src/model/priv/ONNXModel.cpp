@@ -6,7 +6,6 @@
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/model/IModel.h>
 
-#include <fstream>
 #include <memory>
 #include <vector>
 
@@ -200,24 +199,8 @@ void ONNXModel::build(const std::string &onnx_file)
         throw irt::Exception(Status::ERROR_INTERNAL, "Failed to build serialized network from ONNX");
     }
 
-    auto runtime = std::unique_ptr<IRuntime>(createInferRuntime(*trt_params.logger));
-    if (!runtime)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create InferRuntime");
-    }
-
-    trt_params.engine = std::shared_ptr<ICudaEngine>(runtime->deserializeCudaEngine(buffer->data(), buffer->size()),
-                                                     [](ICudaEngine *engine) { delete engine; });
-    if (!trt_params.engine)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to deserialize CUDA engine");
-    }
-
-    trt_params.context.reset(trt_params.engine->createExecutionContext());
-    if (!trt_params.context)
-    {
-        throw irt::Exception(Status::ERROR_INTERNAL, "Failed to create execution context");
-    }
+    trt_params.engine  = priv::deserializeCudaEngine(buffer->data(), buffer->size(), *trt_params.logger);
+    trt_params.context = priv::createTensorRTExecutionContext(trt_params.engine);
 
     SyncModelMetadataFromEngine(*this);
 

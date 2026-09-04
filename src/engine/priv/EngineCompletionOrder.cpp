@@ -21,15 +21,16 @@ void CompletionOrder::registerRequest(const RequestPtr &request)
     }
 
     std::lock_guard lock(mutex_);
-    request->source_sequence = next_source_submit_[request->source_id]++;
-    next_source_deliver_.try_emplace(request->source_id, 0);
-    const auto [_, inserted] = active_requests_.emplace(request->id, request);
-    if (!inserted)
+    if (active_requests_.contains(request->id))
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "Inference request id is already registered: %llu",
                              static_cast<unsigned long long>(request->id));
     }
+
+    request->source_sequence = next_source_submit_[request->source_id]++;
+    next_source_deliver_.try_emplace(request->source_id, 0);
+    active_requests_.emplace(request->id, request);
 }
 
 RequestPtr CompletionOrder::findActive(const uint64_t request_id) const
@@ -118,6 +119,26 @@ void CompletionOrder::completeFailure(const RequestPtr &request, const std::exce
         return;
     }
 
+    std::exception_ptr resolved_error = error;
+    if (!resolved_error)
+    {
+        switch (kind)
+        {
+        case FailureKind::Failed:
+            resolved_error = failedError();
+            break;
+        case FailureKind::Cancelled:
+            resolved_error = cancelledError();
+            break;
+        case FailureKind::TimedOut:
+            resolved_error = timeoutError();
+            break;
+        case FailureKind::Dropped:
+            resolved_error = droppedError();
+            break;
+        }
+    }
+
     std::vector<PendingCompletion> ready;
     {
         std::lock_guard lock(mutex_);
@@ -127,7 +148,7 @@ void CompletionOrder::completeFailure(const RequestPtr &request, const std::exce
         }
         active_requests_.erase(request->id);
         metrics_.recordRequestTerminal(kind);
-        PendingCompletion completion{request, false, {}, error};
+        PendingCompletion completion{request, false, {}, std::move(resolved_error)};
         if (request->preserve_source_order)
         {
             pending_source_completions_[request->source_id].emplace(request->source_sequence, std::move(completion));
@@ -204,15 +225,17 @@ void CompletionOrder::shutdown()
     std::vector<PendingCompletion> remaining;
     {
         std::lock_guard lock(mutex_);
+        std::map<std::string, std::map<uint64_t, PendingCompletion>> remaining_by_source;
         for (auto &[id, request] : active_requests_)
         {
             if (request && !request->finished.exchange(true))
             {
                 metrics_.recordRequestTerminal(FailureKind::Failed);
-                remaining.push_back(
-                    {request, false, {},
-                     std::make_exception_ptr(
-                         irt::Exception(irt::Status::INVALID_OPERATION, "Inference engine stopped"))});
+                remaining_by_source[request->source_id].emplace(
+                    request->source_sequence,
+                    PendingCompletion{request, false, {},
+                                       std::make_exception_ptr(
+                                           irt::Exception(irt::Status::INVALID_OPERATION, "Inference engine stopped"))});
             }
         }
         active_requests_.clear();
@@ -220,11 +243,19 @@ void CompletionOrder::shutdown()
         {
             for (auto &[sequence, completion] : pending)
             {
-                remaining.push_back(std::move(completion));
+                remaining_by_source[source_id].emplace(sequence, std::move(completion));
             }
         }
         pending_source_completions_.clear();
         unordered_delivered_sequences_.clear();
+
+        for (auto &[source_id, completions] : remaining_by_source)
+        {
+            for (auto &[sequence, completion] : completions)
+            {
+                remaining.push_back(std::move(completion));
+            }
+        }
     }
     fulfill(std::move(remaining));
 }

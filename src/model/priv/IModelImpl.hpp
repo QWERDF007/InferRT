@@ -1,6 +1,7 @@
 #pragma once
 
 #include <inferrt/model/BackendRuntime.hpp>
+#include <inferrt/model/IModel.hpp>
 #include "TensorRTBackend.hpp"
 #include "TRTParams.hpp"
 #include "TRTUtils.hpp"
@@ -15,6 +16,45 @@
 #include <unordered_map>
 #include <vector>
 
+namespace irt::model {
+
+/**
+ * @brief Private implementation interface behind the public IModel wrapper.
+ *
+ * IModel exposes only the opaque nested type.  This interface is defined in a
+ * private header so public consumers never need to parse model or backend
+ * implementation details.
+ */
+class IModel::Implementation : public irt::IExecutableModel
+{
+public:
+    virtual ~Implementation() = default;
+
+    virtual std::string name() const = 0;
+    virtual std::string wtsExtension() const = 0;
+    virtual std::string engineExtension() const = 0;
+    virtual LogLevel logLevel() const = 0;
+    virtual void build(const std::string &weights_file) = 0;
+    virtual void save(const std::string &weights_file) = 0;
+    virtual void load(const std::string &weights_file) = 0;
+    virtual void buildOrLoad(const std::string &weights_file) = 0;
+    virtual void infer(std::span<const irt::BufferView> buffers, std::uintptr_t stream, bool non_blocking) = 0;
+    virtual void forwardFeatures(std::span<const irt::BufferView> buffers, std::uintptr_t stream,
+                                  bool non_blocking) = 0;
+    virtual void setModelConfig(std::unique_ptr<IModelConfig> config) = 0;
+    virtual const IModelConfig &modelConfig() const = 0;
+    virtual std::vector<std::string> ioTensorNames(irt::TensorIOMode mode) const = 0;
+    virtual irt::Shape tensorShape(const std::string &tensor_name) const = 0;
+    virtual irt::TensorDataType tensorDataType(const std::string &tensor_name) const = 0;
+    virtual void setTensorShape(const std::string &tensor_name, const irt::Shape &shape) = 0;
+    virtual void setStream(std::uintptr_t stream) = 0;
+    virtual void clearStream() = 0;
+    virtual std::uintptr_t resolveExecutionStream(std::uintptr_t stream_override) = 0;
+    virtual void setLogLevel(LogLevel level) = 0;
+};
+
+} // namespace irt::model
+
 namespace irt::model::priv {
 
 /**
@@ -24,7 +64,7 @@ namespace irt::model::priv {
  * 运行时查询以及日志初始化等公共能力。具体模型只需要实现模型名称、
  * 网络构建和推理入口。
  */
-class IModelImpl
+class IModelImpl : public IModel::Implementation
 {
 public:
     using BackendRuntimeFactory = std::unique_ptr<irt::model::IBackendRuntime> (*)(ModelRuntime::Backend);
@@ -177,8 +217,14 @@ public:
     std::vector<std::string> ioTensorNames(irt::TensorIOMode mode) const;
 
     /** @brief Return backend-owned I/O descriptors through the core contract. */
-    std::vector<irt::TensorInfo> inputs() const;
-    std::vector<irt::TensorInfo> outputs() const;
+    std::vector<irt::TensorInfo> inputs() const override;
+    std::vector<irt::TensorInfo> outputs() const override;
+    irt::ExecutionCapabilities capabilities() const override;
+
+    /** @brief Create and execute one isolated backend session for a concurrent consumer. */
+    std::unique_ptr<irt::ITensorRuntimeSession> createSession() const override;
+    void executeSession(irt::ITensorRuntimeSession &session, std::span<const irt::BufferView> buffers,
+                        irt::ExecuteOptions options = {}) const override;
 
     /**
      * @brief 获取指定张量的运行时形状。
@@ -203,6 +249,10 @@ public:
      * @param dims 运行时维度。
      */
     void setTensorShape(const std::string &tensor_name, const irt::Shape &shape);
+    void setInputShape(const std::string &tensor_name, irt::Shape shape) override;
+
+    /** @brief Execute through the backend-neutral model contract. */
+    void execute(std::span<const irt::BufferView> buffers, irt::ExecuteOptions options = {}) override;
 
     /**
      * @brief 设置模型默认使用的外部 CUDA stream。
@@ -356,8 +406,6 @@ protected:
     }
 
 private:
-    void execute(std::span<const irt::BufferView> buffers, std::uintptr_t stream, bool non_blocking);
-
     [[nodiscard]] std::unique_ptr<irt::model::IBackendRuntime> createBackendRuntime(ModelRuntime::Backend backend) const;
 
     void buildBackendRuntimeFromFile(const std::string &model_file);

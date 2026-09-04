@@ -1,8 +1,6 @@
 # 形状模板匹配示例
 
-`shape_template_matching` 使用 `irt::features::v0::ShapeTemplateMatcher` 或
-`irt::features::v1::ShapeTemplateMatcherFast` 或
-`irt::features::v2::ShapeTemplateMatcherAvx512` 在源图中查找相同边缘形状的目标。它不依赖深度学习模型，适合轮廓稳定、边缘清晰的零件、工件或标记定位。
+`shape_template_matching` 使用 `irt::features::createShapeTemplateMatcher()` 在源图中查找相同边缘形状的目标。实现会根据当前 CPU 能力自动选择内部路径，不依赖深度学习模型，适合轮廓稳定、边缘清晰的零件、工件或标记定位。
 
 示例按两个独立阶段运行：
 
@@ -27,24 +25,16 @@ build\bin\inferrt_sample_shape_template_matching.exe
 .\build\bin\inferrt_sample_shape_template_matching.exe --help
 ```
 
-## 实现版本
+## 实现选择
 
-三个版本实现相同的 `IShapeTemplateMatcher` 接口，模板标准 YAML 格式和匹配结果完全兼容：
-
-- `--version v0`：固定的 `shape_based_matching` 风格标量基线路径。训练时保留原始串行流程：逐变体变换、逐变体提取特征并立即写入模板库；不使用线程并行、工作缓冲复用或跳过掩膜规范化等 v1 优化。适合结果对照和基准比较。
-- `--version v1`：AVX2 加速实现，默认值。匹配时会批量评分相邻滑窗、保留阈值早停，并直接从量化标签查表；训练时会并行处理相互独立的旋转/缩放变体、复用每个工作线程的中间缓冲，并按输入顺序统一提交模板。运行 v1 需要 AVX2 CPU；不支持时请选择 v0。
-- `--version v2`：AVX512F/BW 加速实现。训练阶段以 16-lane 量化和 64-lane 候选筛选处理梯度；全图精确匹配在分子上界不超过 `255` 时使用 64-lane 8-bit 累加，较大但安全的上界使用 32-lane 16-bit 累加。`scan_step != 1` 或累计范围过大时回退到同语义的标量路径，不改变结果。运行 v2 必须同时支持 AVX512F 和 AVX512BW；不支持时构造会明确报错，不会隐式退回 v1。
-
-训练和匹配可以选择不同版本。例如可用 `v0` 训练、`v1` 或 `v2` 匹配，或用 `v0` 对照验证结果：
+训练和匹配都通过 `IShapeTemplateMatcher` 接口执行，标准 YAML 格式和匹配结果由公共流程统一管理。示例不暴露具体实现选择参数：
 
 ```powershell
-.\build\bin\inferrt_sample_shape_template_matching.exe --mode train --version v0 --template "D:\data\part.png" --save-templates "D:\data\part_templates.yaml"
-.\build\bin\inferrt_sample_shape_template_matching.exe --mode match --version v1 --load-templates "D:\data\part_templates.yaml" --source "D:\data\scene.png"
+.\build\bin\inferrt_sample_shape_template_matching.exe --mode train --template "D:\data\part.png" --save-templates "D:\data\part_templates.yaml"
+.\build\bin\inferrt_sample_shape_template_matching.exe --mode match --load-templates "D:\data\part_templates.yaml" --source "D:\data\scene.png"
 ```
 
-三种训练路径产生的模板格式和内容严格兼容。v1 的并行阶段不写模板库，最终按变体输入顺序提交，因此模板 ID、YAML 顺序和精确匹配结果均与 v0 保持一致。
-
-v2 也按输入变体顺序统一提交模板，且其训练、匹配结果与 v0/v1 保持逐字段一致。注意：这里的“实现版本 v2”和下文“模板文件格式 v4”是两个独立概念；v0、v1、v2 实现都读写同一模板文件格式。
+CPU capability dispatch 只影响内部热点实现，不改变公共模板格式、结果语义或默认精确模式。固定实现的结果一致性由 features 测试和 benchmark 的私有 seam 验证；用户代码不需要依赖具体 ISA 类。
 
 ## 模板文件格式：破坏性 v4 升级
 
@@ -64,7 +54,7 @@ features:
   - [16, 8, 2, 90.0]
 ```
 
-这是破坏性修改：旧版 `version: 1`/`version: 2`/`version: 3` 模板文件，以及缺少 `template_width`/`template_height` 的文件，都会被拒绝加载，必须重新执行 `train` 生成 v4 模板。类别字段已从 YAML 和 API 移除；需要识别多类目标时，请由外部为每类维护独立模板文件并分别加载匹配。当前 v0、v1 和 v2 都读写同一标准 YAML v4 格式，四列数量不是恰好 4 的文件也会被拒绝。
+这是破坏性修改：旧版 `version: 1`/`version: 2`/`version: 3` 模板文件，以及缺少 `template_width`/`template_height` 的文件，都会被拒绝加载，必须重新执行 `train` 生成 v4 模板。类别字段已从 YAML 和 API 移除；需要识别多类目标时，请由外部为每类维护独立模板文件并分别加载匹配。自动选择的内部实现都读写同一标准 YAML v4 格式，四列数量不是恰好 4 的文件也会被拒绝。
 
 ## 第一阶段：训练模板
 
@@ -75,7 +65,6 @@ features:
 ```powershell
 .\build\bin\inferrt_sample_shape_template_matching.exe `
   --mode train `
-  --version v1 `
   --template "D:\data\part.png" `
   --template-mask "D:\data\part_mask.png" `
   --angle-begin 0 `
@@ -98,7 +87,6 @@ features:
 ```powershell
 .\build\bin\inferrt_sample_shape_template_matching.exe `
   --mode train `
-  --version v1 `
   --template "D:\data\capture.png" `
   --template-roi "420,180,160,120" `
   --template-mask "D:\data\capture_mask.png" `
@@ -113,7 +101,6 @@ features:
 ```powershell
 .\build\bin\inferrt_sample_shape_template_matching.exe `
   --mode train `
-  --version v1 `
   --template "D:\data\capture.png" `
   --template-roi "420,180,160,120" `
   --template-roi "760,190,155,118" `
@@ -126,7 +113,7 @@ features:
   --save-templates "D:\data\part_templates.yaml"
 ```
 
-上例有两个 ROI、每个 ROI 2,000 个变体时，输出模板库共有 4,000 个模板；一次 `match` 会扫描它们，无需逐 ROI 分别匹配。v1/v2 会把全部 `ROI × 变体` 放入同一个全局任务队列，由 `--train-parallelism` 控制的工作线程统一调度并复用工作缓冲；完成后仍按 ROI 输入顺序、再按变体顺序写入模板。v0 保持原始的逐 ROI、逐变体串行路径。矩形格式为 `x,y,width,height`，坐标以 `--template` 输入图的左上角为原点，且每个矩形必须完全位于图像内。为支持旋转/缩放变体，建议矩形在目标周围保留适量背景空白，避免变换后裁掉目标边缘。
+上例有两个 ROI、每个 ROI 2,000 个变体时，输出模板库共有 4,000 个模板；一次 `match` 会扫描它们，无需逐 ROI 分别匹配。训练任务由 `--train-parallelism` 控制的工作线程统一调度并复用工作缓冲，完成后仍按 ROI 输入顺序、再按变体顺序写入模板。矩形格式为 `x,y,width,height`，坐标以 `--template` 输入图的左上角为原点，且每个矩形必须完全位于图像内。为支持旋转/缩放变体，建议矩形在目标周围保留适量背景空白，避免变换后裁掉目标边缘。
 
 ### 训练掩码 `--template-mask`
 
@@ -144,7 +131,6 @@ features:
 ```powershell
 .\build\bin\inferrt_sample_shape_template_matching.exe `
   --mode match `
-  --version v1 `
   --load-templates "D:\data\part_templates.yaml" `
   --source "D:\data\scene.png" `
   --threshold 85 `
@@ -160,7 +146,6 @@ features:
 ```powershell
 .\build\bin\inferrt_sample_shape_template_matching.exe `
   --mode match `
-  --version v1 `
   --load-templates "D:\data\part_templates.yaml" `
   --source "D:\data\scene.png" `
   --search-mask "D:\data\scene_search_mask.png" `
@@ -169,41 +154,11 @@ features:
 
 `--search-mask` 非零区域允许搜索，零值区域会跳过；它与训练阶段的 `--template-mask` 用途不同。
 
-### 使用 v2 AVX512
-
-在支持 AVX512F 和 AVX512BW 的机器上，将同一套训练、匹配命令中的 `--version` 改为 `v2` 即可：
-
-```powershell
-.\build\bin\inferrt_sample_shape_template_matching.exe `
-  --mode train `
-  --version v2 `
-  --template "D:\data\part.png" `
-  --angle-begin -20 `
-  --angle-end 20 `
-  --angle-step 0.1 `
-  --scale-begin 0.8 `
-  --scale-end 1.2 `
-  --scale-step 0.1 `
-  --train-parallelism 0 `
-  --save-templates "D:\data\part_templates_v2.yaml"
-
-.\build\bin\inferrt_sample_shape_template_matching.exe `
-  --mode match `
-  --version v2 `
-  --load-templates "D:\data\part_templates_v2.yaml" `
-  --source "D:\data\scene.png" `
-  --threshold 85 `
-  --output "D:\data\result_v2.png"
-```
-
-`v2` 不适合 AVX512 被禁用或不具备 AVX512BW 的 CPU。例如第 12 代桌面 Intel Core i7-12700K 没有可用的 AVX512F/BW，示例会返回 `IRT_ERROR_INVALID_OPERATION`；请在该机器上使用 v1。
-
 需要更短的延迟、且允许量化的召回或定位损失时，可显式开启近似匹配选项，例如：
 
 ```powershell
 .\build\bin\inferrt_sample_shape_template_matching.exe `
   --mode match `
-  --version v1 `
   --load-templates "D:\data\part_templates.yaml" `
   --source "D:\data\scene.png" `
   --template-stride 7 `
@@ -236,10 +191,6 @@ features:
 - `--warmup`：不计入统计的预热次数，必须大于等于 `0`，默认 `3`。
 - `--repeat`：计入统计的重复次数，必须大于 `0`，默认 `10`。
 
-### 实现版本（两个阶段通用）
-
-- `--version`：选择 `v0`、`v1` 或 `v2`，默认 `v1`。三者可以读写同一模板文件格式 v4；需要验证 SIMD 路径时，可在同一输入上分别运行各版本并比较结果。v2 需要 AVX512F/BW。
-
 ### 训练参数（`--mode train`）
 
 - `--template`：训练输入图，可为目标小图或原始大图。
@@ -253,9 +204,9 @@ features:
 - `--max-label-difference`：方向环形容差，范围 `[0,4]`；值越大方向稳定性越强但区分度降低。
 - `--min-feature-distance`：模板特征点最小空间间距；`0` 按模板面积和特征数自动估计，v1 用等价空间网格加速选点。
 - `--template-scan-step`：写入模板文件的精确空间扫描步长，通常保持 `1`；匹配时可用 `--scan-step` 临时覆盖，但大于 `1` 会进入近似模式。
-- `--train-parallelism`：影响 v1/v2 的训练工作线程数；多个 ROI 时线程从同一个 `ROI × 变体` 全局任务队列领取工作。`0`（默认）自动选择，`1` 强制 SIMD 版本串行。v0 忽略该项，始终保持原始串行训练。此运行时参数不写入模板文件，也不会改变后续匹配的线程设置。
-- `--gaussian-gradient`、`--edge-nms`、`--edge-connectivity`、`--orientation-histogram`、`--polarity-invariant`、`--spatial-spread`：v1 可选梯度/方向预处理，默认关闭；会改变特征和精度，训练后配置写入 YAML。
-- `--reuse-base-features`：v1 可选旋转/缩放训练加速；每个 ROI 只抽取一次基础特征，默认关闭，可能改变最佳变体和定位。
+- `--train-parallelism`：模板训练工作线程数；多个 ROI 时线程从同一个 `ROI × 变体` 全局任务队列领取工作。`0`（默认）自动选择，`1` 强制串行。此运行时参数不写入模板文件，也不会改变后续匹配的线程设置。
+- `--gaussian-gradient`、`--edge-nms`、`--edge-connectivity`、`--orientation-histogram`、`--polarity-invariant`、`--spatial-spread`：可选梯度/方向预处理，默认关闭；会改变特征和精度，训练后配置写入 YAML。
+- `--reuse-base-features`：可选旋转/缩放训练加速；每个 ROI 只抽取一次基础特征，默认关闭，可能改变最佳变体和定位。
 - `--max-results`、`--nms`：保存到模板文件的匹配默认配置。`--nms` 为全模板库 NMS 的 IoU 阈值，负数表示关闭；`--max-results` 为最多输出的结果数。
 
 ### 匹配参数（`--mode match`）
@@ -300,7 +251,7 @@ features:
 - `--spatial-spread`：把邻域多数方向扩散到孤立弱像素。
 - `--reuse-base-features`：每个 ROI 只提取一次基础特征，旋转/缩放变体只变换坐标和方向。
 
-这些选项会改变模板特征、响应分数、最佳变体或定位，不能与 v0 的 `shape_based_matching` 基线混用。v1 默认关闭它们时，v0/v1 的模板和匹配结果继续逐字段一致。`--template-stride` 和 `--scan-step` 是匹配调用级近似开关，仍默认分别为 `1` 和 `0`。
+这些选项会改变模板特征、响应分数、最佳变体或定位，默认关闭。`--template-stride` 和 `--scan-step` 是匹配调用级近似开关，仍默认分别为 `1` 和 `0`。
 
 注意：精确 v1 的耗时会随匹配阈值明显变化。阈值较高时，SIMD 早停可以在累加少量特征后淘汰绝大多数窗口；阈值降低后，更多窗口必须完成完整特征累加，因此全图匹配可能变慢，这不是 NMS 或可选预处理造成的回归。对比速度时请固定 `--parallelism`、`--warmup 0 --repeat 1` 和阈值；输出中的 `total` 是所有重复次数的总耗时，`avg` 才是单次平均耗时。若需要接近 `shapeMatchV2` 的金字塔粗筛，应显式使用 `--template-stride`/`--scan-step` 等近似开关并单独验证召回率，默认精确路径不会跳过候选位置。
 
@@ -334,7 +285,7 @@ F:\Projects\InferRT\build\bin\inferrt_sample_shape_template_matching.exe --mode 
 
 #### match
 
-F:\Projects\InferRT\build\bin\inferrt_sample_shape_template_matching.exe --mode match --load-templates "F:\data\shape_match\part_templates.yaml" --source "F:\data\shape_match\51661.png" --threshold 85 --output "F:\data\shape_match\result.png" --version v1
+F:\Projects\InferRT\build\bin\inferrt_sample_shape_template_matching.exe --mode match --load-templates "F:\data\shape_match\part_templates.yaml" --source "F:\data\shape_match\51661.png" --threshold 85 --output "F:\data\shape_match\result.png"
 
 
 
@@ -351,7 +302,7 @@ F:\Projects\InferRT\build\bin\inferrt_sample_shape_template_matching.exe --mode 
 | v1 AVX2 | 可用 | 1,945.296 ms | 2,392.368 ms | `template=1000 / score=100 / (1289,247,437,442)` |
 | v2 AVX512F/BW | 不可用 | — | — | `IRT_ERROR_INVALID_OPERATION`：CPU 缺少 AVX512F/BW |
 
-本机 CPU 为 **12th Gen Intel Core i7-12700K**。该型号没有可用 AVX512F/BW，因此不能提供伪造的 v2 性能数据；v2 不会回退到 v1，以保证 `--version v2` 始终代表真实 AVX512 路径。已构建 v2、并加入与 v1 的条件奇偶测试；在具有 AVX512F/BW 的机器上该测试会自动执行训练和匹配逐字段对比。请使用上文的 v2 命令在支持的机器上重新测量，并将 v1/v2 的 `--warmup 0 --repeat 1` 输出按相同输入进行比较。
+本机 CPU 为 **12th Gen Intel Core i7-12700K**。自动工厂会优先选择可用的最高性能内部路径；固定实现的 parity 测试在相应指令集可用时执行，缺失指令集时明确标记为环境跳过，不用其他路径冒充结果。性能数据应在同一机器、同一构建配置和同一输入上重新测量。
 
 本次复核生成的 v1 训练产物为 `build\part_templates_v2_reverified.yaml`，它采用当前紧凑模板文件格式；旧的
 `F:\data\shape_match\part_templates.yaml` 仍为 `version: 1`，会被当前程序按设计拒绝加载。
@@ -385,7 +336,7 @@ F:\Projects\InferRT\build\bin\inferrt_sample_shape_template_matching.exe --mode 
 
 两个看似合理但在该真实场景中更慢的方案没有保留：完整得分图累加超过 180,000 ms 后超时；在少量存活 lane 时改回标量收尾为 13,845.349 ms（比阶段 2 慢 2.26×）。
 
-截至上述阶段 7 的同条件全图真实图对照为：v0 `100,158.746 ms`，v1 `2,451.975 ms`，v1 为 **40.85×** 更快（耗时降低 **97.55%**），且匹配字段一致。这是 v0/v1 的历史优化对照；独立 v2 AVX512 实现及本机可用性见上方 [v2 AVX512 真实图验证](#v2-avx512-真实图验证)。
+截至上述阶段 7 的同条件全图真实图对照为：标量参考路径 `100,158.746 ms`，AVX2 路径 `2,451.975 ms`，AVX2 为 **40.85×** 更快（耗时降低 **97.55%**），且匹配字段一致。这些数据只用于内部实现对照；消费者始终使用自动工厂。
 
 ### 可选近似配置的整体耗时
 
@@ -428,7 +379,7 @@ v1 新增了严格等价的“全图无掩膜”快路径：当调用方未传 `
 
 ### 训练输出：v0 原始路径与 v1 优化路径
 
-v0 使用当前公开的 `--version v0` 原始串行训练路径；v1 使用当前公开的 `--version v1 --train-parallelism 0` 自动并行路径。为展示本轮 v1 训练优化的整体收益，表中还保留了改动前的 v1 串行基线；它不是第三个公开版本，只用于分离“原有 v1”与“本轮训练优化”的耗时。所有数据均为一次运行。
+下表比较标量参考路径、AVX2 路径和其优化前基线；这些名称只用于内部性能记录，不是示例的公共参数。所有数据均为一次运行。
 
 | 组 | 模板 ROI `(x,y,w,h)` | 变体数 | v0 原始串行 | 改动前 v1 串行基线 | v1 优化训练 | v0 → v1 | 串行 v1 → 优化 v1 |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -441,7 +392,7 @@ v0 使用当前公开的 `--version v0` 原始串行训练路径；v1 使用当�
 
 ### 多 ROI 全局训练调度
 
-上述表逐个 ROI 调用训练接口。为避免每个 ROI 分别创建线程和工作区，当前 sample 会把同一张真实图的 5 个 ROI 与各自 2,000 个变体合并为一个 10,000 任务的全局队列。v1/v2 工作线程跨 ROI 复用仿射、梯度和候选缓冲区；提交阶段仍固定为 ROI 输入顺序、再按变体顺序，因此不改变模板 ID 或内容。以下均为 `--warmup 0 --repeat 1` 的单次结果：
+上述表逐个 ROI 调用训练接口。为避免每个 ROI 分别创建线程和工作区，当前 sample 会把同一张真实图的 5 个 ROI 与各自 2,000 个变体合并为一个 10,000 任务的全局队列。内部 SIMD 工作线程跨 ROI 复用仿射、梯度和候选缓冲区；提交阶段仍固定为 ROI 输入顺序、再按变体顺序，因此不改变模板 ID 或内容。以下均为 `--warmup 0 --repeat 1` 的单次结果：
 
 | 训练调度 | 模板数 | 单次核心训练 | 相对分 ROI 调度 | 模板与精度 |
 | --- | ---: | ---: | ---: | --- |
@@ -452,7 +403,7 @@ v0 使用当前公开的 `--version v0` 原始串行训练路径；v1 使用当�
 
 ### 本轮严格等价训练优化：候选缓冲复用
 
-在全局队列基础上，v1/v2 现在让每个训练工作线程复用一个候选点 `std::vector`：AVX2/AVX512 内核只负责向该数组追加当前变体的候选，公共流程仍使用原有的稳定 `std::sort` 比较器和原有贪心选点规则。v0 不进入该路径，保持与 `shape_based_matching` 一致的原始逐变体实现。
+在全局队列基础上，优化后的内部 SIMD 路径让每个训练工作线程复用一个候选点 `std::vector`；热点内核只负责向该数组追加当前变体的候选，公共流程仍使用稳定排序比较器和贪心选点规则。
 
 以下使用同一张 `F:\data\shape_match\51661.png`、同一 5 组 ROI、每组 2,000 个变体（共 10,000 个模板）、Release 构建、`--warmup 0 --repeat 1` 的单次真实图结果。计时只覆盖 `addTemplateVariantsBatch()`，不包含读图、ROI 裁剪和 YAML 写入。
 
@@ -526,7 +477,7 @@ E1 相对 E0 节省 147.380 ms（9.16%）。这是内存分配/释放优化，�
 训练时的开关写入模板 YAML，匹配时自动使用相同设置；必须重新训练模板，不能把开关追加到已有的不同设置模板上。命令示例：
 
 ```powershell
-build\bin\inferrt_sample_shape_template_matching.exe --mode train --version v1 `
+build\bin\inferrt_sample_shape_template_matching.exe --mode train `
   --template "E:\works\用户\wzy\picture_16_2026_06_22_15_00_22_298.png" `
   --template-roi "2034,1306,297,296" --angle-begin -5 --angle-end 5 --angle-step 0.1 `
   --features 64 --gaussian-gradient --orientation-histogram `

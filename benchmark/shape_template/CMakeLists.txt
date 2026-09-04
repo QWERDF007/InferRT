@@ -5,3 +5,8 @@ add_inferrt_benchmark(shape_template
         opencv_core
         opencv_imgproc
 )
+
+target_include_directories(${PROJECT_NAME_LOWER}_benchmark_shape_template
+    PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/features/priv
+)

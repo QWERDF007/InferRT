@@ -96,8 +96,8 @@ void validateFloat32(const std::vector<irt::TensorInfo> &infos, const char *kind
 
 } // namespace
 
-std::shared_ptr<IEngineRuntimePlan> CreateEngineRuntimePlan(const EngineConfig &config, const int device_id,
-                                                            const PipelinePlan *pipeline)
+std::shared_ptr<irt::IExecutionPlan> CreateEngineRuntimePlan(const EngineConfig &config, const int device_id,
+                                                             const PipelinePlan *pipeline)
 {
     if (const auto factory = g_factory_override.load(std::memory_order_acquire))
     {
@@ -118,6 +118,7 @@ void SetEngineRuntimePlanFactoryOverride(const EngineRuntimePlanFactory factory)
 
 TensorRTRuntimePlan::TensorRTRuntimePlan(const EngineConfig &config, const int device_id,
                                          const PipelinePlan *pipeline)
+    : supports_feature_outputs_(config.feature_only || !config.feature_tensor_names.empty())
 {
     auto backend = irt::model::CreateBackendRuntime(irt::model::ModelRuntime::Backend::TensorRT);
     if (!backend)
@@ -216,8 +217,11 @@ void TensorRTRuntimePlan::executeSession(irt::ITensorRuntimeSession &session,
                                           const std::span<const irt::BufferView> buffers,
                                           const irt::ExecuteOptions options) const
 {
-    auto normalized = irt::normalizeExecutionBuffers(buffers, inputs_, outputs_);
-    session.execute(normalized, options);
+    if (!backend_)
+    {
+        throw irt::Exception(irt::Status::INVALID_OPERATION, "TensorRT backend is not initialized");
+    }
+    backend_->executeSession(session, buffers, options);
 }
 
 std::vector<irt::TensorInfo> TensorRTRuntimePlan::inputs() const
@@ -230,9 +234,11 @@ std::vector<irt::TensorInfo> TensorRTRuntimePlan::outputs() const
     return outputs_;
 }
 
-int TensorRTRuntimePlan::fixedBatchSize() const noexcept
+irt::ExecutionCapabilities TensorRTRuntimePlan::capabilities() const noexcept
 {
-    return fixed_batch_size_;
+    return {.supports_dynamic_batch = fixed_batch_size_ == 0,
+            .supports_feature_outputs = supports_feature_outputs_,
+            .fixed_batch_size = fixed_batch_size_};
 }
 
 } // namespace irt::engine::priv

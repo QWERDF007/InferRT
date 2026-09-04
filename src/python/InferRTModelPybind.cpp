@@ -10,6 +10,7 @@
 #include <dlpack/dlpack.h>
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/core/Tensor.hpp>
+#include <inferrt/model/Buffers.hpp>
 #include <inferrt/model/ModelFactory.hpp>
 #include <inferrt/model/Utils.hpp>
 #include <inferrt/util/CheckError.hpp>
@@ -29,6 +30,10 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#ifndef INFERRT_BUILD_TENSORRT
+#define INFERRT_BUILD_TENSORRT 0
+#endif
 
 #ifndef INFERRT_BUILD_ONNX
 #define INFERRT_BUILD_ONNX 0
@@ -436,98 +441,7 @@ int currentCudaDevice()
     return device;
 }
 
-/**
- * @brief 管理一次推理所需的设备端缓冲区。
- */
-class DeviceBuffer
-{
-public:
-    DeviceBuffer() = default;
-
-    /**
-     * @brief 构造指定大小的设备缓冲区。
-     * @param num_bytes 申请的字节数。
-     */
-    explicit DeviceBuffer(size_t num_bytes)
-        : size_(num_bytes)
-    {
-        if (size_ > 0)
-        {
-            IRT_CHECK_THROW(cudaMalloc(&data_, size_), "Failed to allocate %zu bytes on device", size_);
-        }
-    }
-
-    /**
-     * @brief 析构时自动释放显存。
-     */
-    ~DeviceBuffer()
-    {
-        if (data_ != nullptr)
-        {
-            cudaFree(data_);
-        }
-    }
-
-    DeviceBuffer(const DeviceBuffer &)            = delete;
-    DeviceBuffer &operator=(const DeviceBuffer &) = delete;
-
-    /**
-     * @brief 移动构造。
-     * @param other 被移动对象。
-     */
-    DeviceBuffer(DeviceBuffer &&other) noexcept
-        : data_(other.data_)
-        , size_(other.size_)
-    {
-        other.data_ = nullptr;
-        other.size_ = 0;
-    }
-
-    /**
-     * @brief 移动赋值。
-     * @param other 被移动对象。
-     * @return 当前对象。
-     */
-    DeviceBuffer &operator=(DeviceBuffer &&other) noexcept
-    {
-        if (this == &other)
-        {
-            return *this;
-        }
-
-        if (data_ != nullptr)
-        {
-            cudaFree(data_);
-        }
-        data_       = other.data_;
-        size_       = other.size_;
-        other.data_ = nullptr;
-        other.size_ = 0;
-        return *this;
-    }
-
-    /**
-     * @brief 返回设备指针。
-     * @return 设备端地址。
-     */
-    void *data() const noexcept
-    {
-        return data_;
-    }
-
-    /**
-     * @brief 返回缓冲区大小。
-     * @return 字节数。
-     */
-    size_t size() const noexcept
-    {
-        return size_;
-    }
-
-private:
-    void  *data_{nullptr}; ///< 设备端缓冲区指针，未分配时为 nullptr。
-    size_t size_{0};       ///< 缓冲区字节数。
-};
+using DeviceBuffer = irt::model::DeviceBuffer;
 
 struct HostTensorBinding
 {
@@ -558,7 +472,7 @@ struct TensorBinding
     TensorBinding(std::string tensor_name, py::array array)
         : name(std::move(tensor_name))
         , host_array(std::move(array))
-        , device_buffer(static_cast<size_t>(host_array.nbytes()))
+        , device_buffer(static_cast<size_t>(host_array.nbytes()), irt::TensorDataType::U8)
     {
     }
 };
@@ -1283,7 +1197,7 @@ private:
             binding.host_array           = std::move(array);
             binding.host_ptr             = binding.host_array.mutable_data();
             binding.num_bytes            = static_cast<size_t>(binding.host_array.nbytes());
-            binding.staging_buffer       = DeviceBuffer(binding.num_bytes);
+            binding.staging_buffer       = DeviceBuffer(binding.num_bytes, irt::TensorDataType::U8);
             binding.device_ptr           = binding.staging_buffer.data();
             binding.copy_input_to_device = is_input;
             binding.copy_output_to_host  = !is_input;
@@ -1327,7 +1241,7 @@ private:
         if (dlDeviceIsHost(tensor.device))
         {
             binding.host_ptr             = tensor_ptr;
-            binding.staging_buffer       = DeviceBuffer(binding.num_bytes);
+            binding.staging_buffer       = DeviceBuffer(binding.num_bytes, irt::TensorDataType::U8);
             binding.device_ptr           = binding.staging_buffer.data();
             binding.copy_input_to_device = is_input;
             binding.copy_output_to_host  = !is_input;
@@ -1421,11 +1335,11 @@ private:
      * @tparam BindingType `TensorBinding` 或 `TensorBindingV2`。
      * @param inputs 输入张量绑定列表。
      * @param outputs 输出张量绑定列表。
-     * @return 先输入后输出的 typed buffer view，顺序与模型 I/O 一致。
+    * @return 先输入后输出的 typed buffer view，顺序与模型 I/O 一致。
      */
     template<typename BindingType>
-    std::vector<irt::BufferView> buildBufferList(const std::vector<BindingType> &inputs,
-                                                 const std::vector<BindingType> &outputs) const
+    std::vector<irt::BufferView> buildBufferList(std::vector<BindingType> &inputs,
+                                                  std::vector<BindingType> &outputs) const
     {
         std::vector<irt::BufferView> buffers;
         buffers.reserve(inputs.size() + outputs.size());
@@ -1453,7 +1367,7 @@ private:
                                    bytes,
                                    name};
         };
-        for (const auto &input : inputs)
+        for (auto &input : inputs)
         {
             if constexpr (std::is_same_v<BindingType, TensorBinding>)
             {
@@ -1464,7 +1378,7 @@ private:
                 buffers.push_back(make_view(input.name, input.device_ptr, input.num_bytes));
             }
         }
-        for (const auto &output : outputs)
+        for (auto &output : outputs)
         {
             if constexpr (std::is_same_v<BindingType, TensorBinding>)
             {
@@ -1517,12 +1431,12 @@ private:
      * @brief 将宿主侧输入拷贝到设备侧（按需跳过已在 GPU 的 V2 输入）。
      * @tparam BindingType `TensorBinding` 或 `TensorBindingV2`。
      * @param inputs 输入张量绑定列表。
-     * @param stream 异步拷贝使用的 CUDA stream，可为 nullptr。
+    * @param stream 异步拷贝使用的 CUDA stream，可为 nullptr。
      */
     template<typename BindingType>
-    void copyInputsToDevice(const std::vector<BindingType> &inputs, cudaStream_t stream = nullptr) const
+    void copyInputsToDevice(std::vector<BindingType> &inputs, cudaStream_t stream = nullptr) const
     {
-        for (const auto &input : inputs)
+        for (auto &input : inputs)
         {
             if constexpr (std::is_same_v<BindingType, TensorBindingV2>)
             {
@@ -1659,6 +1573,7 @@ private:
 PYBIND11_MODULE(inferrt_model_py, m)
 {
     m.doc() = "InferRT 模型 Python 扩展模块（pybind11）。";
+    m.attr("tensorrt_enabled")  = py::bool_(INFERRT_BUILD_TENSORRT != 0);
     m.attr("onnxruntime_enabled") = py::bool_(INFERRT_BUILD_ONNX != 0);
     m.attr("openvino_enabled")    = py::bool_(INFERRT_BUILD_OPENVINO != 0);
 

@@ -21,12 +21,12 @@ from test_model_dir_parity import (
     _primary_output_tolerances,
     _run_inferrt_features,
     _run_inferrt_primary,
-    _runtime_device_pairs,
     _runtime_label,
     _torch_features,
     _torch_primary,
     discover_model_dir_cases,
 )
+from helpers.runtime import available_runtime_device_pairs
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -74,7 +74,7 @@ def test_dino_pybind_matches_pytorch_forward_and_features(
 
     if not compare_runtimes:
         pytest.skip("No runtimes selected; pass --inferrt-compare-runtime=TensorRT,onnx,openvino")
-    runtime_device_pairs = _runtime_device_pairs(compare_runtimes, compare_devices)
+    runtime_device_pairs = available_runtime_device_pairs(irt_module, compare_runtimes, compare_devices)
     if not runtime_device_pairs:
         pytest.skip("No compatible runtime/device pairs selected; TensorRT requires --inferrt-compare-devices=gpu")
 

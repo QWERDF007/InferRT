@@ -98,6 +98,7 @@ def _inputs() -> dict[str, np.ndarray]:
     }
 
 
+@pytest.mark.optional_backend
 def test_sam_v1_wrapper_exports_onnxruntime_loadable_graph(tmp_path: Path, irt_module: object) -> None:
     inputs = _inputs()
     output_path = tmp_path / "sam_v1.onnx"

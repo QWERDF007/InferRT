@@ -20,7 +20,7 @@ namespace irt::engine::priv {
  * 后端运行时为同 device Slot 只读共享对象；每个 Slot 通过独立 session
  * 保存形状和地址绑定状态，因而并发 batch 之间不会相互覆盖。
  */
-class TensorRTRuntimePlan final : public IEngineRuntimePlan
+class TensorRTRuntimePlan final : public irt::IExecutionPlan
 {
 public:
     TensorRTRuntimePlan(const EngineConfig &config, int device_id,
@@ -33,14 +33,14 @@ public:
 
     [[nodiscard]] std::vector<irt::TensorInfo> inputs() const override;
     [[nodiscard]] std::vector<irt::TensorInfo> outputs() const override;
-    /** 正数表示 TensorRT engine 固定 batch；零表示 batch 维动态。 */
-    [[nodiscard]] int            fixedBatchSize() const noexcept override;
+    [[nodiscard]] irt::ExecutionCapabilities capabilities() const noexcept override;
 
 private:
     std::unique_ptr<irt::IExecutionPlan> backend_;
     std::vector<irt::TensorInfo>                        inputs_;
     std::vector<irt::TensorInfo>                        outputs_;
     int                                                 fixed_batch_size_{0};
+    bool                                                supports_feature_outputs_{false};
 };
 
 } // namespace irt::engine::priv

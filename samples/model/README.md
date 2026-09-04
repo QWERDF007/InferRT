@@ -179,7 +179,7 @@ build/bin/inferrt_sample_image_search.exe --help
 - `--model` 和 `--feature` 可切换至其他内置分类、ViT 和 DINO 特征张量
 - `--runtime` 统一选择模型后端和设备：GPU 使用 `tensorrt:0`、`onnxruntime:0` 或 `openvino:0`，CPU 使用 `onnxruntime:cpu` 或 `openvino:cpu`；也支持裸设备简写 `cpu`、`gpu:0`、`cuda:0`
 - `--norm` 选择归一化方式：`l2`、`l1` 或 `none`
-- `--preprocess-backend` 选择预处理后端：`cpu` 或 `gpu`；GPU 预处理为预留项，当前报告未实现
+- `--preprocess-backend` 选择预处理后端：`cpu` 或 `gpu`；GPU 模式使用 CVCUDA 在设备端完成颜色转换、缩放、填充/裁剪和归一化
 - `--faiss-backend` 选择 Faiss 后端：`cpu` 或 `gpu`
 - `--index-storage` 选择 CPU Faiss 搜索存储方式：`ram` 或 `disk`；`disk` 使用 IVF 配合磁盘倒排链表侧文件以支持大规模图库；GPU Faiss 当前保持 RAM 行为
 - `--model-batch-size` 同时控制特征提取和 Faiss 索引构建的批大小；默认为 `1`

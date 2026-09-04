@@ -7,6 +7,14 @@
 
 #include <cuda_runtime_api.h>
 #include <inferrt/core/Exception.hpp>
+#include <inferrt/cvcuda/OpCvtColor.h>
+#include <inferrt/cvcuda/OpCvtColor.hpp>
+#include <inferrt/cvcuda/OpLetterBox.h>
+#include <inferrt/cvcuda/OpLetterBox.hpp>
+#include <inferrt/cvcuda/OpNormalize.h>
+#include <inferrt/cvcuda/OpNormalize.hpp>
+#include <inferrt/cvcuda/OpResize.h>
+#include <inferrt/cvcuda/OpResize.hpp>
 #include <inferrt/model/Utils.hpp>
 #include <opencv2/core/utility.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -14,6 +22,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <limits>
 #include <utility>
 
 namespace fs = std::filesystem;
@@ -59,6 +68,103 @@ cv::Mat loadImageForPreprocess(const fs::path &path, const irt::PreprocessSpec &
         cv::cvtColor(image, image, cv::COLOR_BGRA2RGBA);
     }
     return image;
+}
+
+int preprocessInterpolation(const irt::Interpolation interpolation)
+{
+    switch (interpolation)
+    {
+    case irt::Interpolation::Nearest:
+        return cv::INTER_NEAREST;
+    case irt::Interpolation::Linear:
+        return cv::INTER_LINEAR;
+    case irt::Interpolation::Cubic:
+        return cv::INTER_CUBIC;
+    case irt::Interpolation::Area:
+        return cv::INTER_AREA;
+    }
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported preprocessing interpolation");
+}
+
+int preprocessColorConversion(const irt::ColorFormat source, const irt::ColorFormat destination)
+{
+    if (source == destination)
+    {
+        return -1;
+    }
+
+    using irt::ColorFormat;
+    switch (source)
+    {
+    case ColorFormat::BGR:
+        switch (destination)
+        {
+        case ColorFormat::RGB:  return cv::COLOR_BGR2RGB;
+        case ColorFormat::GRAY: return cv::COLOR_BGR2GRAY;
+        case ColorFormat::BGRA: return cv::COLOR_BGR2BGRA;
+        case ColorFormat::RGBA: return cv::COLOR_BGR2RGBA;
+        default:                break;
+        }
+        break;
+    case ColorFormat::RGB:
+        switch (destination)
+        {
+        case ColorFormat::BGR:  return cv::COLOR_RGB2BGR;
+        case ColorFormat::GRAY: return cv::COLOR_RGB2GRAY;
+        case ColorFormat::BGRA: return cv::COLOR_RGB2BGRA;
+        case ColorFormat::RGBA: return cv::COLOR_RGB2RGBA;
+        default:                break;
+        }
+        break;
+    case ColorFormat::GRAY:
+        switch (destination)
+        {
+        case ColorFormat::BGR:  return cv::COLOR_GRAY2BGR;
+        case ColorFormat::RGB:  return cv::COLOR_GRAY2RGB;
+        case ColorFormat::BGRA: return cv::COLOR_GRAY2BGRA;
+        case ColorFormat::RGBA: return cv::COLOR_GRAY2RGBA;
+        default:                break;
+        }
+        break;
+    case ColorFormat::BGRA:
+        switch (destination)
+        {
+        case ColorFormat::BGR:  return cv::COLOR_BGRA2BGR;
+        case ColorFormat::RGB:  return cv::COLOR_BGRA2RGB;
+        case ColorFormat::GRAY: return cv::COLOR_BGRA2GRAY;
+        case ColorFormat::RGBA: return cv::COLOR_BGRA2RGBA;
+        default:                break;
+        }
+        break;
+    case ColorFormat::RGBA:
+        switch (destination)
+        {
+        case ColorFormat::BGR:  return cv::COLOR_RGBA2BGR;
+        case ColorFormat::RGB:  return cv::COLOR_RGBA2RGB;
+        case ColorFormat::GRAY: return cv::COLOR_RGBA2GRAY;
+        case ColorFormat::BGRA: return cv::COLOR_RGBA2BGRA;
+        default:                break;
+        }
+        break;
+    }
+
+    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported preprocessing color conversion");
+}
+
+void requireCvcudaStatus(const IRTStatus status, const char *operation)
+{
+    if (status == IRT_SUCCESS)
+    {
+        return;
+    }
+
+    char message[IRT_MAX_STATUS_MESSAGE_LENGTH]{};
+    const auto message_status = irt::PeekAtLastErrorMessage(message, static_cast<int32_t>(sizeof(message)));
+    if (message_status != IRT_SUCCESS && message[0] != '\0')
+    {
+        throw irt::Exception(static_cast<irt::Status>(status), "%s failed: %s", operation, message);
+    }
+    throw irt::Exception(static_cast<irt::Status>(status), "%s failed", operation);
 }
 
 } // namespace
@@ -136,16 +242,21 @@ ImageFeatureExtractor::ImageFeatureExtractor(std::string model_name, std::string
     }
 
     max_batch_size_            = static_cast<size_t>(input_shape_.d[0]);
-    input_height_              = static_cast<int>(input_shape_.d[2]);
-    input_width_               = static_cast<int>(input_shape_.d[3]);
+    input_height_              = irt::checkedSizeToInt(static_cast<size_t>(input_shape_.d[2]),
+                                                       "Feature input height");
+    input_width_               = irt::checkedSizeToInt(static_cast<size_t>(input_shape_.d[3]),
+                                                       "Feature input width");
     input_elements_per_sample_ = tensorElementCount(input_shape_) / max_batch_size_;
     feature_dim_               = tensorElementCount(output_dims_) / max_batch_size_;
-    if (usesTensorRtModelBackend(config_))
+    if (usesTensorRtModelBackend(config_) || config_.preprocess_backend == ImageSearchPreprocessBackend::GPU)
     {
         irt::model::setCudaDevice(config_.model_runtime.deviceId());
         device_input_.resize(irt::checkedSizeMul(max_batch_size_, input_elements_per_sample_,
                                                  "Feature device input elements"),
                              irt::TensorDataType::F32);
+    }
+    if (usesTensorRtModelBackend(config_))
+    {
         device_output_.resize(irt::checkedSizeMul(max_batch_size_, feature_dim_,
                                                   "Feature device output elements"),
                               irt::TensorDataType::F32);
@@ -306,11 +417,14 @@ FeatureTensorBatch ImageFeatureExtractor::extractFeatureTensorBatch(const std::v
                                  "TensorRT feature extraction requires a valid CUDA stream");
         }
 
-        checkCuda(cudaMemcpyAsync(device_input_.data(), input_batch.input_data.data(),
-                                  irt::checkedSizeMul(input_batch.input_data.size(), sizeof(float),
-                                                      "Feature H2D bytes"),
-                                  cudaMemcpyHostToDevice, stream),
-                  "cudaMemcpyAsync(H2D input)");
+        if (config_.preprocess_backend != ImageSearchPreprocessBackend::GPU)
+        {
+            checkCuda(cudaMemcpyAsync(device_input_.data(), input_batch.input_data.data(),
+                                      irt::checkedSizeMul(input_batch.input_data.size(), sizeof(float),
+                                                          "Feature H2D bytes"),
+                                      cudaMemcpyHostToDevice, stream),
+                      "cudaMemcpyAsync(H2D input)");
+        }
         model_->forwardFeatures(buffers, stream_handle, true);
         checkCuda(cudaMemcpyAsync(features.data(), device_output_.data(),
                                   irt::checkedSizeMul(features.size(), sizeof(float), "Feature D2H bytes"),
@@ -394,42 +508,209 @@ nvinfer1::Dims ImageFeatureExtractor::resolveInputShape(nvinfer1::Dims input_sha
 
 void ImageFeatureExtractor::resolvePreprocessSpec()
 {
+    const int model_input_width = irt::checkedSizeToInt(static_cast<size_t>(input_shape_.d[3]),
+                                                        "Feature input width");
+    const int model_input_height = irt::checkedSizeToInt(static_cast<size_t>(input_shape_.d[2]),
+                                                         "Feature input height");
     preprocess_spec_ = config_.preprocess;
     if (preprocess_spec_.input_width == 0)
     {
-        preprocess_spec_.input_width = input_shape_.d[3];
+        preprocess_spec_.input_width = model_input_width;
     }
-    else if (preprocess_spec_.input_width != input_shape_.d[3])
+    else if (preprocess_spec_.input_width != model_input_width)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "ImageFeatureExtractor input width (%d) does not match PreprocessSpec (%d)",
-                             input_shape_.d[3], preprocess_spec_.input_width);
+                             model_input_width, preprocess_spec_.input_width);
     }
     if (preprocess_spec_.input_height == 0)
     {
-        preprocess_spec_.input_height = input_shape_.d[2];
+        preprocess_spec_.input_height = model_input_height;
     }
-    else if (preprocess_spec_.input_height != input_shape_.d[2])
+    else if (preprocess_spec_.input_height != model_input_height)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "ImageFeatureExtractor input height (%d) does not match PreprocessSpec (%d)",
-                             input_shape_.d[2], preprocess_spec_.input_height);
+                             model_input_height, preprocess_spec_.input_height);
     }
     preprocess_spec_.validate();
     config_.preprocess = preprocess_spec_;
 }
 
 ImageFeatureExtractor::PreprocessedBatch ImageFeatureExtractor::preprocessBatch(
-    const std::vector<fs::path> &image_paths, size_t begin, size_t count) const
+    const std::vector<fs::path> &image_paths, size_t begin, size_t count)
 {
     PreprocessedBatch batch;
-    batch.input_data.resize(irt::checkedSizeMul(count, input_elements_per_sample_, "Feature preprocess elements"));
+    const bool gpu_preprocess = config_.preprocess_backend == ImageSearchPreprocessBackend::GPU;
+    if (!gpu_preprocess || !usesTensorRtModelBackend(config_))
+    {
+        batch.input_data.resize(irt::checkedSizeMul(count, input_elements_per_sample_, "Feature preprocess elements"));
+    }
     batch.image_sizes.resize(count);
 
-    if (config_.preprocess_backend == ImageSearchPreprocessBackend::GPU)
+    if (gpu_preprocess)
     {
-        throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED,
-                             "ImageFeatureExtractor GPU preprocessing is not implemented");
+        if (device_input_.data() == nullptr)
+        {
+            throw irt::Exception(irt::Status::ERROR_DEVICE,
+                                 "GPU preprocessing requires an allocated device input buffer");
+        }
+
+        irt::model::setCudaDevice(config_.model_runtime.deviceId());
+        const auto stream_handle = usesTensorRtModelBackend(config_) ? model_->resolveExecutionStream() : 0;
+        const auto stream        = reinterpret_cast<cudaStream_t>(stream_handle);
+        if (usesTensorRtModelBackend(config_) && stream == nullptr)
+        {
+            throw irt::Exception(irt::Status::INVALID_OPERATION,
+                                 "TensorRT feature preprocessing requires a valid CUDA stream");
+        }
+
+        const int source_channels      = irt::colorChannels(preprocess_spec_.src_color);
+        const int destination_channels = irt::colorChannels(preprocess_spec_.dst_color);
+        const int resize_interpolation = preprocessInterpolation(preprocess_spec_.interpolation);
+        const auto target_size         = cv::Size(preprocess_spec_.input_width, preprocess_spec_.input_height);
+        const bool letterbox           = preprocess_spec_.padding_mode == irt::PaddingMode::Letterbox;
+
+        for (size_t index = 0; index < count; ++index)
+        {
+            const auto &image_path = image_paths[begin + index];
+            cv::Mat     image      = loadImageForPreprocess(image_path, preprocess_spec_);
+            if (image.empty())
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to load image: %s",
+                                     image_path.string().c_str());
+            }
+            if (image.depth() != CV_8U || image.channels() != source_channels)
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                     "Image channels do not match PreprocessSpec for %s: expected %d, got %d",
+                                     image_path.string().c_str(), source_channels, image.channels());
+            }
+
+            batch.image_sizes[index] = ImageSize{image.cols, image.rows};
+            const auto geometry = irt::resolvePreprocessGeometry(preprocess_spec_, image.cols, image.rows);
+            const auto source_size = cv::Size(image.cols, image.rows);
+            const auto source_row_bytes = irt::checkedSizeMul(static_cast<size_t>(image.cols),
+                                                              static_cast<size_t>(source_channels),
+                                                              "Feature GPU source row bytes");
+            const auto source_bytes = irt::checkedSizeMul(source_row_bytes, static_cast<size_t>(image.rows),
+                                                          "Feature GPU source bytes");
+            preprocess_source_.resize(source_bytes, irt::TensorDataType::U8);
+            checkCuda(cudaMemcpy2DAsync(preprocess_source_.data(), source_row_bytes, image.data, image.step[0],
+                                        source_row_bytes, static_cast<size_t>(image.rows), cudaMemcpyHostToDevice,
+                                        stream),
+                      "cudaMemcpy2DAsync(feature source)");
+
+            const uint8_t *color_input = static_cast<const uint8_t *>(preprocess_source_.data());
+            const auto      color_code = preprocessColorConversion(preprocess_spec_.src_color,
+                                                                    preprocess_spec_.dst_color);
+            // LetterBox applies the shared color mapping itself when source and
+            // destination have the same channel count.  Convert separately
+            // only when the channel count must change or another resize path
+            // consumes the destination color order directly.
+            const bool convert_before_resize
+                = color_code >= 0 && (!letterbox || source_channels != destination_channels);
+            if (convert_before_resize)
+            {
+                const auto converted_pixels = irt::checkedSizeMul(static_cast<size_t>(image.cols),
+                                                                   static_cast<size_t>(image.rows),
+                                                                   "Feature GPU converted pixels");
+                const auto converted_elements = irt::checkedSizeMul(converted_pixels,
+                                                                     static_cast<size_t>(destination_channels),
+                                                                     "Feature GPU converted elements");
+                preprocess_converted_.resize(converted_elements, irt::TensorDataType::U8);
+                requireCvcudaStatus(
+                    irt::cvcuda::cvtColor<uint8_t>(
+                        color_input, static_cast<uint8_t *>(preprocess_converted_.data()), source_size, color_code,
+                        stream),
+                    "cvcuda.cvtColor(feature preprocessing)");
+                color_input = static_cast<const uint8_t *>(preprocess_converted_.data());
+            }
+
+            auto *destination = static_cast<float *>(device_input_.data())
+                              + irt::checkedSizeMul(index, input_elements_per_sample_,
+                                                    "Feature GPU output offset");
+            if (letterbox)
+            {
+                auto letterbox_spec = preprocess_spec_;
+                if (convert_before_resize)
+                {
+                    letterbox_spec.src_color      = letterbox_spec.dst_color;
+                    letterbox_spec.source_channels = destination_channels;
+                }
+                requireCvcudaStatus(
+                    irt::cvcuda::letterBox(color_input, destination, source_size, target_size, destination_channels,
+                                           letterbox_spec, stream),
+                    "cvcuda.letterBox(feature preprocessing)");
+            }
+            else
+            {
+                const auto resized_size = cv::Size(geometry.resized_width, geometry.resized_height);
+                const auto resized_pixels = irt::checkedSizeMul(static_cast<size_t>(resized_size.width),
+                                                                static_cast<size_t>(resized_size.height),
+                                                                "Feature GPU resized pixels");
+                const auto resized_elements = irt::checkedSizeMul(resized_pixels,
+                                                                  static_cast<size_t>(destination_channels),
+                                                                  "Feature GPU resized elements");
+                preprocess_resized_.resize(resized_elements, irt::TensorDataType::U8);
+                requireCvcudaStatus(
+                    irt::cvcuda::resize<uint8_t>(
+                        color_input, static_cast<uint8_t *>(preprocess_resized_.data()), source_size, resized_size,
+                        destination_channels, resize_interpolation, stream),
+                    "cvcuda.resize(feature preprocessing)");
+
+                const uint8_t *normalize_input = static_cast<const uint8_t *>(preprocess_resized_.data());
+                if (preprocess_spec_.padding_mode == irt::PaddingMode::CenterCrop)
+                {
+                    const auto target_pixels = irt::checkedSizeMul(static_cast<size_t>(target_size.width),
+                                                                   static_cast<size_t>(target_size.height),
+                                                                   "Feature GPU crop pixels");
+                    const auto target_elements = irt::checkedSizeMul(target_pixels,
+                                                                      static_cast<size_t>(destination_channels),
+                                                                      "Feature GPU crop elements");
+                    preprocess_cropped_.resize(target_elements, irt::TensorDataType::U8);
+
+                    const auto resized_row_bytes = irt::checkedSizeMul(static_cast<size_t>(resized_size.width),
+                                                                       static_cast<size_t>(destination_channels),
+                                                                       "Feature GPU resized row bytes");
+                    const auto target_row_bytes = irt::checkedSizeMul(static_cast<size_t>(target_size.width),
+                                                                      static_cast<size_t>(destination_channels),
+                                                                      "Feature GPU crop row bytes");
+                    const auto crop_row_offset = irt::checkedSizeMul(static_cast<size_t>(geometry.crop_top),
+                                                                      resized_row_bytes,
+                                                                      "Feature GPU crop row offset");
+                    const auto crop_column_offset = irt::checkedSizeMul(static_cast<size_t>(geometry.crop_left),
+                                                                         static_cast<size_t>(destination_channels),
+                                                                         "Feature GPU crop column offset");
+                    const auto crop_offset = irt::checkedSizeAdd(crop_row_offset, crop_column_offset,
+                                                                 "Feature GPU crop offset");
+                    checkCuda(cudaMemcpy2DAsync(preprocess_cropped_.data(), target_row_bytes,
+                                                static_cast<const uint8_t *>(preprocess_resized_.data()) + crop_offset,
+                                                resized_row_bytes, target_row_bytes,
+                                                static_cast<size_t>(target_size.height), cudaMemcpyDeviceToDevice,
+                                                stream),
+                              "cudaMemcpy2DAsync(feature center crop)");
+                    normalize_input = static_cast<const uint8_t *>(preprocess_cropped_.data());
+                }
+
+                requireCvcudaStatus(
+                    irt::cvcuda::normalize(normalize_input, destination, target_size, destination_channels,
+                                           preprocess_spec_.mean.data(), preprocess_spec_.stddev.data(),
+                                           preprocess_spec_.scale, stream),
+                    "cvcuda.normalize(feature preprocessing)");
+            }
+        }
+
+        if (!usesTensorRtModelBackend(config_))
+        {
+            const auto input_bytes = irt::checkedSizeMul(batch.input_data.size(), sizeof(float),
+                                                         "Feature GPU host output bytes");
+            checkCuda(cudaMemcpyAsync(batch.input_data.data(), device_input_.data(), input_bytes,
+                                      cudaMemcpyDeviceToHost, stream),
+                      "cudaMemcpyAsync(feature GPU output)");
+            checkCuda(cudaStreamSynchronize(stream), "cudaStreamSynchronize(feature preprocessing)");
+        }
+        return batch;
     }
 
     // 图像解码、颜色转换、缩放和归一化互不依赖。按样本并行处理，写入各自固定的

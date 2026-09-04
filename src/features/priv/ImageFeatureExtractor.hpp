@@ -145,7 +145,7 @@ private:
     nvinfer1::Dims    resolveInputShape(nvinfer1::Dims input_shape);
     void              resolvePreprocessSpec();
     PreprocessedBatch preprocessBatch(const std::vector<std::filesystem::path> &image_paths, size_t begin,
-                                      size_t count) const;
+                                      size_t count);
     nvinfer1::Dims    setRuntimeBatchSize(size_t batch_size);
 
     std::string model_name_;   ///< 模型名称。
@@ -172,6 +172,13 @@ private:
 
     irt::model::DeviceBuffer device_input_;  ///< TensorRT 设备输入缓冲区。
     irt::model::DeviceBuffer device_output_; ///< TensorRT 设备输出缓冲区。
+
+    // GPU preprocessing scratch buffers.  They grow to the largest image
+    // seen and are reused by subsequent batches.
+    irt::model::DeviceBuffer preprocess_source_;
+    irt::model::DeviceBuffer preprocess_converted_;
+    irt::model::DeviceBuffer preprocess_resized_;
+    irt::model::DeviceBuffer preprocess_cropped_;
 };
 
 } // namespace irt::features::priv

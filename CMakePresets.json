@@ -45,7 +45,7 @@
     {
       "name": "full",
       "displayName": "Full Release",
-      "description": "Build all InferRT modules, Python bindings and optional ONNX Runtime/OpenVINO backends.",
+      "description": "Build all required InferRT modules and Python bindings; ONNX Runtime/OpenVINO are opt-in.",
       "binaryDir": "${sourceDir}/build/presets/full",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
@@ -56,8 +56,8 @@
         "INFERRT_BUILD_SAMPLES": "ON",
         "INFERRT_BUILD_BENCHMARK": "ON",
         "INFERRT_BUILD_PYTHON": "ON",
-        "INFERRT_BUILD_ONNX": "ON",
-        "INFERRT_BUILD_OPENVINO": "ON"
+        "INFERRT_BUILD_ONNX": "OFF",
+        "INFERRT_BUILD_OPENVINO": "OFF"
       }
     }
   ],

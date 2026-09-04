@@ -23,6 +23,28 @@ def test_public_header_gate_rejects_backend_leak(tmp_path: Path) -> None:
     assert findings[0].gate == "public-header"
 
 
+def test_public_header_gate_rejects_private_namespace_leak(tmp_path: Path) -> None:
+    header = tmp_path / "src/model/include/inferrt/model/Leaked.hpp"
+    header.parent.mkdir(parents=True)
+    header.write_text("std::unique_ptr<priv::IModelImpl> implementation;\n", encoding="utf-8")
+
+    findings = scan_public_headers(tmp_path)
+
+    assert len(findings) == 1
+    assert findings[0].gate == "public-header"
+
+
+def test_public_header_gate_rejects_isa_specific_shape_matcher_headers(tmp_path: Path) -> None:
+    header = tmp_path / "src/features/include/inferrt/features/v1/ShapeTemplateMatcherFast.hpp"
+    header.parent.mkdir(parents=True)
+    header.write_text("#pragma once\n", encoding="utf-8")
+
+    findings = scan_public_headers(tmp_path)
+
+    assert len(findings) == 1
+    assert findings[0].gate == "public-header"
+
+
 def test_install_config_gate_rejects_source_path(tmp_path: Path) -> None:
     source = tmp_path / "source"
     build = tmp_path / "build"

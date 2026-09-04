@@ -100,6 +100,54 @@ def test_platform_specific_dependency_root_is_used(tmp_path):
     ) == runtime_root.resolve()
 
 
+def test_platform_specific_cache_root_precedes_generic_manifest_default(tmp_path):
+    runtime_root = tmp_path / "opencv-bin"
+    runtime_root.mkdir()
+    generic_root = tmp_path / "opencv-root"
+    generic_root.mkdir()
+    build_dir = tmp_path / "build"
+    write_cache(build_dir, OpenCV_BIN_DIR=runtime_root.as_posix())
+
+    dependency = {
+        "root": "OpenCV_HOME",
+        "windows_root": "OpenCV_BIN_DIR",
+        "cmake": "cmake/ConfigOpenCV.cmake",
+        "default": generic_root.as_posix(),
+    }
+
+    assert resolve_dependency_root(
+        dependency,
+        build_dir,
+        platform="windows",
+    ) == runtime_root.resolve()
+
+
+def test_manifest_default_precedes_unexpanded_cmake_root(tmp_path, monkeypatch):
+    default_root = tmp_path / "mkl"
+    default_root.mkdir()
+    cmake_dir = tmp_path / "cmake"
+    cmake_dir.mkdir()
+    (cmake_dir / "ConfigFaiss.cmake").write_text(
+        'set(MKL_ROOT "$ENV{MKL_ROOT}" CACHE PATH "Intel MKL installation root")\n',
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("MKL_ROOT", raising=False)
+    monkeypatch.delenv("MKLROOT", raising=False)
+
+    dependency = {
+        "root": "MKL_ROOT",
+        "cmake": "cmake/ConfigFaiss.cmake",
+        "default": default_root.as_posix(),
+    }
+
+    assert resolve_dependency_root(
+        dependency,
+        tmp_path / "build",
+        repo_root=tmp_path,
+        platform="windows",
+    ) == default_root.resolve()
+
+
 def test_default_install_dir_uses_cmake_prefix(tmp_path):
     build_dir = tmp_path / "build"
     install_dir = tmp_path / "custom-install"

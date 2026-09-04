@@ -77,13 +77,31 @@ def _cmake_without_comments(path: Path) -> str:
 
 def scan_public_headers(root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    forbidden = re.compile(r"(?:NvInfer\.h|nvinfer1::|/priv/|\\priv\\)")
+    forbidden = re.compile(r"(?:NvInfer\.h|nvinfer1::|\bpriv::|::priv\b|/priv/|\\priv\\)")
+    shape_matcher_public_root = root / "src/features/include/inferrt/features"
     for relative_root in PUBLIC_ROOTS:
         directory = root / relative_root
         if not directory.is_dir():
             continue
         for path in sorted(directory.rglob("*")):
             if path.suffix.lower() not in PUBLIC_SUFFIXES:
+                continue
+            try:
+                shape_matcher_relative = path.relative_to(shape_matcher_public_root)
+            except ValueError:
+                shape_matcher_relative = None
+            if shape_matcher_relative is not None and (
+                shape_matcher_relative.parts[:1] in (("v0",), ("v1",), ("v2",))
+                or path.name == "ShapeTemplateMatcherBase.hpp"
+            ):
+                findings.append(
+                    Finding(
+                        "public-header",
+                        str(path.relative_to(root)),
+                        1,
+                        "ISA-specific shape matcher headers are not part of the public interface",
+                    )
+                )
                 continue
             for number, line in enumerate(_lines(path), 1):
                 if forbidden.search(line):
@@ -136,6 +154,7 @@ def scan_source_artifacts(root: Path, tracked_paths: Iterable[Path] | None = Non
 
 def _cmake_files(root: Path) -> list[Path]:
     paths = [root / "CMakeLists.txt"]
+    paths.append(root / "3rdparty" / "CMakeLists.txt")
     paths.extend(sorted((root / "cmake").rglob("*.cmake")))
     paths.extend(sorted((root / "src").rglob("CMakeLists.txt")))
     paths.extend(sorted((root / "tests").rglob("CMakeLists.txt")))

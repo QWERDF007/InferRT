@@ -108,7 +108,21 @@ CTest 运行前也要显式把同一套第三方运行库部署到构建输出�
 & 'D:\Software\anaconda3\envs\py312\python.exe' tools\package_runtime_dlls.py --skip-dependencies
 ```
 
-## 3. 依赖清单
+## 3. 测试报告门禁
+
+`tools/validate_test_report.py` 是 CTest/pytest JUnit 报告的统一发布门禁。它输出总数、执行数、通过数、失败数、跳过数和跳过原因；未显式允许的 skip、缺失的必需测试目标以及空执行集合都会使命令失败。
+
+```powershell
+& 'D:\Software\anaconda3\envs\py312\python.exe' tools\validate_test_report.py `
+    --report artifacts\release-gate\ctest.xml `
+    --min-executed 1 `
+    --require-case inferrt_test_core `
+    --json artifacts\release-gate\ctest-summary.json
+```
+
+CI 对可选后端和可选资源只通过明确的 `--allow-skip-regex` 规则放行；规则入口见 [`ci.yml`](../.github/workflows/ci.yml)。
+
+## 4. 依赖清单
 
 `tools/dependencies.yaml` 同时给链接脚本和打包脚本使用。
 
@@ -129,7 +143,7 @@ CTest 运行前也要显式把同一套第三方运行库部署到构建输出�
 
 文件模式支持 `*` 和 `?`。
 
-## 4. Python 环境
+## 5. Python 环境
 
 建议直接使用完整路径运行脚本：
 

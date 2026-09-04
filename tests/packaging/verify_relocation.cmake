@@ -17,7 +17,10 @@ file(REMOVE_RECURSE "${INFERRT_TEST_ROOT}")
 file(MAKE_DIRECTORY "${INFERRT_TEST_ROOT}" "${_install_dir}" "${_consumer_build}" "${_relocated_dir}"
      "${_relocated_consumer_build}")
 
-set(_consumer_config_args)
+set(_consumer_dependency_prefix_paths)
+if(DEFINED CMAKE_PREFIX_PATH AND NOT "${CMAKE_PREFIX_PATH}" STREQUAL "")
+    list(APPEND _consumer_dependency_prefix_paths ${CMAKE_PREFIX_PATH})
+endif()
 foreach(_dependency_var IN ITEMS
         CUDAToolkit_ROOT
         TRT_ROOT
@@ -29,11 +32,14 @@ foreach(_dependency_var IN ITEMS
         Faiss_HOME
         Faiss_ROOT
         MKL_ROOT
-        OpenCV_DIR)
+        OpenCV_DIR
+        OpenCV_HOME
+        OpenCV_ROOT)
     if(DEFINED ${_dependency_var} AND NOT "${${_dependency_var}}" STREQUAL "")
-        list(APPEND _consumer_config_args "-D${_dependency_var}=${${_dependency_var}}")
+        list(APPEND _consumer_dependency_prefix_paths "${${_dependency_var}}")
     endif()
 endforeach()
+list(REMOVE_DUPLICATES _consumer_dependency_prefix_paths)
 
 function(run_checked)
     execute_process(
@@ -48,11 +54,21 @@ function(run_checked)
     endif()
 endfunction()
 
+function(set_consumer_prefix_path prefix)
+    set(_consumer_prefix_path "${prefix}")
+    list(APPEND _consumer_prefix_path ${_consumer_dependency_prefix_paths})
+    list(REMOVE_DUPLICATES _consumer_prefix_path)
+    # Keep the prefix list out of execute_process()'s command argument list.
+    # CMake consumes the native CMAKE_PREFIX_PATH environment separator when
+    # configuring the child project.
+    set(ENV{CMAKE_PREFIX_PATH} "${_consumer_prefix_path}")
+endfunction()
+
 function(run_component_consumer prefix label component)
     set(_component_build "${INFERRT_TEST_ROOT}/consumer-${label}-${component}")
+    set_consumer_prefix_path("${prefix}")
     run_checked("${CMAKE_COMMAND}" -S "${INFERRT_SOURCE_DIR}/tests/packaging/component_consumer"
-                -B "${_component_build}" "-DINFERRT_COMPONENT=${component}"
-                "-DCMAKE_PREFIX_PATH=${prefix}" ${_consumer_config_args})
+                -B "${_component_build}" "-DINFERRT_COMPONENT=${component}")
     run_checked("${CMAKE_COMMAND}" --build "${_component_build}" --config Release --parallel 2)
     # The install tree intentionally contains InferRT targets only. Third-party
     # DLLs are deployed by the explicit Python packaging command, so component
@@ -62,16 +78,24 @@ endfunction()
 
 function(run_plain_features_consumer prefix label)
     set(_consumer_build "${INFERRT_TEST_ROOT}/consumer-${label}-plain-features")
+    set_consumer_prefix_path("${prefix}")
     run_checked("${CMAKE_COMMAND}" -S "${INFERRT_SOURCE_DIR}/tests/packaging/component_consumer"
-                -B "${_consumer_build}" -DINFERRT_PLAIN_FEATURES=ON
-                -DINFERRT_PRELOAD_NON_FAISS_TARGETS=ON
-                "-DCMAKE_PREFIX_PATH=${prefix}" ${_consumer_config_args})
+                -B "${_consumer_build}" -DINFERRT_PLAIN_FEATURES=ON)
     run_checked("${CMAKE_COMMAND}" --build "${_consumer_build}" --config Release --parallel 2)
 endfunction()
 
 run_checked("${CMAKE_COMMAND}" --install "${INFERRT_BUILD_DIR}" --config Release --prefix "${_install_dir}")
-run_checked("${CMAKE_COMMAND}" -S "${_consumer_source}" -B "${_consumer_build}"
-            "-DCMAKE_PREFIX_PATH=${_install_dir}" ${_consumer_config_args})
+
+foreach(_legacy_shape_matcher_isa IN ITEMS v0 v1 v2)
+    if(EXISTS "${_install_dir}/include/inferrt/features/${_legacy_shape_matcher_isa}")
+        message(FATAL_ERROR
+                "Installed public headers expose removed shape matcher ISA directory: "
+                "${_legacy_shape_matcher_isa}")
+    endif()
+endforeach()
+
+set_consumer_prefix_path("${_install_dir}")
+run_checked("${CMAKE_COMMAND}" -S "${_consumer_source}" -B "${_consumer_build}")
 run_checked("${CMAKE_COMMAND}" --build "${_consumer_build}" --config Release --parallel 2)
 
 set(_components core util ops)
@@ -106,8 +130,8 @@ run_checked("${CMAKE_COMMAND}" -E env "${_runtime_variable}" "${_consumer_exe}")
 # Move the installed prefix before the second consumer configure.  This tests
 # relocation without making a second copy of any runtime file.
 file(RENAME "${_install_dir}" "${_relocated_install_dir}")
-run_checked("${CMAKE_COMMAND}" -S "${_consumer_source}" -B "${_relocated_consumer_build}"
-            "-DCMAKE_PREFIX_PATH=${_relocated_install_dir}" ${_consumer_config_args})
+set_consumer_prefix_path("${_relocated_install_dir}")
+run_checked("${CMAKE_COMMAND}" -S "${_consumer_source}" -B "${_relocated_consumer_build}")
 run_checked("${CMAKE_COMMAND}" --build "${_relocated_consumer_build}" --config Release --parallel 2)
 
 if(INFERRT_ENABLE_CUDA AND INFERRT_BUILD_TENSORRT)

@@ -9,25 +9,40 @@ namespace {
 
 bool matchesExecutionShape(const Shape &buffer_shape, const Shape &declared_shape)
 {
-    if (buffer_shape == declared_shape)
-    {
-        return true;
-    }
-
-    // BufferView describes one request while TensorInfo may describe the
-    // complete runtime batch.  Compare the non-batch dimensions in that case.
-    if (declared_shape.rank() != buffer_shape.rank() + 1 || declared_shape.empty() || declared_shape[0] <= 0)
+    if (buffer_shape.empty() || declared_shape.empty())
     {
         return false;
     }
-    for (size_t index = 0; index < buffer_shape.rank(); ++index)
+
+    const auto matches_dimensions = [](const Shape &buffer, const Shape &declared, const size_t buffer_offset)
     {
-        if (declared_shape[index + 1] != buffer_shape[index])
+        for (size_t index = 0; index < buffer.rank(); ++index)
         {
-            return false;
+            const auto buffer_dimension   = buffer[index];
+            const auto declared_dimension = declared[index + buffer_offset];
+            if (buffer_dimension <= 0
+                || (declared_dimension >= 0 && declared_dimension != buffer_dimension))
+            {
+                return false;
+            }
         }
+        return true;
+    };
+
+    if (buffer_shape.rank() == declared_shape.rank())
+    {
+        return matches_dimensions(buffer_shape, declared_shape, 0);
     }
-    return true;
+
+    // BufferView may describe one request while TensorInfo describes the
+    // complete runtime batch.  The batch dimension is therefore omitted from
+    // the view, but all remaining dimensions still follow the declaration.
+    if (declared_shape.rank() == buffer_shape.rank() + 1)
+    {
+        return matches_dimensions(buffer_shape, declared_shape, 1);
+    }
+
+    return false;
 }
 
 } // namespace

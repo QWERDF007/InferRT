@@ -31,6 +31,14 @@ struct ExecuteOptions
     bool           non_blocking{false};
 };
 
+/** Capabilities that affect how a plan can be scheduled and consumed. */
+struct ExecutionCapabilities
+{
+    bool supports_dynamic_batch{false};
+    bool supports_feature_outputs{false};
+    int  fixed_batch_size{0};
+};
+
 class ITensorRuntimeSession;
 
 /**
@@ -65,26 +73,32 @@ public:
  * private session for mutable shapes and binding addresses, then submits
  * buffers through this one execution seam.
  */
-class INFERRT_CORE_API IExecutionPlan
+class INFERRT_CORE_API IExecutionPlan : public IExecutionDescriptor
 {
 public:
     IExecutionPlan() = default;
-    IExecutionPlan(const IExecutionPlan &) = delete;
+    IExecutionPlan(const IExecutionPlan &)            = delete;
     IExecutionPlan &operator=(const IExecutionPlan &) = delete;
+    IExecutionPlan(IExecutionPlan &&) noexcept            = default;
+    IExecutionPlan &operator=(IExecutionPlan &&) noexcept = default;
     virtual ~IExecutionPlan();
 
+    /** Return scheduler-visible backend capabilities. */
+    [[nodiscard]] virtual ExecutionCapabilities capabilities() const = 0;
     [[nodiscard]] virtual std::unique_ptr<ITensorRuntimeSession> createSession() const = 0;
     virtual void executeSession(ITensorRuntimeSession &session, std::span<const BufferView> buffers,
                                 ExecuteOptions options = {}) const = 0;
 };
 
 /** Backend-neutral model execution contract shared by model and engine adapters. */
-class INFERRT_CORE_API IExecutableModel : public IExecutionDescriptor
+class INFERRT_CORE_API IExecutableModel : public IExecutionPlan
 {
 public:
     IExecutableModel() = default;
-    IExecutableModel(const IExecutableModel &) = default;
-    IExecutableModel &operator=(const IExecutableModel &) = default;
+    IExecutableModel(const IExecutableModel &)            = delete;
+    IExecutableModel &operator=(const IExecutableModel &) = delete;
+    IExecutableModel(IExecutableModel &&) noexcept            = default;
+    IExecutableModel &operator=(IExecutableModel &&) noexcept = default;
     ~IExecutableModel() override;
 
     virtual void setInputShape(const std::string &name, Shape shape) = 0;

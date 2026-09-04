@@ -4,6 +4,7 @@
 #include <inferrt/core/Status.h>
 
 #include "priv/BackendRuntime.hpp"
+#include "priv/IModelImpl.hpp"
 
 #include <cuda_runtime_api.h>
 
@@ -42,6 +43,56 @@ struct FakeBackendState
 };
 
 FakeBackendState *g_fake_backend_state = nullptr;
+
+class SessionDescriptorTestSession final : public irt::ITensorRuntimeSession
+{
+public:
+    explicit SessionDescriptorTestSession(FakeBackendState &state) : state_(state) {}
+
+    irt::Shape tensorShape(const std::string &tensor_name) const override
+    {
+        if (tensor_name != "input" && tensor_name != "output")
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "unknown session tensor: %s",
+                                 tensor_name.c_str());
+        }
+        return shape_;
+    }
+
+    irt::TensorDataType tensorDataType(const std::string &tensor_name) const override
+    {
+        if (tensor_name != "input" && tensor_name != "output")
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "unknown session tensor: %s",
+                                 tensor_name.c_str());
+        }
+        return irt::TensorDataType::F32;
+    }
+
+    void setTensorShape(const std::string &tensor_name, const irt::Shape &shape) override
+    {
+        if (tensor_name != "input")
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "unknown session input: %s",
+                                 tensor_name.c_str());
+        }
+        shape_ = shape;
+    }
+
+    void execute(std::span<const irt::BufferView> buffers, irt::ExecuteOptions = {}) override
+    {
+        state_.last_execute_names.clear();
+        for (const auto &buffer : buffers)
+        {
+            state_.last_execute_names.push_back(buffer.tensor_name);
+        }
+        ++state_.infer_calls;
+    }
+
+private:
+    FakeBackendState &state_;
+    irt::Shape        shape_{2, 3, 2, 2};
+};
 
 class TransactionTestBackend final : public irt::model::IBackendRuntime
 {
@@ -104,7 +155,12 @@ public:
 
     void setTensorShape(const std::string &, const irt::Shape &) override {}
 
-    void execute(std::span<const irt::BufferView> buffers, irt::ExecuteOptions = {}) override
+    std::unique_ptr<irt::ITensorRuntimeSession> createSession() const override
+    {
+        return std::make_unique<SessionDescriptorTestSession>(state_);
+    }
+
+    void executeNormalized(std::span<const irt::BufferView> buffers, irt::ExecuteOptions = {}) override
     {
         if (state_.fail_next_execute.exchange(false))
         {
@@ -173,6 +229,8 @@ std::vector<irt::BufferView> MakeTransactionExecutionBuffers(irt::model::IModel 
 TEST(BackendRuntimeContractTest, ImplementsTheSharedCoreExecutionContract)
 {
     static_assert(std::is_base_of_v<irt::IExecutableModel, irt::model::IBackendRuntime>);
+    static_assert(std::is_base_of_v<irt::IExecutableModel, irt::model::IModel::Implementation>);
+    static_assert(std::is_base_of_v<irt::IExecutableModel, irt::model::priv::IModelImpl>);
 
     FakeBackendState state;
     TransactionTestBackend backend(state);
@@ -191,7 +249,50 @@ TEST(BackendRuntimeContractTest, ImplementsTheSharedCoreExecutionContract)
     EXPECT_EQ(output_infos.front().mode, irt::TensorIOMode::Output);
     EXPECT_EQ(output_infos.front().desc.data_type, irt::TensorDataType::F32);
 
+    const auto capabilities = executable.capabilities();
+    EXPECT_FALSE(capabilities.supports_dynamic_batch);
+    EXPECT_FALSE(capabilities.supports_feature_outputs);
+    EXPECT_EQ(capabilities.fixed_batch_size, 1);
+
     EXPECT_NO_THROW(executable.setInputShape("input", irt::Shape{1, 3, 2, 2}));
+}
+
+TEST(BackendRuntimeContractTest, DirectExecutionCanonicalizesNamedBuffers)
+{
+    FakeBackendState state;
+    TransactionTestBackend backend(state);
+
+    const auto input_info  = backend.inputs().front();
+    const auto output_info = backend.outputs().front();
+    std::vector<float> input(input_info.desc.elementCount(), 1.0F);
+    std::vector<float> output(output_info.desc.elementCount(), 0.0F);
+    const irt::BufferView input_buffer{input.data(), input_info.desc, input_info.desc.byteSize(), 1,
+                                       input_info.desc.byteSize(), input_info.name};
+    const irt::BufferView output_buffer{output.data(), output_info.desc, output_info.desc.byteSize(), 1,
+                                        output_info.desc.byteSize(), output_info.name};
+
+    const std::vector<irt::BufferView> caller_order{output_buffer, input_buffer};
+    ASSERT_NO_THROW(backend.execute(caller_order));
+    EXPECT_EQ(state.last_execute_names, (std::vector<std::string>{"input", "output"}));
+}
+
+TEST(BackendRuntimeContractTest, SessionExecutionUsesTheSessionTensorDescriptors)
+{
+    FakeBackendState state;
+    TransactionTestBackend backend(state);
+    auto session = backend.createSession();
+
+    const irt::TensorDesc session_desc{irt::TensorDataType::F32, irt::TensorLayout::NCHW, irt::MemoryKind::HOST,
+                                       irt::Shape{2, 3, 2, 2}};
+    std::vector<float> input(session_desc.elementCount(), 1.0F);
+    std::vector<float> output(session_desc.elementCount(), 0.0F);
+    const std::vector<irt::BufferView> buffers{
+        {output.data(), session_desc, session_desc.byteSize(), 1, session_desc.byteSize(), "output"},
+        {input.data(), session_desc, session_desc.byteSize(), 1, session_desc.byteSize(), "input"},
+    };
+
+    ASSERT_NO_THROW(backend.executeSession(*session, buffers));
+    EXPECT_EQ(state.last_execute_names, (std::vector<std::string>{"input", "output"}));
 }
 
 TEST(IModelExecutionContractTest, CanonicalizesNamedBuffersIndependentOfCallerOrder)
@@ -1057,6 +1158,14 @@ TEST(IModelConfigValidationTest, SetInputShapesRejectsEmptyOrNonPositiveDimensio
     EXPECT_THROW(config.setInputShape(irt::Shape{-1, 3, 224, 224}), irt::Exception);
     EXPECT_THROW(config.setNumClasses(0), irt::Exception);
     EXPECT_THROW(config.setNumClasses(-5), irt::Exception);
+}
+
+TEST(IModelLifecycleTest, InvalidHandleRejectsExecutionCapabilitiesQuery)
+{
+    irt::model::IModel model;
+
+    EXPECT_FALSE(model.isValid());
+    ExpectIrtExceptionCode([&] { (void)model.capabilities(); }, irt::Status::INVALID_OPERATION);
 }
 
 TEST(IModelLifecycleTest, StrongExceptionSafetyOnFailedLoadPreservesConfig)

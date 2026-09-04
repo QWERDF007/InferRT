@@ -12,23 +12,8 @@ project(InferRTComponentConsumer LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-if(INFERRT_PRELOAD_NON_FAISS_TARGETS)
-    foreach(_dependency_target IN ITEMS
-            CUDA::cudart
-            opencv_core
-            opencv_imgcodecs
-            opencv_imgproc
-            TensorRT
-            ONNXRuntime::ONNXRuntime
-            openvino::runtime)
-        if(NOT TARGET ${_dependency_target})
-            add_library(${_dependency_target} INTERFACE IMPORTED)
-        endif()
-    endforeach()
-endif()
-
 if(INFERRT_PLAIN_FEATURES)
-    find_package(InferRT CONFIG REQUIRED)
+    find_package(InferRT CONFIG REQUIRED COMPONENTS features)
 else()
     find_package(InferRT CONFIG REQUIRED COMPONENTS "${_consumer_component}")
 endif()

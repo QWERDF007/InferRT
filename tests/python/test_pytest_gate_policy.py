@@ -24,6 +24,8 @@ class _MarkedItem:
         (("slow",), True),
         (("integration", "optional_resource"), False),
         (("slow", "optional_resource"), False),
+        (("integration", "optional_backend"), False),
+        (("slow", "optional_backend"), False),
         (tuple(), False),
     ),
 )

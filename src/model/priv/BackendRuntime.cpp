@@ -4,12 +4,15 @@
 #include <inferrt/core/Exception.hpp>
 
 #include <atomic>
+#include <limits>
 
 namespace irt::model {
 
 namespace {
 
-std::vector<irt::TensorInfo> describeIo(const IBackendRuntime &backend, const irt::TensorIOMode mode)
+template <typename TensorDescriptor>
+std::vector<irt::TensorInfo> describeIo(const IBackendRuntime &backend, const TensorDescriptor &descriptor,
+                                        const irt::TensorIOMode mode)
 {
     const auto names = backend.ioTensorNames(mode);
     std::vector<irt::TensorInfo> result;
@@ -18,8 +21,8 @@ std::vector<irt::TensorInfo> describeIo(const IBackendRuntime &backend, const ir
     {
         result.push_back(irt::TensorInfo{
             name,
-            irt::TensorDesc{backend.tensorDataType(name), irt::TensorLayout::Opaque, backend.ioMemoryKind(mode),
-                            backend.tensorShape(name)},
+            irt::TensorDesc{descriptor.tensorDataType(name), irt::TensorLayout::Opaque, backend.ioMemoryKind(mode),
+                            descriptor.tensorShape(name)},
             mode == irt::TensorIOMode::Input ? irt::TensorIOMode::Input : irt::TensorIOMode::Output});
     }
     return result;
@@ -29,12 +32,57 @@ std::vector<irt::TensorInfo> describeIo(const IBackendRuntime &backend, const ir
 
 std::vector<irt::TensorInfo> IBackendRuntime::inputs() const
 {
-    return describeIo(*this, irt::TensorIOMode::Input);
+    return describeIo(*this, *this, irt::TensorIOMode::Input);
 }
 
 std::vector<irt::TensorInfo> IBackendRuntime::outputs() const
 {
-    return describeIo(*this, irt::TensorIOMode::Output);
+    return describeIo(*this, *this, irt::TensorIOMode::Output);
+}
+
+irt::ExecutionCapabilities IBackendRuntime::capabilities() const
+{
+    const auto input_infos = inputs();
+    if (input_infos.empty())
+    {
+        throw irt::Exception(Status::INVALID_OPERATION, "Backend runtime exposes no input tensors");
+    }
+
+    bool dynamic_batch = false;
+    int  fixed_batch   = 0;
+    for (const auto &info : input_infos)
+    {
+        if (info.desc.shape.rank() == 0)
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                                 "Backend input tensor has no batch dimension: %s", info.name.c_str());
+        }
+
+        if (isInputBatchDynamic(info.name))
+        {
+            dynamic_batch = true;
+            continue;
+        }
+
+        const auto batch = info.desc.shape[0];
+        if (batch <= 0 || batch > static_cast<int64_t>((std::numeric_limits<int>::max)()))
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                                 "Backend input tensor has an invalid fixed batch size: %s", info.name.c_str());
+        }
+
+        const int current_batch = static_cast<int>(batch);
+        if (fixed_batch != 0 && fixed_batch != current_batch)
+        {
+            throw irt::Exception(Status::ERROR_INVALID_ARGUMENT,
+                                 "Backend input tensors use different fixed batch sizes");
+        }
+        fixed_batch = current_batch;
+    }
+
+    return {.supports_dynamic_batch = dynamic_batch,
+            .supports_feature_outputs = false,
+            .fixed_batch_size = dynamic_batch ? 0 : fixed_batch};
 }
 
 void IBackendRuntime::setInputShape(const std::string &tensor_name, irt::Shape shape)
@@ -45,6 +93,12 @@ void IBackendRuntime::setInputShape(const std::string &tensor_name, irt::Shape s
     }
     (void)shape.elementCount();
     setTensorShape(tensor_name, shape);
+}
+
+void IBackendRuntime::execute(const std::span<const irt::BufferView> buffers, const irt::ExecuteOptions options)
+{
+    auto normalized = irt::normalizeExecutionBuffers(buffers, inputs(), outputs());
+    executeNormalized(normalized, options);
 }
 
 std::unique_ptr<irt::ITensorRuntimeSession> IBackendRuntime::createSession() const
@@ -58,7 +112,9 @@ void IBackendRuntime::executeSession(irt::ITensorRuntimeSession &session,
                                      const std::span<const irt::BufferView> buffers,
                                      const irt::ExecuteOptions options) const
 {
-    auto normalized = irt::normalizeExecutionBuffers(buffers, inputs(), outputs());
+    const auto session_inputs  = describeIo(*this, session, irt::TensorIOMode::Input);
+    const auto session_outputs = describeIo(*this, session, irt::TensorIOMode::Output);
+    auto       normalized      = irt::normalizeExecutionBuffers(buffers, session_inputs, session_outputs);
     session.execute(normalized, options);
 }
 

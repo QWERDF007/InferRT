@@ -10,14 +10,18 @@
 
 #include <memory>
 
-namespace irt::cvcuda::priv {
-class IOperatorImpl;
-}
-
-using OperatorHandle = irt::cvcuda::priv::IOperatorImpl *;
-using OperatorImplPtr = std::unique_ptr<irt::cvcuda::priv::IOperatorImpl>;
-
 namespace irt::cvcuda {
+
+/** Opaque implementation seam shared by public operator wrappers. */
+class OperatorImplementation
+{
+public:
+    virtual ~OperatorImplementation() = default;
+};
+
+using OperatorHandle  = OperatorImplementation *;
+using OperatorImplPtr = std::unique_ptr<OperatorImplementation>;
+
 class INFERRT_CVCUDA_API IOperator
 {
 public:

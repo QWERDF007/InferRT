@@ -15,72 +15,243 @@
 #include <inferrt/core/Status.h>
 #include <inferrt/cvcuda/OpLetterBox.h>
 #include <inferrt/cvcuda/OpLetterBox.hpp>
-#include <opencv2/opencv.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace {
 
 using irt::cvcuda::test::AssertInferRTSuccess;
 
-/**
- * @brief 使用 OpenCV 在 CPU 上生成 LetterBox 参考输出
- *
- * 算法与 GPU 实现一致：等比缩放至目标画布内，居中粘贴，空白区域填充 114/255，
- * 输出为 CHW 布局的 float [0,1]；彩色通道由 BGR 转为 RGB。
- *
- * @param src 源图像（HWC，uint8）
- * @param dsize 目标画布尺寸（宽 × 高）
- * @return CHW 浮点张量，长度 ch × dsize.width × dsize.height
- */
-std::vector<float> makeLetterBoxReference(const cv::Mat &src, cv::Size dsize)
+int cvInterpolation(const irt::Interpolation interpolation)
 {
-    const int src_w = src.cols;
-    const int src_h = src.rows;
-    const int ch    = src.channels();
-
-    const double r_w   = static_cast<double>(dsize.width) / src_w;
-    const double r_h   = static_cast<double>(dsize.height) / src_h;
-    const double ratio = std::min(r_w, r_h);
-
-    int resized_w = std::max(1, static_cast<int>(std::round(src_w * ratio)));
-    int resized_h = std::max(1, static_cast<int>(std::round(src_h * ratio)));
-    resized_w     = std::min(resized_w, dsize.width);
-    resized_h     = std::min(resized_h, dsize.height);
-
-    const int left       = static_cast<int>(std::round((dsize.width - resized_w) / 2 - 0.1));
-    const int top        = static_cast<int>(std::round((dsize.height - resized_h) / 2 - 0.1));
-    const int plane_size = dsize.width * dsize.height;
-
-    std::vector<float> ref(static_cast<size_t>(ch) * plane_size, 114.0f / 255.0f);
-
-    cv::Mat resized;
-    cv::resize(src, resized, cv::Size(resized_w, resized_h), 0.0, 0.0, cv::INTER_LINEAR);
-
-    for (int y = 0; y < resized_h; ++y)
+    switch (interpolation)
     {
-        for (int x = 0; x < resized_w; ++x)
-        {
-            const int dst_idx = (top + y) * dsize.width + (left + x);
-            if (ch == 1)
-            {
-                ref[dst_idx] = resized.at<uint8_t>(y, x) / 255.0f;
-            }
-            else
-            {
-                const cv::Vec3b pixel         = resized.at<cv::Vec3b>(y, x);
-                ref[0 * plane_size + dst_idx] = pixel[2] / 255.0f;
-                ref[1 * plane_size + dst_idx] = pixel[1] / 255.0f;
-                ref[2 * plane_size + dst_idx] = pixel[0] / 255.0f;
-            }
-        }
+    case irt::Interpolation::Nearest:
+        return cv::INTER_NEAREST;
+    case irt::Interpolation::Linear:
+        return cv::INTER_LINEAR;
+    case irt::Interpolation::Cubic:
+        return cv::INTER_CUBIC;
+    case irt::Interpolation::Area:
+        return cv::INTER_AREA;
+    }
+    throw std::invalid_argument("unsupported interpolation");
+}
+
+int colorConversionCode(const irt::ColorFormat source, const irt::ColorFormat destination)
+{
+    if (source == destination)
+    {
+        return -1;
     }
 
-    return ref;
+    using irt::ColorFormat;
+    switch (source)
+    {
+    case ColorFormat::BGR:
+        switch (destination)
+        {
+        case ColorFormat::RGB:  return cv::COLOR_BGR2RGB;
+        case ColorFormat::GRAY: return cv::COLOR_BGR2GRAY;
+        case ColorFormat::BGRA: return cv::COLOR_BGR2BGRA;
+        case ColorFormat::RGBA: return cv::COLOR_BGR2RGBA;
+        default:                break;
+        }
+        break;
+    case ColorFormat::RGB:
+        switch (destination)
+        {
+        case ColorFormat::BGR:  return cv::COLOR_RGB2BGR;
+        case ColorFormat::GRAY: return cv::COLOR_RGB2GRAY;
+        case ColorFormat::BGRA: return cv::COLOR_RGB2BGRA;
+        case ColorFormat::RGBA: return cv::COLOR_RGB2RGBA;
+        default:                break;
+        }
+        break;
+    case ColorFormat::GRAY:
+        switch (destination)
+        {
+        case ColorFormat::BGR:  return cv::COLOR_GRAY2BGR;
+        case ColorFormat::RGB:  return cv::COLOR_GRAY2RGB;
+        case ColorFormat::BGRA: return cv::COLOR_GRAY2BGRA;
+        case ColorFormat::RGBA: return cv::COLOR_GRAY2RGBA;
+        default:                break;
+        }
+        break;
+    case ColorFormat::BGRA:
+        switch (destination)
+        {
+        case ColorFormat::BGR:  return cv::COLOR_BGRA2BGR;
+        case ColorFormat::RGB:  return cv::COLOR_BGRA2RGB;
+        case ColorFormat::GRAY: return cv::COLOR_BGRA2GRAY;
+        case ColorFormat::RGBA: return cv::COLOR_BGRA2RGBA;
+        default:                break;
+        }
+        break;
+    case ColorFormat::RGBA:
+        switch (destination)
+        {
+        case ColorFormat::BGR:  return cv::COLOR_RGBA2BGR;
+        case ColorFormat::RGB:  return cv::COLOR_RGBA2RGB;
+        case ColorFormat::GRAY: return cv::COLOR_RGBA2GRAY;
+        case ColorFormat::BGRA: return cv::COLOR_RGBA2BGRA;
+        default:                break;
+        }
+        break;
+    }
+    throw std::invalid_argument("unsupported color conversion");
 }
+
+std::vector<float> makePreprocessSpecReference(const cv::Mat &src, const irt::PreprocessSpec &spec)
+{
+    spec.validate();
+    const int expected_source_channels = irt::colorChannels(spec.src_color);
+    if (src.depth() != CV_8U || src.channels() != expected_source_channels)
+    {
+        throw std::invalid_argument("reference preprocessing source format is invalid");
+    }
+
+    cv::Mat converted;
+    const int conversion = colorConversionCode(spec.src_color, spec.dst_color);
+    if (conversion < 0)
+    {
+        converted = src;
+    }
+    else
+    {
+        cv::cvtColor(src, converted, conversion);
+    }
+
+    const auto geometry = irt::resolvePreprocessGeometry(spec, src.cols, src.rows);
+    const cv::Size target(spec.input_width, spec.input_height);
+    const int interpolation = cvInterpolation(spec.interpolation);
+    cv::Mat resized;
+    cv::Rect content_rect;
+    switch (spec.padding_mode)
+    {
+    case irt::PaddingMode::DirectResize:
+        cv::resize(converted, resized, target, 0.0, 0.0, interpolation);
+        break;
+    case irt::PaddingMode::Letterbox:
+        cv::resize(converted, resized, cv::Size(geometry.resized_width, geometry.resized_height), 0.0, 0.0,
+                   interpolation);
+        content_rect = cv::Rect(geometry.pad_left, geometry.pad_top, resized.cols, resized.rows);
+        if (!spec.pad_after_normalize)
+        {
+            cv::Mat canvas(target.height, target.width, resized.type(),
+                           cv::Scalar(spec.pad_value, spec.pad_value, spec.pad_value, spec.pad_value));
+            resized.copyTo(canvas(content_rect));
+            resized = std::move(canvas);
+        }
+        break;
+    case irt::PaddingMode::CenterCrop:
+        cv::resize(converted, resized, cv::Size(geometry.resized_width, geometry.resized_height), 0.0, 0.0,
+                   interpolation);
+        resized = resized(cv::Rect(geometry.crop_left, geometry.crop_top, target.width, target.height)).clone();
+        break;
+    }
+
+    cv::Mat normalized;
+    resized.convertTo(normalized, CV_MAKETYPE(CV_32F, spec.input_channels), spec.scale);
+    std::vector<cv::Mat> channels;
+    cv::split(normalized, channels);
+    for (size_t channel = 0; channel < channels.size(); ++channel)
+    {
+        channels[channel].convertTo(channels[channel], CV_32F, 1.0, -spec.mean[channel]);
+        channels[channel] /= spec.stddev[channel];
+    }
+    cv::merge(channels, normalized);
+
+    if (spec.pad_after_normalize)
+    {
+        cv::Mat padded = cv::Mat::zeros(target.height, target.width, normalized.type());
+        normalized.copyTo(padded(content_rect));
+        normalized = std::move(padded);
+    }
+
+    const size_t plane_size = normalized.total();
+    std::vector<float> tensor(plane_size * static_cast<size_t>(normalized.channels()));
+    cv::split(normalized, channels);
+    for (size_t channel = 0; channel < channels.size(); ++channel)
+    {
+        std::memcpy(tensor.data() + channel * plane_size, channels[channel].ptr<float>(),
+                    plane_size * sizeof(float));
+    }
+    return tensor;
+}
+
+template<typename Caller>
+void runPreprocessSpecParity(const cv::Mat &source, const irt::PreprocessSpec &spec, Caller caller)
+{
+    const std::vector<float> reference = makePreprocessSpecReference(source, spec);
+    const size_t row_bytes = source.cols * source.elemSize();
+    const size_t source_bytes = source.step * static_cast<size_t>(source.rows);
+    const size_t destination_bytes = reference.size() * sizeof(float);
+
+    uint8_t *d_source = nullptr;
+    float   *d_destination = nullptr;
+    ASSERT_EQ(cudaMalloc(&d_source, source_bytes), cudaSuccess);
+    ASSERT_EQ(cudaMalloc(&d_destination, destination_bytes), cudaSuccess);
+    ASSERT_EQ(cudaMemcpy2D(d_source, source.step, source.data, source.step, row_bytes,
+                           static_cast<size_t>(source.rows), cudaMemcpyHostToDevice), cudaSuccess);
+
+    const int ret = caller(d_source, d_destination, cv::Size(source.cols, source.rows),
+                           cv::Size(spec.input_width, spec.input_height), source.channels(), source.step, spec,
+                           nullptr);
+    ASSERT_TRUE(AssertInferRTSuccess(ret));
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+
+    std::vector<float> actual(reference.size());
+    ASSERT_EQ(cudaMemcpy(actual.data(), d_destination, destination_bytes, cudaMemcpyDeviceToHost), cudaSuccess);
+    ASSERT_EQ(cudaFree(d_source), cudaSuccess);
+    ASSERT_EQ(cudaFree(d_destination), cudaSuccess);
+
+    float  max_diff = 0.0F;
+    size_t max_index = 0;
+    for (size_t index = 0; index < actual.size(); ++index)
+    {
+        const float diff = std::abs(actual[index] - reference[index]);
+        if (diff > max_diff)
+        {
+            max_diff  = diff;
+            max_index = index;
+        }
+    }
+    const float minimum_stddev = *std::min_element(spec.stddev.begin(), spec.stddev.end());
+    EXPECT_LE(max_diff, 3.0F / 255.0F / minimum_stddev + 1e-6F)
+        << "max_index=" << max_index << " actual=" << actual[max_index]
+        << " reference=" << reference[max_index];
+}
+
+irt::PreprocessSpec makeSpec(const int width, const int height, const int channels,
+                             const irt::ColorFormat source_color, const irt::ColorFormat destination_color)
+{
+    irt::PreprocessSpec spec;
+    spec.input_width     = width;
+    spec.input_height    = height;
+    spec.input_channels  = channels;
+    spec.source_channels = channels;
+    spec.src_color       = source_color;
+    spec.dst_color       = destination_color;
+    spec.padding_mode    = irt::PaddingMode::Letterbox;
+    spec.mean.assign(static_cast<size_t>(channels), 0.0F);
+    spec.stddev.assign(static_cast<size_t>(channels), 1.0F);
+    return spec;
+}
+
+auto runSharedSpecLetterBox = [](const uint8_t *source, float *destination, const cv::Size source_size,
+                                 const cv::Size destination_size, const int channels, const size_t source_stride,
+                                 const irt::PreprocessSpec &spec, cudaStream_t stream) {
+    return irt::cvcuda::letterBox(source, destination, source_size, destination_size, channels, spec, source_stride,
+                                   stream);
+};
 
 /**
  * @brief 公共 LetterBox 测试逻辑
@@ -105,7 +276,12 @@ void runLetterBoxTest(int src_w, int src_h, int ch, cv::Size dsize, Caller calle
     cv::Mat src(src_h, src_w, CV_MAKETYPE(CV_8U, ch));
     cv::randu(src, cv::Scalar::all(0), cv::Scalar::all(255));
 
-    const std::vector<float> ref = makeLetterBoxReference(src, dsize);
+    const auto source_color = ch == 1 ? irt::ColorFormat::GRAY
+                                      : ch == 4 ? irt::ColorFormat::BGRA : irt::ColorFormat::BGR;
+    const auto destination_color = ch == 1 ? irt::ColorFormat::GRAY
+                                           : ch == 4 ? irt::ColorFormat::RGBA : irt::ColorFormat::RGB;
+    const auto spec = makeSpec(dsize.width, dsize.height, ch, source_color, destination_color);
+    const std::vector<float> ref = makePreprocessSpecReference(src, spec);
 
     const size_t src_bytes = static_cast<size_t>(src_w) * src_h * ch * sizeof(uint8_t);
     const size_t dst_bytes = static_cast<size_t>(dsize.width) * dsize.height * ch * sizeof(float);
@@ -141,6 +317,72 @@ void runLetterBoxTest(int src_w, int src_h, int ch, cv::Size dsize, Caller calle
 // ============================================================================
 // 功能正确性测试
 // ============================================================================
+
+TEST(PreprocessSpecParityTest, BgrSpecUsesResolvedOddPadding)
+{
+    const cv::Mat source(3, 5, CV_8UC3, cv::Scalar(10, 20, 30));
+    const auto spec = makeSpec(9, 8, 3, irt::ColorFormat::BGR, irt::ColorFormat::RGB);
+
+    const auto geometry = irt::resolvePreprocessGeometry(spec, source.cols, source.rows);
+    ASSERT_EQ(geometry.resized_width, 9);
+    ASSERT_EQ(geometry.resized_height, 5);
+    ASSERT_EQ(geometry.pad_left, 0);
+    ASSERT_EQ(geometry.pad_top, 1);
+    runPreprocessSpecParity(source, spec, runSharedSpecLetterBox);
+}
+
+TEST(PreprocessSpecParityTest, GraySpecSupportsExtremeAspectRatio)
+{
+    cv::Mat source(1, 31, CV_8UC1);
+    for (int x = 0; x < source.cols; ++x)
+    {
+        source.at<uint8_t>(0, x) = static_cast<uint8_t>(x * 7);
+    }
+    const auto spec = makeSpec(7, 5, 1, irt::ColorFormat::GRAY, irt::ColorFormat::GRAY);
+
+    const auto geometry = irt::resolvePreprocessGeometry(spec, source.cols, source.rows);
+    ASSERT_EQ(geometry.resized_width, 7);
+    ASSERT_EQ(geometry.resized_height, 1);
+    runPreprocessSpecParity(source, spec, runSharedSpecLetterBox);
+}
+
+TEST(PreprocessSpecParityTest, BgraSpecPadsAfterNormalization)
+{
+    cv::Mat source(2, 4, CV_8UC4);
+    for (int y = 0; y < source.rows; ++y)
+    {
+        for (int x = 0; x < source.cols; ++x)
+        {
+            source.at<cv::Vec4b>(y, x) = cv::Vec4b(static_cast<uint8_t>(x + 1), static_cast<uint8_t>(y + 2),
+                                                   30, 255);
+        }
+    }
+
+    auto spec = makeSpec(7, 7, 4, irt::ColorFormat::BGRA, irt::ColorFormat::RGBA);
+    spec.pad_value         = 77.0F;
+    spec.pad_after_normalize = true;
+    spec.scale              = 1.0F / 255.0F;
+    spec.mean               = {0.1F, 0.2F, 0.3F, 0.4F};
+    spec.stddev             = {0.5F, 0.6F, 0.7F, 0.8F};
+    runPreprocessSpecParity(source, spec, runSharedSpecLetterBox);
+}
+
+TEST(PreprocessSpecParityTest, NonContinuousBgrSourceUsesItsRowStride)
+{
+    cv::Mat backing(5, 9, CV_8UC3, cv::Scalar(0, 0, 0));
+    cv::Mat source = backing(cv::Rect(1, 1, 5, 3));
+    ASSERT_FALSE(source.isContinuous());
+    for (int y = 0; y < source.rows; ++y)
+    {
+        for (int x = 0; x < source.cols; ++x)
+        {
+            source.at<cv::Vec3b>(y, x) = cv::Vec3b(static_cast<uint8_t>(x + 1), static_cast<uint8_t>(y + 3), 42);
+        }
+    }
+
+    const auto spec = makeSpec(9, 8, 3, irt::ColorFormat::BGR, irt::ColorFormat::RGB);
+    runPreprocessSpecParity(source, spec, runSharedSpecLetterBox);
+}
 
 /**
  * @brief 测试 letterBox 函数：BGR HWC → RGB CHW，带 letterbox 填充

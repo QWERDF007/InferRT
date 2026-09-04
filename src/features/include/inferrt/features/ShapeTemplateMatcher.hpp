@@ -2,13 +2,10 @@
 
 /**
  * @file ShapeTemplateMatcher.hpp
- * @brief 形状模板匹配多版本公共入口。
+ * @brief 形状模板匹配公共入口。
  *
- * 该头文件只提供版本无关的接口、工厂和工具函数，不在 ``irt::features`` 根命名空间
- * 提供具体实现。请显式包含并使用
- * ``irt::features::v0::ShapeTemplateMatcher`` 或
- * ``irt::features::v1::ShapeTemplateMatcherFast`` 或
- * ``irt::features::v2::ShapeTemplateMatcherAvx512``；也可通过工厂获取版本无关接口。
+ * 该头文件只提供版本无关的接口和自动选择工厂。具体算法和 ISA 选择
+ * 保留在 features 模块内部，不属于安装包的公开接口。
  */
 
 #include <inferrt/features/IShapeTemplateMatcher.hpp>
@@ -17,12 +14,9 @@
 
 namespace irt::features {
 
-/** @brief 根据版本创建形状模板匹配器。 */
+/** @brief 根据当前 CPU 能力自动创建最合适的形状模板匹配器。 */
 INFERRT_FEATURES_API std::unique_ptr<IShapeTemplateMatcher>
-createShapeTemplateMatcher(ShapeTemplateMatcherVersion version, ShapeTemplateMatcherConfig config = {});
-
-/** @brief 获取版本的稳定命令行/日志名称（``v0``、``v1`` 或 ``v2``）。 */
-INFERRT_FEATURES_API const char *shapeTemplateMatcherVersionName(ShapeTemplateMatcherVersion version) noexcept;
+createShapeTemplateMatcher(ShapeTemplateMatcherConfig config = {});
 
 /** @brief 根据闭区间角度/尺度范围生成模板变体列表。 */
 INFERRT_FEATURES_API std::vector<ShapeTemplateVariant>

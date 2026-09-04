@@ -2,7 +2,7 @@
 
 /**
  * @file IShapeTemplateMatcher.hpp
- * @brief 可扩展的形状模板匹配版本公共接口。
+ * @brief 可扩展的形状模板匹配公共接口。
  */
 
 #include <inferrt/features/ShapeTemplateMatcherTypes.hpp>
@@ -10,9 +10,9 @@
 namespace irt::features {
 
 /**
- * @brief 形状模板匹配器的版本无关接口。
+ * @brief 形状模板匹配器的实现无关接口。
  *
- * v0、v1、v2 等版本均实现该接口；模板文件格式和结果数据结构在版本间保持兼容。
+ * 不同内部实现均实现该接口；模板文件格式和结果数据结构在实现间保持兼容。
  */
 class INFERRT_FEATURES_API IShapeTemplateMatcher
 {

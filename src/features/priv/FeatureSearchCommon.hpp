@@ -141,7 +141,7 @@ bool useCpuDiskIndex(const ImageSearchConfig &config) noexcept;
  * @param config 待校验配置。
  * @param owner_name 错误消息中使用的模块名称。
  */
-void validateFeatureSearchConfig(const ImageSearchConfig &config, const char *owner_name);
+void validateFeatureSearchConfig(ImageSearchConfig &config, const char *owner_name);
 
 /** @brief 将预处理后端枚举序列化为元数据字符串。 */
 const char *preprocessBackendName(ImageSearchPreprocessBackend backend) noexcept;

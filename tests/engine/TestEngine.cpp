@@ -11,8 +11,10 @@
 
 #include <chrono>
 #include <algorithm>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -88,6 +90,92 @@ public:
     }
 };
 
+class InPlaceOperator final : public irt::engine::IOperator
+{
+public:
+    irt::engine::OperatorContract contract() const override
+    {
+        return {irt::engine::ExecutionKind::CPU, irt::engine::PipelineStage::CPU_PREPROCESS, 1, 1, true, true, 0};
+    }
+
+    void execute(irt::engine::OperatorContext &) override {}
+};
+
+class ContractProbeOperator final : public irt::engine::IOperator
+{
+public:
+    struct State
+    {
+        void entered()
+        {
+            std::lock_guard lock(mutex);
+            ++active;
+            max_active = std::max(max_active, active);
+            ++entry_count;
+            condition.notify_all();
+        }
+
+        void leave()
+        {
+            std::lock_guard lock(mutex);
+            --active;
+            condition.notify_all();
+        }
+
+        bool waitForEntries(const int expected)
+        {
+            std::unique_lock lock(mutex);
+            return condition.wait_for(lock, std::chrono::seconds(1),
+                                      [&] { return entry_count >= expected; });
+        }
+
+        void release()
+        {
+            std::lock_guard lock(mutex);
+            released = true;
+            condition.notify_all();
+        }
+
+        int maxActive()
+        {
+            std::lock_guard lock(mutex);
+            return max_active;
+        }
+
+        std::mutex              mutex;
+        std::condition_variable condition;
+        int                     active{0};
+        int                     max_active{0};
+        int                     entry_count{0};
+        bool                    released{false};
+    };
+
+    ContractProbeOperator(State &state, const bool thread_safe)
+        : state_(state)
+        , thread_safe_(thread_safe)
+    {
+    }
+
+    irt::engine::OperatorContract contract() const override
+    {
+        return {irt::engine::ExecutionKind::CPU, irt::engine::PipelineStage::CPU_PREPROCESS, 0, 0, false,
+                thread_safe_, 0};
+    }
+
+    void execute(irt::engine::OperatorContext &) override
+    {
+        state_.entered();
+        std::unique_lock lock(state_.mutex);
+        state_.condition.wait(lock, [&] { return state_.released; });
+        lock.unlock();
+        state_.leave();
+    }
+
+private:
+    State &state_;
+    bool   thread_safe_{false};
+};
+
 class WrongContractOperator final : public irt::engine::IOperator
 {
 public:
@@ -110,6 +198,12 @@ irt::engine::EngineConfig makeConfig()
     config.opt_batch_size = 2;
     config.max_batch_size = 4;
     return config;
+}
+
+std::unique_ptr<irt::engine::InferenceEngine> createTestEngine(irt::engine::EngineConfig config)
+{
+    auto pipeline = irt::engine::priv::CreateLegacyPipelineForTest(config);
+    return irt::engine::InferenceEngine::create(std::move(config), std::move(pipeline));
 }
 
 TEST(EngineConfigTest, AcceptsValidConfiguration)
@@ -248,7 +342,7 @@ TEST(EngineConfigTest, AcceptsNonIdentityNormalizationForCudaLetterbox)
     config.preprocess.source_height = 576;
 
     EXPECT_NO_THROW(config.validate());
-    EXPECT_NO_THROW(irt::engine::InferenceEngine::create(std::move(config)));
+    EXPECT_NO_THROW(createTestEngine(std::move(config)));
 }
 
 TEST(EngineConfigTest, RejectsIncompleteCudaConfiguration)
@@ -256,7 +350,7 @@ TEST(EngineConfigTest, RejectsIncompleteCudaConfiguration)
     auto config               = makeConfig();
     config.preprocess.backend = irt::engine::PreprocessBackend::CUDA;
     EXPECT_NO_THROW(config.validate());
-    EXPECT_THROW(irt::engine::InferenceEngine::create(std::move(config)), irt::Exception);
+    EXPECT_THROW(createTestEngine(std::move(config)), irt::Exception);
 }
 
 TEST(EngineConfigTest, ValidatesFeatureOnlyOutputContract)
@@ -844,6 +938,79 @@ TEST(PipelinePlanTest, RejectsAliasingForNonInPlaceOperatorBeforeCreator)
     EXPECT_FALSE(creator_called);
 }
 
+TEST(PipelinePlanTest, AcceptsAliasingForInPlaceOperator)
+{
+    using namespace irt::engine;
+
+    bool creator_called = false;
+    auto registry       = std::make_shared<OperatorRegistry>();
+    const OperatorContract contract{ExecutionKind::CPU, PipelineStage::CPU_PREPROCESS, 1, 1, true, true, 0};
+    ASSERT_TRUE(registry->registerCreator(
+        "test.in_place", contract, [&](const NodeConfig &) {
+            creator_called = true;
+            return std::make_unique<InPlaceOperator>();
+        }));
+
+    PipelineBuilder builder;
+    builder.addTensor("host", {TensorDataType::F32, TensorLayout::NCHW, MemoryKind::HOST, 2, 2, 3})
+        .addTensor("model_input", {TensorDataType::F32, TensorLayout::NCHW, MemoryKind::DEVICE, 2, 2, 3})
+        .addNode("test.in_place", {{"host"}, {"host"}, {}})
+        .setModelInput("model_input");
+
+    const auto plan = builder.build(registry);
+    const auto operators = plan->createOperators();
+    ASSERT_TRUE(creator_called);
+    ASSERT_EQ(plan->nodes().size(), 1U);
+    ASSERT_EQ(operators.size(), 1U);
+    EXPECT_TRUE(plan->nodes().front().contract.in_place);
+}
+
+TEST(OperatorContractTest, SerializesNonThreadSafeOperator)
+{
+    using namespace irt::engine;
+
+    ContractProbeOperator::State state;
+    ContractProbeOperator          op(state, false);
+    const auto                     contract = op.contract();
+    TensorViewMap                  tensors;
+    ResultMap                      results;
+    TensorInputMap                 inputs;
+    OperatorContext                context{0, 1, 0, nullptr, nullptr, tensors, results, &inputs, nullptr, 0};
+
+    std::thread first([&] { op.executeWithContract(context, contract); });
+    const bool first_entered = state.waitForEntries(1);
+    std::thread second([&] { op.executeWithContract(context, contract); });
+    state.release();
+    first.join();
+    second.join();
+
+    ASSERT_TRUE(first_entered);
+    EXPECT_EQ(state.maxActive(), 1);
+}
+
+TEST(OperatorContractTest, AllowsConcurrentExecutionForThreadSafeOperator)
+{
+    using namespace irt::engine;
+
+    ContractProbeOperator::State state;
+    ContractProbeOperator          op(state, true);
+    const auto                     contract = op.contract();
+    TensorViewMap                  tensors;
+    ResultMap                      results;
+    TensorInputMap                 inputs;
+    OperatorContext                context{0, 1, 0, nullptr, nullptr, tensors, results, &inputs, nullptr, 0};
+
+    std::thread first([&] { op.executeWithContract(context, contract); });
+    std::thread second([&] { op.executeWithContract(context, contract); });
+    const bool  both_entered = state.waitForEntries(2);
+    state.release();
+    first.join();
+    second.join();
+
+    ASSERT_TRUE(both_entered);
+    EXPECT_EQ(state.maxActive(), 2);
+}
+
 TEST(PipelinePlanTest, RejectsCreatorContractMismatch)
 {
     using namespace irt::engine;
@@ -929,7 +1096,7 @@ TEST(InferenceEngineLifecycleTest, CannotStartStoppedEngine)
 {
     using namespace irt::engine;
 
-    auto engine = InferenceEngine::create(makeConfig());
+    auto engine = createTestEngine(makeConfig());
     ASSERT_NE(engine, nullptr);
     EXPECT_EQ(engine->state(), EngineState::Created);
     engine->shutdown();
@@ -950,7 +1117,7 @@ TEST(InferenceEngineLifecycleTest, ConcurrentShutdownIsIdempotent)
 {
     using namespace irt::engine;
 
-    auto engine = InferenceEngine::create(makeConfig());
+    auto engine = createTestEngine(makeConfig());
     ASSERT_NE(engine, nullptr);
 
     std::vector<std::thread> threads;
@@ -972,7 +1139,7 @@ TEST(InferenceEngineLifecycleTest, CanRecreateEngineAfterFailedStart)
     auto config = makeConfig();
     config.engine_file = "non_existent_engine.engine";
 
-    auto engine1 = InferenceEngine::create(config);
+    auto engine1 = createTestEngine(config);
     ASSERT_NE(engine1, nullptr);
     EXPECT_THROW(engine1->start(), irt::Exception);
     EXPECT_EQ(engine1->state(), EngineState::Failed);
@@ -981,9 +1148,36 @@ TEST(InferenceEngineLifecycleTest, CanRecreateEngineAfterFailedStart)
     EXPECT_FALSE(faults.empty());
     EXPECT_EQ(faults.front().stage, FaultStage::Start);
 
-    auto engine2 = InferenceEngine::create(config);
+    auto engine2 = createTestEngine(config);
     ASSERT_NE(engine2, nullptr);
     EXPECT_EQ(engine2->state(), EngineState::Created);
+}
+
+TEST(InferenceEngineLifecycleTest, InvalidConfigurationStartTransitionsToFailedAndRecordsFault)
+{
+    using namespace irt::engine;
+
+    auto config                  = makeConfig();
+    config.cpu_preprocess_workers = 0;
+    auto engine                  = createTestEngine(std::move(config));
+    ASSERT_NE(engine, nullptr);
+    EXPECT_EQ(engine->state(), EngineState::Created);
+
+    EXPECT_THROW(engine->start(), irt::Exception);
+    EXPECT_EQ(engine->state(), EngineState::Failed);
+
+    const auto faults = engine->faults();
+    ASSERT_FALSE(faults.empty());
+    EXPECT_EQ(faults.back().stage, FaultStage::Start);
+    EXPECT_EQ(faults.back().status, irt::Status::ERROR_INVALID_ARGUMENT);
+    EXPECT_NE(faults.back().message.find("runtime capacity"), std::string::npos);
+
+    const auto metrics = engine->metrics();
+    EXPECT_EQ(metrics.thread_count, 0U);
+    EXPECT_EQ(metrics.joinable_thread_count, 0U);
+    EXPECT_EQ(metrics.slot_count, 0U);
+    EXPECT_EQ(metrics.accepted_requests, 0U);
+    EXPECT_NO_THROW(engine->shutdown());
 }
 
 TEST(TensorViewTest, RespectsCapacityBounds)
@@ -1219,6 +1413,13 @@ TEST(PipelinePlanTest, RejectsDuplicateResultName)
 
     // 重复添加同名 result
     EXPECT_THROW(builder.addResult("res1", "host_in"), irt::Exception);
+}
+
+TEST(PipelinePlanTest, RejectsEmptyModelInputAtBuilderBoundary)
+{
+    irt::engine::PipelineBuilder builder;
+
+    EXPECT_THROW(builder.setModelInput(""), irt::Exception);
 }
 
 class EngineStartFaultInjectionTest : public ::testing::TestWithParam<int>

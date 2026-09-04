@@ -35,15 +35,15 @@ struct ShapeTemplateMatcherConfig
     int   max_results{0};                                        ///< 最多返回的匹配数量；0 表示不限制。
     int   scan_step{1};                                          ///< 滑窗扫描步长，单位为像素。
     int   max_parallelism{0};                                    ///< 模板扫描工作线程数；0 表示自动，1 表示串行。
-    int   max_training_parallelism{0};                           ///< v1/v2 模板训练工作线程数；0 表示自动，1 表示串行；v0 始终使用原始串行路径；该运行时项不写入模板文件。
+    int   max_training_parallelism{0};                           ///< 模板训练工作线程数；0 表示自动，1 表示串行；该运行时项不写入模板文件。
     float min_feature_distance{0.0f};                            ///< 贪心选点最小间距；0 表示按模板面积自动估计。
-    bool  use_gaussian_gradient{false};                          ///< v1 可选：Sobel 前使用 5x5 GaussianBlur；会改变特征，默认关闭。
-    bool  use_orientation_histogram{false};                      ///< v1 可选：3x3 方向多数滤波；会改变特征，默认关闭。
-    bool  use_edge_nms{false};                                    ///< v1 可选：沿梯度方向执行边缘非极大值抑制，默认关闭。
-    bool  use_edge_connectivity{false};                           ///< v1 可选：按强/弱梯度连通保留边缘，默认关闭。
-    bool  use_polarity_invariant{false};                          ///< v1 可选：折叠相反梯度极性，默认关闭。
-    bool  use_spatial_spread{false};                              ///< v1 可选：将方向标签向邻域扩散，默认关闭。
-    bool  reuse_base_features_for_variants{false};                ///< v1 可选：旋转/缩放复用基础特征坐标，默认关闭。
+    bool  use_gaussian_gradient{false};                          ///< 可选：Sobel 前使用 5x5 GaussianBlur；会改变特征，默认关闭。
+    bool  use_orientation_histogram{false};                      ///< 可选：3x3 方向多数滤波；会改变特征，默认关闭。
+    bool  use_edge_nms{false};                                    ///< 可选：沿梯度方向执行边缘非极大值抑制，默认关闭。
+    bool  use_edge_connectivity{false};                           ///< 可选：按强/弱梯度连通保留边缘，默认关闭。
+    bool  use_polarity_invariant{false};                          ///< 可选：折叠相反梯度极性，默认关闭。
+    bool  use_spatial_spread{false};                              ///< 可选：将方向标签向邻域扩散，默认关闭。
+    bool  reuse_base_features_for_variants{false};                ///< 可选：旋转/缩放复用基础特征坐标，默认关闭。
 };
 
 /**
@@ -115,14 +115,6 @@ struct ShapeTemplateMatch
     int   template_id{-1};     ///< 模板文件内的全局模板 ID。
     float angle_degrees{0.0f}; ///< 命中模板的训练变体元数据。
     float scale{1.0f};         ///< 命中模板的训练变体元数据。
-};
-
-/** @brief 内置形状模板匹配实现版本。 */
-enum class ShapeTemplateMatcherVersion
-{
-    V0, ///< 原始标量实现；训练与匹配均不使用 SIMD 优化。
-    V1, ///< AVX2 加速匹配与严格等价的优化训练实现。
-    V2, ///< AVX512F/BW 加速匹配与严格等价的优化训练实现。
 };
 
 } // namespace irt::features

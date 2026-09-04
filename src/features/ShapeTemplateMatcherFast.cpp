@@ -1,25 +1,25 @@
 /**
  * @file ShapeTemplateMatcherFast.cpp
- * @brief v1 快速形状模板匹配器的公开入口。
+ * @brief AVX2 形状模板匹配内部适配器。
  */
 
 #include "priv/ShapeTemplateMatcherFastImpl.hpp"
 
-#include <inferrt/features/v1/ShapeTemplateMatcherFast.hpp>
+#include "priv/ShapeTemplateMatcherVariants.hpp"
 
 #include <memory>
 #include <utility>
 
-namespace irt::features::v1 {
+namespace irt::features::priv {
 
-ShapeTemplateMatcherFast::ShapeTemplateMatcherFast(ShapeTemplateMatcherConfig config)
-    : ::irt::features::detail::ShapeTemplateMatcherBase(
-          std::make_unique<detail::ShapeTemplateMatcherFastImpl>(std::move(config)))
+Avx2ShapeTemplateMatcher::Avx2ShapeTemplateMatcher(ShapeTemplateMatcherConfig config)
+    : ShapeTemplateMatcherAdapter(
+          std::make_unique<::irt::features::v1::detail::ShapeTemplateMatcherFastImpl>(std::move(config)))
 {
 }
 
-ShapeTemplateMatcherFast::~ShapeTemplateMatcherFast() = default;
-ShapeTemplateMatcherFast::ShapeTemplateMatcherFast(ShapeTemplateMatcherFast &&) noexcept = default;
-ShapeTemplateMatcherFast &ShapeTemplateMatcherFast::operator=(ShapeTemplateMatcherFast &&) noexcept = default;
+Avx2ShapeTemplateMatcher::~Avx2ShapeTemplateMatcher() = default;
+Avx2ShapeTemplateMatcher::Avx2ShapeTemplateMatcher(Avx2ShapeTemplateMatcher &&) noexcept = default;
+Avx2ShapeTemplateMatcher &Avx2ShapeTemplateMatcher::operator=(Avx2ShapeTemplateMatcher &&) noexcept = default;
 
-} // namespace irt::features::v1
+} // namespace irt::features::priv

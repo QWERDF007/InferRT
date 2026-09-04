@@ -17,6 +17,7 @@
 #    include <inferrt/engine/EngineConfig.hpp>
 #elif defined(INFERRT_COMPONENT_features)
 #    include <inferrt/features/ImageSearch.hpp>
+#    include <inferrt/features/ShapeTemplateMatcher.hpp>
 #else
 #    error "Unsupported InferRT component consumer"
 #endif
@@ -49,6 +50,11 @@ int main()
     return 0;
 #elif defined(INFERRT_COMPONENT_features)
     irt::features::ImageSearchConfig config;
-    return config.model_name.empty() ? 1 : 0;
+    if (config.model_name.empty())
+    {
+        return 1;
+    }
+    const auto matcher = irt::features::createShapeTemplateMatcher();
+    return matcher == nullptr || !matcher->empty() ? 1 : 0;
 #endif
 }

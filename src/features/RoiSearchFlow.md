@@ -26,7 +26,7 @@
   `openvino:1`，CPU 使用 `onnxruntime:cpu` 或 `openvino:cpu`。也支持裸设备简写 `cpu`、`gpu:0`、`cuda:0`。
   GPU Faiss 使用该目标的设备编号。
 - `model_precision`：底层模型构建/加载精度，支持 `FP32` 和 `FP16`。
-- `preprocess_backend`：当前实现支持 CPU 预处理。
+- `preprocess_backend`：支持 CPU 或 GPU 预处理。GPU 路径使用 CVCUDA 在设备端执行共享 `PreprocessSpec`，并在图后端需要时回传主机输入。
 - `norm`：ROI 展平特征的归一化方式，默认 L2。
 - `faiss_backend`：Faiss 搜索后端，支持 CPU 或 GPU。
 - `index_storage`：CPU Faiss 可选择 RAM 或 Disk；GPU Faiss 会强制使用 RAM。
@@ -97,7 +97,7 @@ searcher.buildOrLoad(weights_file, gallery_items, index_file, rebuild_index, pro
 单个 ROI 特征的生成流程如下：
 
 1. `ImageFeatureExtractor` 读取原图，记录原始宽高。
-2. 在 batch 内并行执行 ImageNet 预处理，把原图缩放到模型输入尺寸，并转为 NCHW float；写入位置仍按输入顺序固定。
+2. 在 batch 内执行共享 `PreprocessSpec` 预处理，把原图缩放到模型输入尺寸，并转为 NCHW float；CPU 路径并行执行 OpenCV 预处理，GPU 路径使用 CVCUDA，写入位置仍按输入顺序固定。
 3. 调用 `IModel::forwardFeatures()` 输出指定 `feature_name` 的特征张量。
 4. 校验输出特征张量：
    - 标准 CNN/空间特征必须是 `B x C x H x W`。
@@ -139,7 +139,7 @@ search_dim = pca_dim * pooled_height * pooled_width
 1. `LoadingModel`：创建 `RoiFeatureExtractor`，内部持有 `ImageFeatureExtractor`。
 2. 根据输出特征图通道数和 ROIAlign 输出尺寸确定原始 `feature_dim`。
 3. 按规范化后的图像路径分组，并按模型最大 batch 打包不同图像；同一图像的所有 ROI 只进入一次模型前向。
-4. 对每个图像 batch 并行执行图像解码和 ImageNet 预处理，再调用一次模型前向；在共享特征图上批量 ROIAlign，按原始 ROI 顺序回写临时特征文件。
+4. 对每个图像 batch 执行图像解码和共享 `PreprocessSpec` 预处理；CPU 路径并行执行 OpenCV 预处理，GPU 路径使用 CVCUDA。随后调用一次模型前向，在共享特征图上批量 ROIAlign，按原始 ROI 顺序回写临时特征文件。
 5. 如果 `use_pca=true`，对每张图的特征图训练本地 PCA，投影为 `pca_dim x H x W` 后再执行该图的 ROIAlign、展平和归一化。
 6. 调用 `buildConfiguredFaissIndex()`，通过临时特征存储的连续区间/索引批量回调训练和添加 Faiss 索引。
 7. 写入 `<index>.manifest.yaml`，包含 ROI ID 映射和配置。

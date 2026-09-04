@@ -137,7 +137,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--inferrt-strict-skips",
         action="store_true",
         default=False,
-        help="将非 optional_resource 的 integration/slow skip 视为失败，并输出测试统计",
+        help="将非 optional_resource/optional_backend 的 integration/slow skip 视为失败，并输出测试统计",
     )
     parser.addoption(
         "--inferrt-model-root",
@@ -519,7 +519,8 @@ def _is_required_skip_item(item: pytest.Item) -> bool:
     is_integration = item.get_closest_marker("integration") is not None
     is_slow = item.get_closest_marker("slow") is not None
     is_optional_resource = item.get_closest_marker("optional_resource") is not None
-    return (is_integration or is_slow) and not is_optional_resource
+    is_optional_backend = item.get_closest_marker("optional_backend") is not None
+    return (is_integration or is_slow) and not (is_optional_resource or is_optional_backend)
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:

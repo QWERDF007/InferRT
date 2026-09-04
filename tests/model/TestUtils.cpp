@@ -271,15 +271,15 @@ TEST(ModelUtilTest, ElementCountValidatesTensorDims)
 }
 
 /**
- * @brief 空形状沿用 core Shape 的零元素语义，对负维度抛出非法参数异常。
+ * @brief 空形状和负维度均应沿用 core Shape 的非法参数契约。
  */
-TEST(ModelUtilTest, ElementCountHandlesScalarAndRejectsNegativeDims)
+TEST(ModelUtilTest, RejectsEmptyAndNegativeDims)
 {
     irt::Shape scalar{};
-    EXPECT_EQ(irt::model::elementCount(scalar), 0U);
+    ExpectIrtExceptionCode([&] { (void)irt::model::elementCount(scalar); }, irt::Status::ERROR_INVALID_ARGUMENT);
 
     irt::Shape invalid{4, -1};
-    EXPECT_THROW({ irt::model::elementCount(invalid); }, irt::Exception);
+    ExpectIrtExceptionCode([&] { (void)irt::model::elementCount(invalid); }, irt::Status::ERROR_INVALID_ARGUMENT);
 }
 
 /**

@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <memory>
+#include <string>
 
 namespace {
 
@@ -77,6 +78,76 @@ TEST(EngineCompletionOrderTest, CancellationOwnsRequestWhileRemovingItFromActive
     EXPECT_THROW(future.get(), irt::Exception);
     EXPECT_EQ(completions.activeCount(), 0U);
     EXPECT_EQ(metrics.snapshot().cancelled_requests, 1U);
+}
+
+TEST(EngineCompletionOrderTest, NullFailureStillCompletesWithKindSpecificError)
+{
+    irt::engine::priv::EngineMetricsFault metrics(4);
+    irt::engine::priv::CompletionOrder  completions(metrics);
+    auto request = makeRequest("default", 5);
+    auto future  = request->promise.get_future();
+    completions.registerRequest(request);
+
+    completions.completeFailure(request, nullptr, irt::engine::priv::FailureKind::Failed);
+
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    try
+    {
+        (void)future.get();
+        FAIL() << "A failed request must complete with an exception";
+    }
+    catch (const irt::Exception &error)
+    {
+        EXPECT_EQ(error.code(), irt::Status::INVALID_OPERATION);
+        EXPECT_NE(std::string(error.msg()).find("engine failed"), std::string::npos);
+    }
+}
+
+TEST(EngineCompletionOrderTest, DuplicateRequestIdDoesNotConsumeSourceSequence)
+{
+    irt::engine::priv::EngineMetricsFault metrics(4);
+    irt::engine::priv::CompletionOrder  completions(metrics);
+    auto first     = makeRequest("camera", 6);
+    auto duplicate = makeRequest("camera", 6);
+    auto next      = makeRequest("camera", 7);
+    auto first_future = first->promise.get_future();
+    auto next_future  = next->promise.get_future();
+
+    completions.registerRequest(first);
+    EXPECT_THROW(completions.registerRequest(duplicate), irt::Exception);
+    completions.registerRequest(next);
+
+    EXPECT_EQ(first->source_sequence, 0U);
+    EXPECT_EQ(next->source_sequence, 1U);
+
+    completions.shutdown();
+    EXPECT_EQ(first_future.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    EXPECT_EQ(next_future.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+}
+
+TEST(EngineCompletionOrderTest, ShutdownFulfillsPendingAndActiveSourceCompletions)
+{
+    irt::engine::priv::EngineMetricsFault metrics(4);
+    irt::engine::priv::CompletionOrder  completions(metrics);
+    auto first  = makeRequest("camera", 8);
+    auto second = makeRequest("camera", 9);
+    auto first_future  = first->promise.get_future();
+    auto second_future = second->promise.get_future();
+
+    completions.registerRequest(first);
+    completions.registerRequest(second);
+
+    irt::engine::InferenceResult second_result;
+    second_result.outputs["value"] = {2.0F};
+    completions.completeSuccess(second, std::move(second_result));
+    EXPECT_EQ(second_future.wait_for(std::chrono::milliseconds(0)), std::future_status::timeout);
+
+    completions.shutdown();
+
+    ASSERT_EQ(first_future.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    ASSERT_EQ(second_future.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    EXPECT_THROW(first_future.get(), irt::Exception);
+    EXPECT_EQ(second_future.get().outputs.at("value").front(), 2.0F);
 }
 
 } // namespace

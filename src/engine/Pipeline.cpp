@@ -254,6 +254,11 @@ PipelineBuilder &PipelineBuilder::addResult(std::string tensor_name, std::string
 
 PipelineBuilder &PipelineBuilder::setModelInput(std::string tensor_name)
 {
+    if (tensor_name.empty())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "Pipeline model input tensor name must not be empty");
+    }
     model_input_ = tensor_name;
     model_inputs_.clear();
     model_inputs_.emplace_back(std::move(tensor_name), std::string{});
@@ -392,7 +397,7 @@ std::shared_ptr<const PipelinePlan> PipelineBuilder::build(std::shared_ptr<Opera
         for (const auto &input : nodes_[index].config.inputs)
         {
             const auto found = producer.find(input);
-            if (found != producer.end())
+            if (found != producer.end() && found->second != index)
             {
                 edges[found->second].push_back(index);
                 ++indegree[index];
