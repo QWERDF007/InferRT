@@ -47,6 +47,32 @@
 
 **边界**：不动导出的字段结构；不顺手重构 handler。
 
+### 2026-09-04 — 重建 InferRT 0.0.3 并运行 full 测试
+
+**目标**
+- 清理旧生成物，将项目版本更新为 `0.0.3`，重新配置、构建、软链接依赖并安装，完成 Windows full 测试。
+
+**当前状态**
+- 已完成：删除 `artifacts/`、`build/` 和 `InferRT-0.0.2/`，将根 `CMakeLists.txt` 版本改为 `0.0.3`。
+- 已完成：重新配置并构建 `full-release`；构建缓存安装前缀为 `F:/Projects/InferRT/InferRT-0.0.3`，ONNX/OpenVINO 均为关闭状态。
+- 已完成：以真实 UAC 管理员权限运行 `link_dependencies.py --mode symlink`，`build/bin` 中 35 个第三方运行库均为符号链接，未保留大体积复制文件。
+- 已完成：安装树 `InferRT-0.0.3/` 已生成，CMake package 版本为 `0.0.3`。
+- 已完成：full CTest 在显式加入 `build/bin` 运行库路径后全部通过。
+- 已完成：同步清理 docs 中已删除临时报告目录的失效索引，当前本地验证统一指向本账本最新条目。
+
+**验证证据**
+- `cmake --preset full ...`（提权）→ 配置成功，版本 `0.0.3`，安装前缀 `F:/Projects/InferRT/InferRT-0.0.3`。
+- `cmake --build --preset full-release --parallel` → 退出码 0。
+- `Start-Process -Verb RunAs ... link_dependencies.py --build-dir build/presets/full --config Release --mode symlink` → 退出码 0；35 个目标均为 `SymbolicLink`。
+- `cmake --install build/presets/full --config Release` → 安装成功。
+- `ctest --test-dir build/presets/full -C Release --output-on-failure --no-tests=error`（提权，PATH 加入 `build/bin`）→ `9/9 passed`，包含 C++、Python API 与 relocation。
+- `artifacts/`、`InferRT-0.0.2/` → 已确认不存在。
+
+**下一步**
+- 当前请求已完成，无需继续生成测试报告或其他临时产物。
+
+---
+
 ### 2026-09-04 — 收口当前 Release 验收证据与生成物
 
 **目标**

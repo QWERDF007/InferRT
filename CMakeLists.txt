@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.25)
 
 project("InferRT"
         LANGUAGES C CXX
-        VERSION 0.0.2
+        VERSION 0.0.3
         DESCRIPTION "推理相关工具"
 )
 
