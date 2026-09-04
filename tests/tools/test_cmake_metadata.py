@@ -481,9 +481,16 @@ def test_tensorrt_config_applies_manifest_default_before_stale_cache(tmp_path: P
     assert version == "10.16.1.11"
 
 
-def test_python_config_default_wins_over_parent_python3_hint(tmp_path: Path) -> None:
+def test_python_config_default_wins_over_parent_python3_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     if not sys.platform.startswith("win"):
         pytest.skip("The configured Python default is Windows-specific")
+
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
+    monkeypatch.delenv("Python_ROOT_DIR", raising=False)
+    monkeypatch.delenv("INFERRT_PYTHON_EXE", raising=False)
+    monkeypatch.delenv("INFERRT_PYTHON_ROOT", raising=False)
 
     default_root = _manifest_default("python-torch-zlib")
     base_executable = default_root.parents[1] / "python.exe"
@@ -520,9 +527,16 @@ def test_python_config_default_wins_over_parent_python3_hint(tmp_path: Path) -> 
     assert version.startswith("3.12.")
 
 
-def test_python_config_replaces_legacy_find_cache_without_d_override(tmp_path: Path) -> None:
+def test_python_config_replaces_legacy_find_cache_without_d_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     if not sys.platform.startswith("win"):
         pytest.skip("The configured Python default is Windows-specific")
+
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
+    monkeypatch.delenv("Python_ROOT_DIR", raising=False)
+    monkeypatch.delenv("INFERRT_PYTHON_EXE", raising=False)
+    monkeypatch.delenv("INFERRT_PYTHON_ROOT", raising=False)
 
     default_root = _manifest_default("python-torch-zlib")
     if not (default_root / "python.exe").is_file():

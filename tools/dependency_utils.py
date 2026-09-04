@@ -426,11 +426,16 @@ def resolve_dependency_root(
 
     default_value = dep.get("default")
     if default_value:
-        return resolve_project_path(str(default_value), repo_root)
+        candidate = resolve_project_path(str(default_value), repo_root)
+        if candidate.exists():
+            return candidate
 
     cache_value = read_cmake_cache_value(build_dir / "CMakeCache.txt", root_spec)
     if cache_value:
         return resolve_project_path(cache_value, repo_root)
+
+    if default_value:
+        return resolve_project_path(str(default_value), repo_root)
 
     cmake_file = resolve_project_path(str(dep["cmake"]), repo_root)
     cmake_value = read_cmake_set_expanded(cmake_file, root_spec)
