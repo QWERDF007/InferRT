@@ -9,6 +9,7 @@ from pathlib import Path
 from dependency_utils import (
     build_dll_variant_sets,
     dependency_destinations,
+    dependency_enabled,
     dependency_matches_config,
     dependency_patterns,
     dll_matches_config,
@@ -82,6 +83,8 @@ def link_dependencies(build_dir: Path, dependency_file: Path, config: str, mode:
     processed = 0
 
     for dep in load_dependencies(dependency_file):
+        if not dependency_enabled(dep, build_dir):
+            continue
         if not dependency_matches_config(dep, config):
             continue
 
