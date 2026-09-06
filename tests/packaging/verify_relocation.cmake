@@ -59,8 +59,10 @@ function(set_consumer_prefix_path prefix)
     list(APPEND _consumer_prefix_path ${_consumer_dependency_prefix_paths})
     list(REMOVE_DUPLICATES _consumer_prefix_path)
     # Keep the prefix list out of execute_process()'s command argument list.
-    # CMake consumes the native CMAKE_PREFIX_PATH environment separator when
-    # configuring the child project.
+    # CMAKE_PREFIX_PATH uses the platform-native separator in the environment
+    # (a colon on Unix, a semicolon on Windows), unlike a CMake list.
+    cmake_path(CONVERT "${_consumer_prefix_path}" TO_NATIVE_PATH_LIST
+               _consumer_prefix_path)
     set(ENV{CMAKE_PREFIX_PATH} "${_consumer_prefix_path}")
 endfunction()
 

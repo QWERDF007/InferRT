@@ -209,14 +209,14 @@ endif()
 # 根据操作系统和 TensorRT 版本配置库模块
 if(WIN32)
   # Windows 平台配置
-  # TensorRT 10+ 版本的库文件名包含版本号后缀
+  # 默认开发运行时只链接完整 TensorRT runtime、plugin 与 ONNX parser。
+  # dispatch/lean 是部署用的裁剪运行时，二者导出 stub API；与完整 nvinfer
+  # 同时链接会使 createInferRuntime 等符号解析到 stub 实现。
   if(${TRT_MAJOR_VERSION} GREATER_EQUAL 10)
-    set(_modules nvinfer_10 nvinfer_plugin_10 nvinfer_vc_plugin_10
-                 nvinfer_dispatch_10 nvinfer_lean_10 nvonnxparser_10)
+    set(_modules nvinfer_10 nvinfer_plugin_10 nvonnxparser_10)
     message(DEBUG "Using ${_modules}")
   else()
-    set(_modules nvinfer nvinfer_plugin nvinfer_vc_plugin nvinfer_dispatch
-                 nvinfer_lean nvonnxparser)
+    set(_modules nvinfer nvinfer_plugin nvonnxparser)
   endif()
 
   # Windows 下的库和头文件路径结构比较简单
@@ -224,11 +224,8 @@ if(WIN32)
   set(TensorRT_INCLUDE_DIR "${TRT_ROOT}/include")
 elseif(UNIX)
   # Linux/Unix 平台配置
+  # dispatch/lean 是面向部署的裁剪 runtime，不属于默认开发链接集。
   set(_modules nvinfer nvinfer_plugin nvonnxparser)
-  # TensorRT 8+ 版本增加了额外的库模块
-  if(${TRT_MAJOR_VERSION} GREATER_EQUAL 8)
-    list(APPEND _modules nvinfer_vc_plugin nvinfer_dispatch nvinfer_lean)
-  endif()
 
   # 尝试常见的子目录结构
   # 将系统架构转换为小写以便匹配
