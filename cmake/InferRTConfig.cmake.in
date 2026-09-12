@@ -52,8 +52,6 @@ list(REMOVE_DUPLICATES _inferrt_load_components)
 
 set(_inferrt_need_cuda OFF)
 set(_inferrt_need_opencv OFF)
-set(_inferrt_need_tensorrt OFF)
-set(_inferrt_need_faiss OFF)
 foreach(_inferrt_component IN LISTS _inferrt_load_components)
     if(_inferrt_component STREQUAL util
        OR _inferrt_component STREQUAL cvcuda
@@ -68,38 +66,14 @@ foreach(_inferrt_component IN LISTS _inferrt_load_components)
        OR _inferrt_component STREQUAL features)
         set(_inferrt_need_opencv ON)
     endif()
-    if(_inferrt_component STREQUAL model
-       OR _inferrt_component STREQUAL engine
-       OR _inferrt_component STREQUAL features)
-        set(_inferrt_need_tensorrt ON)
-    endif()
-    if(_inferrt_component STREQUAL features)
-        set(_inferrt_need_faiss ON)
-    endif()
 endforeach()
 
 if(_inferrt_need_cuda)
     find_dependency(CUDAToolkit)
 endif()
 
-if(_inferrt_need_tensorrt AND INFERRT_BUILD_TENSORRT)
-    include("${CMAKE_CURRENT_LIST_DIR}/FindTensorRT.cmake")
-endif()
-
 if(_inferrt_need_opencv)
     find_dependency(OpenCV)
-endif()
-
-if(_inferrt_need_tensorrt AND INFERRT_BUILD_ONNX)
-    include("${CMAKE_CURRENT_LIST_DIR}/ConfigONNXRuntime.cmake")
-endif()
-
-if(_inferrt_need_tensorrt AND INFERRT_BUILD_OPENVINO)
-    include("${CMAKE_CURRENT_LIST_DIR}/ConfigOpenVINO.cmake")
-endif()
-
-if(_inferrt_need_faiss)
-    include("${CMAKE_CURRENT_LIST_DIR}/ConfigFaiss.cmake")
 endif()
 
 foreach(_inferrt_component IN LISTS _inferrt_load_components)
@@ -123,5 +97,3 @@ unset(_inferrt_requested_components)
 unset(_inferrt_load_components)
 unset(_inferrt_need_cuda)
 unset(_inferrt_need_opencv)
-unset(_inferrt_need_tensorrt)
-unset(_inferrt_need_faiss)

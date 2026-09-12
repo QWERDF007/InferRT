@@ -2,9 +2,9 @@ add_plugin_library(engine
     PRIVATE_LIBS
         inferrt_cvcuda
         yaml-cpp::yaml-cpp
+        TensorRT::TensorRT
     PUBLIC_LIBS
         CUDA::cudart
-        TensorRT::TensorRT
         opencv_core
         opencv_imgproc
         inferrt_core

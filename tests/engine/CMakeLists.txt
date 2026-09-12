@@ -4,4 +4,5 @@ add_inferrt_test(engine
         GTest::gmock
         inferrt_core
         inferrt_engine
+        TensorRT::TensorRT
 )

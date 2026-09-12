@@ -30,11 +30,12 @@ add_plugin_library(features
     PRIVATE_LIBS
         yaml-cpp::yaml-cpp
         inferrt_cvcuda
+        Faiss::faiss
+        TensorRT::TensorRT
 
     PUBLIC_LIBS
         opencv_core opencv_imgcodecs opencv_imgproc
         CUDA::cudart
-        Faiss::faiss
 
         inferrt_core
         inferrt_util
