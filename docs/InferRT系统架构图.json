@@ -1,0 +1,262 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "InferRT 当前代码系统架构",
+    "locale": "zh-CN",
+    "output": "docs/InferRT系统架构图.html",
+    "quality_profile": "showcase",
+    "viewBox": [1210, 460],
+    "repository": {
+      "url": "https://github.com/QWERDF007/InferRT.git",
+      "provider": "github",
+      "revision": "1b1e0c58e691dfd8bca1e355c865171e00c4080a"
+    },
+    "views": [
+      {
+        "id": "foundation",
+        "label": "核心契约与算子",
+        "focus": ["core", "util", "ops", "cvcuda"],
+        "note": "从 core 的张量/执行契约追踪到 CPU 与 CUDA 算子。"
+      },
+      {
+        "id": "inference",
+        "label": "模型与异步推理",
+        "focus": ["model", "engine", "consumers", "runtime_deps"],
+        "note": "追踪 samples 与 bindings 进入 IModel、PipelinePlan 和运行时 backend。"
+      },
+      {
+        "id": "features",
+        "label": "特征与 DINO 数据流",
+        "focus": ["features", "dino_store", "model", "consumers"],
+        "note": "区分 Faiss 图像检索、模板/ROI 能力和独立的 DINO generation/index。"
+      }
+    ]
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [20, 10],
+    "cols": 4,
+    "gapX": 35,
+    "gapY": 22,
+    "cellW": 250,
+    "cellH": 90
+  },
+  "components": [
+    {
+      "id": "runtime_deps",
+      "type": "external",
+      "label": "GPU 与图像运行时",
+      "sublabel": "CUDA · OpenCV",
+      "tag": "外部运行依赖",
+      "sources": [
+        { "path": "cmake/ConfigCUDA.cmake", "label": "依赖发现" },
+        { "path": "cmake/ConfigTensorRT.cmake", "label": "TensorRT" },
+        { "path": "cmake/ConfigOpenCV.cmake", "label": "OpenCV" }
+      ],
+      "pos": [20, 10],
+      "size": [230, 88]
+    },
+    {
+      "id": "dev_deps",
+      "type": "external",
+      "label": "构建与绑定依赖",
+      "sublabel": "Faiss · Python · NumPy · DLPack",
+      "tag": "外部开发依赖",
+      "sources": [
+        { "path": "3rdparty/CMakeLists.txt", "label": "第三方接入" },
+        { "path": "tools/dependencies.yaml", "label": "运行库清单" }
+      ],
+      "pos": [20, 350],
+      "size": [230, 88]
+    },
+    {
+      "id": "core",
+      "type": "backend",
+      "label": "Core 契约层",
+      "sublabel": "Tensor · Preprocess · Contract",
+      "tag": "始终构建",
+      "sources": [
+        { "path": "src/core/include/inferrt/core/Tensor.hpp", "label": "张量契约" },
+        { "path": "src/core/include/inferrt/core/ModelContract.hpp", "label": "执行契约" },
+        { "path": "src/core/include/inferrt/core/PreprocessSpec.hpp", "label": "预处理几何" }
+      ],
+      "pos": [280, 125],
+      "size": [235, 88]
+    },
+    {
+      "id": "util",
+      "type": "backend",
+      "label": "Util 基础设施",
+      "sublabel": "errors · paths · devices",
+      "tag": "始终构建",
+      "sources": [
+        { "path": "src/util/CMakeLists.txt", "label": "target 边界" },
+        { "path": "src/util/CheckError.cpp", "label": "错误桥接" }
+      ],
+      "pos": [280, 240],
+      "size": [235, 82]
+    },
+    {
+      "id": "ops",
+      "type": "backend",
+      "label": "Ops CPU 算法",
+      "sublabel": "DBSCAN/HDBSCAN · curves · NMS",
+      "tag": "无 CUDA target",
+      "sources": [
+        { "path": "src/ops/CMakeLists.txt", "label": "CPU target" },
+        { "path": "src/ops/priv/ClusteringDistance.cpp", "label": "聚类内核" },
+        { "path": "tests/ops/TestDBSCAN.cpp", "label": "行为测试" }
+      ],
+      "pos": [280, 350],
+      "size": [235, 88]
+    },
+    {
+      "id": "cvcuda",
+      "type": "backend",
+      "label": "CVCUDA 图像算子",
+      "sublabel": "Resize · Normalize · NMS",
+      "tag": "CUDA 条件",
+      "sources": [
+        { "path": "src/cvcuda/include/inferrt/cvcuda/IOperator.hpp", "label": "公共 PImpl" },
+        { "path": "src/cvcuda/priv/OpNMSImpl.cu", "label": "CUDA workspace" },
+        { "path": "src/cvcuda/CMakeLists.txt", "label": "target 依赖" }
+      ],
+      "pos": [540, 25],
+      "size": [250, 92]
+    },
+    {
+      "id": "model",
+      "type": "backend",
+      "label": "Model 模型层",
+      "sublabel": "IModel · Factory · Runtime",
+      "tag": "CUDA + TensorRT",
+      "sources": [
+        { "path": "src/model/include/inferrt/model/IModel.hpp", "label": "公共 facade" },
+        { "path": "src/model/include/inferrt/model/BackendRuntime.hpp", "label": "后端 seam" },
+        { "path": "src/model/priv/IModelImpl.cpp", "label": "生命周期" }
+      ],
+      "pos": [540, 125],
+      "size": [250, 88]
+    },
+    {
+      "id": "features",
+      "type": "backend",
+      "label": "Features 特征层",
+      "sublabel": "Image/RoI · Shape · DINO",
+      "tag": "CUDA + TensorRT + Faiss",
+      "sources": [
+        { "path": "src/features/CMakeLists.txt", "label": "target 依赖" },
+        { "path": "src/features/priv/ImageSearchFaissIndex.cpp", "label": "Faiss 索引" },
+        { "path": "src/features/ShapeTemplateMatcherFactory.cpp", "label": "ISA dispatch" }
+      ],
+      "pos": [840, 230],
+      "size": [270, 100]
+    },
+    {
+      "id": "engine",
+      "type": "backend",
+      "label": "Engine 异步推理",
+      "sublabel": "Pipeline · Scheduler · Slots",
+      "tag": "CUDA + TensorRT",
+      "sources": [
+        { "path": "src/engine/include/inferrt/engine/InferenceEngine.hpp", "label": "公共入口" },
+        { "path": "src/engine/Pipeline.cpp", "label": "DAG 编译" },
+        { "path": "src/engine/priv/EngineSlotExecutor.cpp", "label": "GPU 执行" }
+      ],
+      "pos": [840, 125],
+      "size": [270, 88]
+    },
+    {
+      "id": "python",
+      "type": "backend",
+      "label": "Python bindings",
+      "sublabel": "model_py · ops_py · NumPy/DLPack",
+      "tag": "MODULE；非 wheel",
+      "sources": [
+        { "path": "src/python/InferRTModelPybind.cpp", "label": "模型绑定" },
+        { "path": "src/python/InferRTOpsPybind.cpp", "label": "算子绑定" },
+        { "path": "src/python/CMakeLists.txt", "label": "构建条件" }
+      ],
+      "pos": [840, 25],
+      "size": [270, 92]
+    },
+    {
+      "id": "dino_store",
+      "type": "database",
+      "label": "DINO generation/index",
+      "sublabel": "immutable generation · manifest",
+      "tag": "Features private store",
+      "pos": [530, 230],
+      "size": [270, 100]
+    },
+    {
+      "id": "consumers",
+      "type": "frontend",
+      "label": "Samples / Tests / Bench",
+      "sublabel": "C++ CLI · pytest · packaging",
+      "tag": "仓库消费者",
+      "sources": [
+        { "path": "samples/CMakeLists.txt", "label": "样例入口" },
+        { "path": "tests/CMakeLists.txt", "label": "测试入口" },
+        { "path": "benchmark/CMakeLists.txt", "label": "性能入口" }
+      ],
+      "pos": [840, 350],
+      "size": [270, 100]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Always-built CPU foundation",
+      "wraps": ["core", "util", "ops"],
+      "pad": 10
+    },
+    {
+      "kind": "region",
+      "label": "CUDA + TensorRT feature modules",
+      "wraps": ["cvcuda", "model", "features", "engine", "python", "dino_store"],
+      "pad": 10
+    }
+  ],
+  "connections": [
+    { "from": "util", "to": "core", "route": "orthogonal-v" },
+    { "from": "ops", "to": "core", "fromSide": "left", "toSide": "left", "via": [[260, 394], [260, 169]] },
+    { "from": "cvcuda", "to": "core", "fromSide": "left", "toSide": "right", "via": [[532, 71], [532, 169]] },
+    { "from": "model", "to": "core", "route": "straight", "fromSide": "left", "toSide": "right" },
+    { "from": "engine", "to": "model", "route": "straight", "fromSide": "left", "toSide": "right" },
+    { "from": "features", "to": "model", "fromSide": "left", "toSide": "right", "via": [[810, 280], [810, 169]] },
+    { "from": "features", "to": "dino_store", "route": "straight", "fromSide": "left", "toSide": "right" },
+    { "from": "runtime_deps", "to": "cvcuda", "fromSide": "right", "toSide": "left", "via": [[400, 54], [400, 71]], "label": "CUDA + OpenCV", "variant": "emphasis" },
+    { "from": "consumers", "to": "engine", "fromSide": "right", "toSide": "right", "via": [[1125, 400], [1125, 169]], "label": "submit / future", "labelAt": [1160, 280], "variant": "emphasis" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "核心调用关系",
+      "items": [
+        "core 提供 Tensor、PreprocessSpec 和 ModelContract；util/ops/cvcuda/model/engine/features 在其上分层。",
+        "Engine 通过 BackendRuntime 使用 model session，不把 TensorRT 类型暴露到公共 Engine API。",
+        "Features 的 DINO scan 使用自有连续 descriptor generation，不等同于 Faiss ANN。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "主要数据流",
+      "items": [
+        "samples/tests/bench → public facade → model 或 Engine → CUDA streams/runtime → future/result。",
+        "DINO build/update → immutable generation；search → active reader → scan/fine match → response。",
+        "Python binding 通过 NumPy host staging 或 DLPack 设备路径连接模型与算子。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "构建边界",
+      "items": [
+        "core/util/ops 是 Core-only 基础；cvcuda 需要 CUDA；model/engine/features 需要 CUDA + TensorRT。",
+        "inferrt_model_py 与 inferrt_ops_py 还需要 Python、NumPy、pybind11/DLPack；安装为 MODULE，不是独立 wheel。",
+        "外部运行库由 CMake 发现与 tools/dependencies.yaml 管理，第三方运行时部署不是 CMake 自动复制。"
+      ]
+    }
+  ]
+}
