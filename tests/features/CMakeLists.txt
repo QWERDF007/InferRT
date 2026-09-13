@@ -10,6 +10,7 @@ add_inferrt_test(features
         inferrt_core
         inferrt_features
         inferrt_model
+        yaml-cpp::yaml-cpp
         ${Faiss_LIBS}
 )
 
@@ -17,4 +18,13 @@ target_include_directories(${PROJECT_NAME_LOWER}_test_features
     PRIVATE
         ${CMAKE_SOURCE_DIR}/src/features/priv
         ${Faiss_INCLUDE_DIRS}
+)
+
+target_sources(${PROJECT_NAME_LOWER}_test_features
+    PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/features/priv/dino/DinoFeatureCache.cpp
+        ${CMAKE_SOURCE_DIR}/src/features/priv/dino/DinoIngest.cpp
+        ${CMAKE_SOURCE_DIR}/src/features/priv/dino/DinoIndexStore.cpp
+        ${CMAKE_SOURCE_DIR}/src/features/priv/dino/DinoStorageFormat.cpp
+        ${CMAKE_SOURCE_DIR}/src/features/priv/dino/DinoSearchCache.cpp
 )

@@ -12,6 +12,10 @@ if(MSVC)
         PROPERTIES
             COMPILE_OPTIONS "/arch:AVX512"
             COMPILE_DEFINITIONS "INFERRT_SHAPE_TEMPLATE_AVX512_ENABLED=1")
+    set_source_files_properties(priv/dino/DinoSimilarityAvx2.cpp
+        PROPERTIES
+            COMPILE_OPTIONS "/arch:AVX2"
+            COMPILE_DEFINITIONS "INFERRT_DINO_SIMD_AVX2=1")
 else()
     set_source_files_properties(priv/ShapeTemplateMatcherFastImpl.cpp
         PROPERTIES COMPILE_OPTIONS "-mavx2")
@@ -19,6 +23,10 @@ else()
         PROPERTIES
             COMPILE_OPTIONS "-mavx512f;-mavx512bw"
             COMPILE_DEFINITIONS "INFERRT_SHAPE_TEMPLATE_AVX512_ENABLED=1")
+    set_source_files_properties(priv/dino/DinoSimilarityAvx2.cpp
+        PROPERTIES
+            COMPILE_OPTIONS "-mavx2"
+            COMPILE_DEFINITIONS "INFERRT_DINO_SIMD_AVX2=1")
 endif()
 
 # 图像检索需要 OpenCV 做图片读取/预处理，CUDA 支持 TensorRT/GPU Faiss 路径，

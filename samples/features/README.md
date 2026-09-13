@@ -7,6 +7,7 @@
 - `image_search/`：基于 Faiss 的图像特征检索。
 - `roi_search/`：读取 LabelMe 标注、批量提取 ROI 特征并建立 Faiss 检索库。
 - `dino_pca_visualize/`：将 DINO patch token 通过 PCA 可视化。
+- `dino_region_search/`：以标注区域在未标注图库中检索相似区域（DINOv3 / DINOv2 双骨干，CLI + YAML 契约）。
 
 构建示例：
 
@@ -16,6 +17,7 @@ cmake --build build --config Release --target inferrt_sample_feature_extract
 cmake --build build --config Release --target inferrt_sample_image_search
 cmake --build build --config Release --target inferrt_sample_roi_search
 cmake --build build --config Release --target inferrt_sample_dino_pca_visualize
+cmake --build build --config Release --target inferrt_sample_dino_region_search
 ```
 
 各示例的参数和运行方式见对应目录下的 README。特征模块依赖 Faiss；缺少该依赖时，整个特征示例目录会被 CMake 跳过。
