@@ -1,0 +1,102 @@
+date: 2026-09-14
+scope: current_source_against_docs/dino_region_search_v1
+verdict: NOT_ACCEPTED
+source_changes_during_acceptance: false
+evidence_root: build/dino_acceptance_20260914
+evidence_availability: local_untracked_runtime_artifacts
+build: PASS
+dino_regressions:
+  passed: 27
+  failed: 0
+smoke:
+  gallery_images: 3
+  views: 41
+  build_duration_ms: 574.8797999992967
+  rectangle: PASS
+  polygon: PASS
+  self_bbox_iou: 0.95894985739707
+  cli_deadline: PASS
+  profile_deadline: PASS
+  request_deadline: FAIL
+  structured_error_yaml: FAIL
+  missing_index_exit: 2
+  evidence: summary.yaml
+index:
+  layout: index.yaml_and_binary_arrays
+  fp32_int8_multiview_regression: PASS
+  index_sha_manifest_generation: absent
+quality:
+  real_region_recall: NOT_VERIFIED
+  real_precision: NOT_VERIFIED
+  real_localization_iou: NOT_VERIFIED
+  reason: Existing quality tool fails before querying; independent region-level positives and hard negatives are also missing.
+findings:
+  - id: F01
+    tickets: [T04, T06]
+    verification: runtime_reproduced
+    issue: Self candidates consume coarse quota before include_self filtering; a known non-self copy is missed.
+    evidence: self_filter/exclude.yaml
+    control: self_filter/control_search.yaml
+    source: src/features/priv/dino/DinoEngine.cpp:98-145
+  - id: F02
+    tickets: [T04, T06]
+    verification: runtime_reproduced
+    issue: Windows filename case alias bypasses include_self=false and returns the query itself.
+    evidence: case_alias.yaml
+    source: src/features/priv/dino/DinoIngest.cpp:254-258
+  - id: F03
+    tickets: [T07]
+    verification: runtime_reproduced
+    issue: devkit emits source_path while request parser requires query_path; probe exits before obtaining results.
+    source: tools/dino_region_devkit.py:297
+  - id: F04
+    tickets: [T01, T06]
+    verification: runtime_reproduced
+    issue: YAML request deadline_ms=1 is ignored, while the same CLI/profile deadline returns incomplete.
+    evidence: deadline_request.stdout.yaml
+    source: src/features/priv/dino/DinoContracts.cpp:60-200
+  - id: F05
+    tickets: [T01, T06]
+    verification: runtime_reproduced
+    issue: Invalid ROI and missing resources produce empty stdout, not the required error YAML.
+    evidence: invalid_roi.stderr.log
+    source: samples/features/dino_region_search/SampleDinoRegionSearch.cpp:359-375
+  - id: F06
+    tickets: [T04, T07]
+    verification: source_and_runtime_output
+    issue: Response serialization omits computed coarse candidates, timings and diagnostics required by quality tooling.
+    source: src/features/priv/dino/DinoContracts.cpp:202-232
+  - id: F07
+    tickets: [T05, T07]
+    verification: source_review_only
+    issue: Quality tool writes obsolete threshold fields; probe override and calibration threshold disabling do not affect decision.threshold.
+    sources: [tools/dino_region_devkit.py:420, tools/dino_region_devkit.py:573-574]
+  - id: F08
+    tickets: [T05]
+    verification: source_review_only
+    issue: Multiple spatial peaks reduce to one chosen result per candidate; same-candidate multi-target retrieval is incomplete.
+    source: src/features/priv/dino/DinoFineMatch.cpp:847-961
+  - id: F09
+    tickets: [T05]
+    verification: source_review_only
+    issue: Refinement calculates half-patch origin but does not pass it to slidePrepared; repeated identical global scans add work without position refinement.
+    source: src/features/priv/dino/DinoFineMatch.cpp:893-907
+  - id: F10
+    tickets: [T02]
+    verification: source_review_only
+    issue: Backbone cache includes weight file size/mtime but feature-cache signature does not; same-process weight replacement can reuse old candidate features.
+    sources: [src/features/priv/dino/DinoBackbone.cpp:83-104, src/features/priv/dino/DinoBackbone.cpp:144-149]
+  - id: F11
+    tickets: [T01, T06]
+    verification: runtime_and_source
+    issue: A valid lightweight decision.threshold profile is rejected without obsolete calibration_id; weights_sha256 and unused index budget remain in public configuration.
+    evidence: threshold.yaml
+    sources: [src/features/priv/dino/DinoProfile.cpp:199-208, src/features/include/inferrt/features/DinoRegionSearch.hpp:157]
+tickets:
+  T01: FAIL
+  T02: PARTIAL
+  T03: PASS_FUNCTIONAL_SCOPE
+  T04: FAIL
+  T05: FAIL
+  T06: FAIL
+  T07: FAIL

@@ -1,0 +1,9 @@
+# 新文档请求契约示例，不表示现有 CLI 已支持；bbox 与 polygon 二选一。
+query_path: /data/query/ring.png
+polygon:
+  - [120, 80]
+  - [360, 80]
+  - [340, 320]
+  - [130, 300]
+include_self: false
+top_k: 20
