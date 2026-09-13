@@ -320,6 +320,8 @@ TEST(ModelUtilTest, CheckCudaConvertsErrorStatus)
     EXPECT_NO_THROW({ irt::model::checkCuda(cudaSuccess, "cudaSuccess"); });
     ExpectIrtExceptionCode([&] { irt::model::checkCuda(cudaErrorInvalidValue, "invalid"); },
                            irt::Status::ERROR_INTERNAL);
+    ExpectIrtExceptionCode([&] { irt::model::checkCuda(cudaErrorMemoryAllocation, "allocation"); },
+                           irt::Status::ERROR_OUT_OF_MEMORY);
 }
 
 /**

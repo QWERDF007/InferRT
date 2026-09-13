@@ -274,7 +274,9 @@ void checkCuda(cudaError_t status, const char *op)
 {
     if (status != cudaSuccess)
     {
-        throw irt::Exception(irt::Status::ERROR_INTERNAL, "%s failed: %s", op, cudaGetErrorString(status));
+        const auto error_status = status == cudaErrorMemoryAllocation ? irt::Status::ERROR_OUT_OF_MEMORY
+                                                                       : irt::Status::ERROR_INTERNAL;
+        throw irt::Exception(error_status, "%s failed: %s", op, cudaGetErrorString(status));
     }
 }
 

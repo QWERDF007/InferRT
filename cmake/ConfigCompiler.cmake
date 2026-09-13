@@ -25,7 +25,9 @@ if (MSVC)
     # /wd4251: 关闭 STL 成员经 DLL 导出时的接口警告
     set(INFERRT_CXX_COMPILE_OPTIONS /EHa /utf-8 /bigobj /W4 /wd4251)
     set(INFERRT_C_COMPILE_OPTIONS /W4)
-    set(INFERRT_CUDA_COMPILE_OPTIONS)
+    # nvcc 的预处理由宿主 cl 执行：按系统代码页读 UTF-8 源会把多字节序列错误配对并吞掉换行，
+    # 产生错位的语法错误（C4819 是前兆）。与 CXX 一致显式声明源字符集为 UTF-8。
+    set(INFERRT_CUDA_COMPILE_OPTIONS -Xcompiler=/utf-8)
     # set(CXX_WARNING_FLAGS "/permissive-")
 else ()
     set(INFERRT_CXX_COMPILE_OPTIONS ${C_WARNING_ERROR_FLAG} -Wall -Wno-unknown-pragmas -Wpointer-arith -Wmissing-declarations -Wredundant-decls -Wmultichar -Wno-unused-local-typedefs -Wunused -Wsuggest-override)
