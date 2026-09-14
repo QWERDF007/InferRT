@@ -39,6 +39,13 @@ def test_preset_minimum_matches_project_minimum() -> None:
 
     assert _version_tuple(preset) == _version_tuple(match.group(1))
 
+def test_presets_share_standard_build_tree() -> None:
+    presets = json.loads((ROOT / "CMakePresets.json").read_text(encoding="utf-8"))
+
+    binary_dirs = {str(preset["binaryDir"]) for preset in presets["configurePresets"]}
+
+    assert binary_dirs == {"${sourceDir}/build"}
+
 
 def test_package_config_uses_standard_prefix_layout() -> None:
     package = (ROOT / "cmake" / "ConfigCMakePackage.cmake").read_text(encoding="utf-8")

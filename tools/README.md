@@ -10,6 +10,7 @@
 ## 1. 链接依赖
 
 开发阶段使用，把第三方运行时文件链接到 `build/bin`。
+- `CMakePresets.json` 中的 `core-only`、`cuda`、`full` 共享同一个 `build` 构建树；可执行文件和 DLL 输出到 `build/bin`，库输出到 `build/lib`，不再使用 `build/presets/<name>`。
 
 ```powershell
 & 'D:\Software\anaconda3\envs\py312\python.exe' tools\link_dependencies.py
@@ -52,9 +53,9 @@ DLL；CTest 只把构建输出目录加入进程搜索路径。运行 CTest 或�
 请先完成下面对应的显式部署步骤。
 
 ```powershell
-cmake --install build\presets\full --config Release
-& 'D:\Software\anaconda3\envs\py312\python.exe' tools\package_runtime_dlls.py `
-    --build-dir build\presets\full `
+cmake --install build --config Release
+& 'D:\Software\anaconda3\envs\py312\python.exe' tools/package_runtime_dlls.py `
+    --build-dir build `
     --config Release `
     --strict
 ```
@@ -75,11 +76,10 @@ find_package(InferRT CONFIG REQUIRED) # core-only consumer
 
 CTest 运行前也要显式把同一套第三方运行库部署到构建输出目录；CMake 不会
 在构建钩子中复制 DLL。Windows 下这样可以避免系统目录中的同名 DLL 被加载：
-
 ```powershell
-& 'D:\Software\anaconda3\envs\py312\python.exe' tools\package_runtime_dlls.py `
-    --build-dir build\presets\full `
-    --install-bin-dir build\presets\full\bin `
+& 'D:\Software\anaconda3\envs\py312\python.exe' tools/package_runtime_dlls.py `
+    --build-dir build `
+    --install-bin-dir build\bin `
     --config Release `
     --strict
 ```

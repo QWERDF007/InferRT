@@ -29,7 +29,7 @@ jobs:
       - name: Test
         run: |
           mkdir -p "$GITHUB_WORKSPACE/artifacts/core-only-linux"
-          ctest --test-dir build/presets/core-only -C Release --output-on-failure \
+          ctest --test-dir build -C Release --output-on-failure \
             --no-tests=error \
             --output-junit "$GITHUB_WORKSPACE/artifacts/core-only-linux/ctest.xml"
           python tools/validate_test_report.py \
@@ -81,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/artifacts/cuda-linux"
-          ctest --test-dir build/presets/cuda -C Release --output-on-failure \
+          ctest --test-dir build -C Release --output-on-failure \
             --no-tests=error \
             --output-junit "$GITHUB_WORKSPACE/artifacts/cuda-linux/ctest.xml"
           python tools/validate_test_report.py \
@@ -105,7 +105,7 @@ jobs:
             --error-exitcode=1 \
             --target-processes all \
             --log-file "$GITHUB_WORKSPACE/artifacts/cuda-linux/compute-sanitizer.log" \
-            "$GITHUB_WORKSPACE/build/presets/cuda/bin/inferrt_test_cvcuda"
+            "$GITHUB_WORKSPACE/build/bin/inferrt_test_cvcuda"
 
       - name: Upload CUDA evidence
         if: always()
@@ -133,7 +133,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifacts/core-only-windows | Out-Null
-          ctest --test-dir build/presets/core-only -C Release --output-on-failure `
+          ctest --test-dir build -C Release --output-on-failure `
             --no-tests=error `
             --output-junit "$env:GITHUB_WORKSPACE\artifacts\core-only-windows\ctest.xml"
           python tools/validate_test_report.py `
@@ -171,7 +171,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifacts/install-downstream-windows | Out-Null
-          ctest --test-dir build/presets/core-only -C Release --output-on-failure `
+          ctest --test-dir build -C Release --output-on-failure `
             --no-tests=error `
             --output-junit "$env:GITHUB_WORKSPACE\artifacts\install-downstream-windows\ctest.xml" `
             -R "^inferrt_package_relocation$"
@@ -330,12 +330,12 @@ jobs:
         run: cmake --build --preset full-release --parallel
 
       - name: Install full Release
-        run: cmake --install build/presets/full --config Release --prefix artifacts/release-gate/install
+        run: cmake --install build --config Release --prefix artifacts/release-gate/install
 
       - name: Deploy runtime DLLs explicitly
         run: >
           & $env:INFERRT_PYTHON_EXE tools/package_runtime_dlls.py
-          --build-dir build/presets/full
+          --build-dir build
           --config Release
           --install-dir artifacts/release-gate/install
           --strict
@@ -344,7 +344,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifacts/release-gate | Out-Null
-          ctest --test-dir build/presets/full -C Release --output-on-failure `
+          ctest --test-dir build -C Release --output-on-failure `
             --no-tests=error `
             --output-junit "$env:GITHUB_WORKSPACE\artifacts\release-gate\ctest.xml"
           & $env:INFERRT_PYTHON_EXE tools/validate_test_report.py `
@@ -365,10 +365,10 @@ jobs:
       - name: Run full backend and real-model Python gate
         shell: pwsh
         run: |
-          $env:PATH = "$PWD\artifacts\release-gate\install\bin;$PWD\build\presets\full\bin;$env:PATH"
+          $env:PATH = "$PWD\artifacts\release-gate\install\bin;$PWD\build\bin;$env:PATH"
           & $env:INFERRT_PYTHON_EXE -m pytest tests/python -v --tb=short -ra `
             --junitxml=artifacts/release-gate/pytest.xml `
-            --inferrt-build-dir=build/presets/full `
+            --inferrt-build-dir=build `
             --inferrt-model-root="$env:INFERRT_MODEL_ROOT" `
             --inferrt-dinov2-hub-repo="$env:INFERRT_DINOV2_HUB_REPO" `
             --inferrt-compare-runtime=tensorrt,onnx,openvino `
@@ -398,8 +398,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifacts/release-gate/benchmarks | Out-Null
-          $env:PATH = "$PWD\artifacts\release-gate\install\bin;$PWD\build\presets\full\bin;$env:PATH"
-          & build/presets/full/bin/inferrt_benchmark_cuda_ops.exe `
+          $env:PATH = "$PWD\artifacts\release-gate\install\bin;$PWD\build\bin;$env:PATH"
+          & build/bin/inferrt_benchmark_cuda_ops.exe `
             --benchmark_filter="^BM_NMS" `
             --benchmark_min_time=0.1s `
             --benchmark_out=artifacts/release-gate/benchmarks/nms.json `
@@ -407,7 +407,7 @@ jobs:
           $nms = Get-Content -LiteralPath artifacts/release-gate/benchmarks/nms.json -Raw | ConvertFrom-Json
           $allocations = @($nms.benchmarks | Where-Object { [double]$_.steady_allocations -ne 0 })
           if ($allocations.Count -ne 0) { throw "NMS steady-state allocation gate failed" }
-          & build/presets/full/bin/inferrt_benchmark_engine.exe `
+          & build/bin/inferrt_benchmark_engine.exe `
             --example="$env:INFERRT_BENCHMARK_MODEL" `
             --engine="$env:INFERRT_BENCHMARK_ENGINE" `
             --image="$env:INFERRT_BENCHMARK_IMAGE" `
@@ -423,7 +423,7 @@ jobs:
           --root .
           --install-dir artifacts/release-gate/install
           --source-dir .
-          --build-dir build/presets/full
+          --build-dir build
           --json artifacts/release-gate/quality-gates.json
 
       - name: Upload full Release evidence

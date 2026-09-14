@@ -10,7 +10,7 @@
       "name": "core-only",
       "displayName": "Core-only Release",
       "description": "Build core, util and CPU operators without CUDA, TensorRT, OpenCV or Python.",
-      "binaryDir": "${sourceDir}/build/presets/core-only",
+      "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "INFERRT_INSTALL_CMAKEDIR": "lib/cmake/InferRT",
@@ -28,7 +28,7 @@
       "name": "cuda",
       "displayName": "CUDA Release",
       "description": "Build CUDA, TensorRT, CVCUDA, model, engine and feature targets without Python or optional backends.",
-      "binaryDir": "${sourceDir}/build/presets/cuda",
+      "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "INFERRT_INSTALL_CMAKEDIR": "lib/cmake/InferRT",
@@ -46,7 +46,7 @@
       "name": "full",
       "displayName": "Full Release",
       "description": "Build all required InferRT modules and Python bindings; ONNX Runtime/OpenVINO are opt-in.",
-      "binaryDir": "${sourceDir}/build/presets/full",
+      "binaryDir": "${sourceDir}/build",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "INFERRT_INSTALL_CMAKEDIR": "lib/cmake/InferRT",

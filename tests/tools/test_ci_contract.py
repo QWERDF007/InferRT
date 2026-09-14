@@ -46,11 +46,13 @@ def test_linux_cuda_workflow_is_an_executable_release_gate() -> None:
 
     labels = {str(label).lower() for label in job["runs-on"]}
     commands = _commands(job)
+    workflow_text = WORKFLOW.read_text(encoding="utf-8")
 
     assert {"self-hosted", "linux", "x64", "gpu"} <= labels
     assert "cmake --preset cuda" in commands
     assert "cmake --build --preset cuda-release" in commands
-    assert "ctest --test-dir build/presets/cuda" in commands
+    assert "ctest --test-dir build" in commands
+    assert "build/presets/" not in workflow_text
     assert "--no-tests=error" in commands
     assert "--output-junit" in commands and "GITHUB_WORKSPACE" in commands
     assert any(step.get("uses", "").startswith("actions/upload-artifact@") for step in job["steps"])
