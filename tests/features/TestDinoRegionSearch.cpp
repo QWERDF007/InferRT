@@ -9,6 +9,7 @@
 
 #include <inferrt/core/Exception.hpp>
 #include <inferrt/features/DinoRegionSearch.hpp>
+#include <yaml-cpp/yaml.h>
 
 #include "dino/DinoContracts.hpp"
 #include "dino/DinoFeatureCache.hpp"
@@ -24,7 +25,10 @@
 #include "dino/DinoTypes.hpp"
 #include "dino/DinoTime.hpp"
 #include "dino/DinoViews.hpp"
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
 
+#include <fstream>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -110,6 +114,118 @@ TEST(DinoRegionSearchContract, InvalidRoiAndSearchSizesAreRejected)
         "model: {name: dinov3_vits16, weights_path: unused.wts}\nsearch: {block_descriptors: 0}\n"), irt::Exception);
 }
 
+TEST(DinoRegionSearchContract, MalformedProfileValuesUseInvalidArgument)
+{
+    EXPECT_THROW((void)irt::features::dinoConfigFromYaml(
+                     "model: {name: dinov3_vits16, weights_path: unused.wts, encoder_edge: invalid}\n"),
+                 irt::Exception);
+}
+
+TEST(DinoRegionSearchContract, UnsupportedProfileEnumsAreRejected)
+{
+    const std::string base = "model: {name: dinov3_vits16, weights_path: unused.wts}\n";
+    EXPECT_THROW((void)irt::features::dinoConfigFromYaml(base + "mode: unsupported\n"), irt::Exception);
+    EXPECT_THROW((void)irt::features::dinoConfigFromYaml(
+                     "model: {name: dinov3_vits16, weights_path: unused.wts, precision: int8}\n"),
+                 irt::Exception);
+    EXPECT_THROW((void)irt::features::dinoConfigFromYaml(
+                     base + "quantization: {format: unsupported}\n"),
+                 irt::Exception);
+}
+TEST(DinoRegionSearchContract, RequestDeadlineAndThresholdUseLightweightContract)
+{
+    const auto config = irt::features::dinoConfigFromYaml(
+        "model: {name: dinov3_vits16, weights_path: unused.wts}\n"
+        "decision: {threshold: 0.73}\n"
+        "deadline_ms: 30000\n");
+    EXPECT_TRUE(config.enable_decision_threshold);
+    EXPECT_DOUBLE_EQ(config.decision_threshold, 0.73);
+
+    const auto request = irt::features::dinoSearchRequestFromYaml(
+        "query_path: a.png\nbbox: [1, 2, 8, 9]\ndeadline_ms: 1\n");
+    EXPECT_EQ(request.deadline_ms, 1);
+}
+TEST(DinoRegionSearchContract, ResponseIncludesCandidatesTimingsAndDiagnostics)
+{
+    irt::features::DinoSearchResponse response;
+    response.request_id = "request-1";
+    response.status = irt::features::DinoSearchStatus::Completed;
+    response.decision = irt::features::DinoSearchDecision::RankedOnly;
+    response.completed_candidates = 2;
+    response.total_candidates = 3;
+    response.region_candidates.push_back({std::filesystem::path("gallery/a.jpg"),
+                                          irt::features::DinoSearchRect{1.0F, 2.0F, 3.0F, 4.0F}});
+    response.timings.wall_ms = 12.5;
+    response.diagnostics.scanned_region_descriptors = 7;
+    response.diagnostics.similarity_backend = "cpu";
+    const auto node = YAML::Load(irt::features::dinoSearchResponseToYaml(response));
+
+    EXPECT_EQ(node["status"].as<std::string>(), "completed");
+    EXPECT_EQ(node["decision"].as<std::string>(), "ranked_only");
+    EXPECT_EQ(node["region_candidates"].size(), 1U);
+    EXPECT_EQ(node["region_candidates"][0]["source_path"].as<std::string>(), "gallery/a.jpg");
+    EXPECT_DOUBLE_EQ(node["timings"]["wall_ms"].as<double>(), 12.5);
+    EXPECT_EQ(node["diagnostics"]["scanned_region_descriptors"].as<size_t>(), 7U);
+    EXPECT_EQ(node["diagnostics"]["similarity_backend"].as<std::string>(), "cpu");
+}
+
+TEST(DinoRegionSearchContract, RequestDeadlineMustBePositive)
+{
+    EXPECT_THROW((void)irt::features::dinoSearchRequestFromYaml(
+        "query_path: a.png\nbbox: [1, 2, 8, 9]\ndeadline_ms: 0\n"), irt::Exception);
+    EXPECT_THROW((void)irt::features::dinoSearchRequestFromYaml(
+        "query_path: a.png\nbbox: [1, 2, 8, 9]\ndeadline_ms: invalid\n"), irt::Exception);
+    EXPECT_THROW((void)irt::features::dinoSearchRequestFromYaml(
+        "request_id: [not-a-string]\nquery_path: a.png\nbbox: [1, 2, 8, 9]\n"), irt::Exception);
+}
+
+TEST(DinoRegionSearchPaths, WindowsCaseAliasesShareImageIdentity)
+{
+#ifdef _WIN32
+    const auto root = std::filesystem::path(testing::TempDir()) / "dino_case_identity";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+    const auto original = root / "Image.JPG";
+    std::ofstream(original.string()).close();
+    const auto first = irt::features::priv::DinoImageLoader::statIdentity(original);
+    const auto alias = irt::features::priv::DinoImageLoader::statIdentity(root / "image.jpg");
+    EXPECT_EQ(first.image_id, alias.image_id);
+    std::filesystem::remove_all(root);
+#else
+    GTEST_SKIP() << "Windows path identity behavior";
+#endif
+}
+
+TEST(DinoRegionSearchIngest, LargeJpegPreservesDecodedDimensionsAndEdgePixels)
+{
+    const auto root = std::filesystem::path(testing::TempDir()) / "inferrt_dino_large_jpeg";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+    const auto path = root / "large.jpg";
+
+    constexpr int width = 3060;
+    constexpr int height = 4520;
+    cv::Mat source(height, width, CV_8UC3, cv::Scalar(23, 87, 191));
+    // Keep a substantial marker away from the border while still exercising the final decoded pixels.
+    source(cv::Rect(width - 24, height - 24, 16, 16)).setTo(cv::Scalar(41, 129, 213));
+    ASSERT_TRUE(cv::imwrite(path.string(), source, {cv::IMWRITE_JPEG_QUALITY, 100}));
+
+    const auto loaded = irt::features::priv::DinoImageLoader::load(path);
+    EXPECT_EQ(loaded.record.width, width);
+    EXPECT_EQ(loaded.record.height, height);
+    ASSERT_EQ(loaded.image.cols, width);
+    ASSERT_EQ(loaded.image.rows, height);
+
+    const cv::Vec3b edge_pixel = loaded.image.at<cv::Vec3b>(height - 16, width - 16);
+    EXPECT_NEAR(edge_pixel[0], 41, 8);
+    EXPECT_NEAR(edge_pixel[1], 129, 8);
+    EXPECT_NEAR(edge_pixel[2], 213, 8);
+
+    std::filesystem::remove_all(root);
+}
+
+
+
 TEST(DinoRegionSearchIndex, ViewsRetainDistinctDescriptorsAfterReopening)
 {
     for (const bool quantized : {false, true})
@@ -118,8 +234,7 @@ TEST(DinoRegionSearchIndex, ViewsRetainDistinctDescriptorsAfterReopening)
             / (quantized ? "inferrt_dino_views_int8" : "inferrt_dino_views_fp32");
         std::filesystem::remove_all(root);
         {
-            irt::features::DinoRegionSearchConfig config;
-            irt::features::priv::DinoIndexWriter writer(root, config, 3, quantized);
+            irt::features::priv::DinoIndexWriter writer(root, 3, quantized);
             irt::features::priv::DinoImageIdentity image;
             image.image_id = "test-image";
             image.source_path = "test-image.png";

@@ -294,7 +294,7 @@ def run_search(cli: Path, index: Path, profile: Path, request: dict, cache_dir: 
     request_path = cache_dir / f"{request['query_id']}.request.yaml"
     body = {
         "request_id": request["query_id"],
-        "source_path": request["query_path"],
+        "query_path": request["query_path"],
         **request["roi"],
         "include_self": request.get("include_self", False),
     }
@@ -368,7 +368,7 @@ def evaluate_weights(cli: Path, index: Path, profile: Path, manifest: dict, cach
                             "tp": is_true_positive, "fp": not is_true_positive and (duplicate or no_match or exhaustive)})
         rows.append({"query_id": query["query_id"], "no_match": no_match,
                      "status": response["status"], "positive_count": len(positives), "results": records,
-                     "coarse_covered": coarse, "timings": response["timings"], "diagnostics": response.get("diagnostics", [])})
+                     "coarse_covered": coarse, "timings": response["timings"], "diagnostics": response.get("diagnostics", {})})
     return rows
 
 
@@ -417,7 +417,7 @@ def threshold_candidates(rows: list[dict]) -> list[float]:
 def write_weight_profile(profile_path: Path, weights: tuple[float, float, float], out_path: Path) -> Path:
     profile = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
     profile.setdefault("fine", {})["score_weights"] = list(weights)
-    profile.setdefault("decision", {})["enabled"] = False
+    profile.setdefault("decision", {})["threshold"] = None
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(yaml.safe_dump(profile, allow_unicode=True, sort_keys=False) + "\n", encoding="utf-8")
     return out_path
@@ -570,8 +570,7 @@ def probe(args: argparse.Namespace) -> int:
     extra = []
     if args.threshold is not None:
         probe_profile = yaml.safe_load(profile.read_text(encoding="utf-8"))
-        probe_profile.setdefault("decision", {})["enabled"] = True
-        probe_profile.setdefault("fine", {})["decision_threshold"] = args.threshold
+        probe_profile.setdefault("decision", {})["threshold"] = args.threshold
         cache_dir.mkdir(parents=True, exist_ok=True)
         profile = cache_dir / "profile.yaml"
         profile.write_text(yaml.safe_dump(probe_profile, allow_unicode=True, sort_keys=False), encoding="utf-8")
@@ -592,11 +591,8 @@ def probe(args: argparse.Namespace) -> int:
                    "roi": {"bbox": roi},
                    "positives": []}
         response = run_search(cli, index, profile, request, cache_dir, extra)
-        counters = {}
-        for note in response.get("diagnostics", []):
-            if note.get("code") == "COUNTERS":
-                counters = yaml.safe_load(note["message"])
-        results = response["results"]
+        results = response.get("results", []) or []
+        counters = response.get("diagnostics", {}) or {}
         rows.append(
             {
                 "query_id": case["query_id"],

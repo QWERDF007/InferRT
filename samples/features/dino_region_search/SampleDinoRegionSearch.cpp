@@ -3,8 +3,7 @@
  * @brief DINO 区域检索 CLI：build / search。
  *
  * stdout 只输出机器可读的 YAML（结果或报告），进度写 stderr；退出码遵循契约：
- * 0 完成、2 参数或 ROI 错误、3 权重/索引缺失或不兼容、4 建库失败或预算超限、
- * 5 查询未完成、6 内部错误。
+ * 0 完成、2 参数或 ROI 错误、3 权重/索引缺失或不兼容、4 建库含失败文件、5 查询未完成、6 内部错误。
  */
 
 #include <cxxopts.hpp>
@@ -182,10 +181,6 @@ irt::features::DinoRegionSearchConfig loadProfile(const Arguments &arguments)
         const auto device = config.model_runtime.isCpu() ? "cpu" : std::to_string(config.model_runtime.deviceId());
         config.model_runtime = irt::model::ModelRuntime(arguments.backend + ":" + device);
     }
-    if (arguments.deadline_ms > 0)
-    {
-        config.query_deadline_ms = arguments.deadline_ms;
-    }
     config.validate();
     return config;
 }
@@ -208,11 +203,19 @@ irt::features::DinoSearchRequest buildRequest(const Arguments &arguments, const 
         {
             request.profile_id = config.profile_id;
         }
+        if (arguments.deadline_ms > 0)
+        {
+            request.deadline_ms = arguments.deadline_ms;
+        }
         return request;
     }
 
     irt::features::DinoSearchRequest request;
     request.request_id   = "cli-query";
+    if (arguments.deadline_ms > 0)
+    {
+        request.deadline_ms = arguments.deadline_ms;
+    }
     request.query_path   = fs::u8path(arguments.query);
     request.profile_id   = config.profile_id;
     request.top_k        = arguments.top_k > 0 ? static_cast<size_t>(arguments.top_k) : 0U;
@@ -252,6 +255,47 @@ irt::features::DinoSearchRequest buildRequest(const Arguments &arguments, const 
         return request;
     }
     throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "search requires --roi or --polygon");
+}
+
+
+int cliExitCode(const irt::Status status) noexcept
+{
+    switch (status)
+    {
+    case irt::Status::ERROR_INVALID_ARGUMENT:
+    case irt::Status::INVALID_OPERATION:
+        return 2;
+    case irt::Status::ERROR_NOT_IMPLEMENTED:
+    case irt::Status::NOT_READY:
+    case irt::Status::ERROR_DEVICE:
+        return 3;
+    case irt::Status::ERROR_OUT_OF_MEMORY:
+        return 4;
+    default:
+        return 6;
+    }
+}
+
+void emitCliError(const Arguments &arguments, const std::string &message)
+{
+    irt::features::DinoSearchResponse response;
+    response.request_id = "cli-query";
+    response.status     = irt::features::DinoSearchStatus::Failed;
+    response.decision   = irt::features::DinoSearchDecision::Error;
+    response.message    = message;
+    const auto yaml     = irt::features::dinoSearchResponseToYaml(response);
+    std::cout << yaml;
+    if (!arguments.output.empty())
+    {
+        try
+        {
+            writeTextFile(fs::u8path(arguments.output), yaml);
+        }
+        catch (const std::exception &error)
+        {
+            std::cerr << "[dino] failed to write error response: " << error.what() << std::endl;
+        }
+    }
 }
 
 
@@ -317,7 +361,7 @@ int main(int argc, char **argv)
                 fs::u8path(arguments.gallery), config, fs::u8path(arguments.index), [](const irt::features::DinoBuildProgress &progress)
                 { printProgress(buildStageName(progress.stage), progress.processed_count, progress.total_count, progress.message); });
             const auto yaml = irt::features::dinoBuildReportToYaml(report);
-            std::cout << yaml << std::endl;
+            std::cout << yaml;
             if (arguments.output.empty() == false)
             {
                 writeTextFile(fs::u8path(arguments.output), yaml);
@@ -335,7 +379,7 @@ int main(int argc, char **argv)
                 fs::u8path(arguments.index), request, config, [](const irt::features::DinoSearchProgress &progress)
                 { printProgress(searchStageName(progress.stage), progress.processed_count, progress.total_count, {}); });
             const auto yaml = irt::features::dinoSearchResponseToYaml(response);
-            std::cout << yaml << std::endl;
+            std::cout << yaml;
             if (!arguments.output.empty())
             {
                 writeTextFile(fs::u8path(arguments.output), yaml);
@@ -353,25 +397,17 @@ int main(int argc, char **argv)
     }
     catch (const cxxopts::exceptions::exception &error)
     {
-        std::cerr << "[dino] argument error: " << error.what() << std::endl;
+        emitCliError(arguments, error.what());
         return 2;
     }
     catch (const irt::Exception &error)
     {
-        std::cerr << "[dino] error: " << error.what() << std::endl;
-        if (error.code() == irt::Status::ERROR_INVALID_ARGUMENT || error.code() == irt::Status::INVALID_OPERATION)
-        {
-            return 2;
-        }
-        if (error.code() == irt::Status::ERROR_NOT_IMPLEMENTED || error.code() == irt::Status::NOT_READY)
-        {
-            return 3;
-        }
-        return 6;
+        emitCliError(arguments, error.msg());
+        return cliExitCode(error.code());
     }
     catch (const std::exception &error)
     {
-        std::cerr << "[dino] internal error: " << error.what() << std::endl;
+        emitCliError(arguments, error.what());
         return 6;
     }
 }

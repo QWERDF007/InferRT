@@ -44,7 +44,7 @@ DinoSearchResponse DinoRegionSearch::search(const std::filesystem::path &index_r
                                             const DinoRegionSearchConfig &config,
                                             const DinoSearchProgressCallback &progress_callback)
 {
-    return priv::dinoSearchIndex(index_root, request, config, progress_callback).response;
+    return priv::dinoSearchIndex(index_root, request, config, progress_callback);
 }
 
 } // namespace irt::features

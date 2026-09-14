@@ -43,7 +43,7 @@ $CLI search --index build/dino_region/index_dinov3 --profile $PROFILE \
 $CLI search --index build/dino_region/index_dinov3 --profile $PROFILE \
   --query assets/pics/dog.jpg --polygon "140,110;420,120;420,400;150,395"
 
-# 4) 自查询验证（允许返回与查询图同内容的副本）
+# 4) 自查询验证（允许返回与查询路径相同的图像）
 $CLI search --index build/dino_region/index_dinov3 --profile $PROFILE \
   --query assets/pics/dog.jpg --roi 140,110,420,400 --include-self
 
@@ -54,7 +54,7 @@ $CLI search --index build/dino_region/index_dinov3 --profile $PROFILE \
 
 ## 输入输出契约
 
-- 请求 YAML 字段：`query_path`、可选 `request_id`、`profile_id`，以及互斥的 `bbox`/`polygon`；可选 `include_self`、`top_k`。
+- 请求 YAML 字段：`query_path`、可选 `request_id`、`profile_id`、`deadline_ms`，以及互斥的 `bbox`/`polygon`；可选 `include_self`、`top_k`。
 - 响应 YAML 字段：`status`、`decision`、`results[]`（包含 `source_path`、`bbox`、`score`）。
 - 所有坐标都在 canonical image 上，使用浮点半开区间 `[x0, y0, x1, y1)`。
 - `status` 与 `decision` 语义：`completed + ranked_only` 表示排好序但未配置判定阈值；`incomplete` 表示超时或部分候选未处理完，此时结果是部分结果。
@@ -66,3 +66,4 @@ $CLI search --index build/dino_region/index_dinov3 --profile $PROFILE \
 
 - 契约（profile / request / response）里的路径一律是 **UTF-8 文本**；实现内部一律是 `fs::path`。二者通过 [`DinoPaths.hpp`](../../../src/features/priv/dino/DinoPaths.hpp) 互转，统一使用 `/` 分隔符。
 - 图片解码按 `fs::path` 读取原始字节后再 `cv::imdecode`，避免 Windows 上窄字符路径解码失败。
+- 原图尺寸保留由 [`DinoIngest.cpp`](../../../src/features/priv/dino/DinoIngest.cpp) 的 `DinoImageLoader::load` 负责；profile 适用范围诊断见 [`DinoQuery.cpp`](../../../src/features/priv/dino/DinoQuery.cpp) 与 [`DinoGeometry.cpp`](../../../src/features/priv/dino/DinoGeometry.cpp)，不另设解码尺寸门禁。

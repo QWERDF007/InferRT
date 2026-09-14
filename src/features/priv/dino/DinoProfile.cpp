@@ -104,20 +104,6 @@ void dinoValidateConfig(const DinoRegionSearchConfig &config)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile refinement rounds must be within 0..8");
     }
-    if (config.evaluation_ks.empty())
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile requires at least one evaluation K");
-    }
-    for (const auto k : config.evaluation_ks)
-    {
-        if (k <= 0)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Evaluation K must be positive");
-        }
-    }
-    requireRange(config.evaluation_coarse_min_gt_coverage, 0.0, 1.0, "evaluation_coarse_min_gt_coverage");
-    requireRange(config.evaluation_coarse_max_area_ratio, 1.0, 1024.0, "evaluation_coarse_max_area_ratio");
-    requireRange(config.evaluation_final_iou_threshold, 0.0, 1.0, "evaluation_final_iou_threshold");
     if (config.max_leaf_side_patches < 1)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile max leaf side must be >= 1 patch");
@@ -196,24 +182,10 @@ void dinoValidateConfig(const DinoRegionSearchConfig &config)
     if (config.enable_decision_threshold)
     {
         requireRange(config.decision_threshold, 0.0, 1.0, "decision_threshold");
-        if (config.decision_calibration_id.empty())
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "Enabled decision threshold requires a calibration id");
-        }
-    }
-
-    if (config.index_budget_bytes == 0U)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile index budget must be positive");
     }
     if (config.query_deadline_ms <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile query deadline must be positive");
-    }
-    if (config.dense_feature_cache_bytes == 0U || config.image_cache_bytes == 0U)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile cache budgets must be positive");
     }
 }
 
@@ -296,7 +268,6 @@ YAML::Node dinoConfigToYamlNode(const DinoRegionSearchConfig &config)
     if (config.enable_decision_threshold)
     {
         decision["threshold"] = config.decision_threshold;
-        decision["calibration_id"] = config.decision_calibration_id;
     }
     else
     {
@@ -305,14 +276,6 @@ YAML::Node dinoConfigToYamlNode(const DinoRegionSearchConfig &config)
     node["decision"] = decision;
 
     node["deadline_ms"] = config.query_deadline_ms;
-
-    YAML::Node evaluation;
-    evaluation["coarse_min_gt_coverage"] = config.evaluation_coarse_min_gt_coverage;
-    evaluation["coarse_max_area_ratio"] = config.evaluation_coarse_max_area_ratio;
-    evaluation["final_iou_threshold"] = config.evaluation_final_iou_threshold;
-    evaluation["ks"] = config.evaluation_ks;
-    evaluation["seed"] = config.evaluation_seed;
-    node["evaluation"] = evaluation;
 
     return node;
 }
@@ -333,8 +296,21 @@ DinoRegionSearchConfig dinoConfigFromYamlNode(const YAML::Node &node)
     if (node["mode"])
     {
         const auto mode = node["mode"].as<std::string>();
-        config.consistency_mode = (mode == "instance") ? DinoConsistencyMode::Instance : DinoConsistencyMode::Appearance;
+        if (mode == "appearance")
+        {
+            config.consistency_mode = DinoConsistencyMode::Appearance;
+        }
+        else if (mode == "instance")
+        {
+            config.consistency_mode = DinoConsistencyMode::Instance;
+        }
+        else
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                 "Profile mode must be appearance or instance, got '%s'", mode.c_str());
+        }
     }
+
 
     if (const auto model = node["model"])
     {
@@ -353,7 +329,19 @@ DinoRegionSearchConfig dinoConfigFromYamlNode(const YAML::Node &node)
         if (model["precision"])
         {
             const auto prec = model["precision"].as<std::string>();
-            config.model_precision = (prec == "fp16") ? irt::model::ModelPrecision::FP16 : irt::model::ModelPrecision::FP32;
+            if (prec == "fp16")
+            {
+                config.model_precision = irt::model::ModelPrecision::FP16;
+            }
+            else if (prec == "fp32")
+            {
+                config.model_precision = irt::model::ModelPrecision::FP32;
+            }
+            else
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                     "Profile model precision must be fp16 or fp32, got '%s'", prec.c_str());
+            }
         }
         if (model["batch_size"])
         {
@@ -418,7 +406,19 @@ DinoRegionSearchConfig dinoConfigFromYamlNode(const YAML::Node &node)
         if (quant["format"])
         {
             const auto fmt = quant["format"].as<std::string>();
-            config.quantize_int8 = (fmt != "fp32");
+            if (fmt == "int8")
+            {
+                config.quantize_int8 = true;
+            }
+            else if (fmt == "fp32")
+            {
+                config.quantize_int8 = false;
+            }
+            else
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                     "Profile quantization format must be int8 or fp32, got '%s'", fmt.c_str());
+            }
         }
     }
 
@@ -465,41 +465,11 @@ DinoRegionSearchConfig dinoConfigFromYamlNode(const YAML::Node &node)
             config.enable_decision_threshold = false;
             config.decision_threshold = 0.0;
         }
-        if (decision["calibration_id"])
-        {
-            config.decision_calibration_id = decision["calibration_id"].as<std::string>();
-        }
-    }
-
-    if (const auto resources = node["resources"])
-    {
-        if (resources["deadline_ms"]) config.query_deadline_ms = resources["deadline_ms"].as<int64_t>();
-        if (resources["index_budget_gib"])
-        {
-            config.index_budget_bytes = resources["index_budget_gib"].as<uint64_t>() * 1024ULL * 1024ULL * 1024ULL;
-        }
-        if (resources["candidate_cache_mib"])
-        {
-            config.dense_feature_cache_bytes = resources["candidate_cache_mib"].as<uint64_t>() * 1024ULL * 1024ULL;
-        }
-        if (resources["decoded_cache_mib"])
-        {
-            config.image_cache_bytes = resources["decoded_cache_mib"].as<uint64_t>() * 1024ULL * 1024ULL;
-        }
     }
 
     if (node["deadline_ms"])
     {
         config.query_deadline_ms = node["deadline_ms"].as<int64_t>();
-    }
-
-    if (const auto evaluation = node["evaluation"])
-    {
-        if (evaluation["coarse_min_gt_coverage"]) config.evaluation_coarse_min_gt_coverage = evaluation["coarse_min_gt_coverage"].as<double>();
-        if (evaluation["coarse_max_area_ratio"]) config.evaluation_coarse_max_area_ratio = evaluation["coarse_max_area_ratio"].as<double>();
-        if (evaluation["final_iou_threshold"]) config.evaluation_final_iou_threshold = evaluation["final_iou_threshold"].as<double>();
-        if (evaluation["ks"]) config.evaluation_ks = evaluation["ks"].as<std::vector<int>>();
-        if (evaluation["seed"]) config.evaluation_seed = evaluation["seed"].as<int64_t>();
     }
 
     return config;

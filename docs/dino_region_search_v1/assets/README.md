@@ -8,4 +8,4 @@
 
 其中“相近特征合并”适用于局部代表描述；整体区域描述来自池化。差异局部能否被保留，依赖 DINO 是否表达出差异和合并阈值，图片不表示无损保证。
 
-完整生成与编辑提示见 [generation_prompt.txt](generation_prompt.txt)。算法与坐标约定见[轻量规格](../02_spec.md)，模型参考来源见[参考资料](../references/sources.md)。图片展示矩形查询，多边形查询同样属于文档契约；这些说明不表示现有 CLI 已实现新契约。
+完整生成与编辑提示见 [generation_prompt.txt](generation_prompt.txt)。算法与坐标约定见[轻量规格](../02_spec.md)，CLI 用法见[示例 README](../examples/README.md)；图片展示矩形查询，多边形查询同样属于文档契约。

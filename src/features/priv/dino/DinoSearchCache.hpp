@@ -29,7 +29,7 @@ struct DinoSearchCaches final
 /**
  * @brief 获取当前进程的缓存 bundle。
  *
- * bundle key 包含 extractor hash 和两个预算。切换 profile 时旧 bundle 由正在使用它的查询持有，
+ * bundle key 包含 extractor signature 和两个预算。切换 profile 时旧 bundle 由正在使用它的查询持有，
  * 新查询不会串用旧骨干特征；同一 profile 的后续查询复用已有 LRU。
  */
 std::shared_ptr<DinoSearchCaches> dinoAcquireSearchCaches(const std::string &extractor_signature,

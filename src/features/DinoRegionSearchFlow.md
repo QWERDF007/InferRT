@@ -10,7 +10,7 @@
   核心入口为 `build` 与 `search`。
 - 门面转发：[`DinoRegionSearch.cpp`](DinoRegionSearch.cpp)。
 - 编排层：[`priv/dino/DinoEngine.hpp`](priv/dino/DinoEngine.hpp)。
-- CLI：[`samples/features/dino_region_search`](../samples/features/dino_region_search/README.md)。
+- CLI：[`samples/features/dino_region_search`](../../samples/features/dino_region_search/README.md)。
 - 契约解析与序列化（YAML profile / query / result / report）：
   [`priv/dino/DinoContracts.hpp`](priv/dino/DinoContracts.hpp) 与 [`priv/dino/DinoProfile.hpp`](priv/dino/DinoProfile.hpp)。
 
@@ -34,7 +34,7 @@
 | [`DinoPaths.*`](priv/dino/DinoPaths.hpp) | `fs::path` 与契约文本之间的唯一转换入口 | 契约路径一律 UTF-8；统一用 `/` 分隔 |
 | [`DinoTime.hpp`](priv/dino/DinoTime.hpp) | 截止时间与阶段计时 | 阶段边界与批次之间检查 deadline |
 | [`DinoFeatureCache.*`](priv/dino/DinoFeatureCache.hpp) | 候选密集特征的字节 LRU | key 由图像身份、extractor signature 与 crop 组成 |
-| [`DinoSearchCache.*`](priv/dino/DinoSearchCache.hpp) | 同一 extractor 下进程级缓存 bundle 生命周期 | 图像缓存与特征缓存独立受 profile 字节预算约束 |
+| [`DinoSearchCache.*`](priv/dino/DinoSearchCache.hpp) | 同一 extractor 下进程级缓存 bundle 生命周期 | 图像缓存与特征缓存独立受固定进程级字节上限约束
 | [`DinoProfile.*`](priv/dino/DinoProfile.hpp) | YAML profile 解析、序列化与校验 | 权威配置入口，校验语义合法性，无 JSON 双轨 |
 | [`DinoContracts.*`](priv/dino/DinoContracts.hpp) | 请求/响应 YAML 序列化与枚举字符串转换 | 请求支持 bbox/polygon 二选一，响应输出统一 YAML 格式 |
 
@@ -44,9 +44,9 @@
 - `index.yaml`：图像身份列表、特征维度与量化标记。
 - `views.npy`：每个视图的几何规划参数。
 - `offsets.npy`：每个视图对应的区域描述与局部描述起始偏移。
-- `region_vectors.i8` / `region_scales.f32`：紧凑区域描述向量与缩放因子。
+- `region_vectors.i8` / `region_scales.f32`（量化 profile；FP32 profile 使用 `region_vectors.f32`）：紧凑区域描述向量与缩放因子。
 - `region_meta.npy`：区域描述空间元数据（32 字节 packed meta）。
-- `local_vectors.i8` / `local_scales.f32`：紧凑局部描述向量与缩放因子。
+- `local_vectors.i8` / `local_scales.f32`（量化 profile；FP32 profile 使用 `local_vectors.f32`）：紧凑局部描述向量与缩放因子。
 - `local_meta.npy`：局部描述空间元数据（32 字节 packed meta）。
 
 ## 4. 端到端顺序

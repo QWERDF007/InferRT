@@ -35,6 +35,8 @@ namespace {
 
 std::timed_mutex model_mutex;
 constexpr const char *kDefaultIndexDirectoryName = "dino_region_index";
+constexpr uint64_t kDefaultDenseFeatureCacheBytes = 256ULL * 1024ULL * 1024ULL;
+constexpr uint64_t kDefaultImageCacheBytes        = 256ULL * 1024ULL * 1024ULL;
 
 void reportProgress(const DinoBuildProgressCallback &callback, const DinoBuildStage stage, const size_t processed,
                     const size_t total, const std::string &message)
@@ -65,15 +67,12 @@ void reportSearchProgress(const DinoSearchProgressCallback &callback, const Dino
     callback(progress);
 }
 
-
-
-
-DinoSearchDetail runSearchPipeline(const DinoIndexReader &reader, const DinoCanonicalImage &query_image,
+DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCanonicalImage &query_image,
                                    const DinoRoi &roi, const DinoSearchRequest &request,
                                    const DinoRegionSearchConfig &config,
                                    const DinoSearchProgressCallback &progress_callback, const DinoDeadline &deadline)
 {
-    DinoSearchDetail detail;
+    DinoSearchResponse detail;
     auto             backbone_holder = dinoAcquireBackbone(config);
     DinoBackbone    &backbone        = *backbone_holder;
     DinoViewPlanner  planner(backbone.patchSize(), backbone.encoderEdge(), config.view_overlap,
@@ -85,30 +84,31 @@ DinoSearchDetail runSearchPipeline(const DinoIndexReader &reader, const DinoCano
                              "Index descriptor dimension does not match the configured backbone");
     }
     const auto extractor_key = backbone.signature().cacheKey();
-    const auto caches = dinoAcquireSearchCaches(extractor_key, config.image_cache_bytes,
-                                                config.dense_feature_cache_bytes);
+    const auto caches = dinoAcquireSearchCaches(extractor_key, kDefaultImageCacheBytes,
+                                                kDefaultDenseFeatureCacheBytes);
     const size_t cache_hits_before = caches->images.hits() + caches->features.hits();
     reportSearchProgress(progress_callback, DinoSearchStage::QueryExtract, 0, 0);
     size_t model_forwards = 0;
     const auto query_started = dinoNowMs();
     auto   query          = dinoBuildQuery(query_image, roi, backbone, planner, config, model_forwards);
-    detail.response.timings.query_extract_ms = dinoNowMs() - query_started;
+    detail.timings.query_extract_ms = dinoNowMs() - query_started;
 
     reportSearchProgress(progress_callback, DinoSearchStage::RegionScan, 0, 0);
-    auto scan = dinoScan(reader, query, config, deadline);
-    detail.response.timings.region_scan_ms          = scan.region_scan_ms;
-    detail.response.timings.local_scan_ms           = scan.local_scan_ms;
-    detail.response.timings.local_window_rescore_ms = scan.window_rescore_ms;
+    const std::string excluded_image_id = request.include_self ? std::string{} : query_image.record.image_id;
+    auto scan = dinoScan(reader, query, config, deadline, excluded_image_id);
+    detail.timings.region_scan_ms          = scan.region_scan_ms;
+    detail.timings.local_scan_ms           = scan.local_scan_ms;
+    detail.timings.local_window_rescore_ms = scan.window_rescore_ms;
 
     reportSearchProgress(progress_callback, DinoSearchStage::Fusion, 0, 0);
     const auto fusion_started = dinoNowMs();
     const auto fused = dinoFuseCandidates(scan.region_candidates, scan.local_candidates, config);
-    detail.response.timings.fusion_ms = dinoNowMs() - fusion_started;
-    detail.response.total_candidates = fused.candidates.size();
+    detail.timings.fusion_ms = dinoNowMs() - fusion_started;
+    detail.total_candidates = fused.candidates.size();
     const std::vector<DinoCandidate> *candidate_groups[] = {
         &scan.region_candidates, &scan.local_candidates, &fused.candidates};
     std::vector<DinoCoarseCandidate> *reported_groups[] = {
-        &detail.response.region_candidates, &detail.response.local_candidates, &detail.response.coarse_candidates};
+        &detail.region_candidates, &detail.local_candidates, &detail.coarse_candidates};
     for (size_t group = 0; group < 3; ++group)
     {
         auto &reported = *reported_groups[group];
@@ -132,8 +132,8 @@ DinoSearchDetail runSearchPipeline(const DinoIndexReader &reader, const DinoCano
     reportSearchProgress(progress_callback, DinoSearchStage::FineMatch, 0, fused.candidates.size());
     auto fine = dinoFineMatch(reader, query_image, query, fused.candidates, config, backbone, planner,
                               caches->images, caches->features, extractor_key, deadline);
-    detail.response.timings.fine_extract_ms = fine.extract_ms;
-    detail.response.timings.fine_match_ms   = fine.match_ms;
+    detail.timings.fine_extract_ms = fine.extract_ms;
+    detail.timings.fine_match_ms   = fine.match_ms;
 
     // 自身按规范源路径排除；不同路径的图片各自作为图库条目。
     std::vector<DinoMatchResult> filtered;
@@ -149,7 +149,6 @@ DinoSearchDetail runSearchPipeline(const DinoIndexReader &reader, const DinoCano
         }
         filtered.push_back(match);
     }
-
 
     dinoNmsWithinImages(filtered, config.fine_nms_iou);
 
@@ -188,60 +187,58 @@ DinoSearchDetail runSearchPipeline(const DinoIndexReader &reader, const DinoCano
         {
             result.coarse_sources.push_back("local");
         }
-        detail.response.results.push_back(std::move(result));
+        detail.results.push_back(std::move(result));
     }
 
-    detail.response.timings.output_ms = dinoNowMs() - output_started;
-    detail.response.completed_candidates = fine.completed_candidates;
-    detail.response.diagnostics.scanned_region_descriptors  = scan.scanned_region_descriptors;
-    detail.response.diagnostics.scanned_local_descriptors    = scan.scanned_local_descriptors;
-    detail.response.diagnostics.retained_local_views         = scan.retained_local_views;
-    detail.response.diagnostics.region_candidates            = scan.region_candidates.size();
-    detail.response.diagnostics.local_candidates             = scan.local_candidates.size();
-    detail.response.diagnostics.fused_candidates             = fused.candidates.size();
-    detail.response.diagnostics.view_count                   = reader.views().size();
-    detail.response.diagnostics.model_forwards               = model_forwards + fine.model_forwards;
-    detail.response.diagnostics.cache_hits                   = caches->images.hits() + caches->features.hits()
+    detail.timings.output_ms = dinoNowMs() - output_started;
+    detail.completed_candidates = fine.completed_candidates;
+    detail.diagnostics.scanned_region_descriptors  = scan.scanned_region_descriptors;
+    detail.diagnostics.scanned_local_descriptors    = scan.scanned_local_descriptors;
+    detail.diagnostics.retained_local_views         = scan.retained_local_views;
+    detail.diagnostics.region_candidates            = scan.region_candidates.size();
+    detail.diagnostics.local_candidates             = scan.local_candidates.size();
+    detail.diagnostics.fused_candidates             = fused.candidates.size();
+    detail.diagnostics.view_count                   = reader.views().size();
+    detail.diagnostics.model_forwards               = model_forwards + fine.model_forwards;
+    detail.diagnostics.cache_hits                   = caches->images.hits() + caches->features.hits()
                                                               - cache_hits_before;
-    detail.response.diagnostics.query_local_descriptors      = query.views.empty() ? 0U : query.views.front().tokens.size();
-    detail.response.diagnostics.query_valid_cells            = static_cast<size_t>(query.valid_cell_count);
-    detail.response.diagnostics.low_local_evidence           = query.low_local_evidence;
-    detail.response.diagnostics.outside_validated_profile    = query.outside_validated_profile;
-    detail.response.diagnostics.peak_rss_bytes               = dinoPeakRssBytes();
-    detail.response.diagnostics.gpu_allocated_peak_bytes     = scan.device_allocated_bytes;
-    detail.response.diagnostics.gpu_reserved_delta_peak_bytes = scan.device_reserved_delta_bytes;
-    detail.response.diagnostics.similarity_backend           = scan.similarity_backend;
-    detail.response.diagnostics.local_scan_compact           = scan.compact_scan;
-    detail.response.diagnostics.query_local_selection
+    detail.diagnostics.query_local_descriptors      = query.views.empty() ? 0U : query.views.front().tokens.size();
+    detail.diagnostics.query_valid_cells            = static_cast<size_t>(query.valid_cell_count);
+    detail.diagnostics.low_local_evidence           = query.low_local_evidence;
+    detail.diagnostics.outside_validated_profile    = query.outside_validated_profile;
+    detail.diagnostics.peak_rss_bytes               = dinoPeakRssBytes();
+    detail.diagnostics.gpu_allocated_peak_bytes     = scan.device_allocated_bytes;
+    detail.diagnostics.gpu_reserved_delta_peak_bytes = scan.device_reserved_delta_bytes;
+    detail.diagnostics.similarity_backend           = scan.similarity_backend;
+    detail.diagnostics.local_scan_compact           = scan.compact_scan;
+    detail.diagnostics.query_local_selection
         = query.selection_note + ";similarity_backend=" + scan.similarity_backend;
-
-    detail.query_image_id = query_image.record.image_id;
 
     if (deadline.expired() || scan.incomplete || fine.incomplete)
     {
-        detail.response.status   = DinoSearchStatus::Incomplete;
-        detail.response.decision = DinoSearchDecision::Incomplete;
-        detail.response.message
+        detail.status   = DinoSearchStatus::Incomplete;
+        detail.decision = DinoSearchDecision::Incomplete;
+        detail.message
             = "Query exceeded the wall deadline or some candidates failed; results are partial.";
     }
     else
     {
-        detail.response.status = DinoSearchStatus::Completed;
+        detail.status = DinoSearchStatus::Completed;
         if (config.enable_decision_threshold)
         {
-            detail.response.decision
+            detail.decision
                 = filtered.empty() ? DinoSearchDecision::NoMatch : DinoSearchDecision::Matches;
-            detail.response.message = "Configured decision threshold applied.";
+            detail.message = "Configured decision threshold applied.";
         }
         else
         {
-            detail.response.decision = DinoSearchDecision::RankedOnly;
-            detail.response.message  = "No frozen decision threshold is configured; results are ranked only.";
+            detail.decision = DinoSearchDecision::RankedOnly;
+            detail.message  = "No frozen decision threshold is configured; results are ranked only.";
         }
     }
     if (!query.profile_note.empty())
     {
-        detail.response.message += (detail.response.message.empty() ? "" : " ") + query.profile_note;
+        detail.message += (detail.message.empty() ? "" : " ") + query.profile_note;
     }
     return detail;
 }
@@ -275,7 +272,6 @@ uint64_t dinoPeakRssBytes()
 }
 
 DinoBuildReport dinoBuildIndex(const fs::path &gallery_root, const DinoRegionSearchConfig &config,
-
                                const fs::path &index_root, const DinoBuildProgressCallback &progress_callback)
 {
     const auto started = dinoNowMs();
@@ -309,10 +305,10 @@ DinoBuildReport dinoBuildIndex(const fs::path &gallery_root, const DinoRegionSea
     descriptor_config.merge_epsilon = config.merge_epsilon;
     descriptor_config.max_leaf_side_patches = config.max_leaf_side_patches;
 
-    const auto root = fs::absolute(index_root.empty() ? gallery_root / ".." / kDefaultIndexDirectoryName : index_root).lexically_normal();
-    DinoIndexWriter writer(root, config, static_cast<size_t>(backbone.channels()), config.quantize_int8);
-
-    size_t                processed = 0;
+    const auto root = fs::absolute(index_root.empty() ? gallery_root / ".." / kDefaultIndexDirectoryName : index_root)
+                         .lexically_normal();
+    DinoIndexWriter writer(root, static_cast<size_t>(backbone.channels()), config.quantize_int8);
+    size_t processed = 0;
     for (const auto &path : images)
     {
         if (processed < 4U || processed % 16U == 0U)
@@ -323,42 +319,42 @@ DinoBuildReport dinoBuildIndex(const fs::path &gallery_root, const DinoRegionSea
         try
         {
             const auto canonical = DinoImageLoader::load(path);
-    writer.addImage(canonical.record);
-    const auto image_index = writer.imageIdentities().size() - 1U;
-    const auto plans       = planner.planGalleryViews(canonical.record.width, canonical.record.height);
-    const auto spec        = dinoViewPreprocessSpec(planner.encoderEdge(), planner.patchSize());
-    const auto batch       = std::max<size_t>(1U, backbone.maxBatchSize());
+            writer.addImage(canonical.record);
+            const auto image_index = writer.imageIdentities().size() - 1U;
+            const auto plans = planner.planGalleryViews(canonical.record.width, canonical.record.height);
+            const auto spec = dinoViewPreprocessSpec(planner.encoderEdge(), planner.patchSize());
+            const auto batch = std::max<size_t>(1U, backbone.maxBatchSize());
 
-    for (size_t begin = 0; begin < plans.size(); begin += batch)
-    {
-        const size_t count = std::min(batch, plans.size() - begin);
-        std::vector<DinoViewRaster> rasters;
-        rasters.reserve(count);
-        for (size_t index = 0; index < count; ++index)
-        {
-            rasters.push_back(dinoRenderView(canonical.image, plans[begin + index], spec));
-        }
-        const auto grids = backbone.extract(rasters);
-        for (size_t index = 0; index < grids.size(); ++index)
-        {
-            const auto view_id = writer.addView(static_cast<int>(image_index), plans[begin + index]);
-            const auto descriptors = dinoBuildViewDescriptors(view_id, grids[index], descriptor_config);
-            for (size_t region = 0; region < descriptors.region_meta.size(); ++region)
+            for (size_t begin = 0; begin < plans.size(); begin += batch)
             {
-                writer.addRegion(view_id, descriptors.region_meta[region], descriptors.region_vectors[region]);
+                const size_t count = std::min(batch, plans.size() - begin);
+                std::vector<DinoViewRaster> rasters;
+                rasters.reserve(count);
+                for (size_t index = 0; index < count; ++index)
+                {
+                    rasters.push_back(dinoRenderView(canonical.image, plans[begin + index], spec));
+                }
+                const auto grids = backbone.extract(rasters);
+                for (size_t index = 0; index < grids.size(); ++index)
+                {
+                    const auto view_id = writer.addView(static_cast<int>(image_index), plans[begin + index]);
+                    const auto descriptors = dinoBuildViewDescriptors(view_id, grids[index], descriptor_config);
+                    for (size_t region = 0; region < descriptors.region_meta.size(); ++region)
+                    {
+                        writer.addRegion(view_id, descriptors.region_meta[region], descriptors.region_vectors[region]);
+                    }
+                    for (size_t local = 0; local < descriptors.local_meta.size(); ++local)
+                    {
+                        writer.addLocal(view_id, descriptors.local_meta[local], descriptors.local_vectors[local]);
+                    }
+                }
             }
-            for (size_t local = 0; local < descriptors.local_meta.size(); ++local)
-            {
-                writer.addLocal(view_id, descriptors.local_meta[local], descriptors.local_vectors[local]);
-            }
-        }
-    }
         }
         catch (const std::exception &error)
         {
             report.failed_files.push_back(dinoPathToUtf8(fs::absolute(path).lexically_normal()));
             report.messages.push_back(std::string("failed: ") + dinoPathToUtf8(path.filename()) + " -> "
-                                              + error.what());
+                                      + error.what());
         }
         ++processed;
     }
@@ -405,18 +401,22 @@ DinoBuildReport dinoBuildIndex(const fs::path &gallery_root, const DinoRegionSea
     return report;
 }
 
-
-DinoSearchDetail dinoSearchIndex(const fs::path &index_root, const DinoSearchRequest &request,
+DinoSearchResponse dinoSearchIndex(const fs::path &index_root, const DinoSearchRequest &request,
                                  const DinoRegionSearchConfig &config,
                                  const DinoSearchProgressCallback &progress_callback)
 {
     dinoValidateConfig(config);
-    const DinoDeadline deadline(config.query_deadline_ms);
+    if (request.deadline_ms < 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Request deadline must be zero or positive");
+    }
+    const int64_t     query_deadline_ms = request.deadline_ms > 0 ? request.deadline_ms : config.query_deadline_ms;
+    const DinoDeadline deadline(query_deadline_ms);
     const auto        wall_started = dinoNowMs();
     std::unique_lock lock(model_mutex, std::defer_lock);
-    if (config.query_deadline_ms > 0)
+    if (query_deadline_ms > 0)
     {
-        lock.try_lock_for(std::chrono::milliseconds(deadline.remainingMs()));
+        (void)lock.try_lock_for(std::chrono::milliseconds(deadline.remainingMs()));
     }
     else
     {
@@ -426,13 +426,13 @@ DinoSearchDetail dinoSearchIndex(const fs::path &index_root, const DinoSearchReq
 
     const auto incompleteResponse = [&](const std::string &message)
     {
-        DinoSearchDetail detail;
-        detail.response.request_id   = request.request_id;
-        detail.response.status       = DinoSearchStatus::Incomplete;
-        detail.response.decision     = DinoSearchDecision::Incomplete;
-        detail.response.message      = message;
-        detail.response.timings.queue_ms = queue_ms;
-        detail.response.timings.wall_ms  = dinoNowMs() - wall_started;
+        DinoSearchResponse detail;
+        detail.request_id   = request.request_id;
+        detail.status       = DinoSearchStatus::Incomplete;
+        detail.decision     = DinoSearchDecision::Incomplete;
+        detail.message      = message;
+        detail.timings.queue_ms = queue_ms;
+        detail.timings.wall_ms  = dinoNowMs() - wall_started;
         reportSearchProgress(progress_callback, DinoSearchStage::Output, 0, 0);
         return detail;
     };
@@ -461,19 +461,19 @@ DinoSearchDetail dinoSearchIndex(const fs::path &index_root, const DinoSearchReq
     if (deadline.expired())
     {
         auto detail = incompleteResponse("Query deadline expired while decoding the query image; no candidates were processed.");
-        detail.response.timings.decode_ms = decode_ms;
+        detail.timings.decode_ms = decode_ms;
         return detail;
     }
 
     try
     {
         auto detail = runSearchPipeline(reader, query_image, roi, request, config, progress_callback, deadline);
-        detail.response.request_id        = request.request_id;
-        detail.response.timings.decode_ms = decode_ms;
-        detail.response.timings.queue_ms = queue_ms;
-        detail.response.timings.wall_ms   = dinoNowMs() - wall_started;
-        reportSearchProgress(progress_callback, DinoSearchStage::Output, detail.response.results.size(),
-                             detail.response.results.size());
+        detail.request_id        = request.request_id;
+        detail.timings.decode_ms = decode_ms;
+        detail.timings.queue_ms = queue_ms;
+        detail.timings.wall_ms   = dinoNowMs() - wall_started;
+        reportSearchProgress(progress_callback, DinoSearchStage::Output, detail.results.size(),
+                             detail.results.size());
         return detail;
     }
     catch (const irt::Exception &error)
@@ -483,16 +483,15 @@ DinoSearchDetail dinoSearchIndex(const fs::path &index_root, const DinoSearchReq
             throw;
         }
         auto detail = incompleteResponse("GPU resource exhausted; the query was not completed and no result is final.");
-        detail.response.timings.decode_ms = decode_ms;
+        detail.timings.decode_ms = decode_ms;
         return detail;
     }
     catch (const std::bad_alloc &)
     {
         auto detail = incompleteResponse("Host memory exhausted; the query was not completed and no result is final.");
-        detail.response.timings.decode_ms = decode_ms;
+        detail.timings.decode_ms = decode_ms;
         return detail;
     }
 }
-
 
 } // namespace irt::features::priv

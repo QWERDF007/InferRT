@@ -143,7 +143,8 @@ DinoBackboneRegistry &backboneRegistry()
 
 std::string DinoExtractorSignature::cacheKey() const
 {
-    return model_name + "|" + weights_path + "|" + runtime + "|" + precision + "|" + input_tensor + "|"
+    return model_name + "|" + weights_path + "|" + std::to_string(weights_size) + "|"
+         + std::to_string(weights_mtime) + "|" + runtime + "|" + precision + "|" + input_tensor + "|"
          + input_shape + "|" + output_tensor + "|" + output_shape + "|" + extractor_layer + "|" + preprocess + "|"
          + revision + "|" + std::to_string(patch_size) + "|" + std::to_string(channels) + "|"
          + std::to_string(encoder_edge) + "|" + std::to_string(grid_height) + "|" + std::to_string(grid_width);
@@ -185,6 +186,7 @@ DinoBackbone::DinoBackbone(const DinoRegionSearchConfig &config)
                              config_.weights_file.string().c_str());
     }
 
+    const auto weight_identity = makeBackboneCacheKey(config_);
     model_->buildOrLoad(config_.weights_file.string());
 
     use_device_buffers_ = usesTensorRtRuntime(config_);
@@ -245,6 +247,8 @@ DinoBackbone::DinoBackbone(const DinoRegionSearchConfig &config)
 
     signature_.model_name    = config_.model_name;
     signature_.weights_path  = dinoPathToUtf8(std::filesystem::absolute(config_.weights_file).lexically_normal());
+    signature_.weights_size  = weight_identity.weights_size;
+    signature_.weights_mtime = static_cast<int64_t>(weight_identity.weights_mtime.time_since_epoch().count());
     signature_.runtime       = config_.model_runtime.toString();
     signature_.precision     = irt::model::modelPrecisionName(config_.model_precision);
     signature_.input_tensor  = input_name_;

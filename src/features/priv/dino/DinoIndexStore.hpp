@@ -22,8 +22,7 @@ namespace irt::features::priv {
 class DinoIndexWriter
 {
 public:
-    DinoIndexWriter(const std::filesystem::path &index_root, const DinoRegionSearchConfig &config,
-                    size_t descriptor_dim, bool quantize);
+    DinoIndexWriter(const std::filesystem::path &index_root, size_t descriptor_dim, bool quantize);
 
     ~DinoIndexWriter();
 

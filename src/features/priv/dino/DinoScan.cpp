@@ -132,7 +132,8 @@ int quantize(const double value) noexcept
 } // namespace
 
 DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
-                         const DinoRegionSearchConfig &config, const DinoDeadline &deadline)
+                         const DinoRegionSearchConfig &config, const DinoDeadline &deadline,
+                         const std::string &excluded_image_id)
 {
     DinoScanOutcome outcome;
     const auto        scan_started = dinoNowMs();
@@ -144,6 +145,19 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
     outcome.view_survival_truncated = false;
     outcome.similarity_backend      = dinoSimilarityBackendName(similarity_backend);
     outcome.compact_scan            = quantized_index;
+    std::vector<uint8_t> excluded_views(views.size(), 0U);
+    if (!excluded_image_id.empty())
+    {
+        for (size_t view_id = 0; view_id < views.size(); ++view_id)
+        {
+            const auto image_index = views[view_id].image_index;
+            if (image_index >= 0 && static_cast<size_t>(image_index) < reader.images().size()
+                && reader.images()[static_cast<size_t>(image_index)].image_id == excluded_image_id)
+            {
+                excluded_views[view_id] = 1U;
+            }
+        }
+    }
 
     // ---------------- 区域通道 ----------------
     std::map<ViewKey, DinoCandidate> region_best;
@@ -191,6 +205,12 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
             region_reducer->reduceRegionScores(block, roi_vectors.data(), query_view_count, compact_scores.data());
             for (size_t index = 0; index < count; ++index)
             {
+                const auto view_id = reader.viewOfRegionDescriptor(begin + index);
+                if (view_id >= 0 && static_cast<size_t>(view_id) < excluded_views.size()
+                    && excluded_views[static_cast<size_t>(view_id)] != 0U)
+                {
+                    continue;
+                }
                 for (int query_view = 0; query_view < query_view_count; ++query_view)
                 {
                     region_tops[static_cast<size_t>(query_view)].push(
@@ -210,6 +230,12 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
                 }
                 for (size_t index = 0; index < count; ++index)
                 {
+                    const auto view_id = reader.viewOfRegionDescriptor(begin + index);
+                    if (view_id >= 0 && static_cast<size_t>(view_id) < excluded_views.size()
+                        && excluded_views[static_cast<size_t>(view_id)] != 0U)
+                    {
+                        continue;
+                    }
                     const float score = dotProduct(roi_vector.data(), buffer.data() + index * dimension, dimension);
                     region_tops[query_view].push(score, begin + index);
                 }
@@ -353,6 +379,14 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
                 outcome.incomplete = true;
                 break;
             }
+            if (next_view < excluded_views.size() && excluded_views[next_view] != 0U)
+            {
+                finish_view(active_view);
+                active_view = -1;
+                ++next_view;
+                next_offset = 0U;
+                continue;
+            }
             const auto first_range = reader.localRange(next_view);
             if (next_offset >= first_range.count)
             {
@@ -372,6 +406,12 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
             group_ids.clear();
             while (cursor_view < view_count && block_count < config.region_scan_block)
             {
+                if (excluded_views[cursor_view] != 0U)
+                {
+                    ++cursor_view;
+                    cursor_offset = 0U;
+                    continue;
+                }
                 const auto range = reader.localRange(cursor_view);
                 if (cursor_offset >= range.count)
                 {

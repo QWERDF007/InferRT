@@ -9,6 +9,6 @@
 - [Tickets](tickets/README.md)：T01–T07 执行顺序与源码落点
 - [示例](examples/README.md)：YAML 文本及向量格式说明
 
-YAML 是配置、请求、响应的唯一文本格式；向量使用紧凑二进制数组。不保留 JSON/schema 双轨，也不引入 SHA-256、manifest、generation、摘要、增量事务或发布门禁。profile/编码变化直接删除旧索引后重新 `build`；这不表示运行时已经迁移。
+YAML 是配置、请求、响应的唯一文本格式；向量使用紧凑二进制数组。不保留 JSON/schema 双轨，也不引入 SHA-256、manifest、generation、摘要、增量事务或发布门禁。profile/编码变化时删除旧索引后重新 `build`；实现入口与验证证据见 [模块流程](../../src/features/DinoRegionSearchFlow.md)。
 
 轻量化不降低质量：多尺度双路检索、矩形和多边形支持、精匹配必须通过真实正例/困难负例的召回、precision 和定位 IoU 验证。小规模手测只能作为 smoke check。

@@ -360,6 +360,104 @@ void slideRow(const DinoFeatureGrid &grid, const PreparedTemplate &tpl, const in
                       capacity, nms_iou);
     }
 }
+float scorePreparedAtOrigin(const DinoFeatureGrid &grid, const PreparedTemplate &tpl,
+                            const double origin_row, const double origin_col)
+{
+    if (!(tpl.mask_sum > 0.0F))
+    {
+        return -std::numeric_limits<float>::infinity();
+    }
+    if (origin_row < 0.0 || origin_col < 0.0
+        || origin_row + static_cast<double>(tpl.height) > static_cast<double>(grid.plan.grid_height)
+        || origin_col + static_cast<double>(tpl.width) > static_cast<double>(grid.plan.grid_width))
+    {
+        return -std::numeric_limits<float>::infinity();
+    }
+
+    const int channels = grid.channels;
+    std::vector<float> sampled(static_cast<size_t>(channels), 0.0F);
+    const auto sample = [&](const double row, const double col) -> bool
+    {
+        if (row < 0.0 || col < 0.0 || row > static_cast<double>(grid.plan.grid_height - 1)
+            || col > static_cast<double>(grid.plan.grid_width - 1))
+        {
+            return false;
+        }
+        const int row0 = static_cast<int>(std::floor(row));
+        const int col0 = static_cast<int>(std::floor(col));
+        const int row1 = std::min(row0 + 1, grid.plan.grid_height - 1);
+        const int col1 = std::min(col0 + 1, grid.plan.grid_width - 1);
+        const double row_fraction = row - static_cast<double>(row0);
+        const double col_fraction = col - static_cast<double>(col0);
+        const int sample_rows[2]{row0, row1};
+        const int sample_cols[2]{col0, col1};
+        const double row_weights[2]{1.0 - row_fraction, row_fraction};
+        const double col_weights[2]{1.0 - col_fraction, col_fraction};
+
+        std::fill(sampled.begin(), sampled.end(), 0.0F);
+        double weight_sum = 0.0;
+        for (int row_index = 0; row_index < 2; ++row_index)
+        {
+            for (int col_index = 0; col_index < 2; ++col_index)
+            {
+                const double weight = row_weights[row_index] * col_weights[col_index];
+                if (weight <= 0.0 || !grid.patchValid(sample_rows[row_index], sample_cols[col_index]))
+                {
+                    continue;
+                }
+                const float *token = grid.token(sample_rows[row_index], sample_cols[col_index]);
+                for (int channel = 0; channel < channels; ++channel)
+                {
+                    sampled[static_cast<size_t>(channel)] += static_cast<float>(weight) * token[channel];
+                }
+                weight_sum += weight;
+            }
+        }
+        if (!(weight_sum > 0.0))
+        {
+            return false;
+        }
+        double norm = 0.0;
+        for (auto &value : sampled)
+        {
+            value = static_cast<float>(static_cast<double>(value) / weight_sum);
+            norm += static_cast<double>(value) * static_cast<double>(value);
+        }
+        if (!(norm > 1e-12))
+        {
+            return false;
+        }
+        const float inverse_norm = static_cast<float>(1.0 / std::sqrt(norm));
+        for (auto &value : sampled)
+        {
+            value *= inverse_norm;
+        }
+        return true;
+    };
+
+    float score = 0.0F;
+    for (int row = 0; row < tpl.height; ++row)
+    {
+        for (int col = 0; col < tpl.width; ++col)
+        {
+            const auto patch = static_cast<size_t>(row) * static_cast<size_t>(tpl.width)
+                             + static_cast<size_t>(col);
+            if (tpl.active[patch] == 0U)
+            {
+                continue;
+            }
+            if (!sample(origin_row + static_cast<double>(row), origin_col + static_cast<double>(col)))
+            {
+                return -std::numeric_limits<float>::infinity();
+            }
+            const auto *weighted_template = tpl.weighted_tokens.data()
+                                           + patch * static_cast<size_t>(channels);
+            score += dotProduct(weighted_template, sampled.data(), channels);
+        }
+    }
+    return score / tpl.mask_sum;
+}
+
 
 /**
  * @brief 在候选网格上滑动模板，收集至多 ``max_peaks`` 个空间上互不重叠的峰值。
@@ -368,7 +466,8 @@ void slideRow(const DinoFeatureGrid &grid, const PreparedTemplate &tpl, const in
  * 再以与顺序扫描一致的规则全局合并，结果与单线程版本等价。
  */
 float slidePrepared(const DinoFeatureGrid &grid, const PreparedTemplate &tpl, const int max_peaks,
-                    const double nms_iou, std::vector<Peak> &peaks, std::vector<RowResult> &rows)
+                    const double nms_iou, std::vector<Peak> &peaks, std::vector<RowResult> &rows,
+                    const double origin_row = -1.0, const double origin_col = -1.0)
 {
     if (!(tpl.mask_sum > 0.0F))
     {
@@ -379,6 +478,16 @@ float slidePrepared(const DinoFeatureGrid &grid, const PreparedTemplate &tpl, co
     if (max_row < 0 || max_col < 0)
     {
         return -std::numeric_limits<float>::infinity();
+    }
+    if (origin_row >= 0.0 && origin_col >= 0.0)
+    {
+        rows.clear();
+        const float score = scorePreparedAtOrigin(grid, tpl, origin_row, origin_col);
+        if (max_peaks > 0 && score > 0.0F)
+        {
+            peaks.push_back(Peak{origin_row, origin_col, score, tpl.height, tpl.width});
+        }
+        return score;
     }
 
     const int capacity = std::min(max_peaks, kDinoMaxPeaksPerCandidate);
@@ -843,27 +952,38 @@ DinoFineMatchOutcome dinoFineMatch(const DinoIndexReader &reader, const DinoCano
                                               + config.score_weight_consistency * cons);
                 };
 
-                // 峰值先按原始余弦相似度排序，再用互为近邻覆盖率决定最终尺度。
-                Peak  chosen           = candidates_peaks.front();
-                float chosen_cosine    = chosen.score;
-                float chosen_coverage  = 0.0F;
-                float chosen_consistency = 0.0F;
-                float chosen_final     = -std::numeric_limits<float>::infinity();
-                for (const auto &peak : candidates_peaks)
+                struct ScoredPeak
                 {
-                    float coverage    = 0.0F;
-                    float consistency = 0.0F;
-                    measureCoverage(grid, template_source, peak, tolerance, coverage, consistency);
-                    const auto final_score = scoreOf(peak.score, coverage, consistency);
-                    if (final_score > chosen_final)
+                    Peak  peak{};
+                    float coverage{0.0F};
+                    float consistency{0.0F};
+                    float final_score{-std::numeric_limits<float>::infinity()};
+                };
+
+                std::vector<ScoredPeak> scored_peaks;
+                scored_peaks.reserve(candidates_peaks.size());
+                size_t best_peak_index = 0U;
+                float  chosen_final    = -std::numeric_limits<float>::infinity();
+                for (size_t index = 0; index < candidates_peaks.size(); ++index)
+                {
+                    const auto &peak = candidates_peaks[index];
+                    ScoredPeak scored;
+                    scored.peak = peak;
+                    measureCoverage(grid, template_source, peak, tolerance, scored.coverage, scored.consistency);
+                    scored.final_score = scoreOf(peak.score, scored.coverage, scored.consistency);
+                    scored_peaks.push_back(scored);
+                    if (scored.final_score > chosen_final)
                     {
-                        chosen             = peak;
-                        chosen_cosine      = peak.score;
-                        chosen_coverage    = coverage;
-                        chosen_consistency = consistency;
-                        chosen_final       = final_score;
+                        chosen_final    = scored.final_score;
+                        best_peak_index = index;
                     }
                 }
+
+                // 峰值先按最终分数择优；其他空间不重叠峰值保留用于同一候选的多目标检索。
+                Peak  chosen             = scored_peaks[best_peak_index].peak;
+                float chosen_cosine      = chosen.score;
+                float chosen_coverage    = scored_peaks[best_peak_index].coverage;
+                float chosen_consistency = scored_peaks[best_peak_index].consistency;
 
                 // 有界细化：在相邻两档之间二分尺度，并对峰值位置做半 patch 步长搜索，仍以最终分数择优。
                 const int  refinement_rounds = config.fine_refinement_rounds;
@@ -904,7 +1024,8 @@ DinoFineMatchOutcome dinoFineMatch(const DinoIndexReader &reader, const DinoCano
                             }
                             refined_peaks.clear();
                             const auto score
-                                = slidePrepared(grid, prepared, 1, config.fine_nms_iou, refined_peaks, refine_rows);
+                                = slidePrepared(grid, prepared, 1, config.fine_nms_iou, refined_peaks, refine_rows,
+                                                origin_row, origin_col);
                             if (score > refined_best && !refined_peaks.empty())
                             {
                                 refined_best = score;
@@ -912,7 +1033,7 @@ DinoFineMatchOutcome dinoFineMatch(const DinoIndexReader &reader, const DinoCano
                             }
                         }
                     }
-                    if (refined_best <= chosen_cosine)
+                    if (!(refined_best > -std::numeric_limits<float>::infinity()) || refined_best <= chosen_cosine)
                     {
                         continue;
                     }
@@ -930,35 +1051,48 @@ DinoFineMatchOutcome dinoFineMatch(const DinoIndexReader &reader, const DinoCano
                     }
                 }
 
-                if (!(chosen_cosine >= static_cast<float>(config.fine_match_cosine_threshold)))
+                const auto appendPeakResult = [&](const Peak &peak, const float cosine, const float coverage,
+                                                   const float consistency, const float final_score)
                 {
-                    outcome.match_ms += dinoNowMs() - match_started;
-                    ++outcome.completed_candidates;
-                    continue;
-                }
+                    if (!(cosine >= static_cast<float>(config.fine_match_cosine_threshold)))
+                    {
+                        return;
+                    }
+                    // 峰值与模板尺寸以 patch 为单位；映射回原图前必须换算到模型输入像素。
+                    const DinoRect matched_input_box{peak.col * patch_size, peak.row * patch_size,
+                                                     (peak.col + peak.width) * patch_size,
+                                                     (peak.row + peak.height) * patch_size};
+                    const DinoRect matched_source = plan.input_to_canonical.apply(matched_input_box);
 
-                // 峰值与模板尺寸以 patch 为单位；映射回原图前必须换算到模型输入像素。
-                const DinoRect matched_input_box{chosen.col * patch_size, chosen.row * patch_size,
-                                                 (chosen.col + chosen.width) * patch_size,
-                                                 (chosen.row + chosen.height) * patch_size};
-                const DinoRect matched_source = plan.input_to_canonical.apply(matched_input_box);
+                    DinoMatchResult result;
+                    result.image_id            = record.image_id;
+                    result.source_path         = record.source_path;
+                    result.bbox                = dinoClampRect(matched_source, image_width, image_height);
+                    result.template_similarity = static_cast<float>(std::min(1.0, std::max(0.0,
+                        (static_cast<double>(cosine) + 1.0) * 0.5)));
+                    result.query_coverage      = coverage;
+                    result.spatial_consistency = consistency;
+                    result.score               = final_score;
+                    result.from_region_channel = candidate.from_region;
+                    result.from_local_channel  = candidate.from_local;
+                    result.coarse_view_id      = candidate.view_id;
 
-                DinoMatchResult result;
-                result.image_id            = record.image_id;
-                result.source_path         = record.source_path;
-                result.bbox                = dinoClampRect(matched_source, image_width, image_height);
-                result.template_similarity = static_cast<float>(std::min(1.0, std::max(0.0,
-                    (static_cast<double>(chosen_cosine) + 1.0) * 0.5)));
-                result.query_coverage      = chosen_coverage;
-                result.spatial_consistency = chosen_consistency;
-                result.score               = chosen_final;
-                result.from_region_channel = candidate.from_region;
-                result.from_local_channel  = candidate.from_local;
-                result.coarse_view_id      = candidate.view_id;
+                    if (!result.bbox.empty())
+                    {
+                        outcome.results.push_back(std::move(result));
+                    }
+                };
 
-                if (!result.bbox.empty())
+                appendPeakResult(chosen, chosen_cosine, chosen_coverage, chosen_consistency, chosen_final);
+                for (size_t index = 0; index < scored_peaks.size(); ++index)
                 {
-                    outcome.results.push_back(std::move(result));
+                    if (index == best_peak_index || peakIoU(scored_peaks[index].peak, chosen) >= config.fine_nms_iou)
+                    {
+                        continue;
+                    }
+                    const auto &scored = scored_peaks[index];
+                    appendPeakResult(scored.peak, scored.peak.score, scored.coverage, scored.consistency,
+                                     scored.final_score);
                 }
                 outcome.match_ms += dinoNowMs() - match_started;
                 ++outcome.completed_candidates;

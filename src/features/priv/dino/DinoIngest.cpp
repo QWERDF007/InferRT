@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <cctype>
 #include <limits>
 #include <vector>
 
@@ -24,7 +25,6 @@ namespace irt::features::priv {
 
 namespace {
 
-constexpr int kMaximumStandardEdge = 4096;
 
 inline bool isTiffFile(const fs::path &path)
 {
@@ -256,6 +256,10 @@ DinoImageIdentity DinoImageLoader::statIdentity(const fs::path &path)
     DinoImageIdentity record;
     record.source_path = dinoPathToUtf8(fs::absolute(path).lexically_normal());
     record.image_id = record.source_path;
+#ifdef _WIN32
+    std::transform(record.image_id.begin(), record.image_id.end(), record.image_id.begin(),
+                   [](const unsigned char value) { return static_cast<char>(std::tolower(value)); });
+#endif
     std::error_code error;
     const auto size = fs::file_size(path, error);
     if (!error) record.file_size = static_cast<int64_t>(size);
@@ -334,12 +338,6 @@ DinoCanonicalImage DinoImageLoader::load(const fs::path &path)
     result.record.exif_orientation_applied = true;
     result.record.decode_pipeline          = decodePipelineName();
 
-    if (std::max(result.record.width, result.record.height) > kMaximumStandardEdge)
-    {
-        throw irt::Exception(irt::Status::ERROR_NOT_IMPLEMENTED,
-                             "UNSUPPORTED_IMAGE: image edge %d exceeds the standard profile limit of %d pixels",
-                             std::max(result.record.width, result.record.height), kMaximumStandardEdge);
-    }
     return result;
 }
 

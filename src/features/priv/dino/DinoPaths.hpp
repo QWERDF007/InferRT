@@ -4,9 +4,9 @@
  * @file DinoPaths.hpp
  * @brief 文件系统路径与契约文本之间的唯一转换入口。
  *
- * 对外契约（profile / request / response / manifest）里的路径一律是 UTF-8 文本；
+ * 对外契约中的路径一律是 UTF-8 文本；
  * 而 ``std::filesystem::path`` 在本机是宽字符，二者的隐式转换在非 ASCII 路径上会既丢信息
- * 又产出非法 JSON。因此路径一旦离开 ``fs::path`` 必须经过这里，反向解析同理。
+ * 又产出非法文本。因此路径一旦离开 ``fs::path`` 必须经过这里，反向解析同理。
  */
 
 #include <inferrt/features/Export.h>

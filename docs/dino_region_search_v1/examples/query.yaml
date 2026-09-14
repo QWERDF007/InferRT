@@ -1,4 +1,4 @@
-# 新文档请求契约示例，不表示现有 CLI 已支持；路径请替换。
+# 可直接交给 CLI `search --request` 的矩形请求示例；路径请替换为本地路径。
 query_path: /data/query/ring.png
 bbox: [120, 80, 360, 320]
 include_self: false

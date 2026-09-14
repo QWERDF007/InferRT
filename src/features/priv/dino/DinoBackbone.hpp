@@ -13,9 +13,9 @@
 #include <inferrt/model/Buffers.hpp>
 #include <inferrt/model/IModel.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
-#include <vector>
 
 namespace irt::features::priv {
 
@@ -24,6 +24,8 @@ struct DinoExtractorSignature
 {
     std::string model_name{};
     std::string weights_path{};
+    uintmax_t   weights_size{0};
+    int64_t     weights_mtime{0};
     std::string runtime{};
     std::string precision{};
     std::string input_tensor{};
@@ -39,7 +41,7 @@ struct DinoExtractorSignature
     int         grid_height{0};
     int         grid_width{0};
 
-    /** @brief 稳定的非 JSON 配置/输出签名，用于进程缓存隔离。 */
+    /** @brief 稳定的配置/输出签名，用于进程缓存隔离。 */
     std::string cacheKey() const;
 };
 

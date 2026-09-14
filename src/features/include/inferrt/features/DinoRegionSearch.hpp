@@ -4,8 +4,8 @@
  * @file DinoRegionSearch.hpp
  * @brief 冻结 DINO 骨干的区域检索公共 API：配置、请求/响应契约与四个核心入口。
  *
- * 该模块用标注区域在未标注图库中检索外观与局部结构相似的区域。索引一次建立、
- * 增量更新，查询只计算查询图与有限候选，不训练或微调网络。
+ * 该模块用标注区域在未标注图库中检索外观与局部结构相似的区域。索引一次建立，查询只计算查询图与有限候选，
+ * 不训练或微调网络。
  *
  * 坐标约定：所有对外坐标都在 **EXIF 已应用的 canonical image** 上，使用浮点半开区间
  * ``[x0, y0, x1, y1)``。入口函数失败时抛出 ``irt::Exception``；返回值中的 status/decision
@@ -40,9 +40,10 @@ enum class DinoSearchStatus
 enum class DinoSearchDecision
 {
     RankedOnly, ///< 未配置有效判定阈值，只给出排序。
-    Matches,    ///< 至少一个结果超过已冻结阈值。
-    NoMatch,    ///< 在本次索引与已验证 profile 内未检出超阈值结果。
+    Matches,    ///< 至少一个结果超过已配置阈值。
+    NoMatch,    ///< 完成查询但没有超过已配置阈值的结果。
     Incomplete, ///< 未完成，无法给出判定。
+    Error,      ///< 查询输入或索引错误。
 };
 
 /** @brief 一致性模式，决定精匹配阶段的一致性严格程度。 */
@@ -58,21 +59,21 @@ enum class DinoExitCode : int
     Success          = 0, ///< 完成。
     InvalidArgument  = 2, ///< 参数、ROI 或 profile 错误。
     ResourceMissing  = 3, ///< 权重或索引缺失、不兼容。
-    BuildFailed      = 4, ///< 建库含失败文件或预算超限。
+    BuildFailed      = 4, ///< 建库含失败文件。
     QueryIncomplete  = 5, ///< 查询未完成。
     InternalError    = 6, ///< 内部错误。
 };
 
-/** @brief 建库/更新阶段。 */
+/** @brief 建库阶段。 */
 enum class DinoBuildStage
 {
     Unknown,             ///< 未初始化。
-    ScanningImages,      ///< 扫描图库并计算内容身份。
+    ScanningImages,      ///< 扫描图库并计算图像身份。
     LoadingModel,        ///< 加载冻结骨干。
-    ExtractingViews,     ///< 逐批次提取视图特征并生成描述。
+    ExtractingViews,     ///< 提取视图特征并生成描述。
     Quantizing,          ///< INT8 量化与误差统计。
-    WritingIndex,        ///< 写入 staging generation。
-    Finalizing,          ///< 校验摘要并原子切换 active。
+    WritingIndex,        ///< 写入本地索引数组。
+    Finalizing,          ///< 完成 index.yaml 与数组写入。
 };
 
 /** @brief 建库进度事件。 */
@@ -139,12 +140,12 @@ struct DinoSearchRoi
 /**
  * @brief 区域检索 profile（配置）唯一来源。
  *
- * 该结构同时是索引签名与查询配置。任何影响建库编码的字段变化都会改变 profile hash，
- * 必须重建索引；纯查询字段变化只改变检索 profile hash，可在同一 generation 上引用并记录。
+ * profile 或编码配置变化后删除旧索引并重新 build；查询请求的 deadline、top_k 与 include_self
+ * 只影响当前查询。
  */
 struct INFERRT_FEATURES_API DinoRegionSearchConfig
 {
-    /// profile 名称，用于报告与发布记录。
+    /// profile 名称，用于报告。
     std::string profile_id{"development"};
 
     /// 冻结骨干名称；DINOv3 与 DINOv2 各自建立独立索引，不能混用向量。
@@ -152,9 +153,6 @@ struct INFERRT_FEATURES_API DinoRegionSearchConfig
 
     /// 骨干权重或已构建 engine 文件路径。
     std::filesystem::path weights_file{};
-
-    /// 期望的权重文件 SHA-256；非空时在加载骨干前校验，不匹配直接拒绝。
-    std::string weights_sha256{};
 
     /// 推理运行目标（后端 + 设备）。
     irt::model::ModelRuntime model_runtime{};
@@ -285,39 +283,11 @@ struct INFERRT_FEATURES_API DinoRegionSearchConfig
     /// 判定阈值；仅在 ``enable_decision_threshold`` 为 true 时生效。
     double decision_threshold{0.0};
 
-    /// 判定阈值标定 ID；必须能在发布记录中追溯。
-    std::string decision_calibration_id{};
-
-    /// 索引稳态字节预算。
-    uint64_t index_budget_bytes{4ULL * 1024ULL * 1024ULL * 1024ULL};
-
     /// 单查询 wall deadline（毫秒）。
     int64_t query_deadline_ms{30000};
 
     /// 紧凑向量扫描块大小。
     size_t region_scan_block{32768};
-
-    /// 候选密集特征缓存上限。
-    uint64_t dense_feature_cache_bytes{256ULL * 1024ULL * 1024ULL};
-
-    /// 原图解码缓存上限。
-    uint64_t image_cache_bytes{256ULL * 1024ULL * 1024ULL};
-
-
-    /// 评测：粗选命中要求的最小真值覆盖率。
-    double evaluation_coarse_min_gt_coverage{0.90};
-
-    /// 评测：粗选命中允许的最大面积比。
-    double evaluation_coarse_max_area_ratio{16.0};
-
-    /// 评测：最终结果框的 IoU 命中阈值。
-    double evaluation_final_iou_threshold{0.5};
-
-    /// 评测：需要报告召回率的候选数档位。
-    std::vector<int> evaluation_ks{20, 50, 100};
-
-    /// 评测：可复现随机种子。
-    int64_t evaluation_seed{20260912};
 
     /**
      * @brief 校验配置的语义合法性。
@@ -337,14 +307,15 @@ struct DinoSearchRequest
     std::filesystem::path    query_path{};
     DinoSearchRoi            roi{};
     size_t                   top_k{0};             ///< 0 表示使用 profile 的 ``final_k``。
-    bool                     include_self{false};  ///< 是否允许返回同内容副本。
+    bool                     include_self{false};  ///< 是否允许返回查询路径对应的图像。
     std::string              profile_id{};         ///< 为空时使用 profile 自身的 ``profile_id``。
+    int64_t                  deadline_ms{0};       ///< 请求级 wall deadline；0 表示使用 profile 配置。
 };
 
 /** @brief 单条检索结果。 */
 struct DinoSearchResult
 {
-    std::string   image_id{};      ///< 稳定内容身份 ID。
+    std::string   image_id{};      ///< 规范化 source_path 身份 ID（不是内容摘要）。
     std::string   source_path{};   ///< 图库图像路径。
     DinoSearchRect bbox{};         ///< canonical 空间结果框。
     float         score{0.0F};     ///< final_score，非概率。
@@ -432,7 +403,7 @@ struct DinoImageRecord
     uint64_t       quantized_bytes{0};
 };
 
-/** @brief 建库/更新报告。 */
+/** @brief 建库报告。 */
 struct DinoBuildReport
 {
     bool          ready_with_errors{false};
@@ -443,31 +414,11 @@ struct DinoBuildReport
     size_t        local_descriptor_count{0};
     uint64_t      original_patch_count{0};
     uint64_t      index_bytes{0};
-    uint64_t      temporary_peak_bytes{0};
     double        duration_ms{0.0};
     std::vector<DinoImageRecord> images{};
     std::vector<std::string>     failed_files{};
     std::vector<std::string>     messages{};
 };
-
-/** @brief 评测模式，决定指标的可解释范围。 */
-enum class DinoEvaluationMode
-{
-    FullAnnotation, ///< 完整标注子图库，可报告完整区域 recall。
-    JudgedPool,     ///< 只核验过候选池，只能报告 judged-pool 指标。
-};
-
-/** @brief 单个门槛的结果；未测时 value 为 null 且 verified 为 false。 */
-struct DinoGateResult
-{
-    std::string name{};
-    bool        measured{false};
-    bool        passed{false};
-    double      value{0.0};
-    double      threshold{0.0};
-    std::string note{};
-};
-
 
 /**
  * @brief 强制指定局部通道的相似度归约后端，用于 T13 的参考/优化差异报告与对照实验。
@@ -493,33 +444,32 @@ INFERRT_FEATURES_API std::string dinoBuildReportToYaml(const DinoBuildReport &re
 /**
  * @brief 冻结 DINO 骨干的区域检索引擎（无请求状态，进程级共享模型与缓存）。
  *
- * 四个入口共享同一份 profile、同一套坐标与错误语义；模型、图像与候选特征缓存按配置隔离，CLI 与可选 HTTP
- * 适配都调用这里。
+ * 入口共享同一份 profile、同一套坐标与错误语义；模型、图像与候选特征缓存使用进程级默认预算。
+
  */
 class INFERRT_FEATURES_API DinoRegionSearch
 {
 public:
     /**
-     * @brief 从图库目录建立新 generation 索引。
+     * @brief 从图库目录建立本地索引。
      *
      * @param gallery_root 图库根目录；递归扫描受支持图片。
      * @param config 检索 profile。
      * @param index_root 索引根目录；为空时使用 ``gallery_root`` 的上层默认目录。
      * @param progress_callback 可选进度回调。
-     * @return 建库报告；含失败文件时 ``ready_with_errors`` 为 true，抛出前先写出诊断。
-     * @throws irt::Exception 权重缺失、配置非法或索引预算超限时抛出。
+     * @return 建库报告；含失败文件时 ``ready_with_errors`` 为 true。
+     * @throws irt::Exception 权重缺失、配置非法或输入目录不可用时抛出。
      */
     static DinoBuildReport build(const std::filesystem::path &gallery_root, const DinoRegionSearchConfig &config,
                                  const std::filesystem::path &index_root = {},
                                  const DinoBuildProgressCallback &progress_callback = {});
 
-
     /**
      * @brief 在索引中检索与查询区域相似的区域。
      *
      * @param index_root 索引根目录。
-     * @param request 查询请求。
-     * @param config 检索 profile（查询字段参与本次检索并计入检索 profile hash）。
+     * @param request 查询请求；请求级 deadline 覆盖 profile deadline。
+     * @param config 检索 profile。
      * @param progress_callback 可选进度回调。
      * @return 查询响应；未完成时 status 为 ``Incomplete`` 且保留部分结果。
      * @throws irt::Exception 索引缺失、profile 不兼容或请求非法时抛出。

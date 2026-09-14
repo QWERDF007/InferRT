@@ -186,7 +186,7 @@ struct DinoImageIdentity
     int64_t     mtime_ns{0};
     bool        exif_orientation_applied{false};
     std::string decode_pipeline{};  ///< 解码库与方向处理标识，进入签名。
-    std::string failure_reason{};   ///< 非空表示该文件被本次 generation 排除。
+    std::string failure_reason{};   ///< 非空表示该文件未能写入索引。
 };
 
 /**

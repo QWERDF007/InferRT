@@ -154,8 +154,7 @@ fs::path resolveIndexRoot(const fs::path &index_root)
 } // namespace
 
 
-DinoIndexWriter::DinoIndexWriter(const fs::path &index_root, const DinoRegionSearchConfig &,
-                                 const size_t descriptor_dim, const bool quantize)
+DinoIndexWriter::DinoIndexWriter(const fs::path &index_root, const size_t descriptor_dim, const bool quantize)
     : index_root_(resolveIndexRoot(index_root))
     , descriptor_dim_(descriptor_dim)
     , quantize_(quantize)
@@ -516,9 +515,30 @@ void DinoIndexWriter::abort()
 DinoIndexReader::DinoIndexReader(const fs::path &index_root)
     : index_root_(resolveIndexRoot(index_root))
 {
+    if (!fs::exists(index_root_ / kIndexFile))
+    {
+        throw irt::Exception(irt::Status::NOT_READY, "DINO index metadata is missing: %s",
+                             (index_root_ / kIndexFile).string().c_str());
+    }
     const auto metadata = YAML::Load(dinoReadTextFile(index_root_ / kIndexFile));
     descriptor_dim_ = metadata["dimension"].as<size_t>();
     quantized_ = metadata["quantized"].as<bool>();
+    const auto require_file = [&](const char *name)
+    {
+        if (!fs::exists(index_root_ / name))
+        {
+            throw irt::Exception(irt::Status::NOT_READY, "DINO index array is missing: %s",
+                                 (index_root_ / name).string().c_str());
+        }
+    };
+    require_file(kViewsFile);
+    require_file(kOffsetsFile);
+    require_file(kRegionMeta);
+    require_file(kLocalMeta);
+    require_file(kRegionScales);
+    require_file(kLocalScales);
+    require_file(quantized_ ? kRegionVectors : "region_vectors.f32");
+    require_file(quantized_ ? kLocalVectors : "local_vectors.f32");
     if (descriptor_dim_ == 0U)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Index descriptor dimension must be positive");

@@ -14,6 +14,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace irt::features::priv {
@@ -45,6 +46,7 @@ struct DinoScanOutcome
  * 视图后在视图的区域窗口内重打分。全程不使用 ANN，也不持久保存每个匹配点。
  */
 DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
-                         const DinoRegionSearchConfig &config, const DinoDeadline &deadline);
+                         const DinoRegionSearchConfig &config, const DinoDeadline &deadline,
+                         const std::string &excluded_image_id = {});
 
 } // namespace irt::features::priv
