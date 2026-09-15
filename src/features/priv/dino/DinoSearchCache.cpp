@@ -26,6 +26,13 @@ public:
         return active_;
     }
 
+    void reset()
+    {
+        std::lock_guard lock(mutex_);
+        active_.reset();
+        extractor_signature_.clear();
+    }
+
 private:
     std::mutex                        mutex_{};
     std::string                       extractor_signature_{};
@@ -47,6 +54,11 @@ std::shared_ptr<DinoSearchCaches> dinoAcquireSearchCaches(const std::string &ext
                                                           const uint64_t feature_budget_bytes)
 {
     return registry().acquire(extractor_signature, image_budget_bytes, feature_budget_bytes);
+}
+
+void dinoResetSearchCaches()
+{
+    registry().reset();
 }
 
 } // namespace irt::features::priv

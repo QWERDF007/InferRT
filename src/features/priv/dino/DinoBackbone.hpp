@@ -138,4 +138,7 @@ private:
  */
 std::shared_ptr<DinoBackbone> dinoAcquireBackbone(const DinoRegionSearchConfig &config);
 
+/** @brief 释放当前进程持有的骨干实例。 */
+void dinoResetBackbones();
+
 } // namespace irt::features::priv

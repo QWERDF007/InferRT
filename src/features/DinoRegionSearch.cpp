@@ -39,12 +39,35 @@ DinoBuildReport DinoRegionSearch::build(const std::filesystem::path &gallery_roo
     return priv::dinoBuildIndex(gallery_root, config, index_root, progress_callback);
 }
 
+DinoBuildReport DinoRegionSearch::buildFiles(const std::vector<std::filesystem::path> &files,
+                                            const DinoRegionSearchConfig &config,
+                                            const std::filesystem::path &index_root,
+                                            const DinoBuildProgressCallback &progress_callback,
+                                            const DinoOperationControl &control)
+{
+    return priv::dinoBuildFiles(files, config, index_root, progress_callback, control);
+}
+
 DinoSearchResponse DinoRegionSearch::search(const std::filesystem::path &index_root,
                                             const DinoSearchRequest &request,
                                             const DinoRegionSearchConfig &config,
                                             const DinoSearchProgressCallback &progress_callback)
 {
     return priv::dinoSearchIndex(index_root, request, config, progress_callback);
+}
+
+DinoSearchResponse DinoRegionSearch::search(const std::filesystem::path &index_root,
+                                            const DinoSearchRequest &request,
+                                            const DinoRegionSearchConfig &config,
+                                            const DinoSearchProgressCallback &progress_callback,
+                                            const DinoOperationControl &control)
+{
+    return priv::dinoSearchIndex(index_root, request, config, progress_callback, control);
+}
+
+void DinoRegionSearch::releaseRuntime(bool release_backbone)
+{
+    priv::dinoReleaseRuntime(release_backbone);
 }
 
 } // namespace irt::features

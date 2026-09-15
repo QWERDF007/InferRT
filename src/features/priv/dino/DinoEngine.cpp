@@ -72,7 +72,8 @@ void reportSearchProgress(const DinoSearchProgressCallback &callback, const Dino
 DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCanonicalImage &query_image,
                                    const DinoRoi &roi, const DinoSearchRequest &request,
                                    const DinoRegionSearchConfig &config,
-                                   const DinoSearchProgressCallback &progress_callback, const DinoDeadline &deadline)
+                                   const DinoSearchProgressCallback &progress_callback, const DinoDeadline &deadline,
+                                   const DinoOperationControl &control)
 {
     DinoSearchResponse detail;
     auto             backbone_holder = dinoAcquireBackbone(config);
@@ -95,12 +96,22 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
     auto   query          = dinoBuildQuery(query_image, roi, backbone, planner, config, model_forwards);
     detail.timings.query_extract_ms = dinoNowMs() - query_started;
 
+    if (control.cancelled && control.cancelled())
+    {
+        throw irt::Exception(irt::Status::INVALID_OPERATION, "Cancelled");
+    }
+
     reportSearchProgress(progress_callback, DinoSearchStage::RegionScan, 0, 0);
     const std::string excluded_image_id = request.include_self ? std::string{} : query_image.record.image_id;
-    auto scan = dinoScan(reader, query, config, deadline, excluded_image_id);
+    auto scan = dinoScan(reader, query, config, deadline, excluded_image_id, request.allowed_image_ids, control);
     detail.timings.region_scan_ms          = scan.region_scan_ms;
     detail.timings.local_scan_ms           = scan.local_scan_ms;
     detail.timings.local_window_rescore_ms = scan.window_rescore_ms;
+
+    if (control.cancelled && control.cancelled())
+    {
+        throw irt::Exception(irt::Status::INVALID_OPERATION, "Cancelled");
+    }
 
     reportSearchProgress(progress_callback, DinoSearchStage::Fusion, 0, 0);
     const auto fusion_started = dinoNowMs();
@@ -129,6 +140,11 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
                 {static_cast<float>(crop.x0), static_cast<float>(crop.y0),
                  static_cast<float>(crop.x1), static_cast<float>(crop.y1)}});
         }
+    }
+
+    if (control.cancelled && control.cancelled())
+    {
+        throw irt::Exception(irt::Status::INVALID_OPERATION, "Cancelled");
     }
 
     reportSearchProgress(progress_callback, DinoSearchStage::FineMatch, 0, fused.candidates.size());
@@ -282,27 +298,32 @@ uint64_t dinoPeakRssBytes()
 #endif
 }
 
-DinoBuildReport dinoBuildIndex(const fs::path &gallery_root, const DinoRegionSearchConfig &config,
-                               const fs::path &index_root, const DinoBuildProgressCallback &progress_callback)
+DinoBuildReport dinoBuildFiles(const std::vector<fs::path> &files, const DinoRegionSearchConfig &config,
+                               const fs::path &index_root, const DinoBuildProgressCallback &progress_callback,
+                               const DinoOperationControl &control)
 {
     const auto started = dinoNowMs();
     dinoValidateConfig(config);
-    std::lock_guard lock(model_mutex);
+    std::unique_lock lock(model_mutex, std::defer_lock);
+    while (!lock.owns_lock())
+    {
+        if (control.cancelled && control.cancelled())
+        {
+            throw irt::Exception(irt::Status::INVALID_OPERATION, "Cancelled");
+        }
+        if (lock.try_lock_for(std::chrono::milliseconds(50)))
+        {
+            break;
+        }
+    }
     active_reader.reset(); // release file handles before rebuilding; no freshness protocol
     active_index_path.clear();
-    if (!fs::exists(gallery_root))
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Gallery root does not exist: %s",
-                             gallery_root.string().c_str());
-    }
+    dinoResetSearchCaches();
 
     DinoBuildReport report;
-    const auto      images = DinoImageLoader::collectGalleryImages(gallery_root);
-    reportProgress(progress_callback, DinoBuildStage::ScanningImages, 0, images.size(), "collecting gallery images");
-    if (images.empty())
+    if (files.empty())
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Gallery root contains no supported image: %s",
-                             gallery_root.string().c_str());
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Gallery file list is empty");
     }
 
     reportProgress(progress_callback, DinoBuildStage::LoadingModel, 0, 0, "loading frozen backbone");
@@ -320,15 +341,19 @@ DinoBuildReport dinoBuildIndex(const fs::path &gallery_root, const DinoRegionSea
     descriptor_config.merge_epsilon = config.merge_epsilon;
     descriptor_config.max_leaf_side_patches = config.max_leaf_side_patches;
 
-    const auto root = fs::absolute(index_root.empty() ? gallery_root / ".." / kDefaultIndexDirectoryName : index_root)
-                         .lexically_normal();
+    const auto root = fs::absolute(index_root).lexically_normal();
     DinoIndexWriter writer(root, static_cast<size_t>(config.coarse_dimension), config.quantize_int8);
     size_t processed = 0;
-    for (const auto &path : images)
+    for (const auto &path : files)
     {
+        if (control.cancelled && control.cancelled())
+        {
+            writer.abort();
+            throw irt::Exception(irt::Status::INVALID_OPERATION, "Cancelled");
+        }
         if (processed < 4U || processed % 16U == 0U)
         {
-            reportProgress(progress_callback, DinoBuildStage::ExtractingViews, processed, images.size(),
+            reportProgress(progress_callback, DinoBuildStage::ExtractingViews, processed, files.size(),
                            dinoPathToUtf8(path.filename()));
         }
         try
@@ -342,6 +367,11 @@ DinoBuildReport dinoBuildIndex(const fs::path &gallery_root, const DinoRegionSea
 
             for (size_t begin = 0; begin < plans.size(); begin += batch)
             {
+                if (control.cancelled && control.cancelled())
+                {
+                    writer.abort();
+                    throw irt::Exception(irt::Status::INVALID_OPERATION, "Cancelled");
+                }
                 const size_t count = std::min(batch, plans.size() - begin);
                 std::vector<DinoViewRaster> rasters;
                 rasters.reserve(count);
@@ -365,6 +395,17 @@ DinoBuildReport dinoBuildIndex(const fs::path &gallery_root, const DinoRegionSea
                 }
             }
         }
+        catch (const irt::Exception &error)
+        {
+            if (error.code() == irt::Status::INVALID_OPERATION)
+            {
+                writer.abort();
+                throw;
+            }
+            report.failed_files.push_back(dinoPathToUtf8(fs::absolute(path).lexically_normal()));
+            report.messages.push_back(std::string("failed: ") + dinoPathToUtf8(path.filename()) + " -> "
+                                      + error.what());
+        }
         catch (const std::exception &error)
         {
             report.failed_files.push_back(dinoPathToUtf8(fs::absolute(path).lexically_normal()));
@@ -373,13 +414,19 @@ DinoBuildReport dinoBuildIndex(const fs::path &gallery_root, const DinoRegionSea
         }
         ++processed;
     }
-    reportProgress(progress_callback, DinoBuildStage::WritingIndex, images.size(), images.size(), "writing index");
+    reportProgress(progress_callback, DinoBuildStage::WritingIndex, files.size(), files.size(), "writing index");
 
     if (writer.imageIdentities().empty())
     {
         writer.abort();
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "No gallery image could be indexed; all inputs failed");
+    }
+
+    if (control.cancelled && control.cancelled())
+    {
+        writer.abort();
+        throw irt::Exception(irt::Status::INVALID_OPERATION, "Cancelled");
     }
 
     reportProgress(progress_callback, DinoBuildStage::Quantizing, 0, 0, "finalizing compact arrays");
@@ -416,9 +463,33 @@ DinoBuildReport dinoBuildIndex(const fs::path &gallery_root, const DinoRegionSea
     return report;
 }
 
+DinoBuildReport dinoBuildIndex(const fs::path &gallery_root, const DinoRegionSearchConfig &config,
+                               const fs::path &index_root, const DinoBuildProgressCallback &progress_callback,
+                               const DinoOperationControl &control)
+{
+    if (!fs::exists(gallery_root))
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Gallery root does not exist: %s",
+                             gallery_root.string().c_str());
+    }
+
+    const auto images = DinoImageLoader::collectGalleryImages(gallery_root);
+    reportProgress(progress_callback, DinoBuildStage::ScanningImages, 0, images.size(), "collecting gallery images");
+    if (images.empty())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Gallery root contains no supported image: %s",
+                             gallery_root.string().c_str());
+    }
+
+    const auto root = fs::absolute(index_root.empty() ? gallery_root / ".." / kDefaultIndexDirectoryName : index_root)
+                         .lexically_normal();
+    return dinoBuildFiles(images, config, root, progress_callback, control);
+}
+
 DinoSearchResponse dinoSearchIndex(const fs::path &index_root, const DinoSearchRequest &request,
-                                 const DinoRegionSearchConfig &config,
-                                 const DinoSearchProgressCallback &progress_callback)
+                                   const DinoRegionSearchConfig &config,
+                                   const DinoSearchProgressCallback &progress_callback,
+                                   const DinoOperationControl &control)
 {
     dinoValidateConfig(config);
     if (request.deadline_ms < 0)
@@ -429,13 +500,28 @@ DinoSearchResponse dinoSearchIndex(const fs::path &index_root, const DinoSearchR
     const DinoDeadline deadline(query_deadline_ms);
     const auto        wall_started = dinoNowMs();
     std::unique_lock lock(model_mutex, std::defer_lock);
-    if (query_deadline_ms > 0)
+    while (!lock.owns_lock())
     {
-        (void)lock.try_lock_for(std::chrono::milliseconds(deadline.remainingMs()));
-    }
-    else
-    {
-        lock.lock();
+        if (control.cancelled && control.cancelled())
+        {
+            throw irt::Exception(irt::Status::INVALID_OPERATION, "Cancelled");
+        }
+        if (query_deadline_ms > 0 && deadline.expired())
+        {
+            DinoSearchResponse response;
+            response.request_id = request.request_id;
+            response.status = DinoSearchStatus::Incomplete;
+            response.decision = DinoSearchDecision::Incomplete;
+            response.message = "Query deadline expired while waiting for the model.";
+            response.timings.wall_ms = dinoNowMs() - wall_started;
+            reportSearchProgress(progress_callback, DinoSearchStage::Output, 0, 0);
+            return response;
+        }
+        const int64_t wait_chunk = query_deadline_ms > 0 ? std::clamp<int64_t>(deadline.remainingMs(), 1, 50) : 50;
+        if (lock.try_lock_for(std::chrono::milliseconds(wait_chunk)))
+        {
+            break;
+        }
     }
     const double queue_ms = dinoNowMs() - wall_started;
 
@@ -455,6 +541,11 @@ DinoSearchResponse dinoSearchIndex(const fs::path &index_root, const DinoSearchR
     if (!lock.owns_lock())
     {
         return incompleteResponse("Query deadline expired while waiting for the model.");
+    }
+
+    if (control.cancelled && control.cancelled())
+    {
+        throw irt::Exception(irt::Status::INVALID_OPERATION, "Cancelled");
     }
 
     const auto path = fs::absolute(index_root).lexically_normal();
@@ -487,7 +578,7 @@ DinoSearchResponse dinoSearchIndex(const fs::path &index_root, const DinoSearchR
 
     try
     {
-        auto detail = runSearchPipeline(reader, query_image, roi, request, config, progress_callback, deadline);
+        auto detail = runSearchPipeline(reader, query_image, roi, request, config, progress_callback, deadline, control);
         detail.request_id        = request.request_id;
         detail.timings.decode_ms = decode_ms;
         detail.timings.queue_ms = queue_ms;
@@ -498,6 +589,10 @@ DinoSearchResponse dinoSearchIndex(const fs::path &index_root, const DinoSearchR
     }
     catch (const irt::Exception &error)
     {
+        if (error.code() == irt::Status::INVALID_OPERATION)
+        {
+            throw;
+        }
         if (error.code() != irt::Status::ERROR_OUT_OF_MEMORY)
         {
             throw;
@@ -511,6 +606,18 @@ DinoSearchResponse dinoSearchIndex(const fs::path &index_root, const DinoSearchR
         auto detail = incompleteResponse("Host memory exhausted; the query was not completed and no result is final.");
         detail.timings.decode_ms = decode_ms;
         return detail;
+    }
+}
+
+void dinoReleaseRuntime(bool release_backbone)
+{
+    std::lock_guard lock(model_mutex);
+    active_reader.reset();
+    active_index_path.clear();
+    dinoResetSearchCaches();
+    if (release_backbone)
+    {
+        dinoResetBackbones();
     }
 }
 

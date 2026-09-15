@@ -36,4 +36,7 @@ std::shared_ptr<DinoSearchCaches> dinoAcquireSearchCaches(const std::string &ext
                                                           uint64_t image_budget_bytes,
                                                           uint64_t feature_budget_bytes);
 
+/** @brief 释放当前进程持有的缓存。 */
+void dinoResetSearchCaches();
+
 } // namespace irt::features::priv

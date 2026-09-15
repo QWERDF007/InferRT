@@ -23,10 +23,17 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace irt::features {
+
+/** @brief 协作式取消与运行控制。 */
+struct DinoOperationControl
+{
+    std::function<bool()> cancelled{};
+};
 
 /** @brief 查询完成状态。 */
 enum class DinoSearchStatus
@@ -317,6 +324,7 @@ struct DinoSearchRequest
     DinoSearchRoi            roi{};
     size_t                   top_k{0};             ///< 0 表示使用 profile 的 ``final_k``。
     bool                     include_self{false};  ///< 是否允许返回查询路径对应的图像。
+    std::optional<std::vector<std::string>> allowed_image_ids{std::nullopt}; ///< 允许参与检索的规范图像 ID 白名单；nullopt 表示不过滤；空集合表示范围为空。
     std::string              profile_id{};         ///< 为空时使用 profile 自身的 ``profile_id``。
     int64_t                  deadline_ms{0};       ///< 请求级 wall deadline；0 表示使用 profile 配置。
 };
@@ -481,6 +489,22 @@ public:
                                  const DinoBuildProgressCallback &progress_callback = {});
 
     /**
+     * @brief 从显式图片文件列表建立本地索引。
+     *
+     * @param files 图库图片绝对路径列表。
+     * @param config 检索 profile。
+     * @param index_root 索引根目录。
+     * @param progress_callback 可选进度回调。
+     * @param control 可选协作取消控制。
+     * @return 建库报告；含失败文件时 ready_with_errors 为 true。
+     */
+    static DinoBuildReport buildFiles(const std::vector<std::filesystem::path> &files,
+                                     const DinoRegionSearchConfig &config,
+                                     const std::filesystem::path &index_root = {},
+                                     const DinoBuildProgressCallback &progress_callback = {},
+                                     const DinoOperationControl &control = {});
+
+    /**
      * @brief 在索引中检索与查询区域相似的区域。
      *
      * @param index_root 索引根目录。
@@ -494,6 +518,27 @@ public:
                                      const DinoRegionSearchConfig &config,
                                      const DinoSearchProgressCallback &progress_callback = {});
 
+    /**
+     * @brief 支持协作取消与白名单过滤的区域检索。
+     *
+     * @param index_root 索引根目录。
+     * @param request 查询请求。
+     * @param config 检索 profile。
+     * @param progress_callback 可选进度回调。
+     * @param control 协作控制。
+     * @return 查询响应。
+     */
+    static DinoSearchResponse search(const std::filesystem::path &index_root, const DinoSearchRequest &request,
+                                     const DinoRegionSearchConfig &config,
+                                     const DinoSearchProgressCallback &progress_callback,
+                                     const DinoOperationControl &control);
+
+    /**
+     * @brief 释放当前进程持有的 DINO 区域检索模型、缓存与索引 reader。
+     *
+     * @param release_backbone 是否同时释放冻结 backbone 实例。
+     */
+    static void releaseRuntime(bool release_backbone = true);
 };
 
 } // namespace irt::features

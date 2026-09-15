@@ -47,6 +47,8 @@ struct DinoScanOutcome
  */
 DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
                          const DinoRegionSearchConfig &config, const DinoDeadline &deadline,
-                         const std::string &excluded_image_id = {});
+                         const std::string &excluded_image_id = {},
+                         const std::optional<std::vector<std::string>> &allowed_image_ids = std::nullopt,
+                         const DinoOperationControl &control = {});
 
 } // namespace irt::features::priv

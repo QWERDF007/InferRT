@@ -124,6 +124,14 @@ public:
         return active_;
     }
 
+    void reset()
+    {
+        std::lock_guard lock(mutex_);
+        active_.reset();
+        has_key_ = false;
+        key_     = {};
+    }
+
 private:
     std::mutex                    mutex_{};
     DinoBackboneCacheKey          key_{};
@@ -283,6 +291,11 @@ DinoBackbone::~DinoBackbone()
 std::shared_ptr<DinoBackbone> dinoAcquireBackbone(const DinoRegionSearchConfig &config)
 {
     return backboneRegistry().acquire(config);
+}
+
+void dinoResetBackbones()
+{
+    backboneRegistry().reset();
 }
 
 std::vector<DinoFeatureGrid> DinoBackbone::extract(const std::vector<DinoViewRaster> &rasters)

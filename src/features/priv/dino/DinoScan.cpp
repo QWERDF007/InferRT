@@ -10,6 +10,7 @@
 #include "DinoRetrievalCore.hpp"
 #include <opencv2/core.hpp>
 #include <queue>
+#include <unordered_set>
 
 #include <inferrt/core/Exception.hpp>
 
@@ -56,7 +57,9 @@ int quantize(const double value) noexcept
 
 DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
                          const DinoRegionSearchConfig &config, const DinoDeadline &deadline,
-                         const std::string &excluded_image_id)
+                         const std::string &excluded_image_id,
+                         const std::optional<std::vector<std::string>> &allowed_image_ids,
+                         const DinoOperationControl &control)
 {
     DinoScanOutcome outcome;
     const auto        scan_started = dinoNowMs();
@@ -69,6 +72,26 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
     outcome.similarity_backend      = dinoSimilarityBackendName(similarity_backend);
     outcome.compact_scan            = quantized_index;
     std::vector<uint8_t> excluded_views(views.size(), 0U);
+    if (allowed_image_ids.has_value())
+    {
+        const auto &allowed_list = allowed_image_ids.value();
+        std::unordered_set<std::string> allowed_set(allowed_list.begin(), allowed_list.end());
+        for (size_t view_id = 0; view_id < views.size(); ++view_id)
+        {
+            const auto image_index = views[view_id].image_index;
+            if (image_index >= 0 && static_cast<size_t>(image_index) < reader.images().size())
+            {
+                if (!allowed_set.contains(reader.images()[static_cast<size_t>(image_index)].image_id))
+                {
+                    excluded_views[view_id] = 1U;
+                }
+            }
+            else
+            {
+                excluded_views[view_id] = 1U;
+            }
+        }
+    }
     if (!excluded_image_id.empty())
     {
         for (size_t view_id = 0; view_id < views.size(); ++view_id)
@@ -80,6 +103,13 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
                 excluded_views[view_id] = 1U;
             }
         }
+    }
+
+    const bool all_excluded = !views.empty() && std::all_of(excluded_views.begin(), excluded_views.end(), [](uint8_t v) { return v != 0U; });
+    if (all_excluded)
+    {
+        outcome.region_scan_ms = dinoNowMs() - scan_started;
+        return outcome;
     }
 
     // ---------------- 区域通道 ----------------
@@ -115,6 +145,10 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
 
     for (size_t begin = 0; begin < reader.regionCount(); begin += config.region_scan_block)
     {
+        if (control.cancelled && control.cancelled())
+        {
+            throw irt::Exception(irt::Status::INVALID_OPERATION, "Cancelled");
+        }
         if (deadline.expired())
         {
             outcome.incomplete = true;
@@ -260,6 +294,9 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
     std::vector<retrieval::Pair> pairs;
     size_t next_view = 0;
     while (next_view < views.size()) {
+        if (control.cancelled && control.cancelled()) {
+            throw irt::Exception(irt::Status::INVALID_OPERATION, "Cancelled");
+        }
         if (deadline.expired()) {outcome.incomplete = true;break;}
         while (next_view < views.size() && (excluded_views[next_view] || reader.localRange(next_view).count == 0)) ++next_view;
         if (next_view == views.size()) break;
