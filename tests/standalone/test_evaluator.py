@@ -7,8 +7,8 @@ m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 
 class EvaluationTests(unittest.TestCase):
-    def p(self, box, score=1):
-        return {'source_path': '/gallery/a.png', 'bbox': box, 'score': score}
+    def p(self, box, score=1, image_id=1):
+        return {'image_id': image_id, 'bbox': box, 'score': score}
     def test_raw_rank_no_backfill(self):
         own = self.p([0, 0, 10, 10]); target = self.p([20, 0, 30, 10])
         gt = {'queries': [{'request_id': 'q', 'targets': [target], 'exclude_roi': own}]}

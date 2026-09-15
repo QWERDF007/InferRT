@@ -251,15 +251,10 @@ std::vector<fs::path> DinoImageLoader::collectGalleryImages(const fs::path &gall
     return irt::features::ImageSearch::collectGalleryImages(gallery_root);
 }
 
-DinoImageIdentity DinoImageLoader::statIdentity(const fs::path &path)
+DinoImageIdentity DinoImageLoader::statIdentity(const int64_t image_id, const fs::path &path)
 {
     DinoImageIdentity record;
-    record.source_path = dinoPathToUtf8(fs::absolute(path).lexically_normal());
-    record.image_id = record.source_path;
-#ifdef _WIN32
-    std::transform(record.image_id.begin(), record.image_id.end(), record.image_id.begin(),
-                   [](const unsigned char value) { return static_cast<char>(std::tolower(value)); });
-#endif
+    record.image_id = image_id;
     std::error_code error;
     const auto size = fs::file_size(path, error);
     if (!error) record.file_size = static_cast<int64_t>(size);
@@ -271,10 +266,10 @@ DinoImageIdentity DinoImageLoader::statIdentity(const fs::path &path)
 
 std::string cacheIdentity(const DinoImageIdentity &record)
 {
-    return record.source_path + "|" + std::to_string(record.file_size) + "|" + std::to_string(record.mtime_ns);
+    return std::to_string(record.image_id) + "|" + std::to_string(record.file_size) + "|" + std::to_string(record.mtime_ns);
 }
 
-DinoCanonicalImage DinoImageLoader::load(const fs::path &path)
+DinoCanonicalImage DinoImageLoader::load(const fs::path &path, const int64_t image_id)
 {
     if (!fs::exists(path))
     {
@@ -294,7 +289,7 @@ DinoCanonicalImage DinoImageLoader::load(const fs::path &path)
     }
 
     DinoCanonicalImage result;
-    result.record = statIdentity(path);
+    result.record = statIdentity(image_id, path);
 
     // OpenCV 的 imread 在 Windows 上按窄字符打开文件，非 ASCII 路径会直接解码失败；
     // 因此先按 fs::path 读取原始字节（MSVC 的 ifstream(path) 走宽字符接口），再交给 imdecode。
@@ -341,15 +336,15 @@ DinoCanonicalImage DinoImageLoader::load(const fs::path &path)
     return result;
 }
 
-std::shared_ptr<const DinoCanonicalImage> DinoImageLoader::loadCached(const fs::path &path, DinoImageCache &cache)
+std::shared_ptr<const DinoCanonicalImage> DinoImageLoader::loadCached(const fs::path &path, DinoImageCache &cache, const int64_t image_id)
 {
-    const auto record = statIdentity(path);
+    const auto record = statIdentity(image_id, path);
     const auto key = cacheIdentity(record);
     if (auto cached = cache.find(key))
     {
         return cached;
     }
-    auto loaded = std::make_shared<DinoCanonicalImage>(load(path));
+    auto loaded = std::make_shared<DinoCanonicalImage>(load(path, image_id));
     cache.insert(key, loaded);
     return loaded;
 }

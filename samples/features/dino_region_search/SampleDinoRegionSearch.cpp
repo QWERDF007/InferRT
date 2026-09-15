@@ -161,6 +161,34 @@ void writeTextFile(const fs::path &path, const std::string &content)
     stream << content;
 }
 
+std::vector<fs::path> collectGalleryImages(const fs::path &gallery_root)
+{
+    std::vector<fs::path> paths;
+    if (!fs::exists(gallery_root))
+    {
+        return paths;
+    }
+    for (const auto &entry : fs::recursive_directory_iterator(gallery_root))
+    {
+        if (!entry.is_regular_file())
+        {
+            continue;
+        }
+        const auto ext = entry.path().extension().string();
+        std::string lower = ext;
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lower == ".jpg" || lower == ".jpeg" || lower == ".png" || lower == ".bmp" || lower == ".webp")
+        {
+            paths.push_back(entry.path());
+        }
+    }
+    std::sort(paths.begin(), paths.end(), [](const fs::path &a, const fs::path &b) {
+        return a.lexically_normal().generic_string() < b.lexically_normal().generic_string();
+    });
+    return paths;
+}
+
 irt::features::DinoRegionSearchConfig loadProfile(const Arguments &arguments)
 {
     if (arguments.profile.empty())
@@ -209,6 +237,16 @@ irt::features::DinoSearchRequest buildRequest(const Arguments &arguments, const 
         {
             request.deadline_ms = arguments.deadline_ms;
         }
+        if (!request.image_resolver && !arguments.gallery.empty() && fs::exists(fs::u8path(arguments.gallery)))
+        {
+            const auto gallery_images = collectGalleryImages(fs::u8path(arguments.gallery));
+            request.image_resolver = [gallery_images](int64_t image_id) -> fs::path {
+                if (image_id >= 0 && static_cast<size_t>(image_id) < gallery_images.size()) {
+                    return gallery_images[static_cast<size_t>(image_id)];
+                }
+                return {};
+            };
+        }
         return request;
     }
 
@@ -222,6 +260,16 @@ irt::features::DinoSearchRequest buildRequest(const Arguments &arguments, const 
     request.profile_id   = config.profile_id;
     request.top_k        = arguments.top_k > 0 ? static_cast<size_t>(arguments.top_k) : 0U;
     request.include_self = arguments.include_self;
+    if (!arguments.gallery.empty() && fs::exists(fs::u8path(arguments.gallery)))
+    {
+        const auto gallery_images = collectGalleryImages(fs::u8path(arguments.gallery));
+        request.image_resolver = [gallery_images](int64_t image_id) -> fs::path {
+            if (image_id >= 0 && static_cast<size_t>(image_id) < gallery_images.size()) {
+                return gallery_images[static_cast<size_t>(image_id)];
+            }
+            return {};
+        };
+    }
     if (request.query_path.empty())
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "search requires --request or --query");
@@ -386,11 +434,22 @@ int main(int argc, char **argv)
                 if (!file) throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Cannot write batch output");
             }
             int exit_code = 0;
+            std::function<fs::path(int64_t)> batch_resolver;
+            if (!arguments.gallery.empty() && fs::exists(fs::u8path(arguments.gallery))) {
+                const auto gallery_images = collectGalleryImages(fs::u8path(arguments.gallery));
+                batch_resolver = [gallery_images](int64_t image_id) -> fs::path {
+                    if (image_id >= 0 && static_cast<size_t>(image_id) < gallery_images.size()) {
+                        return gallery_images[static_cast<size_t>(image_id)];
+                    }
+                    return {};
+                };
+            }
             for (auto &request : requests) {
                 if (arguments.top_k > 0) request.top_k = static_cast<size_t>(arguments.top_k);
                 if (arguments.include_self) request.include_self = true;
                 if (arguments.deadline_ms > 0) request.deadline_ms = arguments.deadline_ms;
                 if (request.profile_id.empty()) request.profile_id = config.profile_id;
+                if (!request.image_resolver && batch_resolver) request.image_resolver = batch_resolver;
                 irt::features::DinoSearchResponse response;
                 int item_code = 0;
                 try {

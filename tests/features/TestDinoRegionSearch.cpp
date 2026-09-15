@@ -153,7 +153,7 @@ TEST(DinoRegionSearchContract, ResponseIncludesCandidatesTimingsAndDiagnostics)
     response.decision = irt::features::DinoSearchDecision::RankedOnly;
     response.completed_candidates = 2;
     response.total_candidates = 3;
-    response.region_candidates.push_back({std::filesystem::path("gallery/a.jpg"),
+    response.region_candidates.push_back({1001,
                                           irt::features::DinoSearchRect{1.0F, 2.0F, 3.0F, 4.0F}});
     response.timings.wall_ms = 12.5;
     response.diagnostics.scanned_region_descriptors = 7;
@@ -163,7 +163,7 @@ TEST(DinoRegionSearchContract, ResponseIncludesCandidatesTimingsAndDiagnostics)
     EXPECT_EQ(node["status"].as<std::string>(), "completed");
     EXPECT_EQ(node["decision"].as<std::string>(), "ranked_only");
     EXPECT_EQ(node["region_candidates"].size(), 1U);
-    EXPECT_EQ(node["region_candidates"][0]["source_path"].as<std::string>(), "gallery/a.jpg");
+    EXPECT_EQ(node["region_candidates"][0]["image_id"].as<int64_t>(), 1001);
     EXPECT_DOUBLE_EQ(node["timings"]["wall_ms"].as<double>(), 12.5);
     EXPECT_EQ(node["diagnostics"]["scanned_region_descriptors"].as<size_t>(), 7U);
     EXPECT_EQ(node["diagnostics"]["similarity_backend"].as<std::string>(), "cpu");
@@ -179,21 +179,29 @@ TEST(DinoRegionSearchContract, RequestDeadlineMustBePositive)
         "request_id: [not-a-string]\nquery_path: a.png\nbbox: [1, 2, 8, 9]\n"), irt::Exception);
 }
 
-TEST(DinoRegionSearchPaths, WindowsCaseAliasesShareImageIdentity)
+TEST(DinoRegionSearchContract, QueryImageIdAndAllowedImageIdsAreParsed)
 {
-#ifdef _WIN32
-    const auto root = std::filesystem::path(testing::TempDir()) / "dino_case_identity";
+    const auto req = irt::features::dinoSearchRequestFromYaml(
+        "query_path: a.png\nquery_image_id: 1001\nallowed_image_ids: [1001, 1002, 1003]\nbbox: [1, 2, 8, 9]\n");
+    EXPECT_EQ(req.query_image_id, 1001);
+    ASSERT_TRUE(req.allowed_image_ids.has_value());
+    EXPECT_EQ(req.allowed_image_ids->size(), 3U);
+    EXPECT_EQ(req.allowed_image_ids->at(0), 1001);
+    EXPECT_EQ(req.allowed_image_ids->at(1), 1002);
+    EXPECT_EQ(req.allowed_image_ids->at(2), 1003);
+}
+
+TEST(DinoRegionSearchPaths, IngestPopulatesImageIdentityAndFileSize)
+{
+    const auto root = std::filesystem::path(testing::TempDir()) / "dino_ingest_identity";
     std::filesystem::remove_all(root);
     std::filesystem::create_directories(root);
-    const auto original = root / "Image.JPG";
+    const auto original = root / "image.jpg";
     std::ofstream(original.string()).close();
-    const auto first = irt::features::priv::DinoImageLoader::statIdentity(original);
-    const auto alias = irt::features::priv::DinoImageLoader::statIdentity(root / "image.jpg");
-    EXPECT_EQ(first.image_id, alias.image_id);
+    const auto identity = irt::features::priv::DinoImageLoader::statIdentity(42, original);
+    EXPECT_EQ(identity.image_id, 42);
+    EXPECT_EQ(identity.file_size, 0);
     std::filesystem::remove_all(root);
-#else
-    GTEST_SKIP() << "Windows path identity behavior";
-#endif
 }
 
 TEST(DinoRegionSearchIngest, LargeJpegPreservesDecodedDimensionsAndEdgePixels)
@@ -236,8 +244,7 @@ TEST(DinoRegionSearchIndex, ViewsRetainDistinctDescriptorsAfterReopening)
         {
             irt::features::priv::DinoIndexWriter writer(root, 3, quantized);
             irt::features::priv::DinoImageIdentity image;
-            image.image_id = "test-image";
-            image.source_path = "test-image.png";
+            image.image_id = 1001;
             image.width = image.height = 64;
             writer.addImage(image);
             for (int view = 0; view < 2; ++view)
@@ -262,6 +269,10 @@ TEST(DinoRegionSearchIndex, ViewsRetainDistinctDescriptorsAfterReopening)
         }
         {
             irt::features::priv::DinoIndexReader reader(root);
+            ASSERT_EQ(reader.images().size(), 1U);
+            EXPECT_EQ(reader.images()[0].image_id, 1001);
+            EXPECT_EQ(reader.imageIndexById(1001), 0);
+            EXPECT_EQ(reader.imageIndexById(9999), -1);
             for (size_t view = 0; view < 2; ++view)
             {
                 const auto region = reader.regionRange(view);
@@ -283,6 +294,26 @@ TEST(DinoRegionSearchIndex, ViewsRetainDistinctDescriptorsAfterReopening)
         std::filesystem::remove_all(root);
     }
 }
+
+TEST(DinoRegionSearchIndex, WriterRejectsDuplicateImageIds)
+{
+    const auto root = std::filesystem::path(testing::TempDir()) / "inferrt_dino_dup_ids";
+    std::filesystem::remove_all(root);
+    {
+        irt::features::priv::DinoIndexWriter writer(root, 3, false);
+        irt::features::priv::DinoImageIdentity image1;
+        image1.image_id = 1001;
+        image1.width = image1.height = 64;
+        EXPECT_NO_THROW(writer.addImage(image1));
+
+        irt::features::priv::DinoImageIdentity image2;
+        image2.image_id = 1001; // duplicate
+        image2.width = image2.height = 64;
+        EXPECT_THROW(writer.addImage(image2), irt::Exception);
+    }
+    std::filesystem::remove_all(root);
+}
+
 
 // ---------------------------------------------------------------- 几何与坐标
 
@@ -948,7 +979,7 @@ TEST(DinoRegionSearchFusion, QuotasBackfillAndDuplicateMergingAreCounted)
     auto make = [](const int view_id, const double x0, const double y0, const double size, const float score)
     {
         DinoCandidate candidate;
-        candidate.image_id  = "image";
+        candidate.image_id  = 1;
         candidate.view_id   = view_id;
         candidate.from_region = true;
         candidate.region_score = score;
@@ -992,7 +1023,7 @@ TEST(DinoRegionSearchFusion, QuotasBackfillAndDuplicateMergingAreCounted)
 
 TEST(DinoRegionSearchFusion, NmsSuppressesOnlyWithinTheSameImage)
 {
-    auto make = [](const std::string &image_id, const double x0, const float score)
+    auto make = [](const int64_t image_id, const double x0, const float score)
     {
         irt::features::priv::DinoMatchResult result;
         result.image_id = image_id;
@@ -1001,14 +1032,14 @@ TEST(DinoRegionSearchFusion, NmsSuppressesOnlyWithinTheSameImage)
         return result;
     };
 
-    std::vector<irt::features::priv::DinoMatchResult> results{make("a", 0.0, 0.9F), make("a", 5.0, 0.8F),
-                                                              make("b", 5.0, 0.7F), make("a", 500.0, 0.6F)};
+    std::vector<irt::features::priv::DinoMatchResult> results{make(1, 0.0, 0.9F), make(1, 5.0, 0.8F),
+                                                              make(2, 5.0, 0.7F), make(1, 500.0, 0.6F)};
     irt::features::priv::dinoNmsWithinImages(results, 0.5);
     ASSERT_EQ(results.size(), 3U);
     EXPECT_FLOAT_EQ(results.front().score, 0.9F);
     EXPECT_EQ(std::count_if(results.begin(), results.end(),
                             [](const irt::features::priv::DinoMatchResult &result)
-                            { return result.image_id == "b"; }),
+                            { return result.image_id == 2; }),
 
               1);
 }
@@ -1127,3 +1158,27 @@ TEST(DinoRegionSearchContract, V4BudgetAndBatchFieldsParse)
     EXPECT_NE(yaml.find("verification_candidates"), std::string::npos);
     EXPECT_NE(yaml.find("tight_global_and_grid"), std::string::npos);
 }
+
+TEST(DinoRegionSearchBuild, BuildRejectsEmptyAndDuplicateItems)
+{
+    irt::features::DinoRegionSearchConfig config;
+    config.weights_file = "nonexistent.wts";
+    config.model_runtime = irt::model::ModelRuntime("cpu");
+
+    const auto index_dir = std::filesystem::path(testing::TempDir()) / "inferrt_dino_build_val";
+
+    // Reject empty list
+    EXPECT_THROW(
+        (void)irt::features::DinoRegionSearch::build(std::vector<irt::features::DinoImageItem>{}, config, index_dir),
+        irt::Exception);
+
+    // Reject duplicate image_ids
+    std::vector<irt::features::DinoImageItem> dup_items = {
+        {100, "a.jpg"},
+        {100, "b.jpg"},
+    };
+    EXPECT_THROW(
+        (void)irt::features::DinoRegionSearch::build(dup_items, config, index_dir),
+        irt::Exception);
+}
+

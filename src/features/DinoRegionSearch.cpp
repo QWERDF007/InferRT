@@ -31,21 +31,22 @@ void dinoSetScanBackendOverride(const std::string &backend)
                          "Unsupported scan backend '%s'; expected auto, cpu or cuda", backend.c_str());
 }
 
+DinoBuildReport DinoRegionSearch::build(const std::vector<DinoImageItem> &items,
+                                        const DinoRegionSearchConfig &config,
+                                        const std::filesystem::path &index_root,
+                                        const DinoBuildProgressCallback &progress_callback,
+                                        const DinoOperationControl &control)
+{
+    return priv::dinoBuildItems(items, config, index_root, progress_callback, control);
+}
+
 DinoBuildReport DinoRegionSearch::build(const std::filesystem::path &gallery_root,
                                         const DinoRegionSearchConfig &config,
                                         const std::filesystem::path &index_root,
-                                        const DinoBuildProgressCallback &progress_callback)
+                                        const DinoBuildProgressCallback &progress_callback,
+                                        const DinoOperationControl &control)
 {
-    return priv::dinoBuildIndex(gallery_root, config, index_root, progress_callback);
-}
-
-DinoBuildReport DinoRegionSearch::buildFiles(const std::vector<std::filesystem::path> &files,
-                                            const DinoRegionSearchConfig &config,
-                                            const std::filesystem::path &index_root,
-                                            const DinoBuildProgressCallback &progress_callback,
-                                            const DinoOperationControl &control)
-{
-    return priv::dinoBuildFiles(files, config, index_root, progress_callback, control);
+    return priv::dinoBuildIndex(gallery_root, config, index_root, progress_callback, control);
 }
 
 DinoSearchResponse DinoRegionSearch::search(const std::filesystem::path &index_root,

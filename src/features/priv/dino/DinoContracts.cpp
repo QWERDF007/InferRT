@@ -193,6 +193,39 @@ DinoSearchRequest dinoSearchRequestFromYaml(const std::string &text)
             }
         }
 
+        if (node["query_image_id"])
+        {
+            try
+            {
+                request.query_image_id = node["query_image_id"].as<int64_t>();
+            }
+            catch (const std::exception &)
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "query_image_id must be an integer");
+            }
+        }
+
+        if (node["allowed_image_ids"] && !node["allowed_image_ids"].IsNull())
+        {
+            if (!node["allowed_image_ids"].IsSequence())
+            {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "allowed_image_ids must be a sequence of integer IDs");
+            }
+            std::vector<int64_t> ids;
+            for (size_t i = 0; i < node["allowed_image_ids"].size(); ++i)
+            {
+                try
+                {
+                    ids.push_back(node["allowed_image_ids"][i].as<int64_t>());
+                }
+                catch (const std::exception &)
+                {
+                    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "allowed_image_ids elements must be integers");
+                }
+            }
+            request.allowed_image_ids = std::move(ids);
+        }
+
         if (node["top_k"])
         {
             int64_t top_k = 0;
@@ -264,7 +297,7 @@ std::string dinoSearchResponseToYaml(const DinoSearchResponse &response)
         for (const auto &candidate : candidates)
         {
             YAML::Node value;
-            value["source_path"] = priv::dinoPathToUtf8(candidate.source_path);
+            value["image_id"] = candidate.image_id;
             value["bbox"] = YAML::Node(YAML::NodeType::Sequence);
             value["bbox"].push_back(candidate.bbox.x0);
             value["bbox"].push_back(candidate.bbox.y0);
@@ -287,7 +320,6 @@ std::string dinoSearchResponseToYaml(const DinoSearchResponse &response)
     {
         YAML::Node result;
         result["image_id"] = item.image_id;
-        result["source_path"] = item.source_path;
         result["bbox"] = rectToYaml(item.bbox);
         result["score"] = item.score;
         result["template_similarity"] = item.template_similarity;

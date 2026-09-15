@@ -24,8 +24,8 @@ DinoBuildReport dinoBuildIndex(const std::filesystem::path &gallery_root, const 
                                const DinoBuildProgressCallback &progress_callback,
                                const DinoOperationControl &control = {});
 
-/** @brief 从显式文件列表建立本地索引。 */
-DinoBuildReport dinoBuildFiles(const std::vector<std::filesystem::path> &files, const DinoRegionSearchConfig &config,
+/** @brief 从显式条目列表建立本地索引（核心建库入口）。 */
+DinoBuildReport dinoBuildItems(const std::vector<DinoImageItem> &items, const DinoRegionSearchConfig &config,
                                const std::filesystem::path &index_root,
                                const DinoBuildProgressCallback &progress_callback,
                                const DinoOperationControl &control = {});

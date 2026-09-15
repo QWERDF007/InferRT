@@ -229,7 +229,7 @@ public:
     int viewOfLocalDescriptor(size_t index) const;
 
     /** @brief 定位图像下标；不存在时返回 -1。 */
-    int imageIndexById(const std::string &image_id) const;
+    int imageIndexById(int64_t image_id) const;
 
     /** @brief 返回索引根目录。 */
     const std::filesystem::path &indexPath() const noexcept

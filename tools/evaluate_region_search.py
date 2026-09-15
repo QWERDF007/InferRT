@@ -27,7 +27,9 @@ def iou(a, b):
 
 
 def same_image(a, b):
-    return path_key(a['source_path']) == path_key(b['source_path'])
+    if 'image_id' in a and 'image_id' in b:
+        return a['image_id'] == b['image_id']
+    return path_key(a.get('source_path', '')) == path_key(b.get('source_path', ''))
 
 
 def percentile(values, p):

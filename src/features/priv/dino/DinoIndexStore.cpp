@@ -239,17 +239,18 @@ void DinoIndexWriter::closeWritersIfOpen(){
 
 void DinoIndexWriter::addImage(const DinoImageIdentity &record)
 {
-    if (record.image_id.empty() || record.source_path.empty() || record.width <= 0 || record.height <= 0)
+    if (record.width <= 0 || record.height <= 0)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "Index image identity must contain id, path and positive dimensions");
+                             "Index image identity must contain positive dimensions");
     }
     for (const auto &image : images_)
     {
         if (image.image_id == record.image_id)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "Index image identity duplicates an existing image");
+                                 "Index image identity duplicates an existing image id: %lld",
+                                 static_cast<long long>(record.image_id));
         }
     }
     images_.push_back(record);
@@ -468,7 +469,6 @@ DinoBuildReport DinoIndexWriter::finish()
     {
         YAML::Node image;
         image["image_id"] = record.image_id;
-        image["source_path"] = record.source_path;
         image["width"] = record.width;
         image["height"] = record.height;
         image["file_size"] = record.file_size;
@@ -546,8 +546,7 @@ DinoIndexReader::DinoIndexReader(const fs::path &index_root)
     for (const auto &image : metadata["images"])
     {
         DinoImageIdentity record;
-        record.image_id = image["image_id"].as<std::string>();
-        record.source_path = image["source_path"].as<std::string>();
+        record.image_id = image["image_id"].as<int64_t>();
         record.width = image["width"].as<int>();
         record.height = image["height"].as<int>();
         record.file_size = image["file_size"].as<int64_t>();
@@ -914,7 +913,7 @@ int DinoIndexReader::viewOfLocalDescriptor(const size_t index) const
     return static_cast<int>(view);
 }
 
-int DinoIndexReader::imageIndexById(const std::string &image_id) const
+int DinoIndexReader::imageIndexById(const int64_t image_id) const
 {
     for (size_t index = 0; index < images_.size(); ++index)
     {

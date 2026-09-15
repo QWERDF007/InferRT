@@ -102,7 +102,9 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
     }
 
     reportSearchProgress(progress_callback, DinoSearchStage::RegionScan, 0, 0);
-    const std::string excluded_image_id = request.include_self ? std::string{} : query_image.record.image_id;
+    const int64_t excluded_image_id = (!request.include_self && request.query_image_id >= 0)
+                                          ? request.query_image_id
+                                          : -1;
     auto scan = dinoScan(reader, query, config, deadline, excluded_image_id, request.allowed_image_ids, control);
     detail.timings.region_scan_ms          = scan.region_scan_ms;
     detail.timings.local_scan_ms           = scan.local_scan_ms;
@@ -132,11 +134,11 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
             if (image_index < 0)
                 continue;
             const auto &image = reader.images()[static_cast<size_t>(image_index)];
-            if (!request.include_self && image.image_id == query_image.record.image_id)
+            if (!request.include_self && request.query_image_id >= 0 && image.image_id == request.query_image_id)
                 continue;
             const auto crop = dinoExpandRect(candidate.source_bbox, config.fine_candidate_expand,
                                              image.width, image.height);
-            reported.push_back({dinoPathFromUtf8(image.source_path),
+            reported.push_back({image.image_id,
                 {static_cast<float>(crop.x0), static_cast<float>(crop.y0),
                  static_cast<float>(crop.x1), static_cast<float>(crop.y1)}});
         }
@@ -149,11 +151,12 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
 
     reportSearchProgress(progress_callback, DinoSearchStage::FineMatch, 0, fused.candidates.size());
     auto fine = dinoFineMatch(reader, query_image, query, fused.candidates, config, backbone, planner,
-                              caches->images, caches->features, extractor_key, deadline);
+                              caches->images, caches->features, extractor_key, deadline,
+                              request.image_resolver);
     detail.score_kind = config.fine_verify_k > 0 ? "tight_global_and_grid" : "localization";
     detail.verified_candidates = config.fine_verify_k > 0 ? fine.results.size() : 0;
     const auto report_boxes = [](const std::vector<DinoMatchResult> &source, std::vector<DinoCoarseCandidate> &target) {
-        for (const auto &item : source) target.push_back({dinoPathFromUtf8(item.source_path),
+        for (const auto &item : source) target.push_back({item.image_id,
             {static_cast<float>(item.bbox.x0), static_cast<float>(item.bbox.y0), static_cast<float>(item.bbox.x1), static_cast<float>(item.bbox.y1)}});
     };
     report_boxes(fine.localized_results, detail.localized_candidates);
@@ -161,14 +164,13 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
     detail.timings.fine_extract_ms = fine.extract_ms;
     detail.timings.fine_match_ms   = fine.match_ms;
 
-    // 自身按规范源路径排除；不同路径的图片各自作为图库条目。
     std::vector<DinoMatchResult> filtered;
     filtered.reserve(fine.results.size());
     for (const auto &match : fine.results)
     {
-        if (!request.include_self)
+        if (!request.include_self && request.query_image_id >= 0)
         {
-            if (match.image_id == query_image.record.image_id)
+            if (match.image_id == request.query_image_id)
             {
                 continue;
             }
@@ -198,7 +200,6 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
     {
         DinoSearchResult result;
         result.image_id             = match.image_id;
-        result.source_path          = match.source_path;
         result.bbox                 = DinoSearchRect{static_cast<float>(match.bbox.x0), static_cast<float>(match.bbox.y0),
                                      static_cast<float>(match.bbox.x1), static_cast<float>(match.bbox.y1)};
         result.score                = match.score;
@@ -298,7 +299,7 @@ uint64_t dinoPeakRssBytes()
 #endif
 }
 
-DinoBuildReport dinoBuildFiles(const std::vector<fs::path> &files, const DinoRegionSearchConfig &config,
+DinoBuildReport dinoBuildItems(const std::vector<DinoImageItem> &items, const DinoRegionSearchConfig &config,
                                const fs::path &index_root, const DinoBuildProgressCallback &progress_callback,
                                const DinoOperationControl &control)
 {
@@ -321,9 +322,19 @@ DinoBuildReport dinoBuildFiles(const std::vector<fs::path> &files, const DinoReg
     dinoResetSearchCaches();
 
     DinoBuildReport report;
-    if (files.empty())
+    if (items.empty())
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Gallery file list is empty");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Gallery items list is empty");
+    }
+
+    std::unordered_set<int64_t> seen_ids;
+    for (const auto &item : items)
+    {
+        if (!seen_ids.insert(item.image_id).second)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Duplicate image_id in build items: %lld",
+                                 static_cast<long long>(item.image_id));
+        }
     }
 
     reportProgress(progress_callback, DinoBuildStage::LoadingModel, 0, 0, "loading frozen backbone");
@@ -344,7 +355,7 @@ DinoBuildReport dinoBuildFiles(const std::vector<fs::path> &files, const DinoReg
     const auto root = fs::absolute(index_root).lexically_normal();
     DinoIndexWriter writer(root, static_cast<size_t>(config.coarse_dimension), config.quantize_int8);
     size_t processed = 0;
-    for (const auto &path : files)
+    for (const auto &item : items)
     {
         if (control.cancelled && control.cancelled())
         {
@@ -353,12 +364,12 @@ DinoBuildReport dinoBuildFiles(const std::vector<fs::path> &files, const DinoReg
         }
         if (processed < 4U || processed % 16U == 0U)
         {
-            reportProgress(progress_callback, DinoBuildStage::ExtractingViews, processed, files.size(),
-                           dinoPathToUtf8(path.filename()));
+            reportProgress(progress_callback, DinoBuildStage::ExtractingViews, processed, items.size(),
+                           dinoPathToUtf8(item.image_path.filename()));
         }
         try
         {
-            const auto canonical = DinoImageLoader::load(path);
+            const auto canonical = DinoImageLoader::load(item.image_path, item.image_id);
             writer.addImage(canonical.record);
             const auto image_index = writer.imageIdentities().size() - 1U;
             const auto plans = planner.planGalleryViews(canonical.record.width, canonical.record.height);
@@ -402,19 +413,19 @@ DinoBuildReport dinoBuildFiles(const std::vector<fs::path> &files, const DinoReg
                 writer.abort();
                 throw;
             }
-            report.failed_files.push_back(dinoPathToUtf8(fs::absolute(path).lexically_normal()));
-            report.messages.push_back(std::string("failed: ") + dinoPathToUtf8(path.filename()) + " -> "
+            report.failed_files.push_back(dinoPathToUtf8(fs::absolute(item.image_path).lexically_normal()));
+            report.messages.push_back(std::string("failed: ") + dinoPathToUtf8(item.image_path.filename()) + " -> "
                                       + error.what());
         }
         catch (const std::exception &error)
         {
-            report.failed_files.push_back(dinoPathToUtf8(fs::absolute(path).lexically_normal()));
-            report.messages.push_back(std::string("failed: ") + dinoPathToUtf8(path.filename()) + " -> "
+            report.failed_files.push_back(dinoPathToUtf8(fs::absolute(item.image_path).lexically_normal()));
+            report.messages.push_back(std::string("failed: ") + dinoPathToUtf8(item.image_path.filename()) + " -> "
                                       + error.what());
         }
         ++processed;
     }
-    reportProgress(progress_callback, DinoBuildStage::WritingIndex, files.size(), files.size(), "writing index");
+    reportProgress(progress_callback, DinoBuildStage::WritingIndex, items.size(), items.size(), "writing index");
 
     if (writer.imageIdentities().empty())
     {
@@ -448,7 +459,6 @@ DinoBuildReport dinoBuildFiles(const std::vector<fs::path> &files, const DinoReg
         const auto &identity = writer.imageIdentities()[index];
         DinoImageRecord record;
         record.image_id                 = identity.image_id;
-        record.source_path              = identity.source_path;
         record.width                    = identity.width;
         record.height                   = identity.height;
         record.view_count               = static_cast<int>(writer.imageViewCount(index));
@@ -481,9 +491,16 @@ DinoBuildReport dinoBuildIndex(const fs::path &gallery_root, const DinoRegionSea
                              gallery_root.string().c_str());
     }
 
+    std::vector<DinoImageItem> items;
+    items.reserve(images.size());
+    for (size_t i = 0; i < images.size(); ++i)
+    {
+        items.push_back(DinoImageItem{static_cast<int64_t>(i), images[i]});
+    }
+
     const auto root = fs::absolute(index_root.empty() ? gallery_root / ".." / kDefaultIndexDirectoryName : index_root)
                          .lexically_normal();
-    return dinoBuildFiles(images, config, root, progress_callback, control);
+    return dinoBuildItems(items, config, root, progress_callback, control);
 }
 
 DinoSearchResponse dinoSearchIndex(const fs::path &index_root, const DinoSearchRequest &request,

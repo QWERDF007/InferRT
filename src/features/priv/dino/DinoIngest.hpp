@@ -71,14 +71,15 @@ public:
     /** @brief 递归收集图库目录下的受支持图片，按路径排序。 */
     static std::vector<std::filesystem::path> collectGalleryImages(const std::filesystem::path &gallery_root);
 
-    /** @brief 解码一张图片为 canonical 图像并计算路径身份。 */
-    static DinoCanonicalImage load(const std::filesystem::path &path);
+    /** @brief 解码一张图片为 canonical 图像并计算身份（可选指定外部 image_id）。 */
+    static DinoCanonicalImage load(const std::filesystem::path &path, int64_t image_id = 0);
 
-    /** @brief 只计算文件身份（路径、大小与修改时间），不解码像素。 */
-    static DinoImageIdentity statIdentity(const std::filesystem::path &path);
+    /** @brief 只计算文件身份（大小与修改时间），不解码像素。 */
+    static DinoImageIdentity statIdentity(int64_t image_id, const std::filesystem::path &path);
 
     static std::shared_ptr<const DinoCanonicalImage> loadCached(const std::filesystem::path &path,
-                                                               DinoImageCache &cache);
+                                                               DinoImageCache &cache,
+                                                               int64_t image_id = 0);
 };
 
 } // namespace irt::features::priv

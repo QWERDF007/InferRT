@@ -174,12 +174,11 @@ struct DinoRoi
 /**
  * @brief 一张图库图像的身份与几何记录。
  *
- * 图像身份由规范化源路径确定；文件大小与修改时间用于缓存失效。
+ * 图像身份由调用方提供的整数 ID 确定；文件大小与修改时间用于缓存失效。
  */
 struct DinoImageIdentity
 {
-    std::string image_id{};         ///< 规范化源路径 UTF-8。
-    std::string source_path{};      ///< 规范化绝对路径。
+    int64_t     image_id{0};        ///< 调用方提供的图像唯一 ID。
     int         width{0};           ///< canonical 宽度。
     int         height{0};          ///< canonical 高度。
     int64_t     file_size{0};
@@ -308,7 +307,7 @@ struct DinoLocalPatch
 /** @brief 粗选候选。 */
 struct DinoCandidate
 {
-    std::string image_id{};
+    int64_t    image_id{0};
     int        view_id{0};
     int        query_view_id{0};
     bool       from_region{false};
@@ -322,8 +321,7 @@ struct DinoCandidate
 /** @brief 最终结果框。 */
 struct DinoMatchResult
 {
-    std::string image_id{};
-    std::string source_path{};
+    int64_t     image_id{0};
     DinoRect    bbox{};       ///< canonical 空间结果框。
     float       score{0.0f};
     float       template_similarity{0.0f};

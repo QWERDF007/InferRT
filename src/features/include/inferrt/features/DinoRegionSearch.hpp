@@ -119,6 +119,15 @@ struct DinoSearchProgress
 
 using DinoSearchProgressCallback = std::function<void(const DinoSearchProgress &)>;
 
+/**
+ * @brief DINO 区域检索图库输入条目。
+ */
+struct DinoImageItem
+{
+    int64_t               image_id{0}; ///< 调用方提供的图像唯一 ID。
+    std::filesystem::path image_path;  ///< 图像文件路径。
+};
+
 /** @brief 矩形 ROI，单位 canonical 像素。 */
 struct DinoSearchRect
 {
@@ -143,6 +152,7 @@ struct DinoSearchRoi
     DinoSearchRect              bbox{};
     std::vector<DinoSearchPoint> polygon{};
 };
+
 
 /**
  * @brief 区域检索 profile（配置）唯一来源。
@@ -319,26 +329,27 @@ struct INFERRT_FEATURES_API DinoRegionSearchConfig
 /** @brief 查询请求。 */
 struct DinoSearchRequest
 {
-    std::string              request_id{};
-    std::filesystem::path    query_path{};
-    DinoSearchRoi            roi{};
-    size_t                   top_k{0};             ///< 0 表示使用 profile 的 ``final_k``。
-    bool                     include_self{false};  ///< 是否允许返回查询路径对应的图像。
-    std::optional<std::vector<std::string>> allowed_image_ids{std::nullopt}; ///< 允许参与检索的规范图像 ID 白名单；nullopt 表示不过滤；空集合表示范围为空。
-    std::string              profile_id{};         ///< 为空时使用 profile 自身的 ``profile_id``。
-    int64_t                  deadline_ms{0};       ///< 请求级 wall deadline；0 表示使用 profile 配置。
+    std::string                         request_id{};
+    std::filesystem::path               query_path{};
+    int64_t                             query_image_id{-1};  ///< 可选：查询图像自身 ID（用于 include_self: false 时排除自身，-1 表示无匹配 ID）。
+    DinoSearchRoi                       roi{};
+    size_t                              top_k{0};            ///< 0 表示使用 profile 的 ``final_k``。
+    bool                                include_self{false}; ///< 是否允许返回查询自身对应的图像。
+    std::optional<std::vector<int64_t>> allowed_image_ids{std::nullopt}; ///< 允许参与检索的图像 ID 白名单；nullopt 表示不过滤；空集合表示范围为空。
+    std::string                         profile_id{};        ///< 为空时使用 profile 自身的 ``profile_id``。
+    int64_t                             deadline_ms{0};      ///< 请求级 wall deadline；0 表示使用 profile 配置。
+    std::function<std::filesystem::path(int64_t)> image_resolver{}; ///< 可选：图像 ID 到文件路径的解析函数（用于精排与紧裁复核阶段加载候选原图）。
 };
 
 /** @brief 单条检索结果。 */
 struct DinoSearchResult
 {
-    std::string   image_id{};      ///< 规范化 source_path 身份 ID（不是内容摘要）。
-    std::string   source_path{};   ///< 图库图像路径。
-    DinoSearchRect bbox{};         ///< canonical 空间结果框。
-    float         score{0.0F};     ///< final_score，非概率。
-    float         template_similarity{0.0F};
-    float         query_coverage{0.0F};
-    float         spatial_consistency{0.0F};
+    int64_t        image_id{0};     ///< 命中的图库图像 ID（调用方提供的 int64_t 标识）。
+    DinoSearchRect bbox{};          ///< canonical 空间结果框。
+    float          score{0.0F};     ///< final_score，非概率。
+    float          template_similarity{0.0F};
+    float          query_coverage{0.0F};
+    float          spatial_consistency{0.0F};
     std::vector<std::string> coarse_sources{}; ///< 命中的粗选通道来源。
 };
 
@@ -382,11 +393,11 @@ struct DinoSearchDiagnostics
     std::string query_local_selection{};
 };
 
-/** @brief Candidate exposed for recall evaluation without private index identifiers. */
+/** @brief 阶段候选结果（去路径化，仅携带图像 ID 与边界框）。 */
 struct DinoCoarseCandidate
 {
-    std::filesystem::path source_path{};
-    DinoSearchRect        bbox{};
+    int64_t        image_id{0};    ///< 候选图像 ID。
+    DinoSearchRect bbox{};
 };
 
 /** @brief Query response. */
@@ -413,8 +424,7 @@ struct DinoSearchResponse
 /** @brief 建库报告中的单图记录。 */
 struct DinoImageRecord
 {
-    std::string    image_id{};
-    std::string    source_path{};
+    int64_t        image_id{0};    ///< 图像 ID。
     int            width{0};
     int            height{0};
     int            view_count{0};
@@ -469,40 +479,41 @@ INFERRT_FEATURES_API std::string dinoBuildReportToYaml(const DinoBuildReport &re
  * @brief 冻结 DINO 骨干的区域检索引擎（无请求状态，进程级共享模型与缓存）。
  *
  * 入口共享同一份 profile、同一套坐标与错误语义；模型、图像与候选特征缓存使用进程级默认预算。
-
  */
 class INFERRT_FEATURES_API DinoRegionSearch
 {
 public:
     /**
-     * @brief 从图库目录建立本地索引。
+     * @brief 从显式图像条目列表建立本地索引（核心入口）。
      *
-     * @param gallery_root 图库根目录；递归扫描受支持图片。
-     * @param config 检索 profile。
-     * @param index_root 索引根目录；为空时使用 ``gallery_root`` 的上层默认目录。
-     * @param progress_callback 可选进度回调。
-     * @return 建库报告；含失败文件时 ``ready_with_errors`` 为 true。
-     * @throws irt::Exception 权重缺失、配置非法或输入目录不可用时抛出。
-     */
-    static DinoBuildReport build(const std::filesystem::path &gallery_root, const DinoRegionSearchConfig &config,
-                                 const std::filesystem::path &index_root = {},
-                                 const DinoBuildProgressCallback &progress_callback = {});
-
-    /**
-     * @brief 从显式图片文件列表建立本地索引。
-     *
-     * @param files 图库图片绝对路径列表。
+     * @param items 待加入索引的图像路径和外部图像 ID 列表。
      * @param config 检索 profile。
      * @param index_root 索引根目录。
      * @param progress_callback 可选进度回调。
      * @param control 可选协作取消控制。
      * @return 建库报告；含失败文件时 ready_with_errors 为 true。
      */
-    static DinoBuildReport buildFiles(const std::vector<std::filesystem::path> &files,
-                                     const DinoRegionSearchConfig &config,
-                                     const std::filesystem::path &index_root = {},
-                                     const DinoBuildProgressCallback &progress_callback = {},
-                                     const DinoOperationControl &control = {});
+    static DinoBuildReport build(const std::vector<DinoImageItem> &items,
+                                 const DinoRegionSearchConfig &config,
+                                 const std::filesystem::path &index_root = {},
+                                 const DinoBuildProgressCallback &progress_callback = {},
+                                 const DinoOperationControl &control = {});
+
+    /**
+     * @brief 从图库目录建立本地索引（便捷重载，自动生成 0..N-1 连续递增 image_id）。
+     *
+     * @param gallery_root 图库根目录；递归扫描受支持图片。
+     * @param config 检索 profile。
+     * @param index_root 索引根目录；为空时使用 ``gallery_root`` 的上层默认目录。
+     * @param progress_callback 可选进度回调。
+     * @param control 可选协作取消控制。
+     * @return 建库报告；含失败文件时 ``ready_with_errors`` 为 true。
+     * @throws irt::Exception 权重缺失、配置非法或输入目录不可用时抛出。
+     */
+    static DinoBuildReport build(const std::filesystem::path &gallery_root, const DinoRegionSearchConfig &config,
+                                 const std::filesystem::path &index_root = {},
+                                 const DinoBuildProgressCallback &progress_callback = {},
+                                 const DinoOperationControl &control = {});
 
     /**
      * @brief 在索引中检索与查询区域相似的区域。
@@ -542,3 +553,4 @@ public:
 };
 
 } // namespace irt::features
+

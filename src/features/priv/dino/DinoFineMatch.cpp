@@ -77,7 +77,8 @@ DinoFineMatchOutcome dinoFineMatch(const DinoIndexReader& reader, const DinoCano
                                    const DinoRegionSearchConfig& config, DinoBackbone& backbone,
                                    const DinoViewPlanner& planner, DinoImageCache& image_cache,
                                    DinoFeatureGridCache& feature_cache, const std::string& extractor_signature,
-                                   const DinoDeadline& deadline) {
+                                   const DinoDeadline& deadline,
+                                   const std::function<std::filesystem::path(int64_t)>& image_resolver) {
     DinoFineMatchOutcome outcome;outcome.total_candidates = candidates.size();
     const auto spec = dinoViewPreprocessSpec(planner.encoderEdge(), planner.patchSize());
     const size_t batch = std::max<size_t>(1, backbone.maxBatchSize());
@@ -115,7 +116,16 @@ DinoFineMatchOutcome dinoFineMatch(const DinoIndexReader& reader, const DinoCano
         const auto& record = reader.images()[image_id];
         std::shared_ptr<const DinoCanonicalImage> image;
         auto started = dinoNowMs();
-        try {image = DinoImageLoader::loadCached(dinoPathFromUtf8(record.source_path), image_cache);}
+        try {
+            if (!image_resolver) {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "image_resolver is required for fine matching");
+            }
+            const auto image_path = image_resolver(record.image_id);
+            if (image_path.empty() || !std::filesystem::exists(image_path)) {
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Resolved image path does not exist");
+            }
+            image = DinoImageLoader::loadCached(image_path, image_cache, record.image_id);
+        }
         catch (const std::exception&) {outcome.incomplete = true;continue;}
         outcome.extract_ms += dinoNowMs() - started;
         for (size_t begin = 0; begin < group.size(); begin += batch) {
@@ -129,7 +139,7 @@ DinoFineMatchOutcome dinoFineMatch(const DinoIndexReader& reader, const DinoCano
             for (size_t i = 0; i < count; ++i) {
                 auto crop = dinoExpandRect(group[begin + i]->source_bbox, config.fine_candidate_expand, image->record.width, image->record.height);
                 if (crop.empty()) {outcome.incomplete = true;continue;}
-                keys[i] = dinoFeatureCacheKey(record.source_path + "|" + std::to_string(record.file_size) + "|" + std::to_string(record.mtime_ns), extractor_signature, crop);
+                keys[i] = dinoFeatureCacheKey(std::to_string(record.image_id) + "|" + std::to_string(record.file_size) + "|" + std::to_string(record.mtime_ns), extractor_signature, crop);
                 grids[i] = feature_cache.find(keys[i]);
                 if (!grids[i]) {
                     misses.push_back(i);
@@ -172,7 +182,7 @@ DinoFineMatchOutcome dinoFineMatch(const DinoIndexReader& reader, const DinoCano
                     if (deadline.expired()) completed = false;
                     for (const auto& p : located) {
                         DinoRect box{p.box.x0 * patch, p.box.y0 * patch, p.box.x1 * patch, p.box.y1 * patch};
-                        DinoMatchResult result;result.image_id = record.image_id;result.source_path = record.source_path;
+                        DinoMatchResult result;result.image_id = record.image_id;
                         result.bbox = dinoClampRect(grid.plan.input_to_canonical.apply(box), image->record.width, image->record.height);
                         result.score = p.score;result.template_similarity = p.appearance;
                         result.query_coverage = p.coverage;result.spatial_consistency = p.consistency;
@@ -208,7 +218,14 @@ DinoFineMatchOutcome dinoFineMatch(const DinoIndexReader& reader, const DinoCano
         std::vector<DinoViewRaster> rasters;std::vector<size_t> ids;std::vector<DinoRoi> rois;
         for (size_t i = begin; i < std::min(pending.size(), begin + batch); ++i) {
             try {
-                auto image = DinoImageLoader::loadCached(dinoPathFromUtf8(pending[i].source_path), image_cache);
+                if (!image_resolver) {
+                    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "image_resolver is required for verification");
+                }
+                const auto image_path = image_resolver(pending[i].image_id);
+                if (image_path.empty() || !std::filesystem::exists(image_path)) {
+                    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Resolved image path does not exist");
+                }
+                auto image = DinoImageLoader::loadCached(image_path, image_cache, pending[i].image_id);
                 auto roi = targetRoi(query.roi, pending[i].bbox);
                 auto crop = dinoExpandRect(pending[i].bbox, 1.04, image->record.width, image->record.height);
                 rasters.push_back(dinoRenderView(image->image, planner.makePlan(crop, image->record.width, image->record.height, false, -4), spec));

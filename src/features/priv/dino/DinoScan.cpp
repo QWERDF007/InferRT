@@ -57,8 +57,8 @@ int quantize(const double value) noexcept
 
 DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
                          const DinoRegionSearchConfig &config, const DinoDeadline &deadline,
-                         const std::string &excluded_image_id,
-                         const std::optional<std::vector<std::string>> &allowed_image_ids,
+                         const int64_t excluded_image_id,
+                         const std::optional<std::vector<int64_t>> &allowed_image_ids,
                          const DinoOperationControl &control)
 {
     DinoScanOutcome outcome;
@@ -75,7 +75,7 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
     if (allowed_image_ids.has_value())
     {
         const auto &allowed_list = allowed_image_ids.value();
-        std::unordered_set<std::string> allowed_set(allowed_list.begin(), allowed_list.end());
+        std::unordered_set<int64_t> allowed_set(allowed_list.begin(), allowed_list.end());
         for (size_t view_id = 0; view_id < views.size(); ++view_id)
         {
             const auto image_index = views[view_id].image_index;
@@ -92,7 +92,7 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
             }
         }
     }
-    if (!excluded_image_id.empty())
+    if (excluded_image_id >= 0)
     {
         for (size_t view_id = 0; view_id < views.size(); ++view_id)
         {
@@ -245,7 +245,7 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
 
     outcome.region_scan_ms = dinoNowMs() - scan_started;
 
-    const auto image_id_of = [&](const int view_id) -> const std::string &
+    const auto image_id_of = [&](const int view_id) -> int64_t
     {
         const auto image_index = views[static_cast<size_t>(view_id)].image_index;
         if (image_index < 0 || static_cast<size_t>(image_index) >= reader.images().size())
