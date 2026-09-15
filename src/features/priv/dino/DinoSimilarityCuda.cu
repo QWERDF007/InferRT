@@ -208,6 +208,51 @@ __global__ void regionScoreKernel(const int8_t *codes, const float *factors, con
     out[flat] = score;
 }
 
+// One block per (view, token), eight warps cooperate across descriptor dimensions.
+// Shared storage is bounded by 64/128 representatives in normal mode; the loop
+// also handles the dense ablation. Only two matches are downloaded, not QxG scores.
+__global__ void localPairKernel(const int8_t *codes, const float *factors, const size_t *offsets,
+                                const size_t *counts, int token_count, int dim,
+                                const float *tokens, retrieval::Pair *out)
+{
+    const int view = static_cast<int>(blockIdx.x), token = static_cast<int>(blockIdx.y);
+    const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+    float first = -CUDART_INF_F, second = -CUDART_INF_F;
+    int first_id = -1, second_id = -1;
+    for (size_t local = warp; local < counts[view]; local += 8U) {
+        const size_t index = offsets[view] + local;
+        float sum = 0;
+        for (int d = lane; d < dim; d += 32)
+            sum += float(codes[index * dim + d]) * factors[index] * tokens[static_cast<size_t>(token) * dim + d];
+        for (int delta = 16; delta > 0; delta >>= 1) sum += __shfl_down_sync(0xffffffffU, sum, delta);
+        if (lane == 0) {
+            if (sum > first || (sum == first && (first_id < 0 || int(local) < first_id))) {
+                second = first; second_id = first_id; first = sum; first_id = int(local);
+            } else if (sum > second || (sum == second && (second_id < 0 || int(local) < second_id))) {
+                second = sum; second_id = int(local);
+            }
+        }
+    }
+    __shared__ float scores[16];
+    __shared__ int ids[16];
+    if (lane == 0) {scores[warp*2] = first;scores[warp*2+1] = second;ids[warp*2] = first_id;ids[warp*2+1] = second_id;}
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        first = second = -CUDART_INF_F;first_id = second_id = -1;
+        for (int i = 0; i < 16; ++i) {
+            int id = ids[i];float value = scores[i];if (id < 0) continue;
+            if (value > first || (value == first && (first_id < 0 || id < first_id))) {
+                second = first;second_id = first_id;first = value;first_id = id;
+            } else if (value > second || (value == second && (second_id < 0 || id < second_id))) {
+                second = value;second_id = id;
+            }
+        }
+        auto &pair = out[static_cast<size_t>(view) * token_count + token];
+        pair.first.index = first_id;pair.first.score = first;
+        pair.second.index = second_id;pair.second.score = second;
+    }
+}
+
 /** @brief 设备端紧凑描述归约后端。 */
 class CudaSimilarityEngine final : public DinoSimilarityEngine
 {
@@ -308,6 +353,31 @@ public:
         output_.download(output_bytes, stream_);
         std::copy_n(static_cast<const float *>(output_.hostData()), output_count, out);
         uploaded_bytes_ += descriptor_bytes + factor_bytes + roi_bytes;
+        updateReservedPeak();
+    }
+
+    void matchViewGroup(const DinoCompactBlock &block, const std::size_t *offsets,
+                        const std::size_t *counts, const std::size_t views,
+                        const float *tokens, const int token_count, retrieval::Pair *out) override
+    {
+        validateBlock(block);
+        if (views == 0 || token_count <= 0 || block.count == 0) return;
+        const size_t codes_bytes = block.count * block.dimension;
+        const size_t factors_bytes = block.count * sizeof(float);
+        const size_t view_bytes = views * sizeof(size_t);
+        const size_t token_bytes = static_cast<size_t>(token_count) * block.dimension * sizeof(float);
+        const size_t output_bytes = views * static_cast<size_t>(token_count) * sizeof(retrieval::Pair);
+        codes_.upload(block.codes, codes_bytes);factors_.upload(block.factors, factors_bytes);
+        offsets_.upload(offsets, view_bytes);counts_.upload(counts, view_bytes);
+        tokens_.upload(tokens, token_bytes);output_.ensure(output_bytes);updateAllocatedPeak();
+        localPairKernel<<<dim3(static_cast<unsigned int>(views), static_cast<unsigned int>(token_count)), 256, 0, stream_>>>(
+            static_cast<const int8_t *>(codes_.data()), static_cast<const float *>(factors_.data()),
+            static_cast<const size_t *>(offsets_.data()), static_cast<const size_t *>(counts_.data()),
+            token_count, dimension_, static_cast<const float *>(tokens_.data()), static_cast<retrieval::Pair *>(output_.data()));
+        checkCuda(cudaGetLastError(), "localPairKernel launch");
+        output_.download(output_bytes, stream_);
+        std::copy_n(static_cast<const retrieval::Pair *>(output_.hostData()), views * token_count, out);
+        uploaded_bytes_ += codes_bytes + factors_bytes + 2 * view_bytes + token_bytes;
         updateReservedPeak();
     }
 

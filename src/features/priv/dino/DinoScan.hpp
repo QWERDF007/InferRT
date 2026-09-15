@@ -42,8 +42,8 @@ struct DinoScanOutcome
 /**
  * @brief 执行区域通道与局部通道的精确扫描。
  *
- * 区域通道对每个查询视图维护区域 Top-K；局部通道先按视图聚合查询格子分数，保留有限
- * 视图后在视图的区域窗口内重打分。全程不使用 ANN，也不持久保存每个匹配点。
+ * 区域通道对每个查询视图维护区域 Top-K；局部通道对所有图库视图计算 top-2 对应点与
+ * 空间尺度投票，然后才做全局 Top-K。全程按块读取，不保存整库相似度或投票。
  */
 DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
                          const DinoRegionSearchConfig &config, const DinoDeadline &deadline,

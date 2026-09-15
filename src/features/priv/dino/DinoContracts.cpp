@@ -12,6 +12,7 @@
 
 #include <cmath>
 #include <sstream>
+#include <utility>
 
 namespace irt::features::priv {
 
@@ -304,6 +305,10 @@ std::string dinoSearchResponseToYaml(const DinoSearchResponse &response)
     node["region_candidates"] = candidatesToYaml(response.region_candidates);
     node["local_candidates"] = candidatesToYaml(response.local_candidates);
     node["coarse_candidates"] = candidatesToYaml(response.coarse_candidates);
+    node["localized_candidates"] = candidatesToYaml(response.localized_candidates);
+    node["verification_candidates"] = candidatesToYaml(response.verification_candidates);
+    node["score_kind"] = response.score_kind;
+    node["verified_candidates"] = response.verified_candidates;
 
     YAML::Node timings;
     timings["decode_ms"] = response.timings.decode_ms;
@@ -381,6 +386,25 @@ std::string dinoBuildReportToYaml(const DinoBuildReport &report)
     YAML::Emitter emitter;
     emitter << node;
     return std::string(emitter.c_str()) + "\n";
+}
+
+std::vector<DinoSearchRequest> dinoSearchRequestsFromYaml(const std::string &text)
+{
+    try {
+        auto node = YAML::Load(text);
+        if (!node.IsSequence()) throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Batch requests must be a YAML sequence");
+        std::vector<DinoSearchRequest> requests;
+        requests.reserve(node.size());
+        for (size_t i = 0; i < node.size(); ++i) {
+            YAML::Emitter emitter;emitter << node[i];
+            auto request = dinoSearchRequestFromYaml(emitter.c_str());
+            if (!node[i]["request_id"] || request.request_id.empty()) request.request_id = "batch-" + std::to_string(i + 1);
+            requests.push_back(std::move(request));
+        }
+        return requests;
+    } catch (const YAML::Exception &error) {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Invalid batch request YAML: %s", error.what());
+    }
 }
 
 } // namespace irt::features

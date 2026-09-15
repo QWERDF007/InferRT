@@ -251,4 +251,29 @@ uint64_t DinoSimilarityReducer::uploadedBytes() const noexcept
     return engine_->uploadedBytes();
 }
 
+void DinoSimilarityEngine::matchViewGroup(const DinoCompactBlock &block, const std::size_t *offsets,
+                                          const std::size_t *counts, const std::size_t views,
+                                          const float *tokens, const int token_count, retrieval::Pair *out)
+{
+    // CPU reference path; scratch is bounded by one index block.
+    std::vector<float> decoded(block.count * block.dimension);
+    for (size_t i = 0; i < block.count; ++i)
+        for (size_t d = 0; d < block.dimension; ++d)
+            decoded[i * block.dimension + d] = float(block.codes[i * block.dimension + d]) * block.factors[i];
+    cv::parallel_for_(cv::Range(0, static_cast<int>(views)), [&](const cv::Range &range) {
+        for (int v = range.start; v < range.end; ++v) {
+            auto pairs = retrieval::nearestTwo(decoded.data() + offsets[v] * block.dimension, counts[v],
+                                               tokens, static_cast<size_t>(token_count), static_cast<int>(block.dimension));
+            std::copy(pairs.begin(), pairs.end(), out + static_cast<size_t>(v) * token_count);
+        }
+    });
+}
+
+void DinoSimilarityReducer::matchViewGroup(const DinoCompactBlock &block, const std::size_t *offsets,
+                                           const std::size_t *counts, const std::size_t views,
+                                           const float *tokens, const int token_count, retrieval::Pair *out)
+{
+    engine_->matchViewGroup(block, offsets, counts, views, tokens, token_count, out);
+}
+
 } // namespace irt::features::priv

@@ -34,6 +34,8 @@ namespace irt::features::priv {
 namespace {
 
 std::timed_mutex model_mutex;
+std::unique_ptr<DinoIndexReader> active_reader;
+fs::path active_index_path;
 constexpr const char *kDefaultIndexDirectoryName = "dino_region_index";
 constexpr uint64_t kDefaultDenseFeatureCacheBytes = 256ULL * 1024ULL * 1024ULL;
 constexpr uint64_t kDefaultImageCacheBytes        = 256ULL * 1024ULL * 1024ULL;
@@ -78,10 +80,10 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
     DinoViewPlanner  planner(backbone.patchSize(), backbone.encoderEdge(), config.view_overlap,
                             config.gallery_tile_edges, config.query_roi_target_lengths);
 
-    if (reader.descriptorDim() != static_cast<size_t>(backbone.channels()))
+    if (reader.descriptorDim() != static_cast<size_t>(config.coarse_dimension))
     {
         throw irt::Exception(irt::Status::NOT_READY,
-                             "Index descriptor dimension does not match the configured backbone");
+                             "Index coarse dimension differs from profile; rebuild the index");
     }
     const auto extractor_key = backbone.signature().cacheKey();
     const auto caches = dinoAcquireSearchCaches(extractor_key, kDefaultImageCacheBytes,
@@ -132,6 +134,14 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
     reportSearchProgress(progress_callback, DinoSearchStage::FineMatch, 0, fused.candidates.size());
     auto fine = dinoFineMatch(reader, query_image, query, fused.candidates, config, backbone, planner,
                               caches->images, caches->features, extractor_key, deadline);
+    detail.score_kind = config.fine_verify_k > 0 ? "tight_global_and_grid" : "localization";
+    detail.verified_candidates = config.fine_verify_k > 0 ? fine.results.size() : 0;
+    const auto report_boxes = [](const std::vector<DinoMatchResult> &source, std::vector<DinoCoarseCandidate> &target) {
+        for (const auto &item : source) target.push_back({dinoPathFromUtf8(item.source_path),
+            {static_cast<float>(item.bbox.x0), static_cast<float>(item.bbox.y0), static_cast<float>(item.bbox.x1), static_cast<float>(item.bbox.y1)}});
+    };
+    report_boxes(fine.localized_results, detail.localized_candidates);
+    report_boxes(fine.verification_input, detail.verification_candidates);
     detail.timings.fine_extract_ms = fine.extract_ms;
     detail.timings.fine_match_ms   = fine.match_ms;
 
@@ -202,7 +212,8 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
     detail.diagnostics.model_forwards               = model_forwards + fine.model_forwards;
     detail.diagnostics.cache_hits                   = caches->images.hits() + caches->features.hits()
                                                               - cache_hits_before;
-    detail.diagnostics.query_local_descriptors      = query.views.empty() ? 0U : query.views.front().tokens.size();
+    detail.diagnostics.query_local_descriptors = 0;
+    for (const auto &view : query.views) detail.diagnostics.query_local_descriptors += view.tokens.size();
     detail.diagnostics.query_valid_cells            = static_cast<size_t>(query.valid_cell_count);
     detail.diagnostics.low_local_evidence           = query.low_local_evidence;
     detail.diagnostics.outside_validated_profile    = query.outside_validated_profile;
@@ -277,6 +288,8 @@ DinoBuildReport dinoBuildIndex(const fs::path &gallery_root, const DinoRegionSea
     const auto started = dinoNowMs();
     dinoValidateConfig(config);
     std::lock_guard lock(model_mutex);
+    active_reader.reset(); // release file handles before rebuilding; no freshness protocol
+    active_index_path.clear();
     if (!fs::exists(gallery_root))
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Gallery root does not exist: %s",
@@ -298,6 +311,8 @@ DinoBuildReport dinoBuildIndex(const fs::path &gallery_root, const DinoRegionSea
     DinoViewPlanner  planner(backbone.patchSize(), backbone.encoderEdge(), config.view_overlap,
                             config.gallery_tile_edges, config.query_roi_target_lengths);
     DinoDescriptorBuildConfig descriptor_config;
+    descriptor_config.coarse_dimension = config.coarse_dimension;
+    descriptor_config.local_representatives = config.local_representatives;
     descriptor_config.window.ratios = config.region_window_ratios;
     descriptor_config.window.stride_ratio = config.region_window_stride_ratio;
     descriptor_config.window.min_valid_fraction = config.region_min_valid_fraction;
@@ -307,7 +322,7 @@ DinoBuildReport dinoBuildIndex(const fs::path &gallery_root, const DinoRegionSea
 
     const auto root = fs::absolute(index_root.empty() ? gallery_root / ".." / kDefaultIndexDirectoryName : index_root)
                          .lexically_normal();
-    DinoIndexWriter writer(root, static_cast<size_t>(backbone.channels()), config.quantize_int8);
+    DinoIndexWriter writer(root, static_cast<size_t>(config.coarse_dimension), config.quantize_int8);
     size_t processed = 0;
     for (const auto &path : images)
     {
@@ -442,7 +457,12 @@ DinoSearchResponse dinoSearchIndex(const fs::path &index_root, const DinoSearchR
         return incompleteResponse("Query deadline expired while waiting for the model.");
     }
 
-    DinoIndexReader reader(index_root);
+    const auto path = fs::absolute(index_root).lexically_normal();
+    if (!active_reader || active_index_path != path) {
+        active_reader = std::make_unique<DinoIndexReader>(path);
+        active_index_path = path;
+    }
+    const auto &reader = *active_reader;
     if (deadline.expired())
     {
         return incompleteResponse("Query deadline expired while loading the index; no candidates were processed.");

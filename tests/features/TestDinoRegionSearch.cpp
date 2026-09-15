@@ -1075,3 +1075,55 @@ TEST(DinoResourceTest, ImageCacheAccountsForDecodedRowStride)
     EXPECT_EQ(cache.find("image-a"), nullptr);
     EXPECT_NE(cache.find("image-b"), nullptr);
 }
+
+TEST(DinoRegionSearchScan, SpatialTopTwoMatchesAcrossAvailableBackends)
+{
+    using namespace irt::features::priv;
+    // Three views exercise ordinary, singleton, and block-tail ranges.
+    constexpr int dim = 96, query_count = 3;
+    std::vector<int8_t> codes(10U * dim, 0);
+    std::vector<float> factors(10U, 1.f);
+    for (size_t p = 0; p < 10; ++p) codes[p * dim + p % query_count] = 1;
+    std::vector<float> query(query_count * dim, 0.f);
+    for (int q = 0; q < query_count; ++q) query[q * dim + q] = 1;
+    const size_t offsets[]{0, 5, 6}, counts[]{5, 1, 4};
+    DinoCompactBlock block{codes.data(), factors.data(), 10, dim};
+    std::vector<retrieval::Pair> reference(3 * query_count), actual(reference.size());
+    DinoSimilarityReducer cpu(DinoSimilarityBackend::Cpu, dim);
+    cpu.matchViewGroup(block, offsets, counts, 3, query.data(), query_count, reference.data());
+    EXPECT_EQ(reference[0].first.index, 0);
+    EXPECT_EQ(reference[0].second.index, 3);
+    EXPECT_EQ(reference[3].second.index, -1);
+    if (!dinoCudaSimilarityAvailable()) GTEST_SKIP() << "CUDA unavailable; CPU pair checks passed";
+    DinoSimilarityReducer gpu(DinoSimilarityBackend::Cuda, dim);
+    gpu.matchViewGroup(block, offsets, counts, 3, query.data(), query_count, actual.data());
+    for (size_t i = 0; i < actual.size(); ++i) {
+        EXPECT_EQ(reference[i].first.index, actual[i].first.index);
+        EXPECT_EQ(reference[i].second.index, actual[i].second.index);
+        EXPECT_NEAR(reference[i].first.score, actual[i].first.score, 1e-5f);
+        if (reference[i].second.index >= 0) EXPECT_NEAR(reference[i].second.score, actual[i].second.score, 1e-5f);
+    }
+}
+
+TEST(DinoRegionSearchContract, V4BudgetAndBatchFieldsParse)
+{
+    const auto config = irt::features::dinoConfigFromYaml(
+        "model: {name: dinov3_vits16, weights_path: unused.wts}\n"
+        "regions: {coarse_dimension: 192, local_representatives: 128}\n"
+        "search: {verify_k: 32}\n");
+    EXPECT_EQ(config.coarse_dimension, 192);
+    EXPECT_EQ(config.local_representatives, 128);
+    EXPECT_EQ(config.fine_verify_k, 32U);
+    const auto requests = irt::features::dinoSearchRequestsFromYaml(
+        "- request_id: square\n  query_path: a.png\n  bbox: [0, 0, 40, 40]\n"
+        "- request_id: small\n  query_path: b.png\n  bbox: [5, 5, 15, 15]\n");
+    ASSERT_EQ(requests.size(), 2U);
+    EXPECT_EQ(requests[1].request_id, "small");
+    irt::features::DinoSearchResponse response;
+    response.score_kind = "tight_global_and_grid";
+    response.verified_candidates = 3;
+    auto yaml = irt::features::dinoSearchResponseToYaml(response);
+    EXPECT_NE(yaml.find("localized_candidates"), std::string::npos);
+    EXPECT_NE(yaml.find("verification_candidates"), std::string::npos);
+    EXPECT_NE(yaml.find("tight_global_and_grid"), std::string::npos);
+}

@@ -18,6 +18,7 @@
  */
 
 #include "DinoIndexStoreTypes.hpp"
+#include "DinoRetrievalCore.hpp"
 
 #include <inferrt/features/Export.h>
 
@@ -75,6 +76,11 @@ public:
     virtual void reduceRegionScores(const DinoCompactBlock &block, const float *roi_vectors, int query_view_count,
                                     float *out) = 0;
 
+    // Two distinct local descriptors per query token. Indices are relative to each view.
+    virtual void matchViewGroup(const DinoCompactBlock &block, const std::size_t *offsets,
+                                const std::size_t *counts, std::size_t views,
+                                const float *tokens, int token_count, retrieval::Pair *out);
+
     /** @brief 该后端占用的设备显存峰值（字节）；纯 CPU 后端为 0。 */
     virtual uint64_t deviceAllocatedBytes() const noexcept = 0;
 
@@ -115,6 +121,10 @@ public:
 
     void reduceRegionScores(const DinoCompactBlock &block, const float *roi_vectors, int query_view_count,
                             float *out);
+
+    void matchViewGroup(const DinoCompactBlock &block, const std::size_t *offsets,
+                        const std::size_t *counts, std::size_t views,
+                        const float *tokens, int token_count, retrieval::Pair *out);
 
     DinoSimilarityBackend backend() const noexcept { return backend_; }
     uint64_t             deviceAllocatedBytes() const noexcept;

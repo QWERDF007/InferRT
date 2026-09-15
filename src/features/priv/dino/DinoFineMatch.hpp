@@ -2,7 +2,7 @@
 
 /**
  * @file DinoFineMatch.hpp
- * @brief 候选局部精算：多尺度模板匹配、峰值定位、覆盖率与一致性打分。
+ * @brief 候选局部精算：原维度相似度图、连续ROI定位与紧裁DINO复核。
  */
 
 #include "DinoBackbone.hpp"
@@ -23,6 +23,8 @@ namespace irt::features::priv {
 struct DinoFineMatchOutcome
 {
     std::vector<DinoMatchResult> results{};
+    std::vector<DinoMatchResult> localized_results{};
+    std::vector<DinoMatchResult> verification_input{};
     size_t                       completed_candidates{0};
     size_t                       total_candidates{0};
     size_t                       model_forwards{0};

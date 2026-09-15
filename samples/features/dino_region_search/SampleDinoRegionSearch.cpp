@@ -32,6 +32,7 @@ struct Arguments
     std::string profile{};
     std::string query{};
     std::string request{};
+    std::string requests{};
     std::string output{};
     std::string weights{};
     std::string backend{};
@@ -49,10 +50,11 @@ struct Arguments
 
 void printUsage()
 {
-    std::cout << "inferrt_sample_dino_region_search <build|search> [options]\n"
+    std::cout << "inferrt_sample_dino_region_search <build|search|search-batch> [options]\n"
                  "  build --gallery <dir> --index <dir> --profile <profile.yaml>\n"
                  "  search --index <dir> --profile <profile.yaml>\n"
                  "         (--request <query.yaml> | --query <img> (--roi x0,y0,x1,y1 | --polygon x,y;x,y;x,y))\n"
+                 "  search-batch --index <dir> --profile <profile.yaml> --requests <requests.yaml>\n"
                  "  --weights <path> --backend <tensorrt|onnxruntime|openvino> --device <cpu|gpu:0|tensorrt:0>\n"
                  "  --scan-backend <auto|cpu|cuda> --deadline-ms <n> --top-k <n> --include-self\n"
                  "  --output <result.yaml> --help\n";
@@ -315,6 +317,7 @@ int main(int argc, char **argv)
             ("profile", "profile YAML", cxxopts::value<std::string>(arguments.profile))
             ("query", "query image", cxxopts::value<std::string>(arguments.query))
             ("request", "query request YAML", cxxopts::value<std::string>(arguments.request))
+            ("requests", "batch request YAML sequence", cxxopts::value<std::string>(arguments.requests))
             ("output", "output file", cxxopts::value<std::string>(arguments.output))
             ("weights", "backbone weights", cxxopts::value<std::string>(arguments.weights))
             ("backend", "inference backend", cxxopts::value<std::string>(arguments.backend))
@@ -336,7 +339,7 @@ int main(int argc, char **argv)
             printUsage();
             return 0;
         }
-        if (arguments.command != "build" && arguments.command != "search")
+        if (arguments.command != "build" && arguments.command != "search" && arguments.command != "search-batch")
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported command: %s", arguments.command.c_str());
         }
@@ -369,6 +372,49 @@ int main(int argc, char **argv)
             return report.failed_image_count > 0U ? 4 : 0;
         }
 
+
+        if (arguments.command == "search-batch")
+        {
+            if (arguments.requests.empty())
+                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "search-batch requires --requests");
+            irt::features::dinoSetScanBackendOverride(arguments.scan_backend);
+            const auto config = loadProfile(arguments);
+            auto requests = irt::features::dinoSearchRequestsFromYaml(readTextFile(fs::u8path(arguments.requests)));
+            std::ofstream file;
+            if (!arguments.output.empty()) {
+                file.open(fs::u8path(arguments.output), std::ios::binary);
+                if (!file) throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Cannot write batch output");
+            }
+            int exit_code = 0;
+            for (auto &request : requests) {
+                if (arguments.top_k > 0) request.top_k = static_cast<size_t>(arguments.top_k);
+                if (arguments.include_self) request.include_self = true;
+                if (arguments.deadline_ms > 0) request.deadline_ms = arguments.deadline_ms;
+                if (request.profile_id.empty()) request.profile_id = config.profile_id;
+                irt::features::DinoSearchResponse response;
+                int item_code = 0;
+                try {
+                    response = irt::features::DinoRegionSearch::search(fs::u8path(arguments.index), request, config);
+                    item_code = response.status == irt::features::DinoSearchStatus::Incomplete ? 5 :
+                                response.status == irt::features::DinoSearchStatus::Failed ? 6 : 0;
+                } catch (const irt::Exception &error) {
+                    response.request_id = request.request_id;
+                    response.status = irt::features::DinoSearchStatus::Failed;
+                    response.decision = irt::features::DinoSearchDecision::Error;
+                    response.message = error.msg();item_code = cliExitCode(error.code());
+                } catch (const std::exception &error) {
+                    response.request_id = request.request_id;
+                    response.status = irt::features::DinoSearchStatus::Failed;
+                    response.decision = irt::features::DinoSearchDecision::Error;
+                    response.message = error.what();item_code = 6;
+                }
+                if (!exit_code && item_code) exit_code = item_code;
+                const auto yaml = "---\n" + irt::features::dinoSearchResponseToYaml(response);
+                std::cout << yaml;
+                if (file.is_open()) {file << yaml;file.flush();if (!file) throw std::runtime_error("Batch output write failed");}
+            }
+            return exit_code;
+        }
 
         if (arguments.command == "search")
         {

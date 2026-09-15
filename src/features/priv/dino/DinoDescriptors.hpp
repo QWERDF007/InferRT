@@ -27,6 +27,8 @@ struct DinoRegionWindowConfig
 struct DinoDescriptorBuildConfig
 {
     DinoRegionWindowConfig window{};
+    int coarse_dimension{0}; // zero: original channels for standalone/legacy callers
+    int local_representatives{0}; // zero: legacy merge/dense baseline
     bool                   merge_enabled{true};
     double                 merge_epsilon{0.10};
     int                    max_leaf_side_patches{4};

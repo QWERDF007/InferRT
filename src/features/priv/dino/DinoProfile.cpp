@@ -80,6 +80,12 @@ void dinoValidateConfig(const DinoRegionSearchConfig &config)
     }
     requireRange(config.view_overlap, 0.0, 0.75, "view_overlap");
 
+    if (config.coarse_dimension < 1 || config.coarse_dimension > 384)
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Coarse dimension must be in 1..384");
+    if (config.local_representatives != 0 && config.local_representatives != 64 && config.local_representatives != 128)
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Local representatives must be 0, 64 or 128");
+    if (config.fine_verify_k > 256U)
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Verification budget must be at most 256");
     if (config.region_window_ratios.empty())
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile requires at least one window ratio");
@@ -109,6 +115,8 @@ void dinoValidateConfig(const DinoRegionSearchConfig &config)
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile max leaf side must be >= 1 patch");
     }
 
+    if (config.query_roi_target_lengths.size() > 3)
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "At most three query contexts are supported");
     if (config.query_roi_target_lengths.empty())
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile requires at least one ROI target length");
@@ -117,13 +125,13 @@ void dinoValidateConfig(const DinoRegionSearchConfig &config)
     {
         requirePositive(length, "query_roi_target_lengths");
     }
-    if (config.query_local_cells < 1 || config.query_local_cells > 16)
+    if (config.query_local_cells < 1 || config.query_local_cells > 4)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile query local cells must be within 1..16");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile query local cells must be within 1..4");
     }
-    if (config.query_local_max_per_cell < 1 || config.query_local_max_per_cell > 4)
+    if (config.query_local_max_per_cell < 1 || config.query_local_max_per_cell > 2)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile query local max per cell must be within 1..4");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile query local max per cell must be within 1..2");
     }
     if (config.query_min_local_evidence < 0)
     {
@@ -224,6 +232,8 @@ YAML::Node dinoConfigToYamlNode(const DinoRegionSearchConfig &config)
     node["query"] = query;
 
     YAML::Node regions;
+    regions["coarse_dimension"] = config.coarse_dimension;
+    regions["local_representatives"] = config.local_representatives;
     regions["window_ratios"] = config.region_window_ratios;
     regions["stride_ratio"] = config.region_window_stride_ratio;
     regions["min_valid_fraction"] = config.region_min_valid_fraction;
@@ -242,7 +252,8 @@ YAML::Node dinoConfigToYamlNode(const DinoRegionSearchConfig &config)
     YAML::Node search;
     search["block_descriptors"] = config.region_scan_block;
     search["region_pool"] = config.region_topk;
-    search["local_view_pool"] = config.local_view_topk;
+    search["local_view_pool"] = config.local_view_topk; // retained only for old profile compatibility
+    search["verify_k"] = config.fine_verify_k;
     search["local_region_pool"] = config.channel_candidate_limit;
     search["coarse_k"] = config.coarse_k;
     search["coarse_dedup_iou"] = config.coarse_dedup_iou;
@@ -386,6 +397,8 @@ DinoRegionSearchConfig dinoConfigFromYamlNode(const YAML::Node &node)
 
     if (const auto regions = node["regions"])
     {
+        if (regions["coarse_dimension"]) config.coarse_dimension = regions["coarse_dimension"].as<int>();
+        if (regions["local_representatives"]) config.local_representatives = regions["local_representatives"].as<int>();
         if (regions["window_ratios"])
         {
             config.region_window_ratios = regions["window_ratios"].as<std::vector<double>>();
@@ -426,6 +439,7 @@ DinoRegionSearchConfig dinoConfigFromYamlNode(const YAML::Node &node)
     {
         if (search["block_descriptors"]) config.region_scan_block = search["block_descriptors"].as<size_t>();
         if (search["region_pool"]) config.region_topk = search["region_pool"].as<size_t>();
+        if (search["verify_k"]) config.fine_verify_k = search["verify_k"].as<size_t>();
         if (search["local_view_pool"]) config.local_view_topk = search["local_view_pool"].as<size_t>();
         if (search["local_region_pool"]) config.channel_candidate_limit = search["local_region_pool"].as<size_t>();
         if (search["coarse_k"]) config.coarse_k = search["coarse_k"].as<size_t>();

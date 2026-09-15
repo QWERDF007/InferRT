@@ -45,7 +45,12 @@ int findDuplicate(const std::vector<DinoCandidate> &accepted, const DinoCandidat
 
 void mergeInto(DinoCandidate &target, const DinoCandidate &source)
 {
-    target.source_bbox = DinoRect::unite(target.source_bbox, source.source_bbox);
+    if (source.score > target.score)
+    {
+        target.source_bbox = source.source_bbox;
+        target.view_id = source.view_id;
+        target.query_view_id = source.query_view_id;
+    }
     target.from_region  = target.from_region || source.from_region;
     target.from_local   = target.from_local || source.from_local;
     if (source.from_region)

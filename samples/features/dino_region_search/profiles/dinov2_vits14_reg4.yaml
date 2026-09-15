@@ -2,14 +2,15 @@ profile_id: dinov2_vits14_reg4
 mode: appearance
 model:
   name: dinov2_vits14_reg4
-  weights_path: D:/Models/dinov2/dinov2_vits14_reg4.wts
+  weights_path: models/dinov2_vits14_reg4.wts
   encoder_edge: 518
   precision: fp32
+  batch_size: 1
 input:
   min_image_edge: 256
-  max_image_edge: 4096
-  min_target_short_px: 64
-  max_target_aspect: 4.0
+  max_image_edge: 8192
+  min_target_short_px: 16
+  max_target_aspect: 64.0
 views:
   source_tile_edges:
   - 512
@@ -18,7 +19,6 @@ views:
   overlap: 0.25
 query:
   roi_long_edges:
-  - 128
   - 256
   - 448
   grid_bins: 4
@@ -27,9 +27,10 @@ regions:
   window_ratios:
   - 1.0
   - 0.5
-  - 0.25
   stride_ratio: 0.5
   min_valid_fraction: 0.5
+  coarse_dimension: 96
+  local_representatives: 64
 merge:
   enabled: true
   epsilon: 0.1
@@ -39,26 +40,24 @@ quantization:
 search:
   block_descriptors: 32768
   region_pool: 400
-  local_view_pool: 200
   local_region_pool: 400
-  coarse_k: 100
+  coarse_k: 64
   coarse_dedup_iou: 0.85
   coarse_dedup_area_ratio: 1.25
+  verify_k: 128
 fine:
   candidate_expand: 1.2
-  min_template_short_patches: 2
   scale_step: 1.4142135623730951
   max_scales: 12
   peaks_per_candidate: 3
   refinement_rounds: 1
   match_cosine_threshold: 0.55
-  normalized_position_tolerance: 0.25
   score_weights:
   - 0.6
   - 0.25
   - 0.15
   nms_iou: 0.5
-  final_k: 20
+  final_k: 50
 decision:
   threshold: null
 deadline_ms: 30000

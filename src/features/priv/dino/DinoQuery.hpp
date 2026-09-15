@@ -24,7 +24,8 @@ struct DinoQueryToken
     int        slot{0};      ///< 该 token 在格子内的槽位（0/1）。
     float      weight{0.0F}; ///< 该 token 在格子内的权重。
     DinoPoint  source{};     ///< canonical 空间位置（patch 中心）。
-    std::vector<float> vector{};
+    std::vector<float> vector{}; // original D for fine matching
+    std::vector<float> coarse_vector{};
 };
 
 /** @brief 一个查询视图的 ROI 表示。 */
@@ -34,6 +35,7 @@ struct DinoQueryView
     DinoFeatureGrid           grid{};
     DinoRect                  roi_bbox{};
     std::vector<float>        roi_vector{};      ///< ROI 面积加权平均描述。
+    std::vector<float>        coarse_roi_vector{};
     std::vector<float>        roi_weights{};     ///< 逐 patch 的 ROI 覆盖权重，供精匹配复用。
     std::vector<DinoQueryToken> tokens{};
     int                       valid_cells{0};
@@ -42,6 +44,7 @@ struct DinoQueryView
 /** @brief 查询图与 ROI 的完整表示。 */
 struct DinoQuery
 {
+    DinoRoi roi{};
     std::vector<DinoQueryView> views{};
     int                        cells{4};
     int                        valid_cell_count{0};

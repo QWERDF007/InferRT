@@ -4,6 +4,7 @@
  */
 
 #include "DinoDescriptors.hpp"
+#include "DinoRetrievalCore.hpp"
 
 #include <inferrt/core/Exception.hpp>
 
@@ -368,7 +369,9 @@ DinoViewDescriptors dinoBuildViewDescriptors(const int view_id, const DinoFeatur
         }
     }
 
-    const auto windows = dinoEnumerateRegionWindows(grid, config.window, view_id);
+    const auto windows = config.local_representatives > 0
+        ? retrieval::regionWindows(grid, view_id, static_cast<float>(config.window.min_valid_fraction))
+        : dinoEnumerateRegionWindows(grid, config.window, view_id);
     descriptors.region_meta = windows;
     descriptors.region_vectors.reserve(windows.size());
     for (const auto &window : windows)
@@ -377,7 +380,25 @@ DinoViewDescriptors dinoBuildViewDescriptors(const int view_id, const DinoFeatur
     }
     descriptors.stats.region_count = descriptors.region_vectors.size();
 
-    if (config.merge_enabled)
+    if (config.local_representatives > 0)
+    {
+        const auto valid_rect = grid.plan.input_to_canonical.apply(grid.plan.valid_input_rect);
+        const auto samples = retrieval::select(grid, valid_rect, grid.valid_area, 4,
+                                               std::max(1, config.local_representatives / 16));
+        for (const auto &sample : samples)
+        {
+            const int row = sample.patch / grid.plan.grid_width, col = sample.patch % grid.plan.grid_width;
+            DinoLocalLeaf leaf;
+            leaf.view_id = view_id;
+            leaf.grid_row = leaf.rep_row = row;
+            leaf.grid_col = leaf.rep_col = col;
+            leaf.grid_height = leaf.grid_width = leaf.member_count = 1;
+            descriptors.local_meta.push_back(leaf);
+            const float *source = grid.token(row, col);
+            descriptors.local_vectors.emplace_back(source, source + grid.channels);
+        }
+    }
+    else if (config.merge_enabled)
     {
         compressRect(grid, 0, 0, grid.plan.grid_height, grid.plan.grid_width, config, view_id, descriptors,
                      descriptors.stats);
@@ -413,6 +434,12 @@ DinoViewDescriptors dinoBuildViewDescriptors(const int view_id, const DinoFeatur
         }
     }
 
+    if (config.coarse_dimension > 0 && config.coarse_dimension != grid.channels)
+    {
+        const retrieval::Projection projection(grid.channels, config.coarse_dimension);
+        for (auto &vector : descriptors.region_vectors) vector = projection.apply(vector.data());
+        for (auto &vector : descriptors.local_vectors) vector = projection.apply(vector.data());
+    }
     descriptors.stats.local_count = descriptors.local_meta.size();
     if (!descriptors.local_meta.empty())
     {

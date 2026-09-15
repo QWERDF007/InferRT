@@ -185,13 +185,22 @@ struct INFERRT_FEATURES_API DinoRegionSearchConfig
     double view_overlap{0.25};
 
     /// 区域整体描述的窗口边长比例（相对视图短边）。
-    std::vector<double> region_window_ratios{1.0, 0.5, 0.25};
+    std::vector<double> region_window_ratios{1.0, 0.5};
 
     /// 区域窗口步长比例（相对窗口边长）。
     double region_window_stride_ratio{0.5};
 
     /// 窗口有效面积占比下限，低于该值的窗口不入库。
     double region_min_valid_fraction{0.5};
+
+    /// Coarse-only dimension; original DINO channels remain available for fine matching.
+    int coarse_dimension{96};
+
+    /// Maximum real local tokens per view, in a 4x4 spatial partition. Zero uses legacy merge/dense ablation.
+    int local_representatives{64};
+
+    /// Maximum localized boxes re-extracted for tight verification; zero disables the ablation.
+    size_t fine_verify_k{64};
 
     /// 是否启用空间相邻合并；false 为不合并基线。
     bool merge_enabled{true};
@@ -208,14 +217,14 @@ struct INFERRT_FEATURES_API DinoRegionSearchConfig
     /// 区域通道候选额度。
     size_t region_topk{400};
 
-    /// 局部通道每个视图保留的标量分数数量。
+    /// 旧 profile 字段；v4 不再用它提前淘汰视图。
     size_t local_view_topk{200};
 
     /// 每个通道进入融合的最大候选数。
     size_t channel_candidate_limit{400};
 
     /// 粗选候选总数。
-    size_t coarse_k{100};
+    size_t coarse_k{64};
 
     /// 粗选去重：空间 IoU 阈值。
     double coarse_dedup_iou{0.85};
@@ -227,7 +236,7 @@ struct INFERRT_FEATURES_API DinoRegionSearchConfig
     size_t final_k{20};
 
     /// 查询 ROI 在模型输入中的目标长边个数。
-    std::vector<double> query_roi_target_lengths{128.0, 256.0, 448.0};
+    std::vector<double> query_roi_target_lengths{256.0, 448.0};
 
     /// 查询 ROI 划分的格子边长（4 表示 4x4）。
     int query_local_cells{4};
@@ -241,7 +250,7 @@ struct INFERRT_FEATURES_API DinoRegionSearchConfig
     /// 候选裁剪扩边比例。
     double fine_candidate_expand{1.2};
 
-    /// 模板短边起始 patch 数。
+    /// 旧整数模板参数；v4 连续框使用固定 0.75 patch 起始短边。
     int fine_template_min_short_patches{2};
 
     /// 模板尺寸档位递增比例（DEFAULT sqrt(2)）。
@@ -259,7 +268,7 @@ struct INFERRT_FEATURES_API DinoRegionSearchConfig
     /// 模板匹配余弦阈值（开发集冻结值）。
     double fine_match_cosine_threshold{0.55};
 
-    /// 归一化位置容差（开发集冻结值）。
+    /// 旧模板参数；v4 标量图使用 1.5 patch 的邻域距离归一化。
     double fine_position_tolerance{0.25};
 
     /// 最终框 NMS 的 IoU 阈值。
@@ -384,6 +393,10 @@ struct DinoSearchResponse
     std::vector<DinoCoarseCandidate> region_candidates{};
     std::vector<DinoCoarseCandidate> local_candidates{};
     std::vector<DinoCoarseCandidate> coarse_candidates{};
+    std::vector<DinoCoarseCandidate> localized_candidates{};
+    std::vector<DinoCoarseCandidate> verification_candidates{};
+    std::string score_kind{"localization"};
+    size_t verified_candidates{0};
     DinoSearchTimings             timings{};
     DinoSearchDiagnostics         diagnostics{};
     std::string                   message{};
@@ -434,6 +447,9 @@ INFERRT_FEATURES_API DinoRegionSearchConfig dinoConfigFromYaml(const std::string
 
 /** @brief Parse YAML search request text. */
 INFERRT_FEATURES_API DinoSearchRequest dinoSearchRequestFromYaml(const std::string &text);
+
+/** @brief Parse a YAML sequence of requests for a persistent-process batch. */
+INFERRT_FEATURES_API std::vector<DinoSearchRequest> dinoSearchRequestsFromYaml(const std::string &text);
 
 /** @brief Serialize search response as YAML. */
 INFERRT_FEATURES_API std::string dinoSearchResponseToYaml(const DinoSearchResponse &response);
