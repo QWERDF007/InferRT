@@ -84,13 +84,15 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
                                    const DinoSearchProgressCallback &progress_callback, const DinoDeadline &deadline,
                                    const DinoOperationControl &control)
 {
+    reader.validateContract(config);
+
     DinoSearchResponse detail;
     auto             backbone_holder = dinoAcquireBackbone(config);
     DinoBackbone    &backbone        = *backbone_holder;
-    DinoViewPlanner  planner(backbone.patchSize(), backbone.encoderEdge(), config.view_overlap,
-                            config.gallery_tile_edges, config.query_roi_target_lengths);
+    DinoViewPlanner  planner(backbone.patchSize(), backbone.encoderEdge(), config.gallery_views.view_overlap,
+                            config.gallery_views.gallery_tile_edges, config.query_features.query_roi_target_lengths);
 
-    if (reader.descriptorDim() != static_cast<size_t>(config.coarse_dimension))
+    if (reader.descriptorDim() != static_cast<size_t>(config.descriptors.coarse_dimension))
     {
         throw irt::Exception(irt::Status::NOT_READY,
                              "Index coarse dimension differs from profile; rebuild the index");
@@ -145,7 +147,7 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
             const auto &image = reader.images()[static_cast<size_t>(image_index)];
             if (!request.include_self && request.query_image_id >= 0 && image.image_id == request.query_image_id)
                 continue;
-            const auto crop = dinoExpandRect(candidate.source_bbox, config.fine_candidate_expand,
+            const auto crop = dinoExpandRect(candidate.source_bbox, config.fine_match.fine_candidate_expand,
                                               image.width, image.height);
             reported.push_back({image.image_id,
                 {static_cast<float>(crop.x0), static_cast<float>(crop.y0),
@@ -162,8 +164,8 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
     auto fine = dinoFineMatch(reader, query_image, query, fused.candidates, config, backbone, planner,
                               caches->images, caches->features, extractor_key, deadline,
                               request.image_resolver, progress_callback);
-    detail.score_kind = config.fine_verify_k > 0 ? "tight_global_and_grid" : "localization";
-    detail.verified_candidates = config.fine_verify_k > 0 ? fine.results.size() : 0;
+    detail.score_kind = config.fine_match.fine_verify_k > 0 ? "tight_global_and_grid" : "localization";
+    detail.verified_candidates = config.fine_match.fine_verify_k > 0 ? fine.results.size() : 0;
     const auto report_boxes = [](const std::vector<DinoMatchResult> &source, std::vector<DinoCoarseCandidate> &target) {
         for (const auto &item : source) target.push_back({item.image_id,
             {static_cast<float>(item.bbox.x0), static_cast<float>(item.bbox.y0), static_cast<float>(item.bbox.x1), static_cast<float>(item.bbox.y1)}});
@@ -187,18 +189,18 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
         filtered.push_back(match);
     }
 
-    dinoNmsWithinImages(filtered, config.fine_nms_iou);
+    dinoNmsWithinImages(filtered, config.fine_match.fine_nms_iou);
 
     // 阈值只作用于最终结果集合，不改变粗选覆盖。
-    if (config.enable_decision_threshold)
+    if (config.decision.enable_decision_threshold)
     {
         filtered.erase(std::remove_if(filtered.begin(), filtered.end(),
                                       [&](const DinoMatchResult &match)
-                                      { return match.score < config.decision_threshold; }),
+                                      { return match.score < config.decision.decision_threshold; }),
                        filtered.end());
     }
 
-    const size_t top_k = request.top_k > 0U ? std::min(request.top_k, config.final_k) : config.final_k;
+    const size_t top_k = request.top_k > 0U ? request.top_k : config.coarse_scan.final_k;
     if (filtered.size() > top_k)
     {
         filtered.resize(top_k);
@@ -261,7 +263,7 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
     else
     {
         detail.status = DinoSearchStatus::Completed;
-        if (config.enable_decision_threshold)
+        if (config.decision.enable_decision_threshold)
         {
             detail.decision
                 = filtered.empty() ? DinoSearchDecision::NoMatch : DinoSearchDecision::Matches;
@@ -349,20 +351,21 @@ DinoBuildReport dinoBuildItems(const std::vector<DinoImageItem> &items, const Di
     reportProgress(progress_callback, DinoBuildStage::LoadingModel, 0, 0, 0, 0, 0, "loading frozen backbone");
     auto             backbone_holder = dinoAcquireBackbone(config);
     DinoBackbone    &backbone        = *backbone_holder;
-    DinoViewPlanner  planner(backbone.patchSize(), backbone.encoderEdge(), config.view_overlap,
-                            config.gallery_tile_edges, config.query_roi_target_lengths);
+    DinoViewPlanner  planner(backbone.patchSize(), backbone.encoderEdge(), config.gallery_views.view_overlap,
+                            config.gallery_views.gallery_tile_edges, config.query_features.query_roi_target_lengths);
     DinoDescriptorBuildConfig descriptor_config;
-    descriptor_config.coarse_dimension = config.coarse_dimension;
-    descriptor_config.local_representatives = config.local_representatives;
-    descriptor_config.window.ratios = config.region_window_ratios;
-    descriptor_config.window.stride_ratio = config.region_window_stride_ratio;
-    descriptor_config.window.min_valid_fraction = config.region_min_valid_fraction;
-    descriptor_config.merge_enabled = config.merge_enabled;
-    descriptor_config.merge_epsilon = config.merge_epsilon;
-    descriptor_config.max_leaf_side_patches = config.max_leaf_side_patches;
+    descriptor_config.coarse_dimension = config.descriptors.coarse_dimension;
+    descriptor_config.local_representatives = config.descriptors.local_representatives;
+    descriptor_config.window.ratios = config.descriptors.region_window_ratios;
+    descriptor_config.window.stride_ratio = config.descriptors.region_window_stride_ratio;
+    descriptor_config.window.min_valid_fraction = config.descriptors.region_min_valid_fraction;
+    descriptor_config.merge_enabled = config.descriptors.merge_enabled;
+    descriptor_config.merge_epsilon = config.descriptors.merge_epsilon;
+    descriptor_config.max_leaf_side_patches = config.descriptors.max_leaf_side_patches;
 
     const auto root = fs::absolute(index_root).lexically_normal();
-    DinoIndexWriter writer(root, static_cast<size_t>(config.coarse_dimension), config.quantize_int8);
+    const auto contract = DinoIndexContract::fromConfig(config);
+    DinoIndexWriter writer(root, contract);
     size_t processed = 0;
     for (size_t index = 0; index < items.size(); ++index)
     {
@@ -520,7 +523,7 @@ DinoSearchResponse dinoSearchIndex(const fs::path &index_root, const DinoSearchR
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Request deadline must be zero or positive");
     }
-    const int64_t     query_deadline_ms = request.deadline_ms > 0 ? request.deadline_ms : config.query_deadline_ms;
+    const int64_t     query_deadline_ms = request.deadline_ms > 0 ? request.deadline_ms : config.runtime.query_deadline_ms;
     const DinoDeadline deadline(query_deadline_ms);
     const auto        wall_started = dinoNowMs();
     std::unique_lock lock(model_mutex, std::defer_lock);
@@ -578,6 +581,8 @@ DinoSearchResponse dinoSearchIndex(const fs::path &index_root, const DinoSearchR
         active_index_path = path;
     }
     const auto &reader = *active_reader;
+    reader.validateContract(config);
+
     if (deadline.expired())
     {
         return incompleteResponse("Query deadline expired while loading the index; no candidates were processed.");

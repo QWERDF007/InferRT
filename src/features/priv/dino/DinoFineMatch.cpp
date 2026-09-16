@@ -93,15 +93,15 @@ DinoFineMatchOutcome dinoFineMatch(const DinoIndexReader& reader, const DinoCano
         if (!item.evidence.empty()) fine_queries.push_back(std::move(item));
     }
     retrieval::FineOptions options;
-    options.max_sizes = config.fine_template_max_sizes;
-    options.scale_step = config.fine_template_scale_step;
-    options.peaks = config.fine_peaks_per_candidate;
-    options.refinement_rounds = config.fine_refinement_rounds;
-    options.nms = config.fine_nms_iou;
-    options.match_cosine = static_cast<float>(config.fine_match_cosine_threshold);
-    options.appearance_weight = static_cast<float>(config.score_weight_template);
-    options.coverage_weight = static_cast<float>(config.score_weight_coverage);
-    options.consistency_weight = static_cast<float>(config.score_weight_consistency);
+    options.max_sizes = config.fine_match.fine_template_max_sizes;
+    options.scale_step = config.fine_match.fine_template_scale_step;
+    options.peaks = config.fine_match.fine_peaks_per_candidate;
+    options.refinement_rounds = config.fine_match.fine_refinement_rounds;
+    options.nms = config.fine_match.fine_nms_iou;
+    options.match_cosine = static_cast<float>(config.fine_match.fine_match_cosine_threshold);
+    options.appearance_weight = static_cast<float>(config.fine_match.score_weight_template);
+    options.coverage_weight = static_cast<float>(config.fine_match.score_weight_coverage);
+    options.consistency_weight = static_cast<float>(config.fine_match.score_weight_consistency);
     // Continuous sub-patch support is deliberate. The old integer support-size gate is obsolete.
     options.min_short = .75;
     std::vector<std::vector<const DinoCandidate*>> groups(reader.images().size());
@@ -140,7 +140,7 @@ DinoFineMatchOutcome dinoFineMatch(const DinoIndexReader& reader, const DinoCano
             std::vector<size_t> misses;
             std::vector<std::string> keys(count);
             for (size_t i = 0; i < count; ++i) {
-                auto crop = dinoExpandRect(group[begin + i]->source_bbox, config.fine_candidate_expand, image->record.width, image->record.height);
+                auto crop = dinoExpandRect(group[begin + i]->source_bbox, config.fine_match.fine_candidate_expand, image->record.width, image->record.height);
                 if (crop.empty()) {outcome.incomplete = true;continue;}
                 keys[i] = dinoFeatureCacheKey(std::to_string(record.image_id) + "|" + std::to_string(record.file_size) + "|" + std::to_string(record.mtime_ns), extractor_signature, crop);
                 grids[i] = feature_cache.find(keys[i]);
@@ -213,10 +213,10 @@ DinoFineMatchOutcome dinoFineMatch(const DinoIndexReader& reader, const DinoCano
     if (outcome.completed_candidates < outcome.total_candidates) outcome.incomplete = true;
     std::stable_sort(outcome.results.begin(), outcome.results.end(), [](const auto& a, const auto& b) {return a.score > b.score;});
     outcome.localized_results = outcome.results;
-    if (config.fine_verify_k == 0) return outcome;
+    if (config.fine_match.fine_verify_k == 0) return outcome;
     // Beam limits are visible acceptance metrics: localization and verification have different scores.
     dinoNmsWithinImages(outcome.results, .85);
-    if (outcome.results.size() > config.fine_verify_k) outcome.results.resize(config.fine_verify_k);
+    if (outcome.results.size() > config.fine_match.fine_verify_k) outcome.results.resize(config.fine_match.fine_verify_k);
     outcome.verification_input = outcome.results;
     auto pending = std::move(outcome.results);outcome.results.clear();
     if (pending.empty()) return outcome;

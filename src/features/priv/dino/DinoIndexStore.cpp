@@ -150,14 +150,223 @@ fs::path resolveIndexRoot(const fs::path &index_root)
     return fs::absolute(index_root).lexically_normal();
 }
 
-
 } // namespace
 
+DinoIndexContract DinoIndexContract::fromConfig(const DinoRegionSearchConfig &config)
+{
+    DinoIndexContract contract;
+    contract.schema_version = "1.0";
+    contract.feature_version = "v4_hadamard_sparse_fine";
+    contract.model_name = config.model.model_name;
+    contract.weights_id = config.model.weights_id;
+    const bool is_dinov3 = config.model.model_name.find("dinov3") != std::string::npos;
+    contract.patch_size = is_dinov3 ? 16 : 14;
+    contract.token_dimension = 384;
+    contract.encoder_edge = config.resolvedEncoderEdge(contract.patch_size);
+    contract.gallery_tile_edges = config.gallery_views.gallery_tile_edges;
+    contract.view_overlap = config.gallery_views.view_overlap;
+    contract.region_window_ratios = config.descriptors.region_window_ratios;
+    contract.region_window_stride_ratio = config.descriptors.region_window_stride_ratio;
+    contract.region_min_valid_fraction = config.descriptors.region_min_valid_fraction;
+    contract.coarse_dimension = config.descriptors.coarse_dimension;
+    contract.local_representatives = config.descriptors.local_representatives;
+    contract.merge_enabled = config.descriptors.merge_enabled;
+    contract.merge_epsilon = config.descriptors.merge_epsilon;
+    contract.max_leaf_side_patches = config.descriptors.max_leaf_side_patches;
+    contract.quantize_int8 = config.descriptors.quantize_int8;
+    contract.preprocess_description = "bgr8->rgb32f;scale=0.00392157;mean=0.485,0.456,0.406;std=0.229,0.224,0.225;resize=linear;letterbox=topleft;pad=mean";
+    return contract;
+}
 
-DinoIndexWriter::DinoIndexWriter(const fs::path &index_root, const size_t descriptor_dim, const bool quantize)
+YAML::Node DinoIndexContract::toYamlNode() const
+{
+    YAML::Node node;
+    node["schema_version"] = schema_version;
+    node["feature_version"] = feature_version;
+    node["model_name"] = model_name;
+    node["weights_id"] = weights_id;
+    node["encoder_edge"] = encoder_edge;
+    node["patch_size"] = patch_size;
+    node["token_dimension"] = token_dimension;
+    node["gallery_tile_edges"] = gallery_tile_edges;
+    node["view_overlap"] = view_overlap;
+    node["region_window_ratios"] = region_window_ratios;
+    node["region_window_stride_ratio"] = region_window_stride_ratio;
+    node["region_min_valid_fraction"] = region_min_valid_fraction;
+    node["coarse_dimension"] = coarse_dimension;
+    node["local_representatives"] = local_representatives;
+    node["merge_enabled"] = merge_enabled;
+    node["merge_epsilon"] = merge_epsilon;
+    node["max_leaf_side_patches"] = max_leaf_side_patches;
+    node["quantize_int8"] = quantize_int8;
+    node["preprocess_description"] = preprocess_description;
+    return node;
+}
+
+DinoIndexContract DinoIndexContract::fromYamlNode(const YAML::Node &node)
+{
+    if (!node || !node.IsMap())
+    {
+        throw irt::Exception(irt::Status::NOT_READY, "Index manifest node is missing or not a map");
+    }
+    DinoIndexContract c;
+    if (node["schema_version"]) c.schema_version = node["schema_version"].as<std::string>();
+    if (node["feature_version"]) c.feature_version = node["feature_version"].as<std::string>();
+    if (node["model_name"]) c.model_name = node["model_name"].as<std::string>();
+    if (node["weights_id"]) c.weights_id = node["weights_id"].as<std::string>();
+    if (node["encoder_edge"]) c.encoder_edge = node["encoder_edge"].as<int>();
+    if (node["patch_size"]) c.patch_size = node["patch_size"].as<int>();
+    if (node["token_dimension"]) c.token_dimension = node["token_dimension"].as<int>();
+    if (node["gallery_tile_edges"]) c.gallery_tile_edges = node["gallery_tile_edges"].as<std::vector<int>>();
+    if (node["view_overlap"]) c.view_overlap = node["view_overlap"].as<double>();
+    if (node["region_window_ratios"]) c.region_window_ratios = node["region_window_ratios"].as<std::vector<double>>();
+    if (node["region_window_stride_ratio"]) c.region_window_stride_ratio = node["region_window_stride_ratio"].as<double>();
+    if (node["region_min_valid_fraction"]) c.region_min_valid_fraction = node["region_min_valid_fraction"].as<double>();
+    if (node["coarse_dimension"]) c.coarse_dimension = node["coarse_dimension"].as<int>();
+    if (node["local_representatives"]) c.local_representatives = node["local_representatives"].as<int>();
+    if (node["merge_enabled"]) c.merge_enabled = node["merge_enabled"].as<bool>();
+    if (node["merge_epsilon"]) c.merge_epsilon = node["merge_epsilon"].as<double>();
+    if (node["max_leaf_side_patches"]) c.max_leaf_side_patches = node["max_leaf_side_patches"].as<int>();
+    if (node["quantize_int8"]) c.quantize_int8 = node["quantize_int8"].as<bool>();
+    if (node["preprocess_description"]) c.preprocess_description = node["preprocess_description"].as<std::string>();
+    return c;
+}
+
+std::string DinoIndexContract::checkCompatibility(const DinoRegionSearchConfig &config) const
+{
+    if (schema_version != "1.0")
+    {
+        return "Index schema version mismatch: index has '" + schema_version + "', request has '1.0'; rebuild the index / 请重建索引.";
+    }
+    if (feature_version != "v4_hadamard_sparse_fine")
+    {
+        return "Index feature version mismatch: index has '" + feature_version + "', request has 'v4_hadamard_sparse_fine'; rebuild the index / 请重建索引.";
+    }
+    if (model_name != config.model.model_name)
+    {
+        return "Index contract mismatch for field 'model_name': index has '" + model_name + "', request has '" + config.model.model_name + "'; rebuild the index / 请重建索引.";
+    }
+    if (weights_id != config.model.weights_id)
+    {
+        return "Index contract mismatch for field 'weights_id': index has '" + weights_id + "', request has '" + config.model.weights_id + "'; rebuild the index / 请重建索引.";
+    }
+    const bool is_dinov3 = config.model.model_name.find("dinov3") != std::string::npos;
+    const int req_patch_size = is_dinov3 ? 16 : 14;
+    const int req_resolved_edge = config.resolvedEncoderEdge(req_patch_size);
+    if (encoder_edge != req_resolved_edge)
+    {
+        return "Index contract mismatch for field 'encoder_edge': index has " + std::to_string(encoder_edge) + ", request has " + std::to_string(req_resolved_edge) + "; rebuild the index / 请重建索引.";
+    }
+    if (gallery_tile_edges != config.gallery_views.gallery_tile_edges)
+    {
+        return "Index contract mismatch for field 'gallery_tile_edges'; rebuild the index / 请重建索引.";
+    }
+    if (std::abs(view_overlap - config.gallery_views.view_overlap) > 1e-6)
+    {
+        return "Index contract mismatch for field 'view_overlap': index has " + std::to_string(view_overlap) + ", request has " + std::to_string(config.gallery_views.view_overlap) + "; rebuild the index / 请重建索引.";
+    }
+    if (region_window_ratios.size() != config.descriptors.region_window_ratios.size())
+    {
+        return "Index contract mismatch for field 'region_window_ratios'; rebuild the index / 请重建索引.";
+    }
+    for (size_t i = 0; i < region_window_ratios.size(); ++i)
+    {
+        if (std::abs(region_window_ratios[i] - config.descriptors.region_window_ratios[i]) > 1e-6)
+        {
+            return "Index contract mismatch for field 'region_window_ratios'; rebuild the index / 请重建索引.";
+        }
+    }
+    if (std::abs(region_window_stride_ratio - config.descriptors.region_window_stride_ratio) > 1e-6)
+    {
+        return "Index contract mismatch for field 'region_window_stride_ratio': index has " + std::to_string(region_window_stride_ratio) + ", request has " + std::to_string(config.descriptors.region_window_stride_ratio) + "; rebuild the index / 请重建索引.";
+    }
+    if (std::abs(region_min_valid_fraction - config.descriptors.region_min_valid_fraction) > 1e-6)
+    {
+        return "Index contract mismatch for field 'region_min_valid_fraction': index has " + std::to_string(region_min_valid_fraction) + ", request has " + std::to_string(config.descriptors.region_min_valid_fraction) + "; rebuild the index / 请重建索引.";
+    }
+    if (coarse_dimension != config.descriptors.coarse_dimension)
+    {
+        return "Index contract mismatch for field 'coarse_dimension': index has " + std::to_string(coarse_dimension) + ", request has " + std::to_string(config.descriptors.coarse_dimension) + "; rebuild the index / 请重建索引.";
+    }
+    if (local_representatives != config.descriptors.local_representatives)
+    {
+        return "Index contract mismatch for field 'local_representatives': index has " + std::to_string(local_representatives) + ", request has " + std::to_string(config.descriptors.local_representatives) + "; rebuild the index / 请重建索引.";
+    }
+    if (merge_enabled != config.descriptors.merge_enabled)
+    {
+        return "Index contract mismatch for field 'merge_enabled'; rebuild the index / 请重建索引.";
+    }
+    if (std::abs(merge_epsilon - config.descriptors.merge_epsilon) > 1e-6)
+    {
+        return "Index contract mismatch for field 'merge_epsilon'; rebuild the index / 请重建索引.";
+    }
+    if (max_leaf_side_patches != config.descriptors.max_leaf_side_patches)
+    {
+        return "Index contract mismatch for field 'max_leaf_side_patches': index has " + std::to_string(max_leaf_side_patches) + ", request has " + std::to_string(config.descriptors.max_leaf_side_patches) + "; rebuild the index / 请重建索引.";
+    }
+    if (quantize_int8 != config.descriptors.quantize_int8)
+    {
+        return "Index contract mismatch for field 'quantize_int8'; rebuild the index / 请重建索引.";
+    }
+    return {};
+}
+
+bool dinoIndexNeedsRebuild(const fs::path &index_root, const DinoRegionSearchConfig &config)
+{
+    config.validate();
+    const auto root = resolveIndexRoot(index_root);
+    const auto index_file = root / kIndexFile;
+    if (!fs::exists(index_file))
+    {
+        return true;
+    }
+    try
+    {
+        const auto text = dinoReadTextFile(index_file);
+        const auto node = YAML::Load(text);
+        if (!node || !node.IsMap() || !node["manifest"])
+        {
+            return true;
+        }
+        const auto contract = DinoIndexContract::fromYamlNode(node["manifest"]);
+        const auto mismatch = contract.checkCompatibility(config);
+        if (!mismatch.empty())
+        {
+            return true;
+        }
+        const auto require_file = [&](const char *name)
+        {
+            return fs::exists(root / name);
+        };
+        if (!require_file(kViewsFile) || !require_file(kOffsetsFile) || !require_file(kRegionMeta)
+            || !require_file(kLocalMeta) || !require_file(kRegionScales) || !require_file(kLocalScales))
+        {
+            return true;
+        }
+        const bool quantized = contract.quantize_int8;
+        if (!require_file(quantized ? kRegionVectors : "region_vectors.f32")
+            || !require_file(quantized ? kLocalVectors : "local_vectors.f32"))
+        {
+            return true;
+        }
+        return false;
+    }
+    catch (const irt::Exception &)
+    {
+        throw;
+    }
+    catch (const std::exception &e)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to read index at %s: %s",
+                             root.string().c_str(), e.what());
+    }
+}
+
+DinoIndexWriter::DinoIndexWriter(const fs::path &index_root, const DinoIndexContract &contract)
     : index_root_(resolveIndexRoot(index_root))
-    , descriptor_dim_(descriptor_dim)
-    , quantize_(quantize)
+    , contract_(contract)
+    , descriptor_dim_(static_cast<size_t>(contract.coarse_dimension))
+    , quantize_(contract.quantize_int8)
 {
     if (descriptor_dim_ == 0U)
     {
@@ -462,6 +671,7 @@ DinoBuildReport DinoIndexWriter::finish()
     const char *local_vector_name  = quantize_ ? kLocalVectors : "local_vectors.f32";
 
     YAML::Node metadata;
+    metadata["manifest"] = contract_.toYamlNode();
     metadata["dimension"] = descriptor_dim_;
     metadata["quantized"] = quantize_;
     YAML::Node images(YAML::NodeType::Sequence);
@@ -521,8 +731,15 @@ DinoIndexReader::DinoIndexReader(const fs::path &index_root)
                              (index_root_ / kIndexFile).string().c_str());
     }
     const auto metadata = YAML::Load(dinoReadTextFile(index_root_ / kIndexFile));
-    descriptor_dim_ = metadata["dimension"].as<size_t>();
-    quantized_ = metadata["quantized"].as<bool>();
+    if (!metadata["manifest"])
+    {
+        throw irt::Exception(irt::Status::NOT_READY,
+                             "DINO index at '%s' is missing manifest contract; rebuild the index / 请重建索引",
+                             index_root_.string().c_str());
+    }
+    contract_ = DinoIndexContract::fromYamlNode(metadata["manifest"]);
+    descriptor_dim_ = metadata["dimension"] ? metadata["dimension"].as<size_t>() : static_cast<size_t>(contract_.coarse_dimension);
+    quantized_ = metadata["quantized"] ? metadata["quantized"].as<bool>() : contract_.quantize_int8;
     const auto require_file = [&](const char *name)
     {
         if (!fs::exists(index_root_ / name))
@@ -596,6 +813,16 @@ DinoIndexReader::DinoIndexReader(const fs::path &index_root)
                              quantized_ ? kLocalVectors : "local_vectors.f32"})
     {
         index_bytes_ += dinoFileSize(index_root_ / file);
+    }
+}
+
+void DinoIndexReader::validateContract(const DinoRegionSearchConfig &config) const
+{
+    config.validate();
+    const auto mismatch = contract_.checkCompatibility(config);
+    if (!mismatch.empty())
+    {
+        throw irt::Exception(irt::Status::NOT_READY, "%s", mismatch.c_str());
     }
 }
 

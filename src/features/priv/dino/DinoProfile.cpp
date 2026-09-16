@@ -44,249 +44,244 @@ void requireRange(const double value, const double low, const double high, const
 
 void dinoValidateConfig(const DinoRegionSearchConfig &config)
 {
-    if (config.profile_id.empty())
+    if (config.preset_id.empty())
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile id must not be empty");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Preset id must not be empty");
     }
-    if (config.model_name.empty())
+    if (config.model.model_name.empty())
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile model name must not be empty");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Model name must not be empty");
     }
-    if (config.weights_file.empty())
+    if (config.model.weights_id.empty())
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile requires a backbone weights file");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Model weights_id must not be empty");
     }
-    config.model_runtime.validate();
+    config.runtime.model_runtime.validate();
 
-    if (config.encoder_edge != 0 && config.encoder_edge < 32)
+    if (config.model.encoder_edge != 0 && config.model.encoder_edge < 32)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile encoder edge must be 0 or >= 32");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Model encoder edge must be 0 or >= 32");
     }
-    if (config.model_batch_size == 0U || config.model_batch_size > 64U)
+    if (config.runtime.model_batch_size == 0U || config.runtime.model_batch_size > 64U)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile model batch size must be within 1..64");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Runtime model batch size must be within 1..64");
     }
 
-    if (config.gallery_tile_edges.empty())
+    if (config.gallery_views.gallery_tile_edges.empty())
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile requires at least one gallery tile edge");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Gallery views requires at least one tile edge");
     }
-    for (const auto edge : config.gallery_tile_edges)
+    for (const auto edge : config.gallery_views.gallery_tile_edges)
     {
         if (edge < 32)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Gallery tile edge must be >= 32 pixels");
         }
     }
-    requireRange(config.view_overlap, 0.0, 0.75, "view_overlap");
+    requireRange(config.gallery_views.view_overlap, 0.0, 0.75, "view_overlap");
 
-    if (config.coarse_dimension < 1 || config.coarse_dimension > 384)
+    if (config.descriptors.coarse_dimension < 1 || config.descriptors.coarse_dimension > 384)
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Coarse dimension must be in 1..384");
-    if (config.local_representatives != 0 && config.local_representatives != 64 && config.local_representatives != 128)
+    if (config.descriptors.local_representatives != 0 && config.descriptors.local_representatives != 64
+        && config.descriptors.local_representatives != 128)
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Local representatives must be 0, 64 or 128");
-    if (config.fine_verify_k > 256U)
+    if (config.fine_match.fine_verify_k > 256U)
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Verification budget must be at most 256");
-    if (config.region_window_ratios.empty())
+    if (config.descriptors.region_window_ratios.empty())
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile requires at least one window ratio");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Descriptors requires at least one window ratio");
     }
-    for (const auto ratio : config.region_window_ratios)
+    for (const auto ratio : config.descriptors.region_window_ratios)
     {
         requireRange(ratio, 0.05, 1.0, "region_window_ratios");
     }
-    requireRange(config.region_window_stride_ratio, 0.05, 1.0, "region_window_stride_ratio");
-    requireRange(config.region_min_valid_fraction, 0.0, 1.0, "region_min_valid_fraction");
-    requireRange(config.merge_epsilon, 0.0, 1.0, "merge_epsilon");
-    if (config.validated_min_image_edge < 1 || config.validated_max_image_edge <= config.validated_min_image_edge)
+    requireRange(config.descriptors.region_window_stride_ratio, 0.05, 1.0, "region_window_stride_ratio");
+    requireRange(config.descriptors.region_min_valid_fraction, 0.0, 1.0, "region_min_valid_fraction");
+    requireRange(config.descriptors.merge_epsilon, 0.0, 1.0, "merge_epsilon");
+    if (config.descriptors.max_leaf_side_patches < 1)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile validated image edge range is invalid");
-    }
-    requirePositive(config.validated_min_target_short_px, "validated_min_target_short_px");
-    requirePositive(config.validated_max_target_aspect, "validated_max_target_aspect");
-    requireRange(config.coarse_dedup_iou, 0.0, 1.0, "coarse_dedup_iou");
-    requireRange(config.coarse_dedup_area_ratio, 1.0, 64.0, "coarse_dedup_area_ratio");
-    requireRange(config.fine_template_scale_step, 1.01, 4.0, "fine_template_scale_step");
-    if (config.fine_refinement_rounds < 0 || config.fine_refinement_rounds > 8)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile refinement rounds must be within 0..8");
-    }
-    if (config.max_leaf_side_patches < 1)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile max leaf side must be >= 1 patch");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Descriptors max leaf side must be >= 1 patch");
     }
 
-    if (config.query_roi_target_lengths.size() > 3)
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "At most three query contexts are supported");
-    if (config.query_roi_target_lengths.empty())
+    if (config.diagnostics.validated_min_image_edge < 1
+        || config.diagnostics.validated_max_image_edge <= config.diagnostics.validated_min_image_edge)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile requires at least one ROI target length");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Diagnostics validated image edge range is invalid");
     }
-    for (const auto length : config.query_roi_target_lengths)
+    requirePositive(config.diagnostics.validated_min_target_short_px, "validated_min_target_short_px");
+    requirePositive(config.diagnostics.validated_max_target_aspect, "validated_max_target_aspect");
+
+    requireRange(config.coarse_scan.coarse_dedup_iou, 0.0, 1.0, "coarse_dedup_iou");
+    requireRange(config.coarse_scan.coarse_dedup_area_ratio, 1.0, 64.0, "coarse_dedup_area_ratio");
+    requireRange(config.fine_match.fine_template_scale_step, 1.01, 4.0, "fine_template_scale_step");
+    if (config.fine_match.fine_refinement_rounds < 0 || config.fine_match.fine_refinement_rounds > 8)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Fine refinement rounds must be within 0..8");
+    }
+
+    if (config.query_features.query_roi_target_lengths.size() > 3)
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "At most three query contexts are supported");
+    if (config.query_features.query_roi_target_lengths.empty())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Query features requires at least one ROI target length");
+    }
+    for (const auto length : config.query_features.query_roi_target_lengths)
     {
         requirePositive(length, "query_roi_target_lengths");
     }
-    if (config.query_local_cells < 1 || config.query_local_cells > 4)
+    if (config.query_features.query_local_cells < 1 || config.query_features.query_local_cells > 4)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile query local cells must be within 1..4");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Query local cells must be within 1..4");
     }
-    if (config.query_local_max_per_cell < 1 || config.query_local_max_per_cell > 2)
+    if (config.query_features.query_local_max_per_cell < 1 || config.query_features.query_local_max_per_cell > 2)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile query local max per cell must be within 1..2");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Query local max per cell must be within 1..2");
     }
-    if (config.query_min_local_evidence < 0)
+    if (config.query_features.query_min_local_evidence < 0)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile query min local evidence must be >= 0");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Query min local evidence must be >= 0");
     }
 
-    if (config.region_topk == 0U || config.local_view_topk == 0U || config.channel_candidate_limit == 0U
-        || config.coarse_k == 0U || config.final_k == 0U)
+    if (config.coarse_scan.region_topk == 0U || config.coarse_scan.channel_candidate_limit == 0U
+        || config.coarse_scan.coarse_k == 0U || config.coarse_scan.final_k == 0U)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile candidate quotas must be positive");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Coarse scan candidate quotas must be positive");
     }
-    if (config.coarse_k > config.channel_candidate_limit)
+    if (config.coarse_scan.coarse_k > config.coarse_scan.channel_candidate_limit)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "Profile coarse_K must not exceed the per-channel candidate limit");
+                             "Coarse scan coarse_k must not exceed channel_candidate_limit");
     }
-    if (config.final_k > config.coarse_k)
+    if (config.coarse_scan.final_k > config.coarse_scan.coarse_k)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile final_K must not exceed coarse_K");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Coarse scan final_k must not exceed coarse_k");
     }
-    if (config.region_scan_block == 0U)
+    if (config.runtime.region_scan_block == 0U)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile scan block must be positive");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Runtime scan block must be positive");
     }
 
-    requireRange(config.fine_candidate_expand, 1.0, 4.0, "fine_candidate_expand");
-    if (config.fine_template_min_short_patches < 1)
+    requireRange(config.fine_match.fine_candidate_expand, 1.0, 4.0, "fine_candidate_expand");
+    if (config.fine_match.fine_template_max_sizes < 1)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile template min short side must be >= 1 patch");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Fine template max sizes must be >= 1");
     }
-    if (config.fine_template_max_sizes < 1)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile template max sizes must be >= 1");
-    }
-    if (config.fine_peaks_per_candidate < 1 || config.fine_peaks_per_candidate > kDinoMaxPeaksPerCandidate)
+    if (config.fine_match.fine_peaks_per_candidate < 1
+        || config.fine_match.fine_peaks_per_candidate > kDinoMaxPeaksPerCandidate)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "Profile peaks per candidate must be within 1..%d", kDinoMaxPeaksPerCandidate);
+                             "Fine peaks per candidate must be within 1..%d", kDinoMaxPeaksPerCandidate);
     }
-    requireRange(config.fine_match_cosine_threshold, -1.0, 1.0, "fine_match_cosine_threshold");
-    requireRange(config.fine_position_tolerance, 0.0, 2.0, "fine_position_tolerance");
-    requireRange(config.fine_nms_iou, 0.0, 1.0, "fine_nms_iou");
+    requireRange(config.fine_match.fine_match_cosine_threshold, -1.0, 1.0, "fine_match_cosine_threshold");
+    requireRange(config.fine_match.fine_nms_iou, 0.0, 1.0, "fine_nms_iou");
 
-    const double weight_sum = config.score_weight_template + config.score_weight_coverage + config.score_weight_consistency;
+    const double weight_sum = config.fine_match.score_weight_template + config.fine_match.score_weight_coverage
+                            + config.fine_match.score_weight_consistency;
     if (std::abs(weight_sum - 1.0) > 1e-6)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                             "Profile score weights must sum to 1.0, got %g", weight_sum);
+                             "Fine match score weights must sum to 1.0, got %g", weight_sum);
     }
-    for (const auto weight : {config.score_weight_template, config.score_weight_coverage,
-                              config.score_weight_consistency})
+    for (const auto weight : {config.fine_match.score_weight_template, config.fine_match.score_weight_coverage,
+                              config.fine_match.score_weight_consistency})
     {
         requireRange(weight, 0.0, 1.0, "score weights");
     }
 
-    if (config.enable_decision_threshold)
+    if (config.decision.enable_decision_threshold)
     {
-        requireRange(config.decision_threshold, 0.0, 1.0, "decision_threshold");
+        requireRange(config.decision.decision_threshold, 0.0, 1.0, "decision_threshold");
     }
-    if (config.query_deadline_ms <= 0)
+    if (config.runtime.query_deadline_ms <= 0)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile query deadline must be positive");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Runtime query deadline must be positive");
     }
 }
 
 YAML::Node dinoConfigToYamlNode(const DinoRegionSearchConfig &config)
 {
     YAML::Node node;
-    node["profile_id"] = config.profile_id;
-    node["mode"] = config.consistency_mode == DinoConsistencyMode::Appearance ? "appearance" : "instance";
+    node["preset_id"] = config.preset_id;
 
     YAML::Node model;
-    model["name"] = config.model_name;
-    model["weights_path"] = dinoPathToUtf8(config.weights_file);
-    model["encoder_edge"] = config.encoder_edge;
-    model["precision"] = config.model_precision == irt::model::ModelPrecision::FP16 ? "fp16" : "fp32";
-    model["batch_size"] = config.model_batch_size;
-    model["runtime"] = config.model_runtime.toString();
+    model["model_name"] = config.model.model_name;
+    model["weights_file"] = dinoPathToUtf8(config.model.weights_file);
+    model["weights_id"] = config.model.weights_id;
+    model["encoder_edge"] = config.model.encoder_edge;
     node["model"] = model;
 
-    YAML::Node input;
-    input["min_image_edge"] = config.validated_min_image_edge;
-    input["max_image_edge"] = config.validated_max_image_edge;
-    input["min_target_short_px"] = config.validated_min_target_short_px;
-    input["max_target_aspect"] = config.validated_max_target_aspect;
-    node["input"] = input;
+    YAML::Node gallery_views;
+    gallery_views["gallery_tile_edges"] = config.gallery_views.gallery_tile_edges;
+    gallery_views["view_overlap"] = config.gallery_views.view_overlap;
+    node["gallery_views"] = gallery_views;
 
-    YAML::Node views;
-    views["source_tile_edges"] = config.gallery_tile_edges;
-    views["overlap"] = config.view_overlap;
-    node["views"] = views;
+    YAML::Node descriptors;
+    descriptors["region_window_ratios"] = config.descriptors.region_window_ratios;
+    descriptors["region_window_stride_ratio"] = config.descriptors.region_window_stride_ratio;
+    descriptors["region_min_valid_fraction"] = config.descriptors.region_min_valid_fraction;
+    descriptors["coarse_dimension"] = config.descriptors.coarse_dimension;
+    descriptors["local_representatives"] = config.descriptors.local_representatives;
+    descriptors["merge_enabled"] = config.descriptors.merge_enabled;
+    descriptors["merge_epsilon"] = config.descriptors.merge_epsilon;
+    descriptors["max_leaf_side_patches"] = config.descriptors.max_leaf_side_patches;
+    descriptors["quantize_int8"] = config.descriptors.quantize_int8;
+    node["descriptors"] = descriptors;
 
-    YAML::Node query;
-    query["roi_long_edges"] = config.query_roi_target_lengths;
-    query["grid_bins"] = config.query_local_cells;
-    query["max_tokens_per_bin"] = config.query_local_max_per_cell;
-    query["min_local_evidence"] = config.query_min_local_evidence;
-    node["query"] = query;
+    YAML::Node query_features;
+    query_features["query_roi_target_lengths"] = config.query_features.query_roi_target_lengths;
+    query_features["query_local_cells"] = config.query_features.query_local_cells;
+    query_features["query_local_max_per_cell"] = config.query_features.query_local_max_per_cell;
+    query_features["query_min_local_evidence"] = config.query_features.query_min_local_evidence;
+    node["query_features"] = query_features;
 
-    YAML::Node regions;
-    regions["coarse_dimension"] = config.coarse_dimension;
-    regions["local_representatives"] = config.local_representatives;
-    regions["window_ratios"] = config.region_window_ratios;
-    regions["stride_ratio"] = config.region_window_stride_ratio;
-    regions["min_valid_fraction"] = config.region_min_valid_fraction;
-    node["regions"] = regions;
+    YAML::Node coarse_scan;
+    coarse_scan["region_topk"] = config.coarse_scan.region_topk;
+    coarse_scan["channel_candidate_limit"] = config.coarse_scan.channel_candidate_limit;
+    coarse_scan["coarse_k"] = config.coarse_scan.coarse_k;
+    coarse_scan["coarse_dedup_iou"] = config.coarse_scan.coarse_dedup_iou;
+    coarse_scan["coarse_dedup_area_ratio"] = config.coarse_scan.coarse_dedup_area_ratio;
+    coarse_scan["final_k"] = config.coarse_scan.final_k;
+    node["coarse_scan"] = coarse_scan;
 
-    YAML::Node merge;
-    merge["enabled"] = config.merge_enabled;
-    merge["epsilon"] = config.merge_epsilon;
-    merge["max_leaf_side_patches"] = config.max_leaf_side_patches;
-    node["merge"] = merge;
-
-    YAML::Node quantization;
-    quantization["format"] = config.quantize_int8 ? "int8" : "fp32";
-    node["quantization"] = quantization;
-
-    YAML::Node search;
-    search["block_descriptors"] = config.region_scan_block;
-    search["region_pool"] = config.region_topk;
-    search["local_view_pool"] = config.local_view_topk; // retained only for old profile compatibility
-    search["verify_k"] = config.fine_verify_k;
-    search["local_region_pool"] = config.channel_candidate_limit;
-    search["coarse_k"] = config.coarse_k;
-    search["coarse_dedup_iou"] = config.coarse_dedup_iou;
-    search["coarse_dedup_area_ratio"] = config.coarse_dedup_area_ratio;
-    node["search"] = search;
-
-    YAML::Node fine;
-    fine["candidate_expand"] = config.fine_candidate_expand;
-    fine["min_template_short_patches"] = config.fine_template_min_short_patches;
-    fine["scale_step"] = config.fine_template_scale_step;
-    fine["max_scales"] = config.fine_template_max_sizes;
-    fine["peaks_per_candidate"] = config.fine_peaks_per_candidate;
-    fine["refinement_rounds"] = config.fine_refinement_rounds;
-    fine["match_cosine_threshold"] = config.fine_match_cosine_threshold;
-    fine["normalized_position_tolerance"] = config.fine_position_tolerance;
-    fine["score_weights"] = std::vector<double>{config.score_weight_template, config.score_weight_coverage,
-                                               config.score_weight_consistency};
-    fine["nms_iou"] = config.fine_nms_iou;
-    fine["final_k"] = config.final_k;
-    node["fine"] = fine;
+    YAML::Node fine_match;
+    fine_match["fine_verify_k"] = config.fine_match.fine_verify_k;
+    fine_match["fine_candidate_expand"] = config.fine_match.fine_candidate_expand;
+    fine_match["fine_template_scale_step"] = config.fine_match.fine_template_scale_step;
+    fine_match["fine_template_max_sizes"] = config.fine_match.fine_template_max_sizes;
+    fine_match["fine_peaks_per_candidate"] = config.fine_match.fine_peaks_per_candidate;
+    fine_match["fine_refinement_rounds"] = config.fine_match.fine_refinement_rounds;
+    fine_match["fine_match_cosine_threshold"] = config.fine_match.fine_match_cosine_threshold;
+    fine_match["fine_nms_iou"] = config.fine_match.fine_nms_iou;
+    fine_match["consistency_mode"]
+        = config.fine_match.consistency_mode == DinoConsistencyMode::Appearance ? "appearance" : "instance";
+    fine_match["score_weight_template"] = config.fine_match.score_weight_template;
+    fine_match["score_weight_coverage"] = config.fine_match.score_weight_coverage;
+    fine_match["score_weight_consistency"] = config.fine_match.score_weight_consistency;
+    node["fine_match"] = fine_match;
 
     YAML::Node decision;
-    if (config.enable_decision_threshold)
-    {
-        decision["threshold"] = config.decision_threshold;
-    }
-    else
-    {
-        decision["threshold"] = YAML::Null;
-    }
+    decision["enable_decision_threshold"] = config.decision.enable_decision_threshold;
+    decision["decision_threshold"] = config.decision.decision_threshold;
     node["decision"] = decision;
 
-    node["deadline_ms"] = config.query_deadline_ms;
+    YAML::Node runtime;
+    runtime["model_runtime"] = config.runtime.model_runtime.toString();
+    runtime["model_precision"]
+        = config.runtime.model_precision == irt::model::ModelPrecision::FP16 ? "fp16" : "fp32";
+    runtime["model_batch_size"] = config.runtime.model_batch_size;
+    runtime["query_deadline_ms"] = config.runtime.query_deadline_ms;
+    runtime["region_scan_block"] = config.runtime.region_scan_block;
+    runtime["scan_backend"] = config.runtime.scan_backend == DinoScanBackend::Cpu    ? "cpu"
+                            : config.runtime.scan_backend == DinoScanBackend::Cuda   ? "cuda"
+                                                                                     : "auto";
+    node["runtime"] = runtime;
+
+    YAML::Node diagnostics;
+    diagnostics["validated_min_image_edge"] = config.diagnostics.validated_min_image_edge;
+    diagnostics["validated_max_image_edge"] = config.diagnostics.validated_max_image_edge;
+    diagnostics["validated_min_target_short_px"] = config.diagnostics.validated_min_target_short_px;
+    diagnostics["validated_max_target_aspect"] = config.diagnostics.validated_max_target_aspect;
+    node["diagnostics"] = diagnostics;
 
     return node;
 }
@@ -295,25 +290,31 @@ DinoRegionSearchConfig dinoConfigFromYamlNode(const YAML::Node &node)
 {
     if (!node || !node.IsMap())
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile must be a YAML mapping");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Profile/Config must be a YAML mapping");
     }
 
     DinoRegionSearchConfig config;
 
-    if (node["profile_id"])
+    // Top-level / legacy identifiers
+    if (node["preset_id"])
     {
-        config.profile_id = node["profile_id"].as<std::string>();
+        config.preset_id = node["preset_id"].as<std::string>();
     }
+    else if (node["profile_id"])
+    {
+        config.preset_id = node["profile_id"].as<std::string>();
+    }
+
     if (node["mode"])
     {
         const auto mode = node["mode"].as<std::string>();
         if (mode == "appearance")
         {
-            config.consistency_mode = DinoConsistencyMode::Appearance;
+            config.fine_match.consistency_mode = DinoConsistencyMode::Appearance;
         }
         else if (mode == "instance")
         {
-            config.consistency_mode = DinoConsistencyMode::Instance;
+            config.fine_match.consistency_mode = DinoConsistencyMode::Instance;
         }
         else
         {
@@ -321,169 +322,267 @@ DinoRegionSearchConfig dinoConfigFromYamlNode(const YAML::Node &node)
                                  "Profile mode must be appearance or instance, got '%s'", mode.c_str());
         }
     }
+    if (node["deadline_ms"])
+    {
+        config.runtime.query_deadline_ms = node["deadline_ms"].as<int64_t>();
+    }
 
-
+    // model
     if (const auto model = node["model"])
     {
-        if (model["name"])
-        {
-            config.model_name = model["name"].as<std::string>();
-        }
-        if (model["weights_path"])
-        {
-            config.weights_file = dinoPathFromUtf8(model["weights_path"].as<std::string>());
-        }
-        if (model["encoder_edge"])
-        {
-            config.encoder_edge = model["encoder_edge"].as<int>();
-        }
+        if (model["model_name"]) config.model.model_name = model["model_name"].as<std::string>();
+        else if (model["name"])  config.model.model_name = model["name"].as<std::string>();
+
+        if (model["weights_file"])      config.model.weights_file = dinoPathFromUtf8(model["weights_file"].as<std::string>());
+        else if (model["weights_path"]) config.model.weights_file = dinoPathFromUtf8(model["weights_path"].as<std::string>());
+
+        if (model["weights_id"]) config.model.weights_id = model["weights_id"].as<std::string>();
+        if (model["encoder_edge"]) config.model.encoder_edge = model["encoder_edge"].as<int>();
+
+        // legacy model fields
         if (model["precision"])
         {
             const auto prec = model["precision"].as<std::string>();
-            if (prec == "fp16")
-            {
-                config.model_precision = irt::model::ModelPrecision::FP16;
-            }
-            else if (prec == "fp32")
-            {
-                config.model_precision = irt::model::ModelPrecision::FP32;
-            }
-            else
-            {
-                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                     "Profile model precision must be fp16 or fp32, got '%s'", prec.c_str());
-            }
+            if (prec == "fp16") config.runtime.model_precision = irt::model::ModelPrecision::FP16;
+            else if (prec == "fp32") config.runtime.model_precision = irt::model::ModelPrecision::FP32;
+            else throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                      "Model precision must be fp16 or fp32, got '%s'", prec.c_str());
         }
-        if (model["batch_size"])
-        {
-            config.model_batch_size = model["batch_size"].as<size_t>();
-        }
-        if (model["runtime"])
-        {
-            config.model_runtime = irt::model::ModelRuntime(model["runtime"].as<std::string>());
-        }
+        if (model["batch_size"]) config.runtime.model_batch_size = model["batch_size"].as<size_t>();
+        if (model["runtime"]) config.runtime.model_runtime = irt::model::ModelRuntime(model["runtime"].as<std::string>());
     }
 
-    if (const auto input = node["input"])
+    // gallery_views / legacy views
+    const auto views_node = node["gallery_views"] ? node["gallery_views"] : node["views"];
+    if (views_node)
     {
-        if (input["min_image_edge"]) config.validated_min_image_edge = input["min_image_edge"].as<int>();
-        if (input["max_image_edge"]) config.validated_max_image_edge = input["max_image_edge"].as<int>();
-        if (input["min_target_short_px"]) config.validated_min_target_short_px = input["min_target_short_px"].as<double>();
-        if (input["max_target_aspect"]) config.validated_max_target_aspect = input["max_target_aspect"].as<double>();
+        if (views_node["gallery_tile_edges"])
+            config.gallery_views.gallery_tile_edges = views_node["gallery_tile_edges"].as<std::vector<int>>();
+        else if (views_node["source_tile_edges"])
+            config.gallery_views.gallery_tile_edges = views_node["source_tile_edges"].as<std::vector<int>>();
+
+        if (views_node["view_overlap"])
+            config.gallery_views.view_overlap = views_node["view_overlap"].as<double>();
+        else if (views_node["overlap"])
+            config.gallery_views.view_overlap = views_node["overlap"].as<double>();
     }
 
-    if (const auto views = node["views"])
+    // descriptors / legacy regions, merge, quantization
+    if (const auto descriptors = node["descriptors"])
     {
-        if (views["source_tile_edges"])
-        {
-            config.gallery_tile_edges = views["source_tile_edges"].as<std::vector<int>>();
-        }
-        if (views["overlap"])
-        {
-            config.view_overlap = views["overlap"].as<double>();
-        }
+        if (descriptors["region_window_ratios"])
+            config.descriptors.region_window_ratios = descriptors["region_window_ratios"].as<std::vector<double>>();
+        if (descriptors["region_window_stride_ratio"])
+            config.descriptors.region_window_stride_ratio = descriptors["region_window_stride_ratio"].as<double>();
+        if (descriptors["region_min_valid_fraction"])
+            config.descriptors.region_min_valid_fraction = descriptors["region_min_valid_fraction"].as<double>();
+        if (descriptors["coarse_dimension"])
+            config.descriptors.coarse_dimension = descriptors["coarse_dimension"].as<int>();
+        if (descriptors["local_representatives"])
+            config.descriptors.local_representatives = descriptors["local_representatives"].as<int>();
+        if (descriptors["merge_enabled"])
+            config.descriptors.merge_enabled = descriptors["merge_enabled"].as<bool>();
+        if (descriptors["merge_epsilon"])
+            config.descriptors.merge_epsilon = descriptors["merge_epsilon"].as<double>();
+        if (descriptors["max_leaf_side_patches"])
+            config.descriptors.max_leaf_side_patches = descriptors["max_leaf_side_patches"].as<int>();
+        if (descriptors["quantize_int8"])
+            config.descriptors.quantize_int8 = descriptors["quantize_int8"].as<bool>();
     }
-
-    if (const auto query = node["query"])
-    {
-        if (query["roi_long_edges"])
-        {
-            config.query_roi_target_lengths = query["roi_long_edges"].as<std::vector<double>>();
-        }
-        if (query["grid_bins"]) config.query_local_cells = query["grid_bins"].as<int>();
-        if (query["max_tokens_per_bin"]) config.query_local_max_per_cell = query["max_tokens_per_bin"].as<int>();
-        if (query["min_local_evidence"]) config.query_min_local_evidence = query["min_local_evidence"].as<int>();
-    }
-
     if (const auto regions = node["regions"])
     {
-        if (regions["coarse_dimension"]) config.coarse_dimension = regions["coarse_dimension"].as<int>();
-        if (regions["local_representatives"]) config.local_representatives = regions["local_representatives"].as<int>();
+        if (regions["coarse_dimension"]) config.descriptors.coarse_dimension = regions["coarse_dimension"].as<int>();
+        if (regions["local_representatives"]) config.descriptors.local_representatives = regions["local_representatives"].as<int>();
         if (regions["window_ratios"])
-        {
-            config.region_window_ratios = regions["window_ratios"].as<std::vector<double>>();
-        }
-        if (regions["stride_ratio"]) config.region_window_stride_ratio = regions["stride_ratio"].as<double>();
-        if (regions["min_valid_fraction"]) config.region_min_valid_fraction = regions["min_valid_fraction"].as<double>();
+            config.descriptors.region_window_ratios = regions["window_ratios"].as<std::vector<double>>();
+        if (regions["stride_ratio"]) config.descriptors.region_window_stride_ratio = regions["stride_ratio"].as<double>();
+        if (regions["min_valid_fraction"]) config.descriptors.region_min_valid_fraction = regions["min_valid_fraction"].as<double>();
     }
-
     if (const auto merge = node["merge"])
     {
-        if (merge["enabled"]) config.merge_enabled = merge["enabled"].as<bool>();
-        if (merge["epsilon"]) config.merge_epsilon = merge["epsilon"].as<double>();
-        if (merge["max_leaf_side_patches"]) config.max_leaf_side_patches = merge["max_leaf_side_patches"].as<int>();
+        if (merge["enabled"]) config.descriptors.merge_enabled = merge["enabled"].as<bool>();
+        if (merge["epsilon"]) config.descriptors.merge_epsilon = merge["epsilon"].as<double>();
+        if (merge["max_leaf_side_patches"]) config.descriptors.max_leaf_side_patches = merge["max_leaf_side_patches"].as<int>();
     }
-
     if (const auto quant = node["quantization"])
     {
         if (quant["format"])
         {
             const auto fmt = quant["format"].as<std::string>();
-            if (fmt == "int8")
+            if (fmt == "int8") config.descriptors.quantize_int8 = true;
+            else if (fmt == "fp32") config.descriptors.quantize_int8 = false;
+            else throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                                      "Profile quantization format must be int8 or fp32, got '%s'", fmt.c_str());
+        }
+    }
+
+    // query_features / legacy query
+    const auto query_node = node["query_features"] ? node["query_features"] : node["query"];
+    if (query_node)
+    {
+        if (query_node["query_roi_target_lengths"])
+            config.query_features.query_roi_target_lengths = query_node["query_roi_target_lengths"].as<std::vector<double>>();
+        else if (query_node["roi_long_edges"])
+            config.query_features.query_roi_target_lengths = query_node["roi_long_edges"].as<std::vector<double>>();
+
+        if (query_node["query_local_cells"]) config.query_features.query_local_cells = query_node["query_local_cells"].as<int>();
+        else if (query_node["grid_bins"]) config.query_features.query_local_cells = query_node["grid_bins"].as<int>();
+
+        if (query_node["query_local_max_per_cell"]) config.query_features.query_local_max_per_cell = query_node["query_local_max_per_cell"].as<int>();
+        else if (query_node["max_tokens_per_bin"]) config.query_features.query_local_max_per_cell = query_node["max_tokens_per_bin"].as<int>();
+
+        if (query_node["query_min_local_evidence"]) config.query_features.query_min_local_evidence = query_node["query_min_local_evidence"].as<int>();
+        else if (query_node["min_local_evidence"]) config.query_features.query_min_local_evidence = query_node["min_local_evidence"].as<int>();
+    }
+
+    // coarse_scan / legacy search
+    const auto scan_node = node["coarse_scan"] ? node["coarse_scan"] : node["search"];
+    if (scan_node)
+    {
+        if (scan_node["region_topk"]) config.coarse_scan.region_topk = scan_node["region_topk"].as<size_t>();
+        else if (scan_node["region_pool"]) config.coarse_scan.region_topk = scan_node["region_pool"].as<size_t>();
+
+        if (scan_node["channel_candidate_limit"]) config.coarse_scan.channel_candidate_limit = scan_node["channel_candidate_limit"].as<size_t>();
+        else if (scan_node["local_region_pool"]) config.coarse_scan.channel_candidate_limit = scan_node["local_region_pool"].as<size_t>();
+
+        if (scan_node["coarse_k"]) config.coarse_scan.coarse_k = scan_node["coarse_k"].as<size_t>();
+        if (scan_node["coarse_dedup_iou"]) config.coarse_scan.coarse_dedup_iou = scan_node["coarse_dedup_iou"].as<double>();
+        if (scan_node["coarse_dedup_area_ratio"]) config.coarse_scan.coarse_dedup_area_ratio = scan_node["coarse_dedup_area_ratio"].as<double>();
+        if (scan_node["final_k"]) config.coarse_scan.final_k = scan_node["final_k"].as<size_t>();
+
+        // legacy search runtime fields
+        if (scan_node["block_descriptors"]) config.runtime.region_scan_block = scan_node["block_descriptors"].as<size_t>();
+        if (scan_node["verify_k"]) config.fine_match.fine_verify_k = scan_node["verify_k"].as<size_t>();
+    }
+
+    // fine_match / legacy fine
+    const auto fine_node = node["fine_match"] ? node["fine_match"] : node["fine"];
+    if (fine_node)
+    {
+        if (fine_node["fine_verify_k"]) config.fine_match.fine_verify_k = fine_node["fine_verify_k"].as<size_t>();
+        else if (fine_node["verify_k"]) config.fine_match.fine_verify_k = fine_node["verify_k"].as<size_t>();
+
+        if (fine_node["fine_candidate_expand"]) config.fine_match.fine_candidate_expand = fine_node["fine_candidate_expand"].as<double>();
+        else if (fine_node["candidate_expand"]) config.fine_match.fine_candidate_expand = fine_node["candidate_expand"].as<double>();
+
+        if (fine_node["fine_template_scale_step"]) config.fine_match.fine_template_scale_step = fine_node["fine_template_scale_step"].as<double>();
+        else if (fine_node["scale_step"]) config.fine_match.fine_template_scale_step = fine_node["scale_step"].as<double>();
+
+        if (fine_node["fine_template_max_sizes"]) config.fine_match.fine_template_max_sizes = fine_node["fine_template_max_sizes"].as<int>();
+        else if (fine_node["max_scales"]) config.fine_match.fine_template_max_sizes = fine_node["max_scales"].as<int>();
+
+        if (fine_node["fine_peaks_per_candidate"]) config.fine_match.fine_peaks_per_candidate = fine_node["fine_peaks_per_candidate"].as<int>();
+        else if (fine_node["peaks_per_candidate"]) config.fine_match.fine_peaks_per_candidate = fine_node["peaks_per_candidate"].as<int>();
+
+        if (fine_node["fine_refinement_rounds"]) config.fine_match.fine_refinement_rounds = fine_node["fine_refinement_rounds"].as<int>();
+        else if (fine_node["refinement_rounds"]) config.fine_match.fine_refinement_rounds = fine_node["refinement_rounds"].as<int>();
+
+        if (fine_node["fine_match_cosine_threshold"]) config.fine_match.fine_match_cosine_threshold = fine_node["fine_match_cosine_threshold"].as<double>();
+        else if (fine_node["match_cosine_threshold"]) config.fine_match.fine_match_cosine_threshold = fine_node["match_cosine_threshold"].as<double>();
+
+        if (fine_node["fine_nms_iou"]) config.fine_match.fine_nms_iou = fine_node["fine_nms_iou"].as<double>();
+        else if (fine_node["nms_iou"]) config.fine_match.fine_nms_iou = fine_node["nms_iou"].as<double>();
+
+        if (fine_node["final_k"]) config.coarse_scan.final_k = fine_node["final_k"].as<size_t>();
+
+        if (fine_node["consistency_mode"])
+        {
+            const auto mode = fine_node["consistency_mode"].as<std::string>();
+            if (mode == "appearance") config.fine_match.consistency_mode = DinoConsistencyMode::Appearance;
+            else if (mode == "instance") config.fine_match.consistency_mode = DinoConsistencyMode::Instance;
+            else throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Invalid consistency_mode '%s'", mode.c_str());
+        }
+
+        if (fine_node["score_weight_template"]) config.fine_match.score_weight_template = fine_node["score_weight_template"].as<double>();
+        if (fine_node["score_weight_coverage"]) config.fine_match.score_weight_coverage = fine_node["score_weight_coverage"].as<double>();
+        if (fine_node["score_weight_consistency"]) config.fine_match.score_weight_consistency = fine_node["score_weight_consistency"].as<double>();
+
+        if (fine_node["score_weights"] && fine_node["score_weights"].IsSequence() && fine_node["score_weights"].size() == 3U)
+        {
+            config.fine_match.score_weight_template = fine_node["score_weights"][0].as<double>();
+            config.fine_match.score_weight_coverage = fine_node["score_weights"][1].as<double>();
+            config.fine_match.score_weight_consistency = fine_node["score_weights"][2].as<double>();
+        }
+    }
+
+    // decision
+    if (const auto decision = node["decision"])
+    {
+        if (decision["enable_decision_threshold"])
+        {
+            config.decision.enable_decision_threshold = decision["enable_decision_threshold"].as<bool>();
+            if (decision["decision_threshold"]) config.decision.decision_threshold = decision["decision_threshold"].as<double>();
+        }
+        else if (decision["threshold"])
+        {
+            if (!decision["threshold"].IsNull())
             {
-                config.quantize_int8 = true;
-            }
-            else if (fmt == "fp32")
-            {
-                config.quantize_int8 = false;
+                config.decision.enable_decision_threshold = true;
+                config.decision.decision_threshold = decision["threshold"].as<double>();
             }
             else
             {
-                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                     "Profile quantization format must be int8 or fp32, got '%s'", fmt.c_str());
+                config.decision.enable_decision_threshold = false;
+                config.decision.decision_threshold = 0.0;
             }
         }
     }
 
-    if (const auto search = node["search"])
+    // runtime
+    if (const auto runtime = node["runtime"])
     {
-        if (search["block_descriptors"]) config.region_scan_block = search["block_descriptors"].as<size_t>();
-        if (search["region_pool"]) config.region_topk = search["region_pool"].as<size_t>();
-        if (search["verify_k"]) config.fine_verify_k = search["verify_k"].as<size_t>();
-        if (search["local_view_pool"]) config.local_view_topk = search["local_view_pool"].as<size_t>();
-        if (search["local_region_pool"]) config.channel_candidate_limit = search["local_region_pool"].as<size_t>();
-        if (search["coarse_k"]) config.coarse_k = search["coarse_k"].as<size_t>();
-        if (search["coarse_dedup_iou"]) config.coarse_dedup_iou = search["coarse_dedup_iou"].as<double>();
-        if (search["coarse_dedup_area_ratio"]) config.coarse_dedup_area_ratio = search["coarse_dedup_area_ratio"].as<double>();
-    }
+        if (runtime["model_runtime"]) config.runtime.model_runtime = irt::model::ModelRuntime(runtime["model_runtime"].as<std::string>());
+        else if (runtime["runtime"]) config.runtime.model_runtime = irt::model::ModelRuntime(runtime["runtime"].as<std::string>());
 
-    if (const auto fine = node["fine"])
-    {
-        if (fine["candidate_expand"]) config.fine_candidate_expand = fine["candidate_expand"].as<double>();
-        if (fine["min_template_short_patches"]) config.fine_template_min_short_patches = fine["min_template_short_patches"].as<int>();
-        if (fine["scale_step"]) config.fine_template_scale_step = fine["scale_step"].as<double>();
-        if (fine["max_scales"]) config.fine_template_max_sizes = fine["max_scales"].as<int>();
-        if (fine["peaks_per_candidate"]) config.fine_peaks_per_candidate = fine["peaks_per_candidate"].as<int>();
-        if (fine["refinement_rounds"]) config.fine_refinement_rounds = fine["refinement_rounds"].as<int>();
-        if (fine["match_cosine_threshold"]) config.fine_match_cosine_threshold = fine["match_cosine_threshold"].as<double>();
-        if (fine["normalized_position_tolerance"]) config.fine_position_tolerance = fine["normalized_position_tolerance"].as<double>();
-        if (fine["nms_iou"]) config.fine_nms_iou = fine["nms_iou"].as<double>();
-        if (fine["final_k"]) config.final_k = fine["final_k"].as<size_t>();
-        if (fine["score_weights"] && fine["score_weights"].IsSequence() && fine["score_weights"].size() == 3U)
+        if (runtime["model_precision"])
         {
-            config.score_weight_template = fine["score_weights"][0].as<double>();
-            config.score_weight_coverage = fine["score_weights"][1].as<double>();
-            config.score_weight_consistency = fine["score_weights"][2].as<double>();
+            const auto prec = runtime["model_precision"].as<std::string>();
+            if (prec == "fp16") config.runtime.model_precision = irt::model::ModelPrecision::FP16;
+            else if (prec == "fp32") config.runtime.model_precision = irt::model::ModelPrecision::FP32;
+            else throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Runtime model precision must be fp16 or fp32");
+        }
+        else if (runtime["precision"])
+        {
+            const auto prec = runtime["precision"].as<std::string>();
+            if (prec == "fp16") config.runtime.model_precision = irt::model::ModelPrecision::FP16;
+            else if (prec == "fp32") config.runtime.model_precision = irt::model::ModelPrecision::FP32;
+            else throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Runtime model precision must be fp16 or fp32");
+        }
+
+        if (runtime["model_batch_size"]) config.runtime.model_batch_size = runtime["model_batch_size"].as<size_t>();
+        else if (runtime["batch_size"]) config.runtime.model_batch_size = runtime["batch_size"].as<size_t>();
+
+        if (runtime["query_deadline_ms"]) config.runtime.query_deadline_ms = runtime["query_deadline_ms"].as<int64_t>();
+        else if (runtime["deadline_ms"]) config.runtime.query_deadline_ms = runtime["deadline_ms"].as<int64_t>();
+
+        if (runtime["region_scan_block"]) config.runtime.region_scan_block = runtime["region_scan_block"].as<size_t>();
+        else if (runtime["block_descriptors"]) config.runtime.region_scan_block = runtime["block_descriptors"].as<size_t>();
+
+        if (runtime["scan_backend"])
+        {
+            const auto sb = runtime["scan_backend"].as<std::string>();
+            if (sb == "cpu") config.runtime.scan_backend = DinoScanBackend::Cpu;
+            else if (sb == "cuda") config.runtime.scan_backend = DinoScanBackend::Cuda;
+            else if (sb == "auto") config.runtime.scan_backend = DinoScanBackend::Auto;
+            else throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Runtime scan_backend must be auto, cpu or cuda");
         }
     }
 
-    if (const auto decision = node["decision"])
+    // diagnostics / legacy input
+    const auto diag_node = node["diagnostics"] ? node["diagnostics"] : node["input"];
+    if (diag_node)
     {
-        if (decision["threshold"] && !decision["threshold"].IsNull())
-        {
-            config.enable_decision_threshold = true;
-            config.decision_threshold = decision["threshold"].as<double>();
-        }
-        else
-        {
-            config.enable_decision_threshold = false;
-            config.decision_threshold = 0.0;
-        }
-    }
+        if (diag_node["validated_min_image_edge"]) config.diagnostics.validated_min_image_edge = diag_node["validated_min_image_edge"].as<int>();
+        else if (diag_node["min_image_edge"]) config.diagnostics.validated_min_image_edge = diag_node["min_image_edge"].as<int>();
 
-    if (node["deadline_ms"])
-    {
-        config.query_deadline_ms = node["deadline_ms"].as<int64_t>();
+        if (diag_node["validated_max_image_edge"]) config.diagnostics.validated_max_image_edge = diag_node["validated_max_image_edge"].as<int>();
+        else if (diag_node["max_image_edge"]) config.diagnostics.validated_max_image_edge = diag_node["max_image_edge"].as<int>();
+
+        if (diag_node["validated_min_target_short_px"]) config.diagnostics.validated_min_target_short_px = diag_node["validated_min_target_short_px"].as<double>();
+        else if (diag_node["min_target_short_px"]) config.diagnostics.validated_min_target_short_px = diag_node["min_target_short_px"].as<double>();
+
+        if (diag_node["validated_max_target_aspect"]) config.diagnostics.validated_max_target_aspect = diag_node["validated_max_target_aspect"].as<double>();
+        else if (diag_node["max_target_aspect"]) config.diagnostics.validated_max_target_aspect = diag_node["max_target_aspect"].as<double>();
     }
 
     return config;
@@ -495,15 +594,15 @@ int dinoResolveEncoderEdge(const DinoRegionSearchConfig &config, const int patch
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Backbone patch size must be positive");
     }
-    if (config.encoder_edge != 0)
+    if (config.model.encoder_edge != 0)
     {
-        if (config.encoder_edge % patch_size != 0)
+        if (config.model.encoder_edge % patch_size != 0)
         {
             throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "Encoder edge %d must be divisible by backbone patch size %d", config.encoder_edge,
+                                 "Encoder edge %d must be divisible by backbone patch size %d", config.model.encoder_edge,
                                  patch_size);
         }
-        return config.encoder_edge;
+        return config.model.encoder_edge;
     }
 
     // spec DEFAULT：输入长边 512/518，即 patch 的整数倍中最接近 512 的取值。

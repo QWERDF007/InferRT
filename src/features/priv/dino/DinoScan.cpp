@@ -66,8 +66,22 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
     const auto        dimension    = reader.descriptorDim();
     const auto &views           = reader.views();
     const bool  quantized_index = reader.quantized();
-    const auto        similarity_backend
-        = quantized_index ? dinoSelectSimilarityBackend() : DinoSimilarityBackend::Cpu;
+    DinoSimilarityBackend similarity_backend = DinoSimilarityBackend::Cpu;
+    if (quantized_index)
+    {
+        if (config.runtime.scan_backend == DinoScanBackend::Cpu)
+        {
+            similarity_backend = DinoSimilarityBackend::Cpu;
+        }
+        else if (config.runtime.scan_backend == DinoScanBackend::Cuda)
+        {
+            similarity_backend = DinoSimilarityBackend::Cuda;
+        }
+        else
+        {
+            similarity_backend = dinoSelectSimilarityBackend();
+        }
+    }
     outcome.view_survival_truncated = false;
     outcome.similarity_backend      = dinoSimilarityBackendName(similarity_backend);
     outcome.compact_scan            = quantized_index;
@@ -119,7 +133,7 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
     region_tops.reserve(query.views.size());
     for (size_t query_view = 0; query_view < query.views.size(); ++query_view)
     {
-        region_tops.emplace_back(config.region_topk);
+        region_tops.emplace_back(config.coarse_scan.region_topk);
     }
     std::vector<float> buffer;
     std::vector<float> compact_scores;
@@ -143,7 +157,7 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
         outcome.similarity_backend = dinoSimilarityBackendName(region_reducer->backend());
     }
 
-    for (size_t begin = 0; begin < reader.regionCount(); begin += config.region_scan_block)
+    for (size_t begin = 0; begin < reader.regionCount(); begin += config.runtime.region_scan_block)
     {
         if (control.cancelled && control.cancelled())
         {
@@ -154,7 +168,7 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
             outcome.incomplete = true;
             break;
         }
-        const size_t count = std::min(config.region_scan_block, reader.regionCount() - begin);
+        const size_t count = std::min(config.runtime.region_scan_block, reader.regionCount() - begin);
         if (quantized_index)
         {
             const auto block = reader.readRegionCompact(begin, count, compact_scratch);
@@ -264,9 +278,9 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
     }
     std::sort(outcome.region_candidates.begin(), outcome.region_candidates.end(),
               [](const DinoCandidate &a, const DinoCandidate &b) { return a.score > b.score; });
-    if (outcome.region_candidates.size() > config.channel_candidate_limit)
+    if (outcome.region_candidates.size() > config.coarse_scan.channel_candidate_limit)
     {
-        outcome.region_candidates.resize(config.channel_candidate_limit);
+        outcome.region_candidates.resize(config.coarse_scan.channel_candidate_limit);
     }
 
     // Spatial evidence is evaluated for EVERY view before the global local Top-K.
@@ -305,10 +319,10 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
         while (next_view < views.size()) {
             auto range = reader.localRange(next_view);
             if (excluded_views[next_view] || range.count == 0) break;
-            if (count && (count + range.count > config.region_scan_block || range.begin != block_begin + count)) break;
+            if (count && (count + range.count > config.runtime.region_scan_block || range.begin != block_begin + count)) break;
             ids.push_back(next_view);offsets.push_back(count);counts.push_back(range.count);
             count += range.count;++next_view;
-            if (count >= config.region_scan_block) break;
+            if (count >= config.runtime.region_scan_block) break;
         }
         // Whole views are never split: top-2 indices must remain view-relative.
         pairs.resize(ids.size() * static_cast<size_t>(token_count));
@@ -368,7 +382,7 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
         });
         outcome.window_rescore_ms += dinoNowMs() - vote_started;
         for (const auto &group : block_candidates) for (const auto &candidate : group) {
-            if (top.size() < config.channel_candidate_limit) top.push(candidate);
+            if (top.size() < config.coarse_scan.channel_candidate_limit) top.push(candidate);
             else if (candidate.score > top.top().score) {top.pop();top.push(candidate);}
         }
         outcome.scanned_local_descriptors += count;

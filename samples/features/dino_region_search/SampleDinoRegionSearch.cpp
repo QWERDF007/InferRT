@@ -201,16 +201,28 @@ irt::features::DinoRegionSearchConfig loadProfile(const Arguments &arguments)
     // 命令行覆盖只作用于显式给出的字段，避免“看起来生效但没有生效”的隐式行为。
     if (!arguments.weights.empty())
     {
-        config.weights_file = fs::u8path(arguments.weights);
+        config.model.weights_file = fs::u8path(arguments.weights);
     }
     if (!arguments.runtime.empty())
     {
-        config.model_runtime = irt::model::ModelRuntime(arguments.runtime);
+        config.runtime.model_runtime = irt::model::ModelRuntime(arguments.runtime);
     }
     if (!arguments.backend.empty())
     {
-        const auto device = config.model_runtime.isCpu() ? "cpu" : std::to_string(config.model_runtime.deviceId());
-        config.model_runtime = irt::model::ModelRuntime(arguments.backend + ":" + device);
+        const auto device = config.runtime.model_runtime.isCpu() ? "cpu" : std::to_string(config.runtime.model_runtime.deviceId());
+        config.runtime.model_runtime = irt::model::ModelRuntime(arguments.backend + ":" + device);
+    }
+    if (arguments.scan_backend == "cpu")
+    {
+        config.runtime.scan_backend = irt::features::DinoScanBackend::Cpu;
+    }
+    else if (arguments.scan_backend == "cuda")
+    {
+        config.runtime.scan_backend = irt::features::DinoScanBackend::Cuda;
+    }
+    else if (arguments.scan_backend == "auto")
+    {
+        config.runtime.scan_backend = irt::features::DinoScanBackend::Auto;
     }
     config.validate();
     return config;
@@ -230,9 +242,9 @@ irt::features::DinoSearchRequest buildRequest(const Arguments &arguments, const 
         {
             request.include_self = true;
         }
-        if (request.profile_id.empty())
+        if (request.preset_id.empty())
         {
-            request.profile_id = config.profile_id;
+            request.preset_id = config.preset_id;
         }
         if (arguments.deadline_ms > 0)
         {
@@ -258,7 +270,7 @@ irt::features::DinoSearchRequest buildRequest(const Arguments &arguments, const 
         request.deadline_ms = arguments.deadline_ms;
     }
     request.query_path   = fs::u8path(arguments.query);
-    request.profile_id   = config.profile_id;
+    request.preset_id    = config.preset_id;
     request.top_k        = arguments.top_k > 0 ? static_cast<size_t>(arguments.top_k) : 0U;
     request.include_self = arguments.include_self;
     if (!arguments.gallery.empty() && fs::exists(fs::u8path(arguments.gallery)))
@@ -426,7 +438,6 @@ int main(int argc, char **argv)
         {
             if (arguments.requests.empty())
                 throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "search-batch requires --requests");
-            irt::features::dinoSetScanBackendOverride(arguments.scan_backend);
             const auto config = loadProfile(arguments);
             auto requests = irt::features::dinoSearchRequestsFromYaml(readTextFile(fs::u8path(arguments.requests)));
             std::ofstream file;
@@ -449,7 +460,7 @@ int main(int argc, char **argv)
                 if (arguments.top_k > 0) request.top_k = static_cast<size_t>(arguments.top_k);
                 if (arguments.include_self) request.include_self = true;
                 if (arguments.deadline_ms > 0) request.deadline_ms = arguments.deadline_ms;
-                if (request.profile_id.empty()) request.profile_id = config.profile_id;
+                if (request.preset_id.empty()) request.preset_id = config.preset_id;
                 if (!request.image_resolver && batch_resolver) request.image_resolver = batch_resolver;
                 irt::features::DinoSearchResponse response;
                 int item_code = 0;
@@ -478,7 +489,6 @@ int main(int argc, char **argv)
 
         if (arguments.command == "search")
         {
-            irt::features::dinoSetScanBackendOverride(arguments.scan_backend);
             const auto config   = loadProfile(arguments);
             const auto request  = buildRequest(arguments, config);
             const auto response = irt::features::DinoRegionSearch::search(

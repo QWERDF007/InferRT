@@ -6,29 +6,13 @@
 #include <inferrt/features/DinoRegionSearch.hpp>
 
 #include "priv/dino/DinoEngine.hpp"
-#include "priv/dino/DinoSimilarity.hpp"
+#include "priv/dino/DinoIndexStore.hpp"
 
 namespace irt::features {
 
-void dinoSetScanBackendOverride(const std::string &backend)
+bool DinoRegionSearch::needsRebuild(const std::filesystem::path &index_root, const DinoRegionSearchConfig &config)
 {
-    if (backend == "auto")
-    {
-        priv::dinoOverrideSimilarityBackend(false, priv::DinoSimilarityBackend::Cpu);
-        return;
-    }
-    if (backend == "cpu")
-    {
-        priv::dinoOverrideSimilarityBackend(true, priv::DinoSimilarityBackend::Cpu);
-        return;
-    }
-    if (backend == "cuda")
-    {
-        priv::dinoOverrideSimilarityBackend(true, priv::DinoSimilarityBackend::Cuda);
-        return;
-    }
-    throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                         "Unsupported scan backend '%s'; expected auto, cpu or cuda", backend.c_str());
+    return priv::dinoIndexNeedsRebuild(index_root, config);
 }
 
 DinoBuildReport DinoRegionSearch::build(const std::vector<DinoImageItem> &items,

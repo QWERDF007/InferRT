@@ -16,13 +16,56 @@
 #include <string>
 #include <vector>
 
+#include <yaml-cpp/yaml.h>
+
 namespace irt::features::priv {
+
+/**
+ * @brief 索引持久化契约（Manifest 强类型定义）。
+ *
+ * 集中管理写入 index.yaml 的 manifest 元数据以及建库、预检查和 search 共享的唯一兼容性校验逻辑。
+ */
+struct DinoIndexContract
+{
+    std::string         schema_version{"1.0"};
+    std::string         feature_version{"v4_hadamard_sparse_fine"};
+    std::string         model_name{"dinov3_vits16"};
+    std::string         weights_id{"default"};
+    int                 encoder_edge{512};
+    int                 patch_size{16};
+    int                 token_dimension{384};
+    std::vector<int>    gallery_tile_edges{512, 1024, 2048};
+    double              view_overlap{0.25};
+    std::vector<double> region_window_ratios{1.0, 0.5};
+    double              region_window_stride_ratio{0.5};
+    double              region_min_valid_fraction{0.5};
+    int                 coarse_dimension{96};
+    int                 local_representatives{64};
+    bool                merge_enabled{true};
+    double              merge_epsilon{0.10};
+    int                 max_leaf_side_patches{4};
+    bool                quantize_int8{true};
+    std::string         preprocess_description{};
+
+    static DinoIndexContract fromConfig(const DinoRegionSearchConfig &config);
+    YAML::Node toYamlNode() const;
+    static DinoIndexContract fromYamlNode(const YAML::Node &node);
+
+    /**
+     * @brief 校验与传入请求配置的兼容性。
+     * @return 兼容时返回空字符串，不兼容时返回描述具体字段差异的错误说明。
+     */
+    std::string checkCompatibility(const DinoRegionSearchConfig &config) const;
+};
+
+/** @brief 检查索引根目录是否需要重新构建。 */
+bool dinoIndexNeedsRebuild(const std::filesystem::path &index_root, const DinoRegionSearchConfig &config);
 
 /** @brief 直接写入索引根目录，最后写出读取所需的 index.yaml。 */
 class DinoIndexWriter
 {
 public:
-    DinoIndexWriter(const std::filesystem::path &index_root, size_t descriptor_dim, bool quantize);
+    DinoIndexWriter(const std::filesystem::path &index_root, const DinoIndexContract &contract);
 
     ~DinoIndexWriter();
 
@@ -103,6 +146,11 @@ public:
         return original_patch_count_;
     }
 
+    const DinoIndexContract &contract() const noexcept
+    {
+        return contract_;
+    }
+
     /** @brief 完成数组与 index.yaml，返回描述统计。 */
     DinoBuildReport finish();
 
@@ -118,6 +166,7 @@ private:
     void closeWritersIfOpen();
 
     std::filesystem::path        index_root_{};
+    DinoIndexContract            contract_{};
     size_t                       descriptor_dim_{0};
     bool                         quantize_{true};
 
@@ -156,6 +205,17 @@ class DinoIndexReader
 {
 public:
     explicit DinoIndexReader(const std::filesystem::path &index_root);
+
+    const DinoIndexContract &contract() const noexcept
+    {
+        return contract_;
+    }
+
+    /**
+     * @brief 校验索引契约与当前配置的兼容性。
+     * @throws irt::Exception 当存在硬参数或版本不一致时抛出 NOT_READY。
+     */
+    void validateContract(const DinoRegionSearchConfig &config) const;
 
     const std::vector<DinoImageIdentity> &images() const noexcept
     {
@@ -245,14 +305,15 @@ private:
                                  size_t count, const char *label, DinoCompactScratch &scratch) const;
 
     std::filesystem::path        index_root_{};
-    std::vector<DinoImageIdentity>  images_{};
-    std::vector<DinoIndexView>    views_{};
-    std::vector<int64_t>          offsets_{};
-    size_t                        descriptor_dim_{0};
-    size_t                        region_count_{0};
-    size_t                        local_count_{0};
-    uint64_t                      index_bytes_{0};
-    bool                          quantized_{true};
+    DinoIndexContract            contract_{};
+    std::vector<DinoImageIdentity> images_{};
+    std::vector<DinoIndexView>   views_{};
+    std::vector<int64_t>         offsets_{};
+    size_t                       descriptor_dim_{0};
+    size_t                       region_count_{0};
+    size_t                       local_count_{0};
+    uint64_t                     index_bytes_{0};
+    bool                         quantized_{true};
 
     std::unique_ptr<DinoNpyReader> region_meta_{};
     std::unique_ptr<DinoNpyReader> local_meta_{};

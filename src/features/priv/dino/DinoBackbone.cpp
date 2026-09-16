@@ -43,8 +43,8 @@ std::string dimsToCsv(const nvinfer1::Dims &dims)
 
 bool usesTensorRtRuntime(const DinoRegionSearchConfig &config) noexcept
 {
-    return config.model_runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT
-        && !config.model_runtime.isCpu();
+    return config.runtime.model_runtime.backend() == irt::model::ModelRuntime::Backend::TensorRT
+        && !config.runtime.model_runtime.isCpu();
 }
 
 std::string preprocessDescription(const irt::PreprocessSpec &spec)
@@ -92,12 +92,12 @@ struct DinoBackboneCacheKey final
 DinoBackboneCacheKey makeBackboneCacheKey(const DinoRegionSearchConfig &config)
 {
     DinoBackboneCacheKey key;
-    key.model_name        = config.model_name;
-    key.weights_path      = std::filesystem::absolute(config.weights_file).lexically_normal();
-    key.model_runtime     = config.model_runtime;
-    key.model_precision   = config.model_precision;
-    key.encoder_edge      = config.encoder_edge;
-    key.model_batch_size  = config.model_batch_size;
+    key.model_name        = config.model.model_name;
+    key.weights_path      = std::filesystem::absolute(config.model.weights_file).lexically_normal();
+    key.model_runtime     = config.runtime.model_runtime;
+    key.model_precision   = config.runtime.model_precision;
+    key.encoder_edge      = config.model.encoder_edge;
+    key.model_batch_size  = config.runtime.model_batch_size;
     std::error_code error;
     key.weights_size = std::filesystem::file_size(key.weights_path, error);
     error.clear();
@@ -164,7 +164,7 @@ DinoBackbone::DinoBackbone(const DinoRegionSearchConfig &config)
     dinoValidateConfig(config_);
 
     // 骨干 patch 边长由模型别名决定：DINOv3 为 16，DINOv2 为 14。
-    const bool is_dinov3 = config_.model_name.find("dinov3") != std::string::npos;
+    const bool is_dinov3 = config_.model.model_name.find("dinov3") != std::string::npos;
     const int  patch_size = is_dinov3 ? 16 : 14;
     const int  encoder_edge = dinoResolveEncoderEdge(config_, patch_size);
     preprocess_spec_ = dinoViewPreprocessSpec(encoder_edge, patch_size);
@@ -175,32 +175,32 @@ DinoBackbone::DinoBackbone(const DinoRegionSearchConfig &config)
     model_config->setFeatureTensorNames({kPatchTokenFeature});
     model_config->setOutputTensorNames({kPatchTokenFeature});
     model_config->setFeatureOnly(true);
-    model_config->setRuntime(config_.model_runtime);
-    model_config->setPrecision(config_.model_precision);
-    model_config->setDynamicBatchRange(1, static_cast<int>(config_.model_batch_size),
-                                       static_cast<int>(config_.model_batch_size));
+    model_config->setRuntime(config_.runtime.model_runtime);
+    model_config->setPrecision(config_.runtime.model_precision);
+    model_config->setDynamicBatchRange(1, static_cast<int>(config_.runtime.model_batch_size),
+                                       static_cast<int>(config_.runtime.model_batch_size));
     model_config->setInputShape(irt::Shape{1, 3, encoder_edge, encoder_edge});
 
-    model_ = irt::model::CreateModel(config_.model_name, std::move(model_config));
+    model_ = irt::model::CreateModel(config_.model.model_name, std::move(model_config));
     if (!model_)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to create backbone model: %s",
-                             config_.model_name.c_str());
+                             config_.model.model_name.c_str());
     }
     model_->setLogLevel(irt::model::LogLevel::Warning);
-    if (!std::filesystem::exists(config_.weights_file))
+    if (!std::filesystem::exists(config_.model.weights_file))
     {
         throw irt::Exception(irt::Status::NOT_READY, "Backbone weights file does not exist: %s",
-                             config_.weights_file.string().c_str());
+                             config_.model.weights_file.string().c_str());
     }
 
     const auto weight_identity = makeBackboneCacheKey(config_);
-    model_->buildOrLoad(config_.weights_file.string());
+    model_->buildOrLoad(config_.model.weights_file.string());
 
     use_device_buffers_ = usesTensorRtRuntime(config_);
     if (use_device_buffers_)
     {
-        irt::model::setCudaDevice(config_.model_runtime.deviceId());
+        irt::model::setCudaDevice(config_.runtime.model_runtime.deviceId());
     }
 
     const auto input_names = model_->ioTensorNames(irt::TensorIOMode::Input);
@@ -253,12 +253,12 @@ DinoBackbone::DinoBackbone(const DinoRegionSearchConfig &config)
                              output_shape_.d[1], token_count_);
     }
 
-    signature_.model_name    = config_.model_name;
-    signature_.weights_path  = dinoPathToUtf8(std::filesystem::absolute(config_.weights_file).lexically_normal());
+    signature_.model_name    = config_.model.model_name;
+    signature_.weights_path  = dinoPathToUtf8(std::filesystem::absolute(config_.model.weights_file).lexically_normal());
     signature_.weights_size  = weight_identity.weights_size;
     signature_.weights_mtime = static_cast<int64_t>(weight_identity.weights_mtime.time_since_epoch().count());
-    signature_.runtime       = config_.model_runtime.toString();
-    signature_.precision     = irt::model::modelPrecisionName(config_.model_precision);
+    signature_.runtime       = config_.runtime.model_runtime.toString();
+    signature_.precision     = irt::model::modelPrecisionName(config_.runtime.model_precision);
     signature_.input_tensor  = input_name_;
     signature_.output_tensor = output_name_;
     signature_.input_shape   = dimsToCsv(input_shape_);

@@ -59,6 +59,14 @@ DinoRegionSearchConfig dinoConfigFromYaml(const std::string &text)
     }
 }
 
+std::string dinoConfigToYaml(const DinoRegionSearchConfig &config)
+{
+    const auto node = priv::dinoConfigToYamlNode(config);
+    YAML::Emitter emitter;
+    emitter << node;
+    return std::string(emitter.c_str()) + "\n";
+}
+
 DinoSearchRequest dinoSearchRequestFromYaml(const std::string &text)
 {
     YAML::Node node;
@@ -249,10 +257,6 @@ DinoSearchRequest dinoSearchRequestFromYaml(const std::string &text)
             request.include_self = node["include_self"].as<bool>();
         }
 
-        if (node["profile_id"])
-        {
-            request.profile_id = node["profile_id"].as<std::string>();
-        }
         if (node["deadline_ms"])
         {
             int64_t deadline_ms = 0;

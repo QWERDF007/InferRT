@@ -138,8 +138,8 @@ TEST(DinoRegionSearchContract, RequestDeadlineAndThresholdUseLightweightContract
         "model: {name: dinov3_vits16, weights_path: unused.wts}\n"
         "decision: {threshold: 0.73}\n"
         "deadline_ms: 30000\n");
-    EXPECT_TRUE(config.enable_decision_threshold);
-    EXPECT_DOUBLE_EQ(config.decision_threshold, 0.73);
+    EXPECT_TRUE(config.decision.enable_decision_threshold);
+    EXPECT_DOUBLE_EQ(config.decision.decision_threshold, 0.73);
 
     const auto request = irt::features::dinoSearchRequestFromYaml(
         "query_path: a.png\nbbox: [1, 2, 8, 9]\ndeadline_ms: 1\n");
@@ -242,7 +242,10 @@ TEST(DinoRegionSearchIndex, ViewsRetainDistinctDescriptorsAfterReopening)
             / (quantized ? "inferrt_dino_views_int8" : "inferrt_dino_views_fp32");
         std::filesystem::remove_all(root);
         {
-            irt::features::priv::DinoIndexWriter writer(root, 3, quantized);
+            irt::features::priv::DinoIndexContract contract;
+            contract.coarse_dimension = 3;
+            contract.quantize_int8 = quantized;
+            irt::features::priv::DinoIndexWriter writer(root, contract);
             irt::features::priv::DinoImageIdentity image;
             image.image_id = 1001;
             image.width = image.height = 64;
@@ -300,7 +303,10 @@ TEST(DinoRegionSearchIndex, WriterRejectsDuplicateImageIds)
     const auto root = std::filesystem::path(testing::TempDir()) / "inferrt_dino_dup_ids";
     std::filesystem::remove_all(root);
     {
-        irt::features::priv::DinoIndexWriter writer(root, 3, false);
+        irt::features::priv::DinoIndexContract contract;
+        contract.coarse_dimension = 3;
+        contract.quantize_int8 = false;
+        irt::features::priv::DinoIndexWriter writer(root, contract);
         irt::features::priv::DinoImageIdentity image1;
         image1.image_id = 1001;
         image1.width = image1.height = 64;
@@ -1000,10 +1006,10 @@ TEST(DinoRegionSearchFusion, QuotasBackfillAndDuplicateMergingAreCounted)
     }
 
     irt::features::DinoRegionSearchConfig config;
-    config.coarse_k = 10;
+    config.coarse_scan.coarse_k = 10;
 
     const auto fused = irt::features::priv::dinoFuseCandidates(region, local, config);
-    EXPECT_LE(fused.candidates.size(), config.coarse_k);
+    EXPECT_LE(fused.candidates.size(), config.coarse_scan.coarse_k);
     EXPECT_GT(fused.region_taken, 0U);
     EXPECT_GT(fused.local_taken, 0U);
     EXPECT_EQ(fused.candidates.size(), fused.region_taken + fused.local_taken);
@@ -1139,12 +1145,12 @@ TEST(DinoRegionSearchScan, SpatialTopTwoMatchesAcrossAvailableBackends)
 TEST(DinoRegionSearchContract, V4BudgetAndBatchFieldsParse)
 {
     const auto config = irt::features::dinoConfigFromYaml(
-        "model: {name: dinov3_vits16, weights_path: unused.wts}\n"
-        "regions: {coarse_dimension: 192, local_representatives: 128}\n"
-        "search: {verify_k: 32}\n");
-    EXPECT_EQ(config.coarse_dimension, 192);
-    EXPECT_EQ(config.local_representatives, 128);
-    EXPECT_EQ(config.fine_verify_k, 32U);
+        "model: {name: dinov3_vits16, weights_file: unused.wts}\n"
+        "descriptors: {coarse_dimension: 192, local_representatives: 128}\n"
+        "fine_match: {fine_verify_k: 32}\n");
+    EXPECT_EQ(config.descriptors.coarse_dimension, 192);
+    EXPECT_EQ(config.descriptors.local_representatives, 128);
+    EXPECT_EQ(config.fine_match.fine_verify_k, 32U);
     const auto requests = irt::features::dinoSearchRequestsFromYaml(
         "- request_id: square\n  query_path: a.png\n  bbox: [0, 0, 40, 40]\n"
         "- request_id: small\n  query_path: b.png\n  bbox: [5, 5, 15, 15]\n");
@@ -1162,8 +1168,8 @@ TEST(DinoRegionSearchContract, V4BudgetAndBatchFieldsParse)
 TEST(DinoRegionSearchBuild, BuildRejectsEmptyAndDuplicateItems)
 {
     irt::features::DinoRegionSearchConfig config;
-    config.weights_file = "nonexistent.wts";
-    config.model_runtime = irt::model::ModelRuntime("cpu");
+    config.model.weights_file = "nonexistent.wts";
+    config.runtime.model_runtime = irt::model::ModelRuntime("cpu");
 
     const auto index_dir = std::filesystem::path(testing::TempDir()) / "inferrt_dino_build_val";
 
@@ -1219,4 +1225,302 @@ TEST(DinoRegionSearchProgress, BuildAndSearchProgressSupportBatchFields)
     EXPECT_EQ(search_p.message, "matching candidate crops");
 }
 
+TEST(DinoRegionSearchContract, HierarchicalYamlRoundTripPreservesAllFields)
+{
+    irt::features::DinoRegionSearchConfig original;
+    original.preset_id = "custom_preset_v1";
+    original.model.model_name = "dinov2_vits14_reg4";
+    original.model.weights_id = "custom_weights_01";
+    original.model.weights_file = "models/custom.wts";
+    original.model.encoder_edge = 518;
+
+    original.gallery_views.gallery_tile_edges = {518, 1036};
+    original.gallery_views.view_overlap = 0.20;
+
+    original.descriptors.region_window_ratios = {0.125, 0.25, 0.5, 1.0};
+    original.descriptors.region_window_stride_ratio = 0.10;
+    original.descriptors.region_min_valid_fraction = 0.08;
+    original.descriptors.coarse_dimension = 128;
+    original.descriptors.local_representatives = 128;
+    original.descriptors.merge_enabled = true;
+    original.descriptors.merge_epsilon = 0.12;
+    original.descriptors.max_leaf_side_patches = 6;
+    original.descriptors.quantize_int8 = true;
+
+    original.query_features.query_roi_target_lengths = {128.0, 256.0, 512.0};
+    original.query_features.query_local_cells = 4;
+    original.query_features.query_local_max_per_cell = 2;
+    original.query_features.query_min_local_evidence = 2;
+
+    original.coarse_scan.region_topk = 150;
+    original.coarse_scan.channel_candidate_limit = 400;
+    original.coarse_scan.coarse_k = 120;
+    original.coarse_scan.coarse_dedup_iou = 0.65;
+    original.coarse_scan.coarse_dedup_area_ratio = 1.8;
+    original.coarse_scan.final_k = 40;
+
+    original.fine_match.fine_verify_k = 25;
+    original.fine_match.fine_candidate_expand = 1.2;
+    original.fine_match.fine_template_scale_step = 1.414;
+    original.fine_match.fine_template_max_sizes = 8;
+    original.fine_match.fine_peaks_per_candidate = 3;
+    original.fine_match.fine_refinement_rounds = 2;
+    original.fine_match.fine_match_cosine_threshold = 0.45;
+    original.fine_match.fine_nms_iou = 0.55;
+    original.fine_match.consistency_mode = irt::features::DinoConsistencyMode::Instance;
+    original.fine_match.score_weight_template = 0.5;
+    original.fine_match.score_weight_coverage = 0.3;
+    original.fine_match.score_weight_consistency = 0.2;
+
+    original.decision.enable_decision_threshold = true;
+    original.decision.decision_threshold = 0.88;
+
+    original.runtime.model_runtime = irt::model::ModelRuntime::parse("cuda:0");
+    original.runtime.model_precision = irt::model::ModelPrecision::FP16;
+    original.runtime.model_batch_size = 4;
+    original.runtime.query_deadline_ms = 45000;
+    original.runtime.region_scan_block = 2048;
+    original.runtime.scan_backend = irt::features::DinoScanBackend::Cuda;
+
+    original.diagnostics.validated_min_image_edge = 64;
+    original.diagnostics.validated_max_image_edge = 4096;
+    original.diagnostics.validated_min_target_short_px = 16.0;
+    original.diagnostics.validated_max_target_aspect = 8.0;
+
+    // Serialize to YAML
+    const std::string yaml = irt::features::dinoConfigToYaml(original);
+    EXPECT_FALSE(yaml.empty());
+
+    // Parse back from YAML
+    const auto parsed = irt::features::dinoConfigFromYaml(yaml);
+
+    EXPECT_EQ(parsed.preset_id, original.preset_id);
+    EXPECT_EQ(parsed.model.model_name, original.model.model_name);
+    EXPECT_EQ(parsed.model.weights_id, original.model.weights_id);
+    EXPECT_EQ(parsed.model.weights_file, original.model.weights_file);
+    EXPECT_EQ(parsed.model.encoder_edge, original.model.encoder_edge);
+
+    EXPECT_EQ(parsed.gallery_views.gallery_tile_edges, original.gallery_views.gallery_tile_edges);
+    EXPECT_DOUBLE_EQ(parsed.gallery_views.view_overlap, original.gallery_views.view_overlap);
+
+    EXPECT_EQ(parsed.descriptors.region_window_ratios, original.descriptors.region_window_ratios);
+    EXPECT_DOUBLE_EQ(parsed.descriptors.region_window_stride_ratio, original.descriptors.region_window_stride_ratio);
+    EXPECT_DOUBLE_EQ(parsed.descriptors.region_min_valid_fraction, original.descriptors.region_min_valid_fraction);
+    EXPECT_EQ(parsed.descriptors.coarse_dimension, original.descriptors.coarse_dimension);
+    EXPECT_EQ(parsed.descriptors.local_representatives, original.descriptors.local_representatives);
+    EXPECT_EQ(parsed.descriptors.merge_enabled, original.descriptors.merge_enabled);
+    EXPECT_DOUBLE_EQ(parsed.descriptors.merge_epsilon, original.descriptors.merge_epsilon);
+    EXPECT_EQ(parsed.descriptors.max_leaf_side_patches, original.descriptors.max_leaf_side_patches);
+    EXPECT_EQ(parsed.descriptors.quantize_int8, original.descriptors.quantize_int8);
+
+    EXPECT_EQ(parsed.query_features.query_roi_target_lengths, original.query_features.query_roi_target_lengths);
+    EXPECT_EQ(parsed.query_features.query_local_cells, original.query_features.query_local_cells);
+    EXPECT_EQ(parsed.query_features.query_local_max_per_cell, original.query_features.query_local_max_per_cell);
+    EXPECT_EQ(parsed.query_features.query_min_local_evidence, original.query_features.query_min_local_evidence);
+
+    EXPECT_EQ(parsed.coarse_scan.region_topk, original.coarse_scan.region_topk);
+    EXPECT_EQ(parsed.coarse_scan.channel_candidate_limit, original.coarse_scan.channel_candidate_limit);
+    EXPECT_EQ(parsed.coarse_scan.coarse_k, original.coarse_scan.coarse_k);
+    EXPECT_DOUBLE_EQ(parsed.coarse_scan.coarse_dedup_iou, original.coarse_scan.coarse_dedup_iou);
+    EXPECT_DOUBLE_EQ(parsed.coarse_scan.coarse_dedup_area_ratio, original.coarse_scan.coarse_dedup_area_ratio);
+    EXPECT_EQ(parsed.coarse_scan.final_k, original.coarse_scan.final_k);
+
+    EXPECT_EQ(parsed.fine_match.fine_verify_k, original.fine_match.fine_verify_k);
+    EXPECT_DOUBLE_EQ(parsed.fine_match.fine_candidate_expand, original.fine_match.fine_candidate_expand);
+    EXPECT_DOUBLE_EQ(parsed.fine_match.fine_template_scale_step, original.fine_match.fine_template_scale_step);
+    EXPECT_EQ(parsed.fine_match.fine_template_max_sizes, original.fine_match.fine_template_max_sizes);
+    EXPECT_EQ(parsed.fine_match.fine_peaks_per_candidate, original.fine_match.fine_peaks_per_candidate);
+    EXPECT_EQ(parsed.fine_match.fine_refinement_rounds, original.fine_match.fine_refinement_rounds);
+    EXPECT_DOUBLE_EQ(parsed.fine_match.fine_match_cosine_threshold, original.fine_match.fine_match_cosine_threshold);
+    EXPECT_DOUBLE_EQ(parsed.fine_match.fine_nms_iou, original.fine_match.fine_nms_iou);
+    EXPECT_EQ(parsed.fine_match.consistency_mode, original.fine_match.consistency_mode);
+    EXPECT_DOUBLE_EQ(parsed.fine_match.score_weight_template, original.fine_match.score_weight_template);
+    EXPECT_DOUBLE_EQ(parsed.fine_match.score_weight_coverage, original.fine_match.score_weight_coverage);
+    EXPECT_DOUBLE_EQ(parsed.fine_match.score_weight_consistency, original.fine_match.score_weight_consistency);
+
+    EXPECT_EQ(parsed.decision.enable_decision_threshold, original.decision.enable_decision_threshold);
+    EXPECT_DOUBLE_EQ(parsed.decision.decision_threshold, original.decision.decision_threshold);
+
+    EXPECT_EQ(parsed.runtime.model_runtime, original.runtime.model_runtime);
+    EXPECT_EQ(parsed.runtime.model_precision, original.runtime.model_precision);
+    EXPECT_EQ(parsed.runtime.model_batch_size, original.runtime.model_batch_size);
+    EXPECT_EQ(parsed.runtime.query_deadline_ms, original.runtime.query_deadline_ms);
+    EXPECT_EQ(parsed.runtime.region_scan_block, original.runtime.region_scan_block);
+    EXPECT_EQ(parsed.runtime.scan_backend, original.runtime.scan_backend);
+
+    EXPECT_EQ(parsed.diagnostics.validated_min_image_edge, original.diagnostics.validated_min_image_edge);
+    EXPECT_EQ(parsed.diagnostics.validated_max_image_edge, original.diagnostics.validated_max_image_edge);
+    EXPECT_DOUBLE_EQ(parsed.diagnostics.validated_min_target_short_px, original.diagnostics.validated_min_target_short_px);
+    EXPECT_DOUBLE_EQ(parsed.diagnostics.validated_max_target_aspect, original.diagnostics.validated_max_target_aspect);
+}
+
+TEST(DinoRegionSearchContract, NeedsRebuildAndValidateContractOnHardParameters)
+{
+    const auto root = std::filesystem::path(testing::TempDir()) / "inferrt_dino_contract_test";
+    std::filesystem::remove_all(root);
+
+    irt::features::DinoRegionSearchConfig base_config;
+    base_config.model.model_name = "dinov2_vits14_reg4";
+    base_config.model.weights_id = "dinov2_vits14_reg4_default";
+    base_config.model.weights_file = "F:/models/dinov2.wts";
+    base_config.model.encoder_edge = 518;
+    base_config.descriptors.coarse_dimension = 64;
+    base_config.descriptors.quantize_int8 = false;
+
+    // 1. Non-existent directory requires rebuild
+    EXPECT_TRUE(irt::features::DinoRegionSearch::needsRebuild(root, base_config));
+
+    // 2. Create valid index with contract
+    {
+        auto contract = irt::features::priv::DinoIndexContract::fromConfig(base_config);
+        contract.coarse_dimension = 64;
+        contract.quantize_int8 = false;
+        irt::features::priv::DinoIndexWriter writer(root, contract);
+        irt::features::priv::DinoImageIdentity img;
+        img.image_id = 101;
+        img.width = img.height = 64;
+        writer.addImage(img);
+        const auto view_id = writer.addView(0, makePlan(64, 64));
+        irt::features::priv::DinoRegionDescriptor region{};
+        region.grid_row = 0;
+        region.grid_height = region.grid_width = 1;
+        region.valid_fraction = 1.0f;
+        std::vector<float> vec(64, 0.0f);
+        writer.addRegion(view_id, region, vec);
+        irt::features::priv::DinoLocalLeaf local{};
+        local.grid_row = local.rep_row = 0;
+        local.grid_height = local.grid_width = local.member_count = 1;
+        writer.addLocal(view_id, local, vec);
+        writer.finish();
+    }
+
+    // 3. Matching config -> needsRebuild is false, reader validateContract passes
+    EXPECT_FALSE(irt::features::DinoRegionSearch::needsRebuild(root, base_config));
+    {
+        irt::features::priv::DinoIndexReader reader(root);
+        EXPECT_NO_THROW(reader.validateContract(base_config));
+    }
+
+    // 4. Changing Dynamic (D) parameters -> needsRebuild is FALSE, validateContract passes
+    {
+        auto d_config = base_config;
+        d_config.model.weights_file = "C:/other/path/to/same_weights.wts"; // path changed, weights_id identical
+        d_config.runtime.model_batch_size = 8;
+        d_config.runtime.scan_backend = irt::features::DinoScanBackend::Cpu;
+        d_config.coarse_scan.coarse_k = 200;
+        d_config.fine_match.fine_verify_k = 64;
+        d_config.decision.decision_threshold = 0.95;
+
+        EXPECT_FALSE(irt::features::DinoRegionSearch::needsRebuild(root, d_config));
+        irt::features::priv::DinoIndexReader reader(root);
+        EXPECT_NO_THROW(reader.validateContract(d_config));
+    }
+
+    // 5. Changing Hard (H) parameters -> needsRebuild is TRUE, validateContract throws NOT_READY
+    // 5a. weights_id changed
+    {
+        auto h_config = base_config;
+        h_config.model.weights_id = "dinov2_new_version";
+        EXPECT_TRUE(irt::features::DinoRegionSearch::needsRebuild(root, h_config));
+        irt::features::priv::DinoIndexReader reader(root);
+        try
+        {
+            reader.validateContract(h_config);
+            FAIL() << "Expected validateContract to throw NOT_READY";
+        }
+        catch (const irt::Exception &e)
+        {
+            EXPECT_EQ(e.code(), irt::Status::NOT_READY);
+            EXPECT_NE(std::string(e.what()).find("weights_id"), std::string::npos);
+            EXPECT_NE(std::string(e.what()).find("重建索引"), std::string::npos);
+        }
+    }
+
+    // 5b. model_name changed
+    {
+        auto h_config = base_config;
+        h_config.model.model_name = "dinov3_vits16";
+        EXPECT_TRUE(irt::features::DinoRegionSearch::needsRebuild(root, h_config));
+        irt::features::priv::DinoIndexReader reader(root);
+        try
+        {
+            reader.validateContract(h_config);
+            FAIL() << "Expected validateContract to throw NOT_READY";
+        }
+        catch (const irt::Exception &e)
+        {
+            EXPECT_EQ(e.code(), irt::Status::NOT_READY);
+            EXPECT_NE(std::string(e.what()).find("model_name"), std::string::npos);
+        }
+    }
+
+    // 5c. encoder_edge changed
+    {
+        auto h_config = base_config;
+        h_config.model.encoder_edge = 700;
+        EXPECT_TRUE(irt::features::DinoRegionSearch::needsRebuild(root, h_config));
+        irt::features::priv::DinoIndexReader reader(root);
+        EXPECT_THROW(reader.validateContract(h_config), irt::Exception);
+    }
+
+    // 5d. quantize_int8 changed
+    {
+        auto h_config = base_config;
+        h_config.descriptors.quantize_int8 = true;
+        EXPECT_TRUE(irt::features::DinoRegionSearch::needsRebuild(root, h_config));
+        irt::features::priv::DinoIndexReader reader(root);
+        EXPECT_THROW(reader.validateContract(h_config), irt::Exception);
+    }
+
+    // 5e. view_overlap changed
+    {
+        auto h_config = base_config;
+        h_config.gallery_views.view_overlap = 0.50;
+        EXPECT_TRUE(irt::features::DinoRegionSearch::needsRebuild(root, h_config));
+        irt::features::priv::DinoIndexReader reader(root);
+        EXPECT_THROW(reader.validateContract(h_config), irt::Exception);
+    }
+
+    // 6. encoder_edge = 0 is compatible with explicit resolved value 518
+    {
+        auto auto_config = base_config;
+        auto_config.model.encoder_edge = 0;
+        EXPECT_FALSE(irt::features::DinoRegionSearch::needsRebuild(root, auto_config));
+        irt::features::priv::DinoIndexReader reader(root);
+        EXPECT_NO_THROW(reader.validateContract(auto_config));
+    }
+
+    std::filesystem::remove_all(root);
+}
+
+TEST(DinoRegionSearchContract, OldIndexWithoutManifestRequiresRebuild)
+{
+    const auto root = std::filesystem::path(testing::TempDir()) / "inferrt_dino_unmanifested_test";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+
+    // Write index.yaml without manifest block
+    {
+        std::ofstream fout((root / "index.yaml").string());
+        fout << "total_images: 1\n";
+    }
+
+    irt::features::DinoRegionSearchConfig config;
+    EXPECT_TRUE(irt::features::DinoRegionSearch::needsRebuild(root, config));
+
+    // Constructing reader or validating contract throws NOT_READY
+    try
+    {
+        irt::features::priv::DinoIndexReader reader(root);
+        reader.validateContract(config);
+        FAIL() << "Expected DinoIndexReader / validateContract to throw NOT_READY for unmanifested index";
+    }
+    catch (const irt::Exception &e)
+    {
+        EXPECT_EQ(e.code(), irt::Status::NOT_READY);
+        EXPECT_NE(std::string(e.what()).find("重建索引"), std::string::npos);
+    }
+
+    std::filesystem::remove_all(root);
+}
 

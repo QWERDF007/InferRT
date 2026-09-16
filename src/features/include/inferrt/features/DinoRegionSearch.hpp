@@ -161,166 +161,123 @@ struct DinoSearchRoi
 };
 
 
+/** @brief 局部通道与紧凑向量扫描的计算后端。 */
+enum class DinoScanBackend
+{
+    Auto, ///< 自动选择：优先使用 CUDA，不可用时回退 CPU。
+    Cpu,  ///< 强制使用 CPU 归约。
+    Cuda, ///< 强制使用 CUDA 归约；无可用设备时回退 CPU。
+};
+
+/** @brief 骨干模型与输入光栅配置。 */
+struct DinoModelConfig
+{
+    std::string           model_name{"dinov3_vits16"}; ///< 冻结骨干名称（如 dinov3_vits16 / dinov2_vits14_reg4）。
+    std::filesystem::path weights_file{};             ///< 骨干权重或 engine 路径（动态路径，不影响索引兼容）。
+    std::string           weights_id{"default"};      ///< 调用方声明的权重版本身份（参与索引契约）。
+    int                   encoder_edge{0};            ///< 骨干输入光栅边长；0 表示按 patch 推导。
+};
+
+/** @brief 图库切片与多尺度视图配置。 */
+struct DinoGalleryViewsConfig
+{
+    std::vector<int> gallery_tile_edges{512, 1024, 2048}; ///< 切片尺度源边长。
+    double           view_overlap{0.25};                  ///< 切片重叠率。
+};
+
+/** @brief 描述子生成与量化配置。 */
+struct DinoDescriptorConfig
+{
+    std::vector<double> region_window_ratios{1.0, 0.5}; ///< 区域窗口边长比例。
+    double              region_window_stride_ratio{0.5}; ///< 区域窗口步长比例。
+    double              region_min_valid_fraction{0.5};  ///< 窗口有效面积占比下限。
+    int                 coarse_dimension{96};            ///< 粗排描述子维度。
+    int                 local_representatives{64};       ///< 局部代表 token 上限。
+    bool                merge_enabled{true};             ///< 是否启用空间相邻合并。
+    double              merge_epsilon{0.10};             ///< 合并误差上限。
+    int                 max_leaf_side_patches{4};        ///< 叶节点最大边长（patch 数）。
+    bool                quantize_int8{true};             ///< 是否使用 INT8 紧凑量化存储。
+};
+
+/** @brief 查询特征提取配置。 */
+struct DinoQueryFeaturesConfig
+{
+    std::vector<double> query_roi_target_lengths{256.0, 448.0}; ///< 查询 ROI 目标边长。
+    int                 query_local_cells{4};                  ///< 查询局部空间网格划分。
+    int                 query_local_max_per_cell{2};           ///< 每格局部描述上限。
+    int                 query_min_local_evidence{4};           ///< 有效局部描述数量下限。
+};
+
+/** @brief 粗排扫描与候选融合配置。 */
+struct DinoCoarseScanConfig
+{
+    size_t region_topk{400};             ///< 区域通道候选额度。
+    size_t channel_candidate_limit{400}; ///< 每通道进入融合的最大候选数。
+    size_t coarse_k{64};                 ///< 粗选候选总数。
+    double coarse_dedup_iou{0.85};       ///< 粗选空间去重 IoU。
+    double coarse_dedup_area_ratio{1.25};///< 粗选空间去重面积比上限。
+    size_t final_k{20};                  ///< 最终返回结果数默认上限。
+};
+
+/** @brief 精匹配与紧裁复核配置。 */
+struct DinoFineMatchConfig
+{
+    size_t              fine_verify_k{64};                   ///< 紧裁复核候选数上限（0 表示关闭紧裁复核）。
+    double              fine_candidate_expand{1.2};          ///< 候选裁剪扩边比例。
+    double              fine_template_scale_step{1.4142135623730951}; ///< 模板尺寸递增步长。
+    int                 fine_template_max_sizes{12};         ///< 模板尺寸档位上限。
+    int                 fine_peaks_per_candidate{3};         ///< 每候选空间峰值数。
+    int                 fine_refinement_rounds{1};           ///< 峰值细化轮数。
+    double              fine_match_cosine_threshold{0.55};   ///< 模板匹配余弦阈值。
+    double              fine_nms_iou{0.5};                   ///< 最终结果 NMS IoU 阈值。
+    DinoConsistencyMode consistency_mode{DinoConsistencyMode::Appearance}; ///< 一致性模式。
+    double              score_weight_template{0.60};         ///< 模板相似度权重。
+    double              score_weight_coverage{0.25};         ///< 查询覆盖率权重。
+    double              score_weight_consistency{0.15};      ///< 空间一致性权重。
+};
+
+/** @brief 判定与业务阈值配置。 */
+struct DinoDecisionConfig
+{
+    bool   enable_decision_threshold{false}; ///< 是否启用最终判定阈值。
+    double decision_threshold{0.0};          ///< 判定阈值。
+};
+
+/** @brief 运行资源与推理环境配置。 */
+struct DinoRuntimeConfig
+{
+    irt::model::ModelRuntime   model_runtime{};                             ///< 推理运行目标（后端与设备）。
+    irt::model::ModelPrecision model_precision{irt::model::ModelPrecision::FP32}; ///< 推理精度。
+    size_t                     model_batch_size{4};                         ///< 推理批量大小。
+    int64_t                    query_deadline_ms{30000};                    ///< 单查询截止时间（毫秒）。
+    size_t                     region_scan_block{32768};                    ///< 紧凑扫描块大小。
+    DinoScanBackend            scan_backend{DinoScanBackend::Auto};         ///< 扫描计算后端。
+};
+
+/** @brief 诊断与适用范围规格配置。 */
+struct DinoDiagnosticsConfig
+{
+    int    validated_min_image_edge{256};        ///< 适用图像边长下限。
+    int    validated_max_image_edge{4096};       ///< 适用图像边长上限。
+    double validated_min_target_short_px{64.0};  ///< 适用目标短边下限。
+    double validated_max_target_aspect{4.0};     ///< 适用目标长宽比上限。
+};
+
 /**
- * @brief 区域检索 profile（配置）唯一来源。
- *
- * profile 或编码配置变化后删除旧索引并重新 build；查询请求的 deadline、top_k 与 include_self
- * 只影响当前查询。
+ * @brief 区域检索配置主结构体（强类型子结构体组合）。
  */
 struct INFERRT_FEATURES_API DinoRegionSearchConfig
 {
-    /// profile 名称，用于报告。
-    std::string profile_id{"development"};
-
-    /// 冻结骨干名称；DINOv3 与 DINOv2 各自建立独立索引，不能混用向量。
-    std::string model_name{"dinov3_vits16"};
-
-    /// 骨干权重或已构建 engine 文件路径。
-    std::filesystem::path weights_file{};
-
-    /// 推理运行目标（后端 + 设备）。
-    irt::model::ModelRuntime model_runtime{};
-
-    /// 骨干构建精度；量化误差单独统计，不依赖该字段。
-    irt::model::ModelPrecision model_precision{irt::model::ModelPrecision::FP32};
-
-    /// 骨干输入光栅边长；0 表示按 patch 推导为 spec DEFAULT 的 512/518。
-    int encoder_edge{0};
-
-    /// 骨干推理批量上限；建库与精匹配共用。
-    size_t model_batch_size{4};
-
-    /// 标准适用范围：图像边长下限。
-    int validated_min_image_edge{256};
-
-    /// 标准适用范围：图像边长上限。
-    int validated_max_image_edge{4096};
-
-    /// 标准适用范围：目标短边下限（canonical 像素）。
-    double validated_min_target_short_px{64.0};
-
-    /// 标准适用范围：目标长宽比上限（1:4～4:1）。
-    double validated_max_target_aspect{4.0};
-
-    /// 图库切片源边长尺度。
-    std::vector<int> gallery_tile_edges{512, 1024, 2048};
-
-    /// 切片重叠率。
-    double view_overlap{0.25};
-
-    /// 区域整体描述的窗口边长比例（相对视图短边）。
-    std::vector<double> region_window_ratios{1.0, 0.5};
-
-    /// 区域窗口步长比例（相对窗口边长）。
-    double region_window_stride_ratio{0.5};
-
-    /// 窗口有效面积占比下限，低于该值的窗口不入库。
-    double region_min_valid_fraction{0.5};
-
-    /// Coarse-only dimension; original DINO channels remain available for fine matching.
-    int coarse_dimension{96};
-
-    /// Maximum real local tokens per view, in a 4x4 spatial partition. Zero uses legacy merge/dense ablation.
-    int local_representatives{64};
-
-    /// Maximum localized boxes re-extracted for tight verification; zero disables the ablation.
-    size_t fine_verify_k{64};
-
-    /// 是否启用空间相邻合并；false 为不合并基线。
-    bool merge_enabled{true};
-
-    /// 合并误差上限（原始 FP32 归一化特征上的最大替换距离）。
-    double merge_epsilon{0.10};
-
-    /// 叶节点最大边长（patch 数），防止大范围同质背景用单点代表。
-    int max_leaf_side_patches{4};
-
-    /// 是否使用 INT8 紧凑存储；false 时使用 FP32 参考。
-    bool quantize_int8{true};
-
-    /// 区域通道候选额度。
-    size_t region_topk{400};
-
-    /// 旧 profile 字段；v4 不再用它提前淘汰视图。
-    size_t local_view_topk{200};
-
-    /// 每个通道进入融合的最大候选数。
-    size_t channel_candidate_limit{400};
-
-    /// 粗选候选总数。
-    size_t coarse_k{64};
-
-    /// 粗选去重：空间 IoU 阈值。
-    double coarse_dedup_iou{0.85};
-
-    /// 粗选去重：面积比上限。
-    double coarse_dedup_area_ratio{1.25};
-
-    /// 最终返回结果数上限。
-    size_t final_k{20};
-
-    /// 查询 ROI 在模型输入中的目标长边个数。
-    std::vector<double> query_roi_target_lengths{256.0, 448.0};
-
-    /// 查询 ROI 划分的格子边长（4 表示 4x4）。
-    int query_local_cells{4};
-
-    /// 每格最多贡献的局部描述数。
-    int query_local_max_per_cell{2};
-
-    /// 有效局部描述数量下限；低于该值标记局部证据不足。
-    int query_min_local_evidence{4};
-
-    /// 候选裁剪扩边比例。
-    double fine_candidate_expand{1.2};
-
-    /// 旧整数模板参数；v4 连续框使用固定 0.75 patch 起始短边。
-    int fine_template_min_short_patches{2};
-
-    /// 模板尺寸档位递增比例（DEFAULT sqrt(2)）。
-    double fine_template_scale_step{1.4142135623730951};
-
-    /// 单一候选的模板尺寸上限。
-    int fine_template_max_sizes{12};
-
-    /// 每候选保留的空间峰值数量。
-    int fine_peaks_per_candidate{3};
-
-    /// 峰值细化的有界轮数。
-    int fine_refinement_rounds{1};
-
-    /// 模板匹配余弦阈值（开发集冻结值）。
-    double fine_match_cosine_threshold{0.55};
-
-    /// 旧模板参数；v4 标量图使用 1.5 patch 的邻域距离归一化。
-    double fine_position_tolerance{0.25};
-
-    /// 最终框 NMS 的 IoU 阈值。
-    double fine_nms_iou{0.5};
-
-    /// template_similarity 权重。
-    double score_weight_template{0.60};
-
-    /// query_coverage 权重。
-    double score_weight_coverage{0.25};
-
-    /// spatial_consistency 权重。
-    double score_weight_consistency{0.15};
-
-    /// 一致性模式。
-    DinoConsistencyMode consistency_mode{DinoConsistencyMode::Appearance};
-
-    /// 是否启用最终判定阈值；false 时为 ranked_only。
-    bool enable_decision_threshold{false};
-
-    /// 判定阈值；仅在 ``enable_decision_threshold`` 为 true 时生效。
-    double decision_threshold{0.0};
-
-    /// 单查询 wall deadline（毫秒）。
-    int64_t query_deadline_ms{30000};
-
-    /// 紧凑向量扫描块大小。
-    size_t region_scan_block{32768};
+    std::string             preset_id{"development"}; ///< 预设/展示标签（不参与索引兼容判断）。
+    DinoModelConfig         model{};
+    DinoGalleryViewsConfig  gallery_views{};
+    DinoDescriptorConfig    descriptors{};
+    DinoQueryFeaturesConfig query_features{};
+    DinoCoarseScanConfig    coarse_scan{};
+    DinoFineMatchConfig     fine_match{};
+    DinoDecisionConfig      decision{};
+    DinoRuntimeConfig       runtime{};
+    DinoDiagnosticsConfig   diagnostics{};
 
     /**
      * @brief 校验配置的语义合法性。
@@ -330,7 +287,6 @@ struct INFERRT_FEATURES_API DinoRegionSearchConfig
 
     /** @brief 返回解析后的骨干输入边长（考虑 ``encoder_edge`` 的自动取值）。 */
     int resolvedEncoderEdge(int patch_size) const;
-
 };
 
 /** @brief 查询请求。 */
@@ -340,11 +296,11 @@ struct DinoSearchRequest
     std::filesystem::path               query_path{};
     int64_t                             query_image_id{-1};  ///< 可选：查询图像自身 ID（用于 include_self: false 时排除自身，-1 表示无匹配 ID）。
     DinoSearchRoi                       roi{};
-    size_t                              top_k{0};            ///< 0 表示使用 profile 的 ``final_k``。
+    size_t                              top_k{0};            ///< 0 表示使用 config 的 ``coarse_scan.final_k``。
     bool                                include_self{false}; ///< 是否允许返回查询自身对应的图像。
     std::optional<std::vector<int64_t>> allowed_image_ids{std::nullopt}; ///< 允许参与检索的图像 ID 白名单；nullopt 表示不过滤；空集合表示范围为空。
-    std::string                         profile_id{};        ///< 为空时使用 profile 自身的 ``profile_id``。
-    int64_t                             deadline_ms{0};      ///< 请求级 wall deadline；0 表示使用 profile 配置。
+    std::string                         preset_id{};         ///< 可选展示/请求标签。
+    int64_t                             deadline_ms{0};      ///< 请求级 wall deadline；0 表示使用 runtime 配置。
     std::function<std::filesystem::path(int64_t)> image_resolver{}; ///< 可选：图像 ID 到文件路径的解析函数（用于精排与紧裁复核阶段加载候选原图）。
 };
 
@@ -458,17 +414,11 @@ struct DinoBuildReport
     std::vector<std::string>     messages{};
 };
 
-/**
- * @brief 强制指定局部通道的相似度归约后端，用于 T13 的参考/优化差异报告与对照实验。
- *
- * @param backend ``"auto"``（默认，有可用 GPU 用 GPU）、``"cpu"`` 或 ``"cuda"``；
- *                非 ``"auto"`` 时请求的后端不可用会退回 CPU。
- * @throws irt::Exception 名称非法时抛出。
- */
-INFERRT_FEATURES_API void dinoSetScanBackendOverride(const std::string &backend);
-
-/** @brief Parse documented YAML profile text. */
+/** @brief Parse documented YAML profile/config text. */
 INFERRT_FEATURES_API DinoRegionSearchConfig dinoConfigFromYaml(const std::string &text);
+
+/** @brief Serialize configuration to YAML text. */
+INFERRT_FEATURES_API std::string dinoConfigToYaml(const DinoRegionSearchConfig &config);
 
 /** @brief Parse YAML search request text. */
 INFERRT_FEATURES_API DinoSearchRequest dinoSearchRequestFromYaml(const std::string &text);
@@ -490,6 +440,16 @@ INFERRT_FEATURES_API std::string dinoBuildReportToYaml(const DinoBuildReport &re
 class INFERRT_FEATURES_API DinoRegionSearch
 {
 public:
+    /**
+     * @brief 预先检查索引是否存在、格式是否有效且与当前配置硬参数兼容。
+     *
+     * @param index_root 索引根目录。
+     * @param config 检索配置。
+     * @return true 表示需要（重新）构建索引；false 表示可直接复用现有索引。
+     * @throws irt::Exception 参数非法、索引文件严重损坏或 I/O 错误时抛出。
+     */
+    static bool needsRebuild(const std::filesystem::path &index_root, const DinoRegionSearchConfig &config);
+
     /**
      * @brief 从显式图像条目列表建立本地索引（核心入口）。
      *

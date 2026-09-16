@@ -34,8 +34,8 @@ int findDuplicate(const std::vector<DinoCandidate> &accepted, const DinoCandidat
         {
             continue;
         }
-        if (dinoIoU(existing.source_bbox, candidate.source_bbox) >= config.coarse_dedup_iou
-            && areaRatio(existing.source_bbox, candidate.source_bbox) <= config.coarse_dedup_area_ratio)
+        if (dinoIoU(existing.source_bbox, candidate.source_bbox) >= config.coarse_scan.coarse_dedup_iou
+            && areaRatio(existing.source_bbox, candidate.source_bbox) <= config.coarse_scan.coarse_dedup_area_ratio)
         {
             return static_cast<int>(index);
         }
@@ -71,7 +71,7 @@ DinoFusionOutcome dinoFuseCandidates(const std::vector<DinoCandidate> &region_ca
                                      const DinoRegionSearchConfig &config)
 {
     DinoFusionOutcome outcome;
-    const size_t per_channel_quota = config.coarse_k / 2U;
+    const size_t per_channel_quota = config.coarse_scan.coarse_k / 2U;
 
     size_t region_index = 0;
     size_t local_index  = 0;
@@ -98,7 +98,7 @@ DinoFusionOutcome dinoFuseCandidates(const std::vector<DinoCandidate> &region_ca
         return true;
     };
 
-    while (outcome.candidates.size() < config.coarse_k)
+    while (outcome.candidates.size() < config.coarse_scan.coarse_k)
     {
         const bool region_exhausted = region_index >= region_candidates.size();
         const bool local_exhausted  = local_index >= local_candidates.size();

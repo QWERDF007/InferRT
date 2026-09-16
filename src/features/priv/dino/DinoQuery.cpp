@@ -21,7 +21,7 @@ DinoQuery dinoBuildQuery(const DinoCanonicalImage &image, const DinoRoi &roi, Di
 {
     DinoQuery query;
     query.roi = roi;
-    query.cells = config.query_local_cells;
+    query.cells = config.query_features.query_local_cells;
 
     const auto plans = planner.planQueryViews(roi, image.record.width, image.record.height);
     const auto spec  = dinoViewPreprocessSpec(planner.encoderEdge(), planner.patchSize());
@@ -35,8 +35,8 @@ DinoQuery dinoBuildQuery(const DinoCanonicalImage &image, const DinoRoi &roi, Di
     const auto forward_start = backbone.forwardCount();
     const auto grids = backbone.extract(rasters);
     model_forwards += backbone.forwardCount() - forward_start;
-    const int  cells = std::max(1, config.query_local_cells);
-    const retrieval::Projection projection(backbone.channels(), config.coarse_dimension);
+    const int  cells = std::max(1, config.query_features.query_local_cells);
+    const retrieval::Projection projection(backbone.channels(), config.descriptors.coarse_dimension);
     const auto roi_bbox = roi.boundingBox();
 
     for (const auto &grid : grids)
@@ -85,7 +85,7 @@ DinoQuery dinoBuildQuery(const DinoCanonicalImage &image, const DinoRoi &roi, Di
         view.roi_vector = std::move(pooled);
 
         view.coarse_roi_vector = projection.apply(view.roi_vector.data());
-        const auto samples = retrieval::select(grid, roi_bbox, weights, cells, config.query_local_max_per_cell);
+        const auto samples = retrieval::select(grid, roi_bbox, weights, cells, config.query_features.query_local_max_per_cell);
         int previous_cell = -1;
         int slot = 0;
         for (const auto &sample : samples)
@@ -115,14 +115,14 @@ DinoQuery dinoBuildQuery(const DinoCanonicalImage &image, const DinoRoi &roi, Di
     size_t total_tokens = 0;
     for (const auto &view : query.views) total_tokens += view.tokens.size();
     query.low_local_evidence
-        = query.valid_cell_count < config.query_min_local_evidence || total_tokens < 2U;
+        = query.valid_cell_count < config.query_features.query_min_local_evidence || total_tokens < 2U;
 
     std::string         note;
     DinoValidatedRange  range;
-    range.min_image_edge      = config.validated_min_image_edge;
-    range.max_image_edge      = config.validated_max_image_edge;
-    range.min_target_short_px = config.validated_min_target_short_px;
-    range.max_target_aspect   = config.validated_max_target_aspect;
+    range.min_image_edge      = config.diagnostics.validated_min_image_edge;
+    range.max_image_edge      = config.diagnostics.validated_max_image_edge;
+    range.min_target_short_px = config.diagnostics.validated_min_target_short_px;
+    range.max_target_aspect   = config.diagnostics.validated_max_target_aspect;
     query.outside_validated_profile
         = !dinoWithinValidatedProfile(roi, image.record.width, image.record.height, range, note);
     query.profile_note = note;
