@@ -47,6 +47,8 @@ struct DinoIndexContract
     bool                quantize_int8{true};
     std::string         preprocess_description{};
 
+    bool operator==(const DinoIndexContract &) const = default;
+
     static DinoIndexContract fromConfig(const DinoRegionSearchConfig &config);
     YAML::Node toYamlNode() const;
     static DinoIndexContract fromYamlNode(const YAML::Node &node);

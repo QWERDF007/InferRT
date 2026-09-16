@@ -7,6 +7,7 @@
 
 #include "DinoTypes.hpp"
 #include "DinoViews.hpp"
+#include "DinoBackboneMetadata.hpp"
 
 #include <NvInfer.h>
 #include <inferrt/features/DinoRegionSearch.hpp>
@@ -18,6 +19,7 @@
 #include <string>
 
 namespace irt::features::priv {
+
 
 /** @brief 提取器签名：权重、代码、提取层、前处理与精度的唯一记录。 */
 struct DinoExtractorSignature

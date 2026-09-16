@@ -18,12 +18,16 @@ inline DINOTransformerSpec makeLingBotVisionSpec(const char *display_name, int e
  * LingBot-Vision 与 DINOv3 使用相同的 token、RoPE 和 Transformer block
  * 拓扑；具体差异通过 Transformer spec 配置，网络实现复用 DINOTransformer。
  */
-class LingBotVisionViTS16 : public DINOTransformer
-{
+class LingBotVisionViTS16 : public DINOTransformer {
 public:
     LingBotVisionViTS16()
-        : DINOTransformer(makeLingBotVisionSpec("LingBotVisionViTS16", 384, 12, 6))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeLingBotVisionSpec("LingBotVisionViTS16", 384, 12, 6);
     }
 
     static const char *key() noexcept
@@ -35,12 +39,16 @@ public:
 /**
  * @brief LingBot-Vision ViT-B/16 TensorRT 主干。
  */
-class LingBotVisionViTB16 : public DINOTransformer
-{
+class LingBotVisionViTB16 : public DINOTransformer {
 public:
     LingBotVisionViTB16()
-        : DINOTransformer(makeLingBotVisionSpec("LingBotVisionViTB16", 768, 12, 12))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeLingBotVisionSpec("LingBotVisionViTB16", 768, 12, 12);
     }
 
     static const char *key() noexcept
@@ -52,12 +60,16 @@ public:
 /**
  * @brief LingBot-Vision ViT-L/16 TensorRT 主干。
  */
-class LingBotVisionViTL16 : public DINOTransformer
-{
+class LingBotVisionViTL16 : public DINOTransformer {
 public:
     LingBotVisionViTL16()
-        : DINOTransformer(makeLingBotVisionSpec("LingBotVisionViTL16", 1024, 24, 16))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeLingBotVisionSpec("LingBotVisionViTL16", 1024, 24, 16);
     }
 
     static const char *key() noexcept
@@ -69,13 +81,17 @@ public:
 /**
  * @brief LingBot-Vision ViT-G/16 TensorRT 主干。
  */
-class LingBotVisionViTG16 : public DINOTransformer
-{
+class LingBotVisionViTG16 : public DINOTransformer {
 public:
     LingBotVisionViTG16()
-        : DINOTransformer(makeLingBotVisionSpec("LingBotVisionViTG16", 1536, 40, 24,
-                                                 DINOMlpKind::SplitSwiGLU, 8))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeLingBotVisionSpec("LingBotVisionViTG16", 1536, 40, 24,
+                                                 DINOMlpKind::SplitSwiGLU, 8);
     }
 
     static const char *key() noexcept

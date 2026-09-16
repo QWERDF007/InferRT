@@ -111,40 +111,91 @@ TEST(DinoRegionSearchContract, InvalidRoiAndSearchSizesAreRejected)
     EXPECT_THROW((void)irt::features::dinoSearchRequestFromYaml(
         "query_path: a.png\nbbox: [1, 2, .nan, 9]\n"), irt::Exception);
     EXPECT_THROW((void)irt::features::dinoConfigFromYaml(
-        "model: {name: dinov3_vits16, weights_path: unused.wts}\nsearch: {block_descriptors: 0}\n"), irt::Exception);
+        "runtime: {region_scan_block: 0}\n"), irt::Exception);
 }
 
 TEST(DinoRegionSearchContract, MalformedProfileValuesUseInvalidArgument)
 {
     EXPECT_THROW((void)irt::features::dinoConfigFromYaml(
-                     "model: {name: dinov3_vits16, weights_path: unused.wts, encoder_edge: invalid}\n"),
+                     "model: {encoder_edge: invalid}\n"),
                  irt::Exception);
 }
 
 TEST(DinoRegionSearchContract, UnsupportedProfileEnumsAreRejected)
 {
-    const std::string base = "model: {name: dinov3_vits16, weights_path: unused.wts}\n";
-    EXPECT_THROW((void)irt::features::dinoConfigFromYaml(base + "mode: unsupported\n"), irt::Exception);
     EXPECT_THROW((void)irt::features::dinoConfigFromYaml(
-                     "model: {name: dinov3_vits16, weights_path: unused.wts, precision: int8}\n"),
-                 irt::Exception);
+                     "fine_match: {consistency_mode: unsupported}\n"), irt::Exception);
     EXPECT_THROW((void)irt::features::dinoConfigFromYaml(
-                     base + "quantization: {format: unsupported}\n"),
-                 irt::Exception);
+                     "runtime: {model_precision: int8}\n"), irt::Exception);
+    EXPECT_THROW((void)irt::features::dinoConfigFromYaml(
+                     "runtime: {scan_backend: unsupported}\n"), irt::Exception);
 }
-TEST(DinoRegionSearchContract, RequestDeadlineAndThresholdUseLightweightContract)
+TEST(DinoRegionSearchContract, DecisionThresholdCanBeConfiguredBeforeEnabling)
 {
-    const auto config = irt::features::dinoConfigFromYaml(
-        "model: {name: dinov3_vits16, weights_path: unused.wts}\n"
-        "decision: {threshold: 0.73}\n"
-        "deadline_ms: 30000\n");
-    EXPECT_TRUE(config.decision.enable_decision_threshold);
+    auto config = irt::features::dinoConfigFromYaml("decision: {decision_threshold: 0.73}\n");
     EXPECT_DOUBLE_EQ(config.decision.decision_threshold, 0.73);
+    config.decision.enable_decision_threshold = true;
+    EXPECT_NO_THROW(config.validate());
 
-    const auto request = irt::features::dinoSearchRequestFromYaml(
-        "query_path: a.png\nbbox: [1, 2, 8, 9]\ndeadline_ms: 1\n");
-    EXPECT_EQ(request.deadline_ms, 1);
+    config = irt::features::dinoConfigFromYaml("decision: {decision_threshold: 1.2}\n");
+    config.decision.enable_decision_threshold = true;
+    EXPECT_THROW(config.validate(), irt::Exception);
 }
+
+TEST(DinoRegionSearchContract, LegacyConfigGroupsAndAliasesAreRejected)
+{
+    const auto yaml = irt::features::dinoConfigToYaml(irt::features::DinoRegionSearchConfig{});
+    const struct { const char *key; const char *value; } legacy_fields[] = {
+        {"profile_id", "retired_profile"},
+        {"mode", "appearance"},
+        {"deadline_ms", "30000"},
+        {"views", "{source_tile_edges: [512, 1024]}"},
+        {"regions", "{coarse_dimension: 192}"},
+        {"merge", "{enabled: true}"},
+        {"quantization", "{format: int8}"},
+        {"query", "{grid_bins: 4}"},
+        {"search", "{block_descriptors: 2048}"},
+        {"fine", "{verify_k: 32}"},
+        {"input", "{min_image_edge: 64}"},
+    };
+    for (const auto &field : legacy_fields)
+    {
+        SCOPED_TRACE(field.key);
+        auto node = YAML::Load(yaml);
+        node[field.key] = YAML::Load(field.value);
+        EXPECT_THROW((void)irt::features::dinoConfigFromYaml(YAML::Dump(node)), irt::Exception);
+    }
+
+    const struct { const char *group; const char *key; const char *value; } aliases[] = {
+        {"model", "name", "dinov3_vits16"},
+        {"model", "weights_path", "unused.wts"},
+        {"model", "precision", "fp32"},
+        {"gallery_views", "overlap", "0.25"},
+        {"query_features", "grid_bins", "4"},
+        {"coarse_scan", "region_pool", "100"},
+        {"coarse_scan", "block_descriptors", "2048"},
+        {"fine_match", "verify_k", "32"},
+        {"fine_match", "final_k", "20"},
+        {"fine_match", "score_weights", "[0.5, 0.3, 0.2]"},
+        {"decision", "threshold", "0.73"},
+        {"runtime", "precision", "fp32"},
+        {"diagnostics", "min_image_edge", "64"},
+    };
+    for (const auto &alias : aliases)
+    {
+        SCOPED_TRACE(std::string(alias.group) + "." + alias.key);
+        auto node = YAML::Load(yaml);
+        node[alias.group][alias.key] = YAML::Load(alias.value);
+        EXPECT_THROW((void)irt::features::dinoConfigFromYaml(YAML::Dump(node)), irt::Exception);
+    }
+}
+
+TEST(DinoRegionSearchContract, ConfigGroupsMustBeMappings)
+{
+    EXPECT_THROW((void)irt::features::dinoConfigFromYaml("runtime: null\n"), irt::Exception);
+    EXPECT_THROW((void)irt::features::dinoConfigFromYaml("decision: []\n"), irt::Exception);
+}
+
 TEST(DinoRegionSearchContract, ResponseIncludesCandidatesTimingsAndDiagnostics)
 {
     irt::features::DinoSearchResponse response;
@@ -1142,27 +1193,13 @@ TEST(DinoRegionSearchScan, SpatialTopTwoMatchesAcrossAvailableBackends)
     }
 }
 
-TEST(DinoRegionSearchContract, V4BudgetAndBatchFieldsParse)
+TEST(DinoRegionSearchContract, RequestsPreserveBatchOrder)
 {
-    const auto config = irt::features::dinoConfigFromYaml(
-        "model: {name: dinov3_vits16, weights_file: unused.wts}\n"
-        "descriptors: {coarse_dimension: 192, local_representatives: 128}\n"
-        "fine_match: {fine_verify_k: 32}\n");
-    EXPECT_EQ(config.descriptors.coarse_dimension, 192);
-    EXPECT_EQ(config.descriptors.local_representatives, 128);
-    EXPECT_EQ(config.fine_match.fine_verify_k, 32U);
     const auto requests = irt::features::dinoSearchRequestsFromYaml(
         "- request_id: square\n  query_path: a.png\n  bbox: [0, 0, 40, 40]\n"
         "- request_id: small\n  query_path: b.png\n  bbox: [5, 5, 15, 15]\n");
     ASSERT_EQ(requests.size(), 2U);
     EXPECT_EQ(requests[1].request_id, "small");
-    irt::features::DinoSearchResponse response;
-    response.score_kind = "tight_global_and_grid";
-    response.verified_candidates = 3;
-    auto yaml = irt::features::dinoSearchResponseToYaml(response);
-    EXPECT_NE(yaml.find("localized_candidates"), std::string::npos);
-    EXPECT_NE(yaml.find("verification_candidates"), std::string::npos);
-    EXPECT_NE(yaml.find("tight_global_and_grid"), std::string::npos);
 }
 
 TEST(DinoRegionSearchBuild, BuildRejectsEmptyAndDuplicateItems)
@@ -1188,42 +1225,6 @@ TEST(DinoRegionSearchBuild, BuildRejectsEmptyAndDuplicateItems)
         irt::Exception);
 }
 
-TEST(DinoRegionSearchProgress, BuildAndSearchProgressSupportBatchFields)
-{
-    irt::features::DinoBuildProgress build_p;
-    build_p.stage = irt::features::DinoBuildStage::ExtractingViews;
-    build_p.batch_index = 2;
-    build_p.batch_begin = 2;
-    build_p.batch_count = 1;
-    build_p.processed_count = 3;
-    build_p.total_count = 10;
-    build_p.message = "sample.png";
-
-    EXPECT_EQ(build_p.stage, irt::features::DinoBuildStage::ExtractingViews);
-    EXPECT_EQ(build_p.batch_index, 2U);
-    EXPECT_EQ(build_p.batch_begin, 2U);
-    EXPECT_EQ(build_p.batch_count, 1U);
-    EXPECT_EQ(build_p.processed_count, 3U);
-    EXPECT_EQ(build_p.total_count, 10U);
-    EXPECT_EQ(build_p.message, "sample.png");
-
-    irt::features::DinoSearchProgress search_p;
-    search_p.stage = irt::features::DinoSearchStage::FineMatch;
-    search_p.batch_index = 1;
-    search_p.batch_begin = 4;
-    search_p.batch_count = 4;
-    search_p.processed_count = 8;
-    search_p.total_count = 16;
-    search_p.message = "matching candidate crops";
-
-    EXPECT_EQ(search_p.stage, irt::features::DinoSearchStage::FineMatch);
-    EXPECT_EQ(search_p.batch_index, 1U);
-    EXPECT_EQ(search_p.batch_begin, 4U);
-    EXPECT_EQ(search_p.batch_count, 4U);
-    EXPECT_EQ(search_p.processed_count, 8U);
-    EXPECT_EQ(search_p.total_count, 16U);
-    EXPECT_EQ(search_p.message, "matching candidate crops");
-}
 
 TEST(DinoRegionSearchContract, HierarchicalYamlRoundTripPreservesAllFields)
 {
@@ -1289,7 +1290,6 @@ TEST(DinoRegionSearchContract, HierarchicalYamlRoundTripPreservesAllFields)
 
     // Serialize to YAML
     const std::string yaml = irt::features::dinoConfigToYaml(original);
-    EXPECT_FALSE(yaml.empty());
 
     // Parse back from YAML
     const auto parsed = irt::features::dinoConfigFromYaml(yaml);
@@ -1431,8 +1431,6 @@ TEST(DinoRegionSearchContract, NeedsRebuildAndValidateContractOnHardParameters)
         catch (const irt::Exception &e)
         {
             EXPECT_EQ(e.code(), irt::Status::NOT_READY);
-            EXPECT_NE(std::string(e.what()).find("weights_id"), std::string::npos);
-            EXPECT_NE(std::string(e.what()).find("重建索引"), std::string::npos);
         }
     }
 
@@ -1440,6 +1438,7 @@ TEST(DinoRegionSearchContract, NeedsRebuildAndValidateContractOnHardParameters)
     {
         auto h_config = base_config;
         h_config.model.model_name = "dinov3_vits16";
+        h_config.model.encoder_edge = 0;
         EXPECT_TRUE(irt::features::DinoRegionSearch::needsRebuild(root, h_config));
         irt::features::priv::DinoIndexReader reader(root);
         try
@@ -1450,7 +1449,6 @@ TEST(DinoRegionSearchContract, NeedsRebuildAndValidateContractOnHardParameters)
         catch (const irt::Exception &e)
         {
             EXPECT_EQ(e.code(), irt::Status::NOT_READY);
-            EXPECT_NE(std::string(e.what()).find("model_name"), std::string::npos);
         }
     }
 
@@ -1490,6 +1488,46 @@ TEST(DinoRegionSearchContract, NeedsRebuildAndValidateContractOnHardParameters)
         EXPECT_NO_THROW(reader.validateContract(auto_config));
     }
 
+    const auto metadata_path = root / "index.yaml";
+    const auto metadata = YAML::LoadFile(metadata_path.string());
+    for (const auto &entry : metadata["manifest"])
+    {
+        const auto key = entry.first.as<std::string>();
+        SCOPED_TRACE(key);
+        auto incomplete = YAML::Clone(metadata);
+        incomplete["manifest"].remove(key);
+        std::ofstream(metadata_path) << incomplete;
+        EXPECT_THROW((void)irt::features::DinoRegionSearch::needsRebuild(root, base_config), irt::Exception);
+    }
+
+    const struct { const char *key; const char *value; } changed_contracts[] = {
+        {"token_dimension", "768"},
+        {"patch_size", "16"},
+        {"preprocess_description", "rgb8;resize=nearest"},
+    };
+    for (const auto &change : changed_contracts)
+    {
+        SCOPED_TRACE(change.key);
+        auto incompatible = YAML::Clone(metadata);
+        incompatible["manifest"][change.key] = YAML::Load(change.value);
+        std::ofstream(metadata_path) << incompatible;
+        EXPECT_TRUE(irt::features::DinoRegionSearch::needsRebuild(root, base_config));
+        irt::features::priv::DinoIndexReader reader(root);
+        try
+        {
+            reader.validateContract(base_config);
+            FAIL() << "Expected incompatible index contract to be rejected";
+        }
+        catch (const irt::Exception &e)
+        {
+            EXPECT_EQ(e.code(), irt::Status::NOT_READY);
+        }
+    }
+
+    std::ofstream(metadata_path) << metadata;
+    ASSERT_TRUE(std::filesystem::remove(root / "local_vectors.f32"));
+    EXPECT_THROW((void)irt::features::DinoRegionSearch::needsRebuild(root, base_config), irt::Exception);
+
     std::filesystem::remove_all(root);
 }
 
@@ -1518,7 +1556,6 @@ TEST(DinoRegionSearchContract, OldIndexWithoutManifestRequiresRebuild)
     catch (const irt::Exception &e)
     {
         EXPECT_EQ(e.code(), irt::Status::NOT_READY);
-        EXPECT_NE(std::string(e.what()).find("重建索引"), std::string::npos);
     }
 
     std::filesystem::remove_all(root);

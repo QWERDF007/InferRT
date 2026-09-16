@@ -299,7 +299,6 @@ struct DinoSearchRequest
     size_t                              top_k{0};            ///< 0 表示使用 config 的 ``coarse_scan.final_k``。
     bool                                include_self{false}; ///< 是否允许返回查询自身对应的图像。
     std::optional<std::vector<int64_t>> allowed_image_ids{std::nullopt}; ///< 允许参与检索的图像 ID 白名单；nullopt 表示不过滤；空集合表示范围为空。
-    std::string                         preset_id{};         ///< 可选展示/请求标签。
     int64_t                             deadline_ms{0};      ///< 请求级 wall deadline；0 表示使用 runtime 配置。
     std::function<std::filesystem::path(int64_t)> image_resolver{}; ///< 可选：图像 ID 到文件路径的解析函数（用于精排与紧裁复核阶段加载候选原图）。
 };

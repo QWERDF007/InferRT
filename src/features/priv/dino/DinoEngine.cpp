@@ -579,6 +579,7 @@ DinoSearchResponse dinoSearchIndex(const fs::path &index_root, const DinoSearchR
     if (!active_reader || active_index_path != path) {
         active_reader = std::make_unique<DinoIndexReader>(path);
         active_index_path = path;
+        dinoResetSearchCaches();
     }
     const auto &reader = *active_reader;
     reader.validateContract(config);

@@ -16,6 +16,13 @@ namespace irt::model {
  */
 using ModelCreator = std::unique_ptr<IModel> (*)();
 
+/** @brief 静态 patch-token 输出规格；零值表示模型未声明 patch-token 输出。 */
+struct PatchTokenMetadata
+{
+    int patch_size{0};
+    int channels{0};
+};
+
 /**
  * @brief 模型注册器。
  *
@@ -28,17 +35,20 @@ public:
      * @brief 注册一个模型创建器。
      * @param name 模型注册名称。
      * @param creator 模型创建函数。
+     * @param patch_tokens 静态 patch-token 输出规格；未提供表示不支持该输出。
      */
-    ModelRegistrar(const std::string &name, ModelCreator creator);
+    ModelRegistrar(const std::string &name, ModelCreator creator, PatchTokenMetadata patch_tokens = {});
 };
 
 /**
  * @brief 向全局模型注册表注册模型。
  * @param name 模型注册名称。
  * @param creator 模型创建函数。
+ * @param patch_tokens 静态 patch-token 输出规格；未提供表示不支持该输出。
  * @return 注册成功返回 true；名称重复或创建函数无效时返回 false。
  */
-INFERRT_MODEL_API bool RegisterModel(const std::string &name, ModelCreator creator);
+INFERRT_MODEL_API bool RegisterModel(const std::string &name, ModelCreator creator,
+                                    PatchTokenMetadata patch_tokens = {});
 
 /**
  * @brief 查询模型名称是否已注册。
@@ -52,6 +62,12 @@ INFERRT_MODEL_API bool isSupportedModel(const std::string &name);
  * @return 已注册模型名称列表。
  */
 INFERRT_MODEL_API std::vector<std::string> getRegisteredModelNames();
+
+/**
+ * @brief 查询注册模型的静态 patch-token 规格，不创建模型、后端或读取权重。
+ * @throws irt::Exception 模型未注册或未声明 patch-token 输出。
+ */
+INFERRT_MODEL_API PatchTokenMetadata describePatchTokens(const std::string &name);
 
 /**
  * @brief 根据名称创建模型对象。

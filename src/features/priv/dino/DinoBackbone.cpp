@@ -149,6 +149,14 @@ DinoBackboneRegistry &backboneRegistry()
 
 } // namespace
 
+DinoBackboneMetadata dinoDescribeBackbone(const DinoRegionSearchConfig &config)
+{
+    const auto model = irt::model::describePatchTokens(config.model.model_name);
+    const int encoder_edge = dinoResolveEncoderEdge(config, model.patch_size);
+    return {model.patch_size, model.channels, encoder_edge,
+            preprocessDescription(dinoViewPreprocessSpec(encoder_edge, model.patch_size))};
+}
+
 std::string DinoExtractorSignature::cacheKey() const
 {
     return model_name + "|" + weights_path + "|" + std::to_string(weights_size) + "|"
@@ -163,10 +171,9 @@ DinoBackbone::DinoBackbone(const DinoRegionSearchConfig &config)
 {
     dinoValidateConfig(config_);
 
-    // 骨干 patch 边长由模型别名决定：DINOv3 为 16，DINOv2 为 14。
-    const bool is_dinov3 = config_.model.model_name.find("dinov3") != std::string::npos;
-    const int  patch_size = is_dinov3 ? 16 : 14;
-    const int  encoder_edge = dinoResolveEncoderEdge(config_, patch_size);
+    const auto metadata = dinoDescribeBackbone(config_);
+    const int patch_size = metadata.patch_size;
+    const int encoder_edge = metadata.encoder_edge;
     preprocess_spec_ = dinoViewPreprocessSpec(encoder_edge, patch_size);
 
     constexpr const char *kPatchTokenFeature = "x_norm_patchtokens";
@@ -238,6 +245,12 @@ DinoBackbone::DinoBackbone(const DinoRegionSearchConfig &config)
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
                              "Backbone patch token output must be BxNxD, got %s", dimsToCsv(output_shape_).c_str());
     }
+    if (output_shape_.d[2] != metadata.channels)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "Backbone patch token dimension mismatch: output has %d channels, expected %d",
+                             output_shape_.d[2], metadata.channels);
+    }
 
     max_batch_size_ = static_cast<size_t>(input_shape_.d[0]);
     const auto grid_height = static_cast<int>(input_shape_.d[2]) / patch_size;
@@ -264,10 +277,10 @@ DinoBackbone::DinoBackbone(const DinoRegionSearchConfig &config)
     signature_.input_shape   = dimsToCsv(input_shape_);
     signature_.output_shape  = dimsToCsv(output_shape_);
     signature_.extractor_layer = std::string(kPatchTokenFeature) + " (last layer, normalized spatial tokens)";
-    signature_.preprocess    = preprocessDescription(preprocess_spec_);
+    signature_.preprocess    = metadata.preprocess;
     signature_.revision      = irt::GetVersionString() + "|trt-" + std::to_string(NV_TENSORRT_MAJOR);
     signature_.patch_size    = patch_size;
-    signature_.channels      = static_cast<int>(output_shape_.d[2]);
+    signature_.channels      = metadata.channels;
     signature_.encoder_edge  = encoder_edge;
     signature_.grid_height   = grid_height;
     signature_.grid_width    = grid_width;

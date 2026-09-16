@@ -733,12 +733,16 @@ DINOTransformerSpec makeDINOv3Spec(const char *display_name, int image_size, int
             mlp_ratio,    DINOVersion::V3, mlp_kind, swiglu_align, 1e-5F};
 }
 
-class DINOv2ViTS14 : public DINOTransformer
-{
+class DINOv2ViTS14 : public DINOTransformer {
 public:
     DINOv2ViTS14()
-        : DINOTransformer(makeDINOv2Spec("DINOv2ViTS14", 518, 384, 12, 6, DINOMlpKind::Mlp, 0))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv2Spec("DINOv2ViTS14", 518, 384, 12, 6, DINOMlpKind::Mlp, 0);
     }
 
     static const char *key() noexcept
@@ -747,12 +751,16 @@ public:
     }
 };
 
-class DINOv2ViTB14 : public DINOTransformer
-{
+class DINOv2ViTB14 : public DINOTransformer {
 public:
     DINOv2ViTB14()
-        : DINOTransformer(makeDINOv2Spec("DINOv2ViTB14", 518, 768, 12, 12, DINOMlpKind::Mlp, 0))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv2Spec("DINOv2ViTB14", 518, 768, 12, 12, DINOMlpKind::Mlp, 0);
     }
 
     static const char *key() noexcept
@@ -761,12 +769,16 @@ public:
     }
 };
 
-class DINOv2ViTL14 : public DINOTransformer
-{
+class DINOv2ViTL14 : public DINOTransformer {
 public:
     DINOv2ViTL14()
-        : DINOTransformer(makeDINOv2Spec("DINOv2ViTL14", 518, 1024, 24, 16, DINOMlpKind::Mlp, 0))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv2Spec("DINOv2ViTL14", 518, 1024, 24, 16, DINOMlpKind::Mlp, 0);
     }
 
     static const char *key() noexcept
@@ -775,12 +787,16 @@ public:
     }
 };
 
-class DINOv2ViTG14 : public DINOTransformer
-{
+class DINOv2ViTG14 : public DINOTransformer {
 public:
     DINOv2ViTG14()
-        : DINOTransformer(makeDINOv2Spec("DINOv2ViTG14", 518, 1536, 40, 24, DINOMlpKind::PackedSwiGLU, 0))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv2Spec("DINOv2ViTG14", 518, 1536, 40, 24, DINOMlpKind::PackedSwiGLU, 0);
     }
 
     static const char *key() noexcept
@@ -789,12 +805,16 @@ public:
     }
 };
 
-class DINOv2ViTS14Reg : public DINOTransformer
-{
+class DINOv2ViTS14Reg : public DINOTransformer {
 public:
     DINOv2ViTS14Reg()
-        : DINOTransformer(makeDINOv2Spec("DINOv2ViTS14Reg4", 518, 384, 12, 6, DINOMlpKind::Mlp, 4))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv2Spec("DINOv2ViTS14Reg4", 518, 384, 12, 6, DINOMlpKind::Mlp, 4);
     }
 
     static const char *key() noexcept
@@ -803,12 +823,16 @@ public:
     }
 };
 
-class DINOv2ViTB14Reg : public DINOTransformer
-{
+class DINOv2ViTB14Reg : public DINOTransformer {
 public:
     DINOv2ViTB14Reg()
-        : DINOTransformer(makeDINOv2Spec("DINOv2ViTB14Reg4", 518, 768, 12, 12, DINOMlpKind::Mlp, 4))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv2Spec("DINOv2ViTB14Reg4", 518, 768, 12, 12, DINOMlpKind::Mlp, 4);
     }
 
     static const char *key() noexcept
@@ -817,12 +841,16 @@ public:
     }
 };
 
-class DINOv2ViTL14Reg : public DINOTransformer
-{
+class DINOv2ViTL14Reg : public DINOTransformer {
 public:
     DINOv2ViTL14Reg()
-        : DINOTransformer(makeDINOv2Spec("DINOv2ViTL14Reg4", 518, 1024, 24, 16, DINOMlpKind::Mlp, 4))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv2Spec("DINOv2ViTL14Reg4", 518, 1024, 24, 16, DINOMlpKind::Mlp, 4);
     }
 
     static const char *key() noexcept
@@ -831,12 +859,16 @@ public:
     }
 };
 
-class DINOv2ViTG14Reg : public DINOTransformer
-{
+class DINOv2ViTG14Reg : public DINOTransformer {
 public:
     DINOv2ViTG14Reg()
-        : DINOTransformer(makeDINOv2Spec("DINOv2ViTG14Reg4", 518, 1536, 40, 24, DINOMlpKind::PackedSwiGLU, 4))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv2Spec("DINOv2ViTG14Reg4", 518, 1536, 40, 24, DINOMlpKind::PackedSwiGLU, 4);
     }
 
     static const char *key() noexcept
@@ -845,12 +877,16 @@ public:
     }
 };
 
-class DINOv3ViTS16 : public DINOTransformer
-{
+class DINOv3ViTS16 : public DINOTransformer {
 public:
     DINOv3ViTS16()
-        : DINOTransformer(makeDINOv3Spec("DINOv3ViTS16", 224, 384, 12, 6, 4.0F, DINOMlpKind::Mlp, 1))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv3Spec("DINOv3ViTS16", 224, 384, 12, 6, 4.0F, DINOMlpKind::Mlp, 1);
     }
 
     static const char *key() noexcept
@@ -859,12 +895,16 @@ public:
     }
 };
 
-class DINOv3ViTS16Plus : public DINOTransformer
-{
+class DINOv3ViTS16Plus : public DINOTransformer {
 public:
     DINOv3ViTS16Plus()
-        : DINOTransformer(makeDINOv3Spec("DINOv3ViTS16Plus", 224, 384, 12, 6, 6.0F, DINOMlpKind::SplitSwiGLU, 8))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv3Spec("DINOv3ViTS16Plus", 224, 384, 12, 6, 6.0F, DINOMlpKind::SplitSwiGLU, 8);
     }
 
     static const char *key() noexcept
@@ -873,12 +913,16 @@ public:
     }
 };
 
-class DINOv3ViTB16 : public DINOTransformer
-{
+class DINOv3ViTB16 : public DINOTransformer {
 public:
     DINOv3ViTB16()
-        : DINOTransformer(makeDINOv3Spec("DINOv3ViTB16", 224, 768, 12, 12, 4.0F, DINOMlpKind::Mlp, 1))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv3Spec("DINOv3ViTB16", 224, 768, 12, 12, 4.0F, DINOMlpKind::Mlp, 1);
     }
 
     static const char *key() noexcept
@@ -887,12 +931,16 @@ public:
     }
 };
 
-class DINOv3ViTL16 : public DINOTransformer
-{
+class DINOv3ViTL16 : public DINOTransformer {
 public:
     DINOv3ViTL16()
-        : DINOTransformer(makeDINOv3Spec("DINOv3ViTL16", 224, 1024, 24, 16, 4.0F, DINOMlpKind::Mlp, 1))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv3Spec("DINOv3ViTL16", 224, 1024, 24, 16, 4.0F, DINOMlpKind::Mlp, 1);
     }
 
     static const char *key() noexcept
@@ -901,12 +949,16 @@ public:
     }
 };
 
-class DINOv3ViTL16Plus : public DINOTransformer
-{
+class DINOv3ViTL16Plus : public DINOTransformer {
 public:
     DINOv3ViTL16Plus()
-        : DINOTransformer(makeDINOv3Spec("DINOv3ViTL16Plus", 224, 1024, 24, 16, 6.0F, DINOMlpKind::SplitSwiGLU, 8))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv3Spec("DINOv3ViTL16Plus", 224, 1024, 24, 16, 6.0F, DINOMlpKind::SplitSwiGLU, 8);
     }
 
     static const char *key() noexcept
@@ -915,12 +967,16 @@ public:
     }
 };
 
-class DINOv3ViTH16Plus : public DINOTransformer
-{
+class DINOv3ViTH16Plus : public DINOTransformer {
 public:
     DINOv3ViTH16Plus()
-        : DINOTransformer(makeDINOv3Spec("DINOv3ViTH16Plus", 224, 1280, 32, 20, 6.0F, DINOMlpKind::SplitSwiGLU, 8))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv3Spec("DINOv3ViTH16Plus", 224, 1280, 32, 20, 6.0F, DINOMlpKind::SplitSwiGLU, 8);
     }
 
     static const char *key() noexcept
@@ -929,12 +985,16 @@ public:
     }
 };
 
-class DINOv3ViT7B16 : public DINOTransformer
-{
+class DINOv3ViT7B16 : public DINOTransformer {
 public:
     DINOv3ViT7B16()
-        : DINOTransformer(makeDINOv3Spec("DINOv3ViT7B16", 224, 4096, 40, 32, 3.0F, DINOMlpKind::SplitSwiGLU, 64))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv3Spec("DINOv3ViT7B16", 224, 4096, 40, 32, 3.0F, DINOMlpKind::SplitSwiGLU, 64);
     }
 
     static const char *key() noexcept
@@ -970,12 +1030,16 @@ INFERRT_DINO_ALIAS_CLASS(TimmDINOv2ViTB14Reg, DINOv2ViTB14Reg, "vit_base_patch14
 INFERRT_DINO_ALIAS_CLASS(TimmDINOv2ViTL14Reg, DINOv2ViTL14Reg, "vit_large_patch14_reg4_dinov2");
 INFERRT_DINO_ALIAS_CLASS(TimmDINOv2ViTG14Reg, DINOv2ViTG14Reg, "vit_giant_patch14_reg4_dinov2");
 
-class TimmDINOv3ViTS16 : public DINOTransformer
-{
+class TimmDINOv3ViTS16 : public DINOTransformer {
 public:
     TimmDINOv3ViTS16()
-        : DINOTransformer(makeDINOv3Spec("DINOv3ViTS16", 256, 384, 12, 6, 4.0F, DINOMlpKind::Mlp, 1))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv3Spec("DINOv3ViTS16", 256, 384, 12, 6, 4.0F, DINOMlpKind::Mlp, 1);
     }
 
     static const char *key() noexcept
@@ -986,12 +1050,16 @@ public:
 
 INFERRT_DINO_ALIAS_CLASS(TimmDINOv3ViTS16Qkvb, TimmDINOv3ViTS16, "vit_small_patch16_dinov3_qkvb");
 
-class TimmDINOv3ViTS16Plus : public DINOTransformer
-{
+class TimmDINOv3ViTS16Plus : public DINOTransformer {
 public:
     TimmDINOv3ViTS16Plus()
-        : DINOTransformer(makeDINOv3Spec("DINOv3ViTS16Plus", 256, 384, 12, 6, 6.0F, DINOMlpKind::SplitSwiGLU, 8))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv3Spec("DINOv3ViTS16Plus", 256, 384, 12, 6, 6.0F, DINOMlpKind::SplitSwiGLU, 8);
     }
 
     static const char *key() noexcept
@@ -1002,12 +1070,16 @@ public:
 
 INFERRT_DINO_ALIAS_CLASS(TimmDINOv3ViTS16PlusQkvb, TimmDINOv3ViTS16Plus, "vit_small_plus_patch16_dinov3_qkvb");
 
-class TimmDINOv3ViTB16 : public DINOTransformer
-{
+class TimmDINOv3ViTB16 : public DINOTransformer {
 public:
     TimmDINOv3ViTB16()
-        : DINOTransformer(makeDINOv3Spec("DINOv3ViTB16", 256, 768, 12, 12, 4.0F, DINOMlpKind::Mlp, 1))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv3Spec("DINOv3ViTB16", 256, 768, 12, 12, 4.0F, DINOMlpKind::Mlp, 1);
     }
 
     static const char *key() noexcept
@@ -1018,12 +1090,16 @@ public:
 
 INFERRT_DINO_ALIAS_CLASS(TimmDINOv3ViTB16Qkvb, TimmDINOv3ViTB16, "vit_base_patch16_dinov3_qkvb");
 
-class TimmDINOv3ViTL16 : public DINOTransformer
-{
+class TimmDINOv3ViTL16 : public DINOTransformer {
 public:
     TimmDINOv3ViTL16()
-        : DINOTransformer(makeDINOv3Spec("DINOv3ViTL16", 256, 1024, 24, 16, 4.0F, DINOMlpKind::Mlp, 1))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv3Spec("DINOv3ViTL16", 256, 1024, 24, 16, 4.0F, DINOMlpKind::Mlp, 1);
     }
 
     static const char *key() noexcept
@@ -1034,12 +1110,16 @@ public:
 
 INFERRT_DINO_ALIAS_CLASS(TimmDINOv3ViTL16Qkvb, TimmDINOv3ViTL16, "vit_large_patch16_dinov3_qkvb");
 
-class TimmDINOv3ViTH16Plus : public DINOTransformer
-{
+class TimmDINOv3ViTH16Plus : public DINOTransformer {
 public:
     TimmDINOv3ViTH16Plus()
-        : DINOTransformer(makeDINOv3Spec("DINOv3ViTH16Plus", 256, 1280, 32, 20, 6.0F, DINOMlpKind::SplitSwiGLU, 8))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv3Spec("DINOv3ViTH16Plus", 256, 1280, 32, 20, 6.0F, DINOMlpKind::SplitSwiGLU, 8);
     }
 
     static const char *key() noexcept
@@ -1050,12 +1130,16 @@ public:
 
 INFERRT_DINO_ALIAS_CLASS(TimmDINOv3ViTH16PlusQkvb, TimmDINOv3ViTH16Plus, "vit_huge_plus_patch16_dinov3_qkvb");
 
-class TimmDINOv3ViT7B16 : public DINOTransformer
-{
+class TimmDINOv3ViT7B16 : public DINOTransformer {
 public:
     TimmDINOv3ViT7B16()
-        : DINOTransformer(makeDINOv3Spec("DINOv3ViT7B16", 256, 4096, 40, 32, 3.0F, DINOMlpKind::SplitSwiGLU, 64))
+        : DINOTransformer(patchTokenSpec())
     {
+    }
+
+    static DINOTransformerSpec patchTokenSpec()
+    {
+        return makeDINOv3Spec("DINOv3ViT7B16", 256, 4096, 40, 32, 3.0F, DINOMlpKind::SplitSwiGLU, 64);
     }
 
     static const char *key() noexcept

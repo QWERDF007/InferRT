@@ -416,8 +416,9 @@ def threshold_candidates(rows: list[dict]) -> list[float]:
 
 def write_weight_profile(profile_path: Path, weights: tuple[float, float, float], out_path: Path) -> Path:
     profile = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
-    profile.setdefault("fine", {})["score_weights"] = list(weights)
-    profile.setdefault("decision", {})["threshold"] = None
+    fine_match = profile.setdefault("fine_match", {})
+    fine_match["score_weight_template"], fine_match["score_weight_coverage"], fine_match["score_weight_consistency"] = weights
+    profile.setdefault("decision", {})["enable_decision_threshold"] = False
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(yaml.safe_dump(profile, allow_unicode=True, sort_keys=False) + "\n", encoding="utf-8")
     return out_path
@@ -570,7 +571,9 @@ def probe(args: argparse.Namespace) -> int:
     extra = []
     if args.threshold is not None:
         probe_profile = yaml.safe_load(profile.read_text(encoding="utf-8"))
-        probe_profile.setdefault("decision", {})["threshold"] = args.threshold
+        decision = probe_profile.setdefault("decision", {})
+        decision["enable_decision_threshold"] = True
+        decision["decision_threshold"] = args.threshold
         cache_dir.mkdir(parents=True, exist_ok=True)
         profile = cache_dir / "profile.yaml"
         profile.write_text(yaml.safe_dump(probe_profile, allow_unicode=True, sort_keys=False), encoding="utf-8")

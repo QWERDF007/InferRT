@@ -229,7 +229,7 @@ irt::features::DinoRegionSearchConfig loadProfile(const Arguments &arguments)
 }
 
 
-irt::features::DinoSearchRequest buildRequest(const Arguments &arguments, const irt::features::DinoRegionSearchConfig &config)
+irt::features::DinoSearchRequest buildRequest(const Arguments &arguments)
 {
     if (!arguments.request.empty())
     {
@@ -241,10 +241,6 @@ irt::features::DinoSearchRequest buildRequest(const Arguments &arguments, const 
         if (arguments.include_self)
         {
             request.include_self = true;
-        }
-        if (request.preset_id.empty())
-        {
-            request.preset_id = config.preset_id;
         }
         if (arguments.deadline_ms > 0)
         {
@@ -270,7 +266,6 @@ irt::features::DinoSearchRequest buildRequest(const Arguments &arguments, const 
         request.deadline_ms = arguments.deadline_ms;
     }
     request.query_path   = fs::u8path(arguments.query);
-    request.preset_id    = config.preset_id;
     request.top_k        = arguments.top_k > 0 ? static_cast<size_t>(arguments.top_k) : 0U;
     request.include_self = arguments.include_self;
     if (!arguments.gallery.empty() && fs::exists(fs::u8path(arguments.gallery)))
@@ -460,7 +455,6 @@ int main(int argc, char **argv)
                 if (arguments.top_k > 0) request.top_k = static_cast<size_t>(arguments.top_k);
                 if (arguments.include_self) request.include_self = true;
                 if (arguments.deadline_ms > 0) request.deadline_ms = arguments.deadline_ms;
-                if (request.preset_id.empty()) request.preset_id = config.preset_id;
                 if (!request.image_resolver && batch_resolver) request.image_resolver = batch_resolver;
                 irt::features::DinoSearchResponse response;
                 int item_code = 0;
@@ -490,7 +484,7 @@ int main(int argc, char **argv)
         if (arguments.command == "search")
         {
             const auto config   = loadProfile(arguments);
-            const auto request  = buildRequest(arguments, config);
+            const auto request  = buildRequest(arguments);
             const auto response = irt::features::DinoRegionSearch::search(
                 fs::u8path(arguments.index), request, config, [](const irt::features::DinoSearchProgress &progress)
                 { printProgress(searchStageName(progress.stage), progress.batch_index, progress.processed_count, progress.total_count, progress.message); });
