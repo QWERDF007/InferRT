@@ -1182,3 +1182,41 @@ TEST(DinoRegionSearchBuild, BuildRejectsEmptyAndDuplicateItems)
         irt::Exception);
 }
 
+TEST(DinoRegionSearchProgress, BuildAndSearchProgressSupportBatchFields)
+{
+    irt::features::DinoBuildProgress build_p;
+    build_p.stage = irt::features::DinoBuildStage::ExtractingViews;
+    build_p.batch_index = 2;
+    build_p.batch_begin = 2;
+    build_p.batch_count = 1;
+    build_p.processed_count = 3;
+    build_p.total_count = 10;
+    build_p.message = "sample.png";
+
+    EXPECT_EQ(build_p.stage, irt::features::DinoBuildStage::ExtractingViews);
+    EXPECT_EQ(build_p.batch_index, 2U);
+    EXPECT_EQ(build_p.batch_begin, 2U);
+    EXPECT_EQ(build_p.batch_count, 1U);
+    EXPECT_EQ(build_p.processed_count, 3U);
+    EXPECT_EQ(build_p.total_count, 10U);
+    EXPECT_EQ(build_p.message, "sample.png");
+
+    irt::features::DinoSearchProgress search_p;
+    search_p.stage = irt::features::DinoSearchStage::FineMatch;
+    search_p.batch_index = 1;
+    search_p.batch_begin = 4;
+    search_p.batch_count = 4;
+    search_p.processed_count = 8;
+    search_p.total_count = 16;
+    search_p.message = "matching candidate crops";
+
+    EXPECT_EQ(search_p.stage, irt::features::DinoSearchStage::FineMatch);
+    EXPECT_EQ(search_p.batch_index, 1U);
+    EXPECT_EQ(search_p.batch_begin, 4U);
+    EXPECT_EQ(search_p.batch_count, 4U);
+    EXPECT_EQ(search_p.processed_count, 8U);
+    EXPECT_EQ(search_p.total_count, 16U);
+    EXPECT_EQ(search_p.message, "matching candidate crops");
+}
+
+

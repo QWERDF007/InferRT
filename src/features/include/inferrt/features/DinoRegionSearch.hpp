@@ -83,13 +83,16 @@ enum class DinoBuildStage
     Finalizing,          ///< 完成 index.yaml 与数组写入。
 };
 
-/** @brief 建库进度事件。 */
+/** @brief 建库进度事件（对齐 ImageSearch / RoiSearch 批次规范）。 */
 struct DinoBuildProgress
 {
-    DinoBuildStage stage{DinoBuildStage::Unknown};
-    size_t         processed_count{0};
-    size_t         total_count{0};
-    std::string    message{};
+    DinoBuildStage stage{DinoBuildStage::Unknown}; ///< 当前构建阶段。
+    size_t         batch_index{0};                 ///< 从 0 开始的已完成批次编号。
+    size_t         batch_begin{0};                 ///< 当前批次第一张图库图片的下标。
+    size_t         batch_count{0};                 ///< 当前批次包含的图库图片数量。
+    size_t         processed_count{0};             ///< 当前阶段累计已处理的工作单元数量。
+    size_t         total_count{0};                 ///< 当前阶段需要处理的工作单元总数；不可度量时为 0。
+    std::string    message{};                      ///< 阶段或文件描述信息。
 };
 
 using DinoBuildProgressCallback = std::function<void(const DinoBuildProgress &)>;
@@ -109,12 +112,16 @@ enum class DinoSearchStage
     Output,
 };
 
-/** @brief 查询进度事件；阶段边界必须可观测。 */
+/** @brief 查询进度事件（阶段与批次边界可观测）。 */
 struct DinoSearchProgress
 {
-    DinoSearchStage stage{DinoSearchStage::Unknown};
-    size_t          processed_count{0};
-    size_t          total_count{0};
+    DinoSearchStage stage{DinoSearchStage::Unknown}; ///< 当前查询阶段。
+    size_t          batch_index{0};                  ///< 当前阶段内从 0 开始的批次编号。
+    size_t          batch_begin{0};                  ///< 当前批次起始下标。
+    size_t          batch_count{0};                  ///< 当前批次包含的项目/候选数量。
+    size_t          processed_count{0};              ///< 当前阶段累计已处理数量。
+    size_t          total_count{0};                  ///< 当前阶段总工作单元数量；不可度量时为 0。
+    std::string     message{};                       ///< 附加信息。
 };
 
 using DinoSearchProgressCallback = std::function<void(const DinoSearchProgress &)>;

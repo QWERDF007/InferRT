@@ -40,8 +40,9 @@ constexpr const char *kDefaultIndexDirectoryName = "dino_region_index";
 constexpr uint64_t kDefaultDenseFeatureCacheBytes = 256ULL * 1024ULL * 1024ULL;
 constexpr uint64_t kDefaultImageCacheBytes        = 256ULL * 1024ULL * 1024ULL;
 
-void reportProgress(const DinoBuildProgressCallback &callback, const DinoBuildStage stage, const size_t processed,
-                    const size_t total, const std::string &message)
+void reportProgress(const DinoBuildProgressCallback &callback, const DinoBuildStage stage,
+                    const size_t batch_index, const size_t batch_begin, const size_t batch_count,
+                    const size_t processed, const size_t total, const std::string &message = {})
 {
     if (!callback)
     {
@@ -49,6 +50,9 @@ void reportProgress(const DinoBuildProgressCallback &callback, const DinoBuildSt
     }
     DinoBuildProgress progress;
     progress.stage           = stage;
+    progress.batch_index     = batch_index;
+    progress.batch_begin     = batch_begin;
+    progress.batch_count     = batch_count;
     progress.processed_count = processed;
     progress.total_count     = total;
     progress.message         = message;
@@ -56,7 +60,8 @@ void reportProgress(const DinoBuildProgressCallback &callback, const DinoBuildSt
 }
 
 void reportSearchProgress(const DinoSearchProgressCallback &callback, const DinoSearchStage stage,
-                          const size_t processed, const size_t total)
+                          const size_t batch_index, const size_t batch_begin, const size_t batch_count,
+                          const size_t processed, const size_t total, const std::string &message = {})
 {
     if (!callback)
     {
@@ -64,8 +69,12 @@ void reportSearchProgress(const DinoSearchProgressCallback &callback, const Dino
     }
     DinoSearchProgress progress;
     progress.stage           = stage;
+    progress.batch_index     = batch_index;
+    progress.batch_begin     = batch_begin;
+    progress.batch_count     = batch_count;
     progress.processed_count = processed;
     progress.total_count     = total;
+    progress.message         = message;
     callback(progress);
 }
 
@@ -90,7 +99,7 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
     const auto caches = dinoAcquireSearchCaches(extractor_key, kDefaultImageCacheBytes,
                                                 kDefaultDenseFeatureCacheBytes);
     const size_t cache_hits_before = caches->images.hits() + caches->features.hits();
-    reportSearchProgress(progress_callback, DinoSearchStage::QueryExtract, 0, 0);
+    reportSearchProgress(progress_callback, DinoSearchStage::QueryExtract, 0, 0, 1, 1, 1, "extract query features");
     size_t model_forwards = 0;
     const auto query_started = dinoNowMs();
     auto   query          = dinoBuildQuery(query_image, roi, backbone, planner, config, model_forwards);
@@ -101,7 +110,7 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
         throw irt::Exception(irt::Status::INVALID_OPERATION, "Cancelled");
     }
 
-    reportSearchProgress(progress_callback, DinoSearchStage::RegionScan, 0, 0);
+    reportSearchProgress(progress_callback, DinoSearchStage::RegionScan, 0, 0, reader.views().size(), reader.views().size(), reader.views().size(), "scan region descriptors");
     const int64_t excluded_image_id = (!request.include_self && request.query_image_id >= 0)
                                           ? request.query_image_id
                                           : -1;
@@ -115,7 +124,7 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
         throw irt::Exception(irt::Status::INVALID_OPERATION, "Cancelled");
     }
 
-    reportSearchProgress(progress_callback, DinoSearchStage::Fusion, 0, 0);
+    reportSearchProgress(progress_callback, DinoSearchStage::Fusion, 0, 0, scan.region_candidates.size() + scan.local_candidates.size(), scan.region_candidates.size() + scan.local_candidates.size(), scan.region_candidates.size() + scan.local_candidates.size(), "fuse coarse candidates");
     const auto fusion_started = dinoNowMs();
     const auto fused = dinoFuseCandidates(scan.region_candidates, scan.local_candidates, config);
     detail.timings.fusion_ms = dinoNowMs() - fusion_started;
@@ -137,7 +146,7 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
             if (!request.include_self && request.query_image_id >= 0 && image.image_id == request.query_image_id)
                 continue;
             const auto crop = dinoExpandRect(candidate.source_bbox, config.fine_candidate_expand,
-                                             image.width, image.height);
+                                              image.width, image.height);
             reported.push_back({image.image_id,
                 {static_cast<float>(crop.x0), static_cast<float>(crop.y0),
                  static_cast<float>(crop.x1), static_cast<float>(crop.y1)}});
@@ -149,10 +158,10 @@ DinoSearchResponse runSearchPipeline(const DinoIndexReader &reader, const DinoCa
         throw irt::Exception(irt::Status::INVALID_OPERATION, "Cancelled");
     }
 
-    reportSearchProgress(progress_callback, DinoSearchStage::FineMatch, 0, fused.candidates.size());
+    reportSearchProgress(progress_callback, DinoSearchStage::FineMatch, 0, 0, fused.candidates.size(), 0, fused.candidates.size(), "start fine match");
     auto fine = dinoFineMatch(reader, query_image, query, fused.candidates, config, backbone, planner,
                               caches->images, caches->features, extractor_key, deadline,
-                              request.image_resolver);
+                              request.image_resolver, progress_callback);
     detail.score_kind = config.fine_verify_k > 0 ? "tight_global_and_grid" : "localization";
     detail.verified_candidates = config.fine_verify_k > 0 ? fine.results.size() : 0;
     const auto report_boxes = [](const std::vector<DinoMatchResult> &source, std::vector<DinoCoarseCandidate> &target) {
@@ -337,7 +346,7 @@ DinoBuildReport dinoBuildItems(const std::vector<DinoImageItem> &items, const Di
         }
     }
 
-    reportProgress(progress_callback, DinoBuildStage::LoadingModel, 0, 0, "loading frozen backbone");
+    reportProgress(progress_callback, DinoBuildStage::LoadingModel, 0, 0, 0, 0, 0, "loading frozen backbone");
     auto             backbone_holder = dinoAcquireBackbone(config);
     DinoBackbone    &backbone        = *backbone_holder;
     DinoViewPlanner  planner(backbone.patchSize(), backbone.encoderEdge(), config.view_overlap,
@@ -355,17 +364,13 @@ DinoBuildReport dinoBuildItems(const std::vector<DinoImageItem> &items, const Di
     const auto root = fs::absolute(index_root).lexically_normal();
     DinoIndexWriter writer(root, static_cast<size_t>(config.coarse_dimension), config.quantize_int8);
     size_t processed = 0;
-    for (const auto &item : items)
+    for (size_t index = 0; index < items.size(); ++index)
     {
+        const auto &item = items[index];
         if (control.cancelled && control.cancelled())
         {
             writer.abort();
             throw irt::Exception(irt::Status::INVALID_OPERATION, "Cancelled");
-        }
-        if (processed < 4U || processed % 16U == 0U)
-        {
-            reportProgress(progress_callback, DinoBuildStage::ExtractingViews, processed, items.size(),
-                           dinoPathToUtf8(item.image_path.filename()));
         }
         try
         {
@@ -386,15 +391,15 @@ DinoBuildReport dinoBuildItems(const std::vector<DinoImageItem> &items, const Di
                 const size_t count = std::min(batch, plans.size() - begin);
                 std::vector<DinoViewRaster> rasters;
                 rasters.reserve(count);
-                for (size_t index = 0; index < count; ++index)
+                for (size_t view_idx = 0; view_idx < count; ++view_idx)
                 {
-                    rasters.push_back(dinoRenderView(canonical.image, plans[begin + index], spec));
+                    rasters.push_back(dinoRenderView(canonical.image, plans[begin + view_idx], spec));
                 }
                 const auto grids = backbone.extract(rasters);
-                for (size_t index = 0; index < grids.size(); ++index)
+                for (size_t view_idx = 0; view_idx < grids.size(); ++view_idx)
                 {
-                    const auto view_id = writer.addView(static_cast<int>(image_index), plans[begin + index]);
-                    const auto descriptors = dinoBuildViewDescriptors(view_id, grids[index], descriptor_config);
+                    const auto view_id = writer.addView(static_cast<int>(image_index), plans[begin + view_idx]);
+                    const auto descriptors = dinoBuildViewDescriptors(view_id, grids[view_idx], descriptor_config);
                     for (size_t region = 0; region < descriptors.region_meta.size(); ++region)
                     {
                         writer.addRegion(view_id, descriptors.region_meta[region], descriptors.region_vectors[region]);
@@ -424,8 +429,10 @@ DinoBuildReport dinoBuildItems(const std::vector<DinoImageItem> &items, const Di
                                       + error.what());
         }
         ++processed;
+        reportProgress(progress_callback, DinoBuildStage::ExtractingViews, index, index, 1, processed,
+                       items.size(), dinoPathToUtf8(item.image_path.filename()));
     }
-    reportProgress(progress_callback, DinoBuildStage::WritingIndex, items.size(), items.size(), "writing index");
+    reportProgress(progress_callback, DinoBuildStage::WritingIndex, 0, 0, items.size(), items.size(), items.size(), "writing index");
 
     if (writer.imageIdentities().empty())
     {
@@ -440,7 +447,7 @@ DinoBuildReport dinoBuildItems(const std::vector<DinoImageItem> &items, const Di
         throw irt::Exception(irt::Status::INVALID_OPERATION, "Cancelled");
     }
 
-    reportProgress(progress_callback, DinoBuildStage::Quantizing, 0, 0, "finalizing compact arrays");
+    reportProgress(progress_callback, DinoBuildStage::Quantizing, 0, 0, items.size(), items.size(), items.size(), "finalizing compact arrays");
     const auto finish_report = writer.finish();
 
     report.image_count             = writer.imageIdentities().size();
@@ -468,8 +475,8 @@ DinoBuildReport dinoBuildItems(const std::vector<DinoImageItem> &items, const Di
         report.images.push_back(std::move(record));
     }
 
-    reportProgress(progress_callback, DinoBuildStage::Finalizing, report.image_count, report.image_count,
-                   "index complete");
+    reportProgress(progress_callback, DinoBuildStage::Finalizing, 0, 0, report.image_count, report.image_count,
+                   report.image_count, "index complete");
     return report;
 }
 
@@ -484,7 +491,7 @@ DinoBuildReport dinoBuildIndex(const fs::path &gallery_root, const DinoRegionSea
     }
 
     const auto images = DinoImageLoader::collectGalleryImages(gallery_root);
-    reportProgress(progress_callback, DinoBuildStage::ScanningImages, 0, images.size(), "collecting gallery images");
+    reportProgress(progress_callback, DinoBuildStage::ScanningImages, 0, 0, images.size(), 0, images.size(), "collecting gallery images");
     if (images.empty())
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Gallery root contains no supported image: %s",
@@ -531,7 +538,7 @@ DinoSearchResponse dinoSearchIndex(const fs::path &index_root, const DinoSearchR
             response.decision = DinoSearchDecision::Incomplete;
             response.message = "Query deadline expired while waiting for the model.";
             response.timings.wall_ms = dinoNowMs() - wall_started;
-            reportSearchProgress(progress_callback, DinoSearchStage::Output, 0, 0);
+            reportSearchProgress(progress_callback, DinoSearchStage::Output, 0, 0, 0, 0, 0, "Query deadline expired while waiting for the model.");
             return response;
         }
         const int64_t wait_chunk = query_deadline_ms > 0 ? std::clamp<int64_t>(deadline.remainingMs(), 1, 50) : 50;
@@ -551,7 +558,7 @@ DinoSearchResponse dinoSearchIndex(const fs::path &index_root, const DinoSearchR
         detail.message      = message;
         detail.timings.queue_ms = queue_ms;
         detail.timings.wall_ms  = dinoNowMs() - wall_started;
-        reportSearchProgress(progress_callback, DinoSearchStage::Output, 0, 0);
+        reportSearchProgress(progress_callback, DinoSearchStage::Output, 0, 0, 0, 0, 0, message);
         return detail;
     };
 
@@ -576,7 +583,7 @@ DinoSearchResponse dinoSearchIndex(const fs::path &index_root, const DinoSearchR
         return incompleteResponse("Query deadline expired while loading the index; no candidates were processed.");
     }
 
-    reportSearchProgress(progress_callback, DinoSearchStage::Decode, 0, 0);
+    reportSearchProgress(progress_callback, DinoSearchStage::Decode, 0, 0, 1, 1, 1, "decode query image");
     const auto decode_started = dinoNowMs();
     if (request.query_path.empty() || !fs::exists(request.query_path))
     {
@@ -600,8 +607,8 @@ DinoSearchResponse dinoSearchIndex(const fs::path &index_root, const DinoSearchR
         detail.timings.decode_ms = decode_ms;
         detail.timings.queue_ms = queue_ms;
         detail.timings.wall_ms   = dinoNowMs() - wall_started;
-        reportSearchProgress(progress_callback, DinoSearchStage::Output, detail.results.size(),
-                             detail.results.size());
+        reportSearchProgress(progress_callback, DinoSearchStage::Output, 0, 0, detail.results.size(),
+                             detail.results.size(), detail.results.size(), "output search results");
         return detail;
     }
     catch (const irt::Exception &error)

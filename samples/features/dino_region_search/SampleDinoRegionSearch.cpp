@@ -94,12 +94,13 @@ double Arguments::parseDouble(const std::string &text, const char *name)
     }
 }
 
-void printProgress(const std::string &stage, const size_t processed, const size_t total, const std::string &message)
+void printProgress(const std::string &stage, const size_t batch_index, const size_t processed,
+                   const size_t total, const std::string &message)
 {
     std::cerr << "[dino] " << stage;
     if (total > 0U)
     {
-        std::cerr << " " << processed << "/" << total;
+        std::cerr << " batch=" << batch_index << " (" << processed << "/" << total << ")";
     }
     if (!message.empty())
     {
@@ -410,7 +411,7 @@ int main(int argc, char **argv)
             }
             const auto report = irt::features::DinoRegionSearch::build(
                 fs::u8path(arguments.gallery), config, fs::u8path(arguments.index), [](const irt::features::DinoBuildProgress &progress)
-                { printProgress(buildStageName(progress.stage), progress.processed_count, progress.total_count, progress.message); });
+                { printProgress(buildStageName(progress.stage), progress.batch_index, progress.processed_count, progress.total_count, progress.message); });
             const auto yaml = irt::features::dinoBuildReportToYaml(report);
             std::cout << yaml;
             if (arguments.output.empty() == false)
@@ -482,7 +483,7 @@ int main(int argc, char **argv)
             const auto request  = buildRequest(arguments, config);
             const auto response = irt::features::DinoRegionSearch::search(
                 fs::u8path(arguments.index), request, config, [](const irt::features::DinoSearchProgress &progress)
-                { printProgress(searchStageName(progress.stage), progress.processed_count, progress.total_count, {}); });
+                { printProgress(searchStageName(progress.stage), progress.batch_index, progress.processed_count, progress.total_count, progress.message); });
             const auto yaml = irt::features::dinoSearchResponseToYaml(response);
             std::cout << yaml;
             if (!arguments.output.empty())

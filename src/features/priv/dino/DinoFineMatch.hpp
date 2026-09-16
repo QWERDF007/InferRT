@@ -40,6 +40,7 @@ DinoFineMatchOutcome dinoFineMatch(const DinoIndexReader &reader, const DinoCano
                                    const DinoViewPlanner &planner, DinoImageCache &image_cache,
                                    DinoFeatureGridCache &feature_cache, const std::string &extractor_signature,
                                    const DinoDeadline &deadline,
-                                   const std::function<std::filesystem::path(int64_t)> &image_resolver = {});
+                                   const std::function<std::filesystem::path(int64_t)> &image_resolver = {},
+                                   const DinoSearchProgressCallback &progress_callback = {});
 
 } // namespace irt::features::priv

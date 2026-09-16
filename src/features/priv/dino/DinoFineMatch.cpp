@@ -78,7 +78,8 @@ DinoFineMatchOutcome dinoFineMatch(const DinoIndexReader& reader, const DinoCano
                                    const DinoViewPlanner& planner, DinoImageCache& image_cache,
                                    DinoFeatureGridCache& feature_cache, const std::string& extractor_signature,
                                    const DinoDeadline& deadline,
-                                   const std::function<std::filesystem::path(int64_t)>& image_resolver) {
+                                   const std::function<std::filesystem::path(int64_t)>& image_resolver,
+                                   const DinoSearchProgressCallback& progress_callback) {
     DinoFineMatchOutcome outcome;outcome.total_candidates = candidates.size();
     const auto spec = dinoViewPreprocessSpec(planner.encoderEdge(), planner.patchSize());
     const size_t batch = std::max<size_t>(1, backbone.maxBatchSize());
@@ -110,6 +111,8 @@ DinoFineMatchOutcome dinoFineMatch(const DinoIndexReader& reader, const DinoCano
         if (image < 0 || static_cast<size_t>(image) >= groups.size()) {outcome.incomplete = true;continue;}
         groups[static_cast<size_t>(image)].push_back(&c);
     }
+    size_t candidate_batch_index = 0;
+    size_t processed_candidates = 0;
     for (size_t image_id = 0; image_id < groups.size(); ++image_id) {
         const auto& group = groups[image_id];if (group.empty()) continue;
         if (deadline.expired()) {outcome.incomplete = true;break;}
@@ -193,6 +196,18 @@ DinoFineMatchOutcome dinoFineMatch(const DinoIndexReader& reader, const DinoCano
                 outcome.match_ms += dinoNowMs() - started;
                 if (completed) ++outcome.completed_candidates;else outcome.incomplete = true;
             }
+            if (progress_callback) {
+                progress_callback(DinoSearchProgress{
+                    DinoSearchStage::FineMatch,
+                    candidate_batch_index++,
+                    processed_candidates,
+                    count,
+                    processed_candidates + count,
+                    outcome.total_candidates,
+                    "matching candidate crops"
+                });
+            }
+            processed_candidates += count;
         }
     }
     if (outcome.completed_candidates < outcome.total_candidates) outcome.incomplete = true;
@@ -212,11 +227,13 @@ DinoFineMatchOutcome dinoFineMatch(const DinoIndexReader& reader, const DinoCano
     auto query_grids = backbone.extract({dinoRenderView(query_image.image, query_plan, spec)});
     auto tight_query = describeTight(query_grids.at(0), query.roi);
     outcome.model_forwards += backbone.forwardCount() - before;outcome.extract_ms += dinoNowMs() - started;
+    size_t verify_batch_index = 0;
     for (size_t begin = 0; begin < pending.size(); begin += batch) {
         if (deadline.expired()) {outcome.incomplete = true;break;}
         started = dinoNowMs();
+        const size_t count = std::min(pending.size(), begin + batch) - begin;
         std::vector<DinoViewRaster> rasters;std::vector<size_t> ids;std::vector<DinoRoi> rois;
-        for (size_t i = begin; i < std::min(pending.size(), begin + batch); ++i) {
+        for (size_t i = begin; i < begin + count; ++i) {
             try {
                 if (!image_resolver) {
                     throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "image_resolver is required for verification");
@@ -243,6 +260,17 @@ DinoFineMatchOutcome dinoFineMatch(const DinoIndexReader& reader, const DinoCano
             catch (const std::exception&) {outcome.incomplete = true;}
         }
         outcome.match_ms += dinoNowMs() - started;
+        if (progress_callback) {
+            progress_callback(DinoSearchProgress{
+                DinoSearchStage::FineExtract,
+                verify_batch_index++,
+                begin,
+                count,
+                begin + count,
+                pending.size(),
+                "verifying tight candidate crops"
+            });
+        }
     }
     std::stable_sort(outcome.results.begin(), outcome.results.end(), [](const auto& a, const auto& b) {return a.score > b.score;});
     return outcome;
