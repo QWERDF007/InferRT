@@ -129,6 +129,8 @@ TEST(DinoRegionSearchContract, UnsupportedProfileEnumsAreRejected)
                      "runtime: {model_precision: int8}\n"), irt::Exception);
     EXPECT_THROW((void)irt::features::dinoConfigFromYaml(
                      "runtime: {scan_backend: unsupported}\n"), irt::Exception);
+    EXPECT_THROW((void)irt::features::dinoConfigFromYaml(
+                     "runtime: {scan_backend: auto}\n"), irt::Exception);
 }
 TEST(DinoRegionSearchContract, DecisionThresholdCanBeConfiguredBeforeEnabling)
 {
@@ -240,6 +242,32 @@ TEST(DinoRegionSearchContract, QueryImageIdAndAllowedImageIdsAreParsed)
     EXPECT_EQ(req.allowed_image_ids->at(0), 1001);
     EXPECT_EQ(req.allowed_image_ids->at(1), 1002);
     EXPECT_EQ(req.allowed_image_ids->at(2), 1003);
+}
+
+TEST(DinoRegionSearchContract, ScanBackendAutoIsRejectedAndExplicitRequired)
+{
+    EXPECT_THROW((void)irt::features::dinoConfigFromYaml(
+                     "runtime: {scan_backend: auto}\n"), irt::Exception);
+    auto cpu_config = irt::features::dinoConfigFromYaml("runtime: {scan_backend: cpu}\n");
+    EXPECT_EQ(cpu_config.runtime.scan_backend, irt::features::DinoScanBackend::Cpu);
+    auto cuda_config = irt::features::dinoConfigFromYaml("runtime: {scan_backend: cuda}\n");
+    EXPECT_EQ(cuda_config.runtime.scan_backend, irt::features::DinoScanBackend::Cuda);
+}
+
+TEST(DinoRegionSearchContract, EncoderEdgeMustBeExplicitAndPositive)
+{
+    irt::features::DinoRegionSearchConfig config;
+    EXPECT_GT(config.model.encoder_edge, 0);
+    EXPECT_NO_THROW(config.validate());
+
+    config.model.encoder_edge = 0;
+    EXPECT_THROW(config.validate(), irt::Exception);
+
+    config.model.encoder_edge = -1;
+    EXPECT_THROW(config.validate(), irt::Exception);
+
+    config.model.encoder_edge = 500; // not divisible by 16 (dinov3 default)
+    EXPECT_THROW(config.validate(), irt::Exception);
 }
 
 TEST(DinoRegionSearchPaths, IngestPopulatesImageIdentityAndFileSize)
@@ -1438,7 +1466,7 @@ TEST(DinoRegionSearchContract, NeedsRebuildAndValidateContractOnHardParameters)
     {
         auto h_config = base_config;
         h_config.model.model_name = "dinov3_vits16";
-        h_config.model.encoder_edge = 0;
+        h_config.model.encoder_edge = 512;
         EXPECT_TRUE(irt::features::DinoRegionSearch::needsRebuild(root, h_config));
         irt::features::priv::DinoIndexReader reader(root);
         try
@@ -1479,13 +1507,12 @@ TEST(DinoRegionSearchContract, NeedsRebuildAndValidateContractOnHardParameters)
         EXPECT_THROW(reader.validateContract(h_config), irt::Exception);
     }
 
-    // 6. encoder_edge = 0 is compatible with explicit resolved value 518
+    // 6. encoder_edge = 0 is rejected; explicit positive value required
     {
-        auto auto_config = base_config;
-        auto_config.model.encoder_edge = 0;
-        EXPECT_FALSE(irt::features::DinoRegionSearch::needsRebuild(root, auto_config));
-        irt::features::priv::DinoIndexReader reader(root);
-        EXPECT_NO_THROW(reader.validateContract(auto_config));
+        auto invalid_config = base_config;
+        invalid_config.model.encoder_edge = 0;
+        EXPECT_THROW(invalid_config.validate(), irt::Exception);
+        EXPECT_THROW((void)irt::features::DinoRegionSearch::needsRebuild(root, invalid_config), irt::Exception);
     }
 
     const auto metadata_path = root / "index.yaml";

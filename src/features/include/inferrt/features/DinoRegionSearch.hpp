@@ -164,9 +164,8 @@ struct DinoSearchRoi
 /** @brief 局部通道与紧凑向量扫描的计算后端。 */
 enum class DinoScanBackend
 {
-    Auto, ///< 自动选择：优先使用 CUDA，不可用时回退 CPU。
-    Cpu,  ///< 强制使用 CPU 归约。
-    Cuda, ///< 强制使用 CUDA 归约；无可用设备时回退 CPU。
+    Cpu = 0, ///< 强制使用 CPU 归约。
+    Cuda = 1, ///< 强制使用 CUDA 归约。
 };
 
 /** @brief 骨干模型与输入光栅配置。 */
@@ -175,7 +174,7 @@ struct DinoModelConfig
     std::string           model_name{"dinov3_vits16"}; ///< 冻结骨干名称（如 dinov3_vits16 / dinov2_vits14_reg4）。
     std::filesystem::path weights_file{};             ///< 骨干权重或 engine 路径（动态路径，不影响索引兼容）。
     std::string           weights_id{"default"};      ///< 调用方声明的权重版本身份（参与索引契约）。
-    int                   encoder_edge{0};            ///< 骨干输入光栅边长；0 表示按 patch 推导。
+    int                   encoder_edge{512};          ///< 骨干输入光栅边长；必须明确指定正数且能被 patch_size 整除。
 };
 
 /** @brief 图库切片与多尺度视图配置。 */
@@ -251,7 +250,7 @@ struct DinoRuntimeConfig
     size_t                     model_batch_size{4};                         ///< 推理批量大小。
     int64_t                    query_deadline_ms{30000};                    ///< 单查询截止时间（毫秒）。
     size_t                     region_scan_block{32768};                    ///< 紧凑扫描块大小。
-    DinoScanBackend            scan_backend{DinoScanBackend::Auto};         ///< 扫描计算后端。
+    DinoScanBackend            scan_backend{DinoScanBackend::Cuda};         ///< 扫描计算后端。
 };
 
 /** @brief 诊断与适用范围规格配置。 */

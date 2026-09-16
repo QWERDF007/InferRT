@@ -58,9 +58,17 @@ void dinoValidateConfig(const DinoRegionSearchConfig &config)
     }
     config.runtime.model_runtime.validate();
 
-    if (config.model.encoder_edge != 0 && config.model.encoder_edge < 32)
+    if (config.model.encoder_edge < 32)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Model encoder edge must be 0 or >= 32");
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "Model encoder edge must be >= 32, explicit encoder_edge required");
+    }
+    const int patch_size = config.model.model_name.find("dinov3") != std::string::npos ? 16 : 14;
+    if (config.model.encoder_edge % patch_size != 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "Model encoder edge %d must be divisible by patch size %d",
+                             config.model.encoder_edge, patch_size);
     }
     if (config.runtime.model_batch_size == 0U || config.runtime.model_batch_size > 64U)
     {
@@ -271,9 +279,7 @@ YAML::Node dinoConfigToYamlNode(const DinoRegionSearchConfig &config)
     runtime["model_batch_size"] = config.runtime.model_batch_size;
     runtime["query_deadline_ms"] = config.runtime.query_deadline_ms;
     runtime["region_scan_block"] = config.runtime.region_scan_block;
-    runtime["scan_backend"] = config.runtime.scan_backend == DinoScanBackend::Cpu    ? "cpu"
-                            : config.runtime.scan_backend == DinoScanBackend::Cuda   ? "cuda"
-                                                                                     : "auto";
+    runtime["scan_backend"] = config.runtime.scan_backend == DinoScanBackend::Cuda ? "cuda" : "cpu";
     node["runtime"] = runtime;
 
     YAML::Node diagnostics;
@@ -471,8 +477,7 @@ DinoRegionSearchConfig dinoConfigFromYamlNode(const YAML::Node &node)
             const auto sb = runtime["scan_backend"].as<std::string>();
             if (sb == "cpu") config.runtime.scan_backend = DinoScanBackend::Cpu;
             else if (sb == "cuda") config.runtime.scan_backend = DinoScanBackend::Cuda;
-            else if (sb == "auto") config.runtime.scan_backend = DinoScanBackend::Auto;
-            else throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Runtime scan_backend must be auto, cpu or cuda");
+            else throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Runtime scan_backend must be cpu or cuda");
         }
     }
 
@@ -497,25 +502,18 @@ int dinoResolveEncoderEdge(const DinoRegionSearchConfig &config, const int patch
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Backbone patch size must be positive");
     }
-    if (config.model.encoder_edge != 0)
+    if (config.model.encoder_edge <= 0)
     {
-        if (config.model.encoder_edge % patch_size != 0)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "Encoder edge %d must be divisible by backbone patch size %d", config.model.encoder_edge,
-                                 patch_size);
-        }
-        return config.model.encoder_edge;
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "Model encoder edge must be positive, explicit encoder_edge required");
     }
-
-    // spec DEFAULT：输入长边 512/518，即 patch 的整数倍中最接近 512 的取值。
-    const int multiplier = static_cast<int>(std::lround(512.0 / static_cast<double>(patch_size)));
-    const int edge       = std::max(1, multiplier) * patch_size;
-    if (edge < 32)
+    if (config.model.encoder_edge % patch_size != 0)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Resolved encoder edge is too small: %d", edge);
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "Encoder edge %d must be divisible by backbone patch size %d", config.model.encoder_edge,
+                             patch_size);
     }
-    return edge;
+    return config.model.encoder_edge;
 }
 
 } // namespace irt::features::priv

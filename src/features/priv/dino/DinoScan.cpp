@@ -69,17 +69,18 @@ DinoScanOutcome dinoScan(const DinoIndexReader &reader, const DinoQuery &query,
     DinoSimilarityBackend similarity_backend = DinoSimilarityBackend::Cpu;
     if (quantized_index)
     {
-        if (config.runtime.scan_backend == DinoScanBackend::Cpu)
+        if (config.runtime.scan_backend == DinoScanBackend::Cuda)
         {
-            similarity_backend = DinoSimilarityBackend::Cpu;
-        }
-        else if (config.runtime.scan_backend == DinoScanBackend::Cuda)
-        {
+            if (!dinoCudaSimilarityAvailable())
+            {
+                throw irt::Exception(irt::Status::ERROR_DEVICE,
+                                     "CUDA similarity scan backend was requested, but CUDA device is not available");
+            }
             similarity_backend = DinoSimilarityBackend::Cuda;
         }
         else
         {
-            similarity_backend = dinoSelectSimilarityBackend();
+            similarity_backend = DinoSimilarityBackend::Cpu;
         }
     }
     outcome.view_survival_truncated = false;

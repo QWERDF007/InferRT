@@ -213,10 +213,12 @@ DinoSimilarityReducer::DinoSimilarityReducer(const DinoSimilarityBackend backend
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Similarity reducer requires a positive dimension");
     }
-    // 契约：请求 CUDA 但设备不可用时回退 CPU，而不是失败查询。
-    backend_ = backend == DinoSimilarityBackend::Cuda && !dinoCudaSimilarityAvailable()
-                   ? DinoSimilarityBackend::Cpu
-                   : backend;
+    if (backend == DinoSimilarityBackend::Cuda && !dinoCudaSimilarityAvailable())
+    {
+        throw irt::Exception(irt::Status::ERROR_DEVICE,
+                             "CUDA similarity reducer was requested, but CUDA device is not available");
+    }
+    backend_ = backend;
     engine_ = backend_ == DinoSimilarityBackend::Cuda ? dinoMakeCudaSimilarityEngine(dimension)
                                                       : dinoMakeCpuSimilarityEngine(dimension);
 }

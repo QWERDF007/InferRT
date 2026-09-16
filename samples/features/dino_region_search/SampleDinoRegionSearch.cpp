@@ -39,7 +39,7 @@ struct Arguments
     std::string runtime{};
     std::string roi{};
     std::string polygon{};
-    std::string scan_backend{"auto"};
+    std::string scan_backend{"cuda"};
     int         deadline_ms{-1};
     int         top_k{0};
     bool        include_self{false};
@@ -220,9 +220,10 @@ irt::features::DinoRegionSearchConfig loadProfile(const Arguments &arguments)
     {
         config.runtime.scan_backend = irt::features::DinoScanBackend::Cuda;
     }
-    else if (arguments.scan_backend == "auto")
+    else
     {
-        config.runtime.scan_backend = irt::features::DinoScanBackend::Auto;
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
+                             "Unsupported scan backend '%s', must be cpu or cuda", arguments.scan_backend.c_str());
     }
     config.validate();
     return config;
@@ -381,7 +382,7 @@ int main(int argc, char **argv)
             ("roi", "x0,y0,x1,y1", cxxopts::value<std::string>(arguments.roi))
             ("polygon", "x,y;x,y;x,y", cxxopts::value<std::string>(arguments.polygon))
             ("top-k", "top K", cxxopts::value<int>(arguments.top_k))
-            ("scan-backend", "similarity backend: auto | cpu | cuda", cxxopts::value<std::string>(arguments.scan_backend))
+            ("scan-backend", "similarity backend: cpu | cuda", cxxopts::value<std::string>(arguments.scan_backend))
             ("deadline-ms", "query deadline ms", cxxopts::value<int>(arguments.deadline_ms))
             ("include-self", "allow returning the query itself",
                 cxxopts::value<bool>(arguments.include_self)->default_value("false")->implicit_value("true"))
