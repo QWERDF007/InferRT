@@ -1,5 +1,0 @@
-# 可直接交给 CLI `search --request` 的矩形请求示例；路径请替换为本地路径。
-query_path: /data/query/ring.png
-bbox: [120, 80, 360, 320]
-include_self: false
-top_k: 20
