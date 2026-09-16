@@ -1,6 +1,6 @@
 # DINO 区域检索 v4 CLI
 
-本目录使用 InferRT 示例目标，支持 `build`、`search` 和 `search-batch`。配置合同见 [配置规格](../../../docs/dino_config_presets/02_specs.md)。
+本目录使用 InferRT 示例目标，支持 `build`、`search` 和 `search-batch`。配置定义与公共接口见 [DinoRegionSearch.hpp](../../../src/features/include/inferrt/features/DinoRegionSearch.hpp)，完整系统流程见 [DinoRegionSearchFlow.md](../../../src/features/DinoRegionSearchFlow.md)。
 
 ```bash
 cmake --build build --config Release --target inferrt_sample_dino_region_search

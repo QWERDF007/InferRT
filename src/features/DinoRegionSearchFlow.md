@@ -29,8 +29,11 @@ DINO 区域检索面向工业缺陷、高分辨率大图及复杂外观形态下
    - 支持轴对齐矩形（Bbox）与任意多边形（Polygon），两者严格互斥。
    - 所有 Patch 证据与特征池化计算均基于几何实际相交面积（Intersection Area），禁止以 Patch 中心点是否落在 ROI 内这种离散方式判定，保证极细长缺陷（长宽比 ≥ 25:1）与狭窄边界不会丢失特征证据。
 3. **自身排除语义**：
-   - `include_self = false`：排除与查询图像来源相同的整个图像文件；
+   - `include_self = false`：排除与查询图像来源相同的整个图像文件（匹配 `query_image_id`）；
    - `include_self = true`：允许同图检索，用于检索同图内的其他相似缺陷实例；评估时结合 `exclude_roi` 滤除查询自身的 ROI。
+4. **图像身份与图库解耦**：
+   - 统一使用 `int64_t image_id` 作为图库与查询的唯一标识，数据结构解耦底层文件路径；
+   - 支持 `query_image_id` 自排除与 `allowed_image_ids` 白名单候选过滤；原图路径可通过两阶段 `image_resolver` 延迟解析。
 
 ---
 
@@ -174,7 +177,7 @@ $$\text{Score}_{\text{pose}} = 0.60 \times \text{Appearance} + 0.25 \times \text
 
 | 流程环节 | 核心类 / 函数 | 源码文件 | 职责与关键逻辑 |
 | :--- | :--- | :--- | :--- |
-| **对外接口** | [`DinoRegionSearch`](include/inferrt/features/DinoRegionSearch.hpp) | [`include/inferrt/features/DinoRegionSearch.hpp`](include/inferrt/features/DinoRegionSearch.hpp) | `build`、`search`、`searchBatch` 顶层公共门面 |
+| **对外接口** | [`DinoRegionSearch`](include/inferrt/features/DinoRegionSearch.hpp) | [`include/inferrt/features/DinoRegionSearch.hpp`](include/inferrt/features/DinoRegionSearch.hpp) | `needsRebuild`、`build`、`search`、`releaseRuntime` 顶层公共门面 |
 | **编排核心** | [`DinoEngine`](priv/dino/DinoEngine.cpp) | [`priv/dino/DinoEngine.cpp`](priv/dino/DinoEngine.cpp) | 串联查询提取、扫描、融合、定位与复核全生命周期 |
 | **算法内核** | [`Projection`](priv/dino/DinoRetrievalCore.hpp#L36), [`select`](priv/dino/DinoRetrievalCore.hpp#L91), [`vote`](priv/dino/DinoRetrievalCore.hpp#L159), [`SparseMatcher`](priv/dino/DinoRetrievalCore.hpp#L224) | [`priv/dino/DinoRetrievalCore.hpp`](priv/dino/DinoRetrievalCore.hpp) | 纯算法实现（阿达马投影、代表采样、姿态投票、连续定位） |
 | **CUDA 加速**| `dinoSimilarityReduceViewGroupCuda` | [`priv/dino/DinoSimilarityCuda.cu`](priv/dino/DinoSimilarityCuda.cu) | GPU 视图分组 Top-2 相似度归约核函数 |
@@ -182,8 +185,8 @@ $$\text{Score}_{\text{pose}} = 0.60 \times \text{Appearance} + 0.25 \times \text
 | **扫描调度** | [`dinoScan`](priv/dino/DinoScan.cpp) | [`priv/dino/DinoScan.cpp`](priv/dino/DinoScan.cpp) | 区域扫描、局部块级读取与全视图多线程姿态投票 |
 | **双路融合** | [`dinoFuseCandidates`](priv/dino/DinoFusion.cpp) | [`priv/dino/DinoFusion.cpp`](priv/dino/DinoFusion.cpp) | 双通道配额分配、去重合并与来源标记 |
 | **定位复核** | [`dinoFineMatch`](priv/dino/DinoFineMatch.cpp), `describeTight` | [`priv/dino/DinoFineMatch.cpp`](priv/dino/DinoFineMatch.cpp) | 原维标量图定位、批量紧裁前向与 4×4 网格复核打分 |
-| **紧凑存储** | [`DinoIndexWriter`](priv/dino/DinoIndexStore.cpp), [`DinoIndexReader`](priv/dino/DinoIndexStore.cpp) | [`priv/dino/DinoIndexStore.cpp`](priv/dino/DinoIndexStore.cpp) | 流式写入/读取 `.i8` 向量、量化参数与 Packed 元数据 |
-| **配置契约** | [`DinoRegionSearchConfig`](priv/dino/DinoProfile.cpp) | [`priv/dino/DinoProfile.cpp`](priv/dino/DinoProfile.cpp) | YAML Profile 解析、合法性校验与序列化 |
+| **紧凑存储与契约** | [`DinoIndexWriter`](priv/dino/DinoIndexStore.cpp), [`DinoIndexReader`](priv/dino/DinoIndexStore.cpp), [`DinoIndexContract`](priv/dino/DinoIndexStore.hpp) | [`priv/dino/DinoIndexStore.cpp`](priv/dino/DinoIndexStore.cpp) | 流式写入/读取 `.i8` 向量与元数据，`index.yaml` Manifest 契约比对 |
+| **配置契约** | [`DinoRegionSearchConfig`](include/inferrt/features/DinoRegionSearch.hpp) | [`priv/dino/DinoProfile.cpp`](priv/dino/DinoProfile.cpp) | 9 大强类型子结构体 YAML 解析、合法性校验与双向序列化 |
 | **CLI 入口**  | `SampleDinoRegionSearch` | [`samples/features/dino_region_search/SampleDinoRegionSearch.cpp`](../../samples/features/dino_region_search/SampleDinoRegionSearch.cpp) | `build`、`search`、`search-batch` 命令行入口 |
 
 ---
@@ -198,3 +201,6 @@ $$\text{Score}_{\text{pose}} = 0.60 \times \text{Appearance} + 0.25 \times \text
    - 内置图像缓存（256 MiB）与候选密集特征缓存（256 MiB），基于 LRU 策略自动回收。
 3. **超时控制 (Deadline)**：
    - 查询请求支持 `deadline_ms`。在粗选分块扫描、定位每档尺度扫描及复核批次边界严格检查截止时间，超时即安全熔断并标记 `status: Incomplete`，杜绝服务挂死。
+4. **显式后端与错误处理**：
+   - 扫描后端 `runtime.scan_backend` 仅显式支持 `Cpu` 或 `Cuda`（默认 `Cuda`），不支持 `Auto` 也不做静默降级；
+   - 当指定 `Cuda` 但设备不可用时立即抛出 `ERROR_DEVICE`；配置中若使用 `"auto"` 或非正数 `encoder_edge` 立即抛出 `ERROR_INVALID_ARGUMENT`。
