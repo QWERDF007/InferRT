@@ -798,6 +798,7 @@ void TensorRTBackend::buildFromNetwork(const std::string &source_file, const std
     if (use_fp16)
     {
         builder_config->setFlag(BuilderFlag::kFP16);
+        builder_config->setFlag(BuilderFlag::kPREFER_PRECISION_CONSTRAINTS);
     }
     else
     {

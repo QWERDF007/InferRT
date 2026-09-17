@@ -134,14 +134,13 @@ struct ImageSearchConfig
 
     ///< 特征提取模型运行目标，统一包含后端、CPU/GPU 类型和 GPU 编号。
     irt::model::ModelRuntime model_runtime{};
-
-    /**
+    /**
      * 特征提取模型构建/加载精度。
      *
      * TensorRT 后端会据此选择 FP16 或 FP32 engine；图后端的模型精度由其导出的图决定，
      * 该字段会随配置保留但不会改变图文件本身。
      */
-    irt::model::ModelPrecision model_precision{irt::model::ModelPrecision::FP32};
+    irt::model::ModelPrecision model_precision{irt::model::ModelPrecision::FP16};
 
     ///< 预处理执行后端。
     ImageSearchPreprocessBackend preprocess_backend{ImageSearchPreprocessBackend::CPU};
@@ -156,13 +155,12 @@ struct ImageSearchConfig
     ImageSearchFeatureNorm norm{ImageSearchFeatureNorm::L2};
 
     ///< Faiss 索引执行后端。
-    ImageSearchFaissBackend faiss_backend{ImageSearchFaissBackend::CPU};
+    ImageSearchFaissBackend faiss_backend{ImageSearchFaissBackend::GPU};
 
     ///< Faiss 索引搜索存储位置；GPU Faiss 当前始终使用 RAM。
     ImageSearchIndexStorage index_storage{ImageSearchIndexStorage::RAM};
 
     /**
-     * @brief 特征提取模型推理和 Faiss 建库批量。
      *
      * 构建索引时，训练特征采样、图库向量提取以及 Faiss 添加/落盘都会按该批量推进，避免
      * 先缓存大批量特征再建库；TensorRT 使用动态 profile，ONNX Runtime/OpenVINO 需要导出的图支持动态 batch。

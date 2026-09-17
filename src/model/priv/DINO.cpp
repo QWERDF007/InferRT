@@ -344,12 +344,16 @@ nvinfer1::ITensor *addAttention(nvinfer1::INetworkDefinition *network, const Wei
         k_heads         = applyRope(network, *k_heads, rope, geometry, spec);
     }
 
-    auto *qk        = network->addMatrixMultiply(*q_heads, M::kNONE, *k_heads, M::kTRANSPOSE);
-    auto *scale     = network->addConstant(nvinfer1::Dims4{1, 1, 1, 1},
-                                           ownedScalarWeight(1.0F / std::sqrt(static_cast<float>(geometry.head_dim))));
-    auto *scaled_qk = network->addElementWise(*qk->getOutput(0), *scale->getOutput(0), E::kPROD);
-    auto *softmax   = network->addSoftMax(*scaled_qk->getOutput(0));
-    softmax->setAxes(1U << static_cast<uint32_t>(scaled_qk->getOutput(0)->getDimensions().nbDims - 1));
+    auto *scale    = network->addConstant(nvinfer1::Dims4{1, 1, 1, 1},
+                                          ownedScalarWeight(1.0F / std::sqrt(static_cast<float>(geometry.head_dim))));
+    auto *scaled_q = network->addElementWise(*q_heads, *scale->getOutput(0), E::kPROD);
+    auto *qk       = network->addMatrixMultiply(*scaled_q->getOutput(0), M::kNONE, *k_heads, M::kTRANSPOSE);
+    auto *softmax  = network->addSoftMax(*qk->getOutput(0));
+    softmax->setAxes(1U << static_cast<uint32_t>(qk->getOutput(0)->getDimensions().nbDims - 1));
+    if (!network->getFlag(nvinfer1::NetworkDefinitionCreationFlag::kSTRONGLY_TYPED))
+    {
+        softmax->setPrecision(nvinfer1::DataType::kFLOAT);
+    }
 
     auto *attended = network->addMatrixMultiply(*softmax->getOutput(0), M::kNONE, *v_heads, M::kNONE);
     auto *attended_output

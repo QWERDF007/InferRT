@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <iostream>
 #include <limits>
 #include <utility>
 
@@ -170,7 +171,7 @@ void requireCvcudaStatus(const IRTStatus status, const char *operation)
 } // namespace
 
 ImageFeatureExtractor::ImageFeatureExtractor(std::string model_name, std::string feature_name,
-                                             const fs::path &weights_file, ImageSearchConfig config)
+                                             const fs::path &weights_file, ImageSearchConfig config, bool use_preprocess_input_shape)
     : model_name_(std::move(model_name))
     , feature_name_(std::move(feature_name))
     , config_(config)
@@ -178,6 +179,8 @@ ImageFeatureExtractor::ImageFeatureExtractor(std::string model_name, std::string
     validateFeatureSearchConfig(config_, "ImageFeatureExtractor");
 
     auto model_config = std::make_unique<irt::model::IModelConfig>();
+    if (use_preprocess_input_shape && config_.preprocess.input_width > 0 && config_.preprocess.input_height > 0)
+        model_config->setInputShape(irt::Shape{1, 3, config_.preprocess.input_height, config_.preprocess.input_width});
     model_config->setFeatureTensorNames({feature_name_});
     model_config->setOutputTensorNames({feature_name_});
     model_config->setFeatureOnly(true);
@@ -381,7 +384,32 @@ FeatureTensorBatch ImageFeatureExtractor::extractFeatureTensorBatch(const std::v
                              "Feature tensor batch size exceeds model max batch size");
     }
 
-    auto       input_batch     = preprocessBatch(image_paths, begin, count);
+    auto input_batch = preprocessBatch(image_paths, begin, count);
+    return forwardPrepared(input_batch, count, config_.preprocess_backend != ImageSearchPreprocessBackend::GPU);
+}
+
+FeatureTensorBatch ImageFeatureExtractor::extractPreparedTensorBatch(std::vector<float> &input, size_t count)
+{
+    if (count == 0 || count > max_batch_size_ || input.size() != count * input_elements_per_sample_)
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Prepared ROI input shape mismatch");
+    PreprocessedBatch batch;
+    batch.input_data.swap(input);
+    batch.image_sizes.assign(count, ImageSize{input_width_, input_height_});
+    try
+    {
+        auto output = forwardPrepared(batch, count, true);
+        batch.input_data.swap(input); // retain caller's capacity for the next batch
+        return output;
+    }
+    catch (...)
+    {
+        batch.input_data.swap(input);
+        throw;
+    }
+}
+
+FeatureTensorBatch ImageFeatureExtractor::forwardPrepared(PreprocessedBatch &input_batch, size_t count, bool host_input)
+{
     if (usesTensorRtModelBackend(config_))
     {
         irt::model::setCudaDevice(config_.model_runtime.deviceId());
@@ -417,7 +445,7 @@ FeatureTensorBatch ImageFeatureExtractor::extractFeatureTensorBatch(const std::v
                                  "TensorRT feature extraction requires a valid CUDA stream");
         }
 
-        if (config_.preprocess_backend != ImageSearchPreprocessBackend::GPU)
+        if (host_input)
         {
             checkCuda(cudaMemcpyAsync(device_input_.data(), input_batch.input_data.data(),
                                       irt::checkedSizeMul(input_batch.input_data.size(), sizeof(float),

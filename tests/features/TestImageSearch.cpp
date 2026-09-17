@@ -117,9 +117,9 @@ TEST(ImageSearchTest, DefaultConstructsNotReadySearcher)
     EXPECT_EQ(search.featureDim(), 0);
     EXPECT_EQ(search.config().preprocess_backend, irt::features::ImageSearchPreprocessBackend::CPU);
     EXPECT_EQ(search.config().model_runtime, irt::model::ModelRuntime{});
-    EXPECT_EQ(search.config().model_precision, irt::model::ModelPrecision::FP32);
+    EXPECT_EQ(search.config().model_precision, irt::model::ModelPrecision::FP16);
     EXPECT_EQ(search.config().norm, irt::features::ImageSearchFeatureNorm::L2);
-    EXPECT_EQ(search.config().faiss_backend, irt::features::ImageSearchFaissBackend::CPU);
+    EXPECT_EQ(search.config().faiss_backend, irt::features::ImageSearchFaissBackend::GPU);
     EXPECT_EQ(search.config().index_storage, irt::features::ImageSearchIndexStorage::RAM);
     EXPECT_EQ(search.config().model_batch_size, irt::features::kDefaultImageSearchModelBatchSize);
     EXPECT_EQ(search.config().preprocess.input_width, 0);
@@ -156,6 +156,7 @@ TEST(ImageSearchTest, ConstructorStoresConfig)
     config.model_runtime         = irt::model::ModelRuntime::parse("openvino:2");
     config.model_precision       = irt::model::ModelPrecision::FP16;
     config.norm                  = irt::features::ImageSearchFeatureNorm::L1;
+    config.faiss_backend         = irt::features::ImageSearchFaissBackend::CPU;
     config.index_storage         = irt::features::ImageSearchIndexStorage::Disk;
     config.model_batch_size      = 3;
 

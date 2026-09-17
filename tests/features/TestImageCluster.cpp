@@ -35,7 +35,7 @@ TEST(ImageClusterTest, DefaultConstructsWithImageFeatureDefaults)
     EXPECT_EQ(cluster.config().model_name, irt::features::ImageCluster::kDefaultModelName);
     EXPECT_EQ(cluster.config().feature_name, irt::features::ImageCluster::kDefaultFeatureName);
     EXPECT_EQ(cluster.config().model_runtime, irt::model::ModelRuntime{});
-    EXPECT_EQ(cluster.config().model_precision, irt::model::ModelPrecision::FP32);
+    EXPECT_EQ(cluster.config().model_precision, irt::model::ModelPrecision::FP16);
     EXPECT_FALSE(cluster.config().use_pca);
     EXPECT_EQ(cluster.config().pca_dim, 0);
     EXPECT_EQ(cluster.config().hdbscan.min_cluster_size, 5);

@@ -55,7 +55,7 @@ public:
      * @param config 检索配置。
      */
     ImageFeatureExtractor(std::string model_name, std::string feature_name, const std::filesystem::path &weights_file,
-                          ImageSearchConfig config);
+                          ImageSearchConfig config, bool use_preprocess_input_shape = false);
 
     /**
      * @brief 析构抽取器，先释放模型再释放 CUDA 缓冲区。
@@ -132,6 +132,10 @@ public:
     FeatureTensorBatch extractFeatureTensorBatch(const std::vector<std::filesystem::path> &image_paths, size_t begin,
                                                  size_t count);
 
+    // NCHW float data already normalized, resized and padded by the caller.
+    // This path always uploads host data, even if image-path preprocessing uses GPU.
+    FeatureTensorBatch extractPreparedTensorBatch(std::vector<float> &input, size_t count);
+
 private:
     /**
      * @brief 预处理后的一批模型输入。
@@ -142,6 +146,7 @@ private:
         std::vector<ImageSize> image_sizes; ///< 原始图像尺寸。
     };
 
+    FeatureTensorBatch forwardPrepared(PreprocessedBatch &input_batch, size_t count, bool host_input);
     nvinfer1::Dims    resolveInputShape(nvinfer1::Dims input_shape);
     void              resolvePreprocessSpec();
     PreprocessedBatch preprocessBatch(const std::vector<std::filesystem::path> &image_paths, size_t begin,

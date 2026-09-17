@@ -518,6 +518,10 @@ std::vector<ImageSearchResult> ImageSearch::Impl::search(const fs::path &query_i
 
     std::vector<faiss::idx_t> indices(result_count);
     std::vector<float>        distances(result_count);
+    if (faiss_gpu_resources_)
+    {
+        irt::model::setCudaDevice(config_.model_runtime.deviceId());
+    }
     index_->search(1, query_feature.data(), result_count, distances.data(), indices.data());
 
     std::vector<ImageSearchResult> results;
