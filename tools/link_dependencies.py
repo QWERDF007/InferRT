@@ -1,12 +1,21 @@
-"""Link InferRT runtime dependencies declared in tools/dependencies.yaml."""
+"""InferRT 运行时依赖链接脚本。
+
+开发阶段用它把 dependencies.yaml 中声明的第三方运行库和项目静态资源
+链接到 build/bin，方便直接从构建目录启动程序或运行测试。
+"""
 
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from dependency_utils import (
+    REPO_ROOT,
     build_dll_variant_sets,
     dependency_destinations,
     dependency_enabled,
@@ -14,6 +23,7 @@ from dependency_utils import (
     dependency_patterns,
     dll_matches_config,
     expand_dependency_pattern,
+    link_dir,
     link_file,
     load_dependencies,
     platform_key,
@@ -32,16 +42,44 @@ def parse_args() -> argparse.Namespace:
     """
 
     parser = argparse.ArgumentParser(description="Link InferRT runtime dependencies.")
-    parser.add_argument("--build-dir", "-BuildDir", default="build")
-    parser.add_argument("--config", "-Config", default="Release")
-    parser.add_argument("--dependencies", default="tools/dependencies.yaml")
+    parser.add_argument("--build-dir", "-BuildDir", default="build", help="Path to CMake build directory.")
+    parser.add_argument(
+        "--config",
+        "-Config",
+        default="Release",
+        help="Build configuration (e.g., Release, Debug).",
+    )
+    parser.add_argument(
+        "--dependencies",
+        default="tools/dependencies.yaml",
+        help="Path to dependency manifest YAML.",
+    )
     parser.add_argument(
         "--mode",
         choices=["symlink", "hardlink", "copy"],
         default="symlink",
         help="Default creates symlink, then falls back to hardlink/copy.",
     )
+    parser.add_argument(
+        "--skip-external",
+        action="store_true",
+        help="Skip linking external dependencies from dependencies.yaml.",
+    )
     return parser.parse_args()
+
+
+def link_assets(build_dir: Path) -> None:
+    """将项目 assets 资源目录链接到 build/bin/assets。
+
+    Args:
+        build_dir: CMake 构建目录。
+    """
+
+    source = REPO_ROOT / "assets"
+    if not source.is_dir():
+        warn(f"skip assets link, missing {source}")
+        return
+    link_dir(source, build_dir / "bin" / "assets")
 
 
 def _matched_files(dep: dict, root: Path, platform: str, config: str) -> list[Path]:
@@ -66,8 +104,10 @@ def _matched_files(dep: dict, root: Path, platform: str, config: str) -> list[Pa
     return unique_paths(matched)
 
 
-def link_dependencies(build_dir: Path, dependency_file: Path, config: str, mode: str) -> int:
-    """按 YAML 清单把运行时依赖链接到目标目录。
+def link_external_dependencies(
+    build_dir: Path, dependency_file: Path, config: str, mode: str = "symlink"
+) -> int:
+    """按 YAML 清单把第三方运行时依赖链接到目标目录。
 
     Args:
         build_dir: CMake 构建目录。
@@ -114,7 +154,7 @@ def link_dependencies(build_dir: Path, dependency_file: Path, config: str, mode:
 
 
 def main() -> int:
-    """执行依赖链接流程。
+    """执行依赖与资源链接主流程。
 
     Returns:
         int: 进程退出码。
@@ -123,11 +163,18 @@ def main() -> int:
     args = parse_args()
     build_dir = resolve_project_path(args.build_dir)
     dependency_file = resolve_project_path(args.dependencies)
-    if not dependency_file.is_file():
-        raise RuntimeError(f"dependency file does not exist: {dependency_file}")
 
-    processed = link_dependencies(build_dir, dependency_file, args.config, args.mode)
-    print(f"link runtime dependencies complete. Files processed: {processed}")
+    link_assets(build_dir)
+    print("link assets success")
+
+    if args.skip_external:
+        print("skip external dependencies")
+    elif dependency_file.is_file():
+        processed = link_external_dependencies(build_dir, dependency_file, args.config, args.mode)
+        print(f"link external dependencies success. Files processed: {processed}")
+    else:
+        warn(f"skip external dependency links, missing {dependency_file}")
+
     print(f"Destination root: {build_dir / 'bin'}")
     return 0
 

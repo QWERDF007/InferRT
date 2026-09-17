@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import glob
+import locale
 import os
 import re
 import shutil
@@ -562,14 +563,6 @@ def link_file(source: Path, link: Path, mode: str = "symlink") -> None:
     source = source.resolve(strict=True)
     link.parent.mkdir(parents=True, exist_ok=True)
     normalized_mode = mode.lower()
-    if normalized_mode != "copy":
-        try:
-            if link.exists() and source.samefile(link):
-                print(f"skip existing {link}")
-                return
-        except OSError:
-            pass
-
     if normalized_mode == "copy":
         copy_file(source, link)
         return
@@ -606,8 +599,7 @@ def remove_existing_dir_link(path: Path) -> None:
 
     if not path.exists() and not path.is_symlink():
         return
-    is_junction = bool(getattr(path, "is_junction", lambda: False)())
-    if is_junction:
+    if path.is_junction():
         path.rmdir()
         return
     if path.is_symlink():
@@ -626,12 +618,6 @@ def link_dir(source: Path, link: Path) -> None:
 
     source = source.resolve(strict=True)
     link.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        if link.exists() and source.samefile(link):
-            print(f"skip existing {link}")
-            return
-    except OSError:
-        pass
     remove_existing_dir_link(link)
     try:
         os.symlink(source, link, target_is_directory=True)
@@ -644,6 +630,8 @@ def link_dir(source: Path, link: Path) -> None:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding=locale.getpreferredencoding(False),
+            errors="replace",
         )
         if result.returncode != 0:
             raise RuntimeError(result.stdout.strip() or f"failed to create junction {link} -> {source}")
