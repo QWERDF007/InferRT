@@ -32,8 +32,7 @@ inline constexpr int kDefaultRoiSearchPooledWidth = kDefaultRoiFeaturePooledWidt
 /**
  * @brief ROI 框，坐标基于原始输入图像像素。
  *
- * ``x2`` 与 ``y2`` 表示右下边界，要求分别大于 ``x1`` 与 ``y1``。实现会按原图尺寸把该 ROI
- * 映射到模型输出特征图坐标，再执行 ROIAlign。
+ * ``x2`` 与 ``y2`` 是半开区间右下边界。默认在原图裁剪后重编码，并按 ROI 覆盖权重汇聚。
  */
 using RoiSearchBox = RoiFeatureBox;
 
@@ -66,16 +65,18 @@ struct RoiSearchConfig : public RoiFeatureConfig
     }
 
     // ROIAlign/PCA 字段继承自 RoiFeatureConfig，搜索与聚类共享同一组设置。
+    bool exact_search{true}; ///< 精确内积搜索（IndexFlatIP / GpuIndexFlatIP）；无量化近似损失，遵循 faiss_backend 与 model_precision。
+
 };
 
 using RoiSearchBuildProgress         = ImageSearchBuildProgress;
 using RoiSearchBuildProgressCallback = ImageSearchBuildProgressCallback;
 
 /**
- * @brief 基于特征图 ROIAlign 与 Faiss 的 ROI 搜索匹配器。
+ * @brief 默认使用 DINO 裁剪区域特征与精确 Faiss 内积的 ROI 搜索器。
  *
- * 流程为：模型抽取空间特征图，将原图 ROI 映射到特征图坐标，使用 ROIAlign 统一 ROI 特征大小，
- * 展平并归一化后写入 Faiss 特征库；查询时对输入 ROI 执行相同处理并返回 Top-K 命中。
+ * 搜索与聚类调用同一提取器。多边形通过 RoiSearchItem 重载传入；旧矩形 API 保留。
+ * LegacyRoiAlign 是旧描述子对照模式。
  */
 class INFERRT_FEATURES_API RoiSearch
 {
@@ -147,6 +148,9 @@ public:
                                         int top_k = kDefaultTopK);
 
     /** @brief 判断索引是否已经可搜索。 */
+    // Polygon query: pass polygon vertices in original image coordinates.
+    std::vector<RoiSearchResult> search(const RoiSearchItem &query, int top_k = kDefaultTopK);
+
     bool isReady() const noexcept;
 
     /** @brief 获取当前配置。 */
@@ -170,6 +174,11 @@ public:
      */
     static std::filesystem::path defaultIndexPath(const std::filesystem::path &output_dir,
                                                   const std::string &model_name, const std::string &feature_name);
+
+    RoiFeatureMatrixView featureView() const;
+    RoiFeatureWorkStats featureWorkStats() const noexcept;
+    std::vector<RoiSearchResult> searchByRoiId(int64_t roi_id, int top_k = kDefaultTopK);
+    std::vector<RoiSearchResult> repeatSearch(int top_k = kDefaultTopK);
 
 private:
     class Impl;

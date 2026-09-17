@@ -1,944 +1,217 @@
-/**
- * @file RoiFeatureExtractor.hpp
- * @brief ROI 特征图抽取、ROIAlign 与归一化的共用实现。
- */
-
 #include "RoiFeatureExtractor.hpp"
-
-#include "FeatureSearchCommon.hpp"
+#include "LegacyRoiFeatureExtractor.hpp"
 #include "ImageFeatureExtractor.hpp"
-
+#include "RoiEmbeddingCore.hpp"
 #include <inferrt/core/Exception.hpp>
-#include <inferrt/core/Tensor.hpp>
-#include <inferrt/features/RoiFeature.hpp>
-#include <inferrt/ops/RoIAlign.hpp>
-
-#include <opencv2/core.hpp>
-
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <algorithm>
-#include <cmath>
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-#include <filesystem>
-#include <functional>
-#include <limits>
+#include <fstream>
 #include <map>
+#include <numeric>
 #include <utility>
-#include <vector>
+#include <iostream>
 
-namespace irt::features {
-
+namespace irt::features::priv {
 namespace {
-
-struct PatchTokenGrid
-{
-    int height{0};
-    int width{0};
-};
-
-inline ImageSearchConfig featureSearchConfig(const RoiFeatureConfig &config)
-{
-    const ImageSearchConfig &base = config;
-    return base;
+embedding::Shape shapeOf(const RoiFeatureItem& item) {
+    embedding::Shape s{{item.roi.x1,item.roi.y1,item.roi.x2,item.roi.y2},{}};
+    s.polygon.reserve(item.polygon.size());
+    for (auto p:item.polygon) s.polygon.push_back({p.x,p.y});
+    return s;
 }
-
-inline bool isPatchTokenFeature(const RoiFeatureConfig &config)
-{
-    return config.feature_name == "x_norm_patchtokens";
+cv::Mat decodeImage(const std::filesystem::path& path) {
+    // filesystem::path preserves wide Windows paths; no temporary crop files.
+    std::ifstream in(path, std::ios::binary);
+    if (!in) throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,"Cannot read ROI image");
+    std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(in)),{});
+    cv::Mat image=cv::imdecode(bytes,cv::IMREAD_COLOR);
+    if(image.empty()) throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,"Cannot decode ROI image");
+    return image;
 }
-
-inline PatchTokenGrid inferPatchTokenGrid(int64_t token_count, int input_height, int input_width)
-{
-    if (token_count <= 0 || token_count > static_cast<int64_t>(std::numeric_limits<int>::max()))
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Invalid patch token count for RoiFeatureExtractor");
+int interpolation(irt::Interpolation value) {
+    switch(value) {
+        case irt::Interpolation::Nearest:return cv::INTER_NEAREST;
+        case irt::Interpolation::Cubic:return cv::INTER_CUBIC;
+        case irt::Interpolation::Area:return cv::INTER_AREA;
+        default:return cv::INTER_LINEAR;
     }
-
-    const auto tokens       = static_cast<int>(token_count);
-    const auto target_ratio = input_width > 0 && input_height > 0
-                                ? static_cast<double>(input_height) / static_cast<double>(input_width)
-                                : 1.0;
-
-    PatchTokenGrid best{1, tokens};
-    double         best_score = std::numeric_limits<double>::infinity();
-    auto           evaluate   = [&](int height, int width)
-    {
-        const auto ratio = static_cast<double>(height) / static_cast<double>(width);
-        const auto score = std::abs(std::log(ratio / target_ratio));
-        if (score < best_score)
-        {
-            best       = PatchTokenGrid{height, width};
-            best_score = score;
-        }
-    };
-
-    for (int factor = 1; factor <= tokens / factor; ++factor)
-    {
-        if (tokens % factor != 0)
-        {
-            continue;
-        }
-        const int other = tokens / factor;
-        evaluate(factor, other);
-        evaluate(other, factor);
-    }
-    return best;
 }
-
-} // namespace
-
-namespace priv {
-
-/**
- * @brief OpenCV PCA 投影器，负责按通道维训练和批量投影。
- */
-class RoiPcaProjector
-{
-public:
-    /**
-     * @brief 使用特征图空间位置上的通道向量训练 PCA。
-     * @param features 扁平化 ``sample_count x input_dim`` 通道特征。
-     * @param sample_count PCA 训练样本数量。
-     * @param input_dim 原始特征图通道数。
-     * @param output_dim PCA 输出通道数。
-     */
-    void train(const std::vector<float> &features, size_t sample_count, int input_dim, int output_dim)
-    {
-        if (sample_count == 0 || input_dim <= 0 || output_dim <= 0)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI PCA requires non-empty features");
-        }
-        if (sample_count > static_cast<size_t>(std::numeric_limits<int>::max()))
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI PCA feature count is too large");
-        }
-        if (output_dim > input_dim || output_dim > static_cast<int>(sample_count))
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "ROI PCA dim must not exceed feature channel count or sample count");
-        }
-        const auto expected_elements = irt::checkedSizeMul(sample_count, static_cast<size_t>(input_dim),
-                                                           "ROI PCA training elements");
-        if (features.size() != expected_elements)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI PCA training feature size mismatch");
-        }
-
-        cv::Mat input(static_cast<int>(sample_count), input_dim, CV_32F, const_cast<float *>(features.data()));
-        pca_        = cv::PCA(input, cv::Mat(), cv::PCA::DATA_AS_ROW, output_dim);
-        input_dim_  = input_dim;
-        output_dim_ = output_dim;
-        normalizeLoadedMats();
-        validateReady();
-    }
-
-    /**
-     * @brief 批量投影 ``count x inputDim()`` 通道特征。
-     */
-    std::vector<float> project(const float *features, size_t count) const
-    {
-        validateReady();
-        if (count == 0)
-        {
-            return {};
-        }
-        if (features == nullptr)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI PCA input feature pointer is null");
-        }
-        if (count > static_cast<size_t>(std::numeric_limits<int>::max()))
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI PCA projection batch is too large");
-        }
-
-        cv::Mat input(static_cast<int>(count), input_dim_, CV_32F, const_cast<float *>(features));
-        cv::Mat output;
-        pca_.project(input, output);
-        if (output.rows != static_cast<int>(count) || output.cols != output_dim_ || output.type() != CV_32F)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI PCA projection shape mismatch");
-        }
-
-        const auto projected_elements = irt::checkedSizeMul(count, static_cast<size_t>(output_dim_),
-                                                            "ROI PCA projection elements");
-        std::vector<float> projected(projected_elements);
-        if (output.isContinuous())
-        {
-            std::memcpy(projected.data(), output.ptr<float>(),
-                        irt::checkedSizeMul(projected.size(), sizeof(float), "ROI PCA projection bytes"));
-        }
-        else
-        {
-            for (size_t row = 0; row < count; ++row)
-            {
-                std::memcpy(projected.data() + row * static_cast<size_t>(output_dim_),
-                            output.ptr<float>(static_cast<int>(row)),
-                            irt::checkedSizeMul(static_cast<size_t>(output_dim_), sizeof(float),
-                                                "ROI PCA projection row bytes"));
+void appendRaster(const cv::Mat& image,const embedding::View& v,const std::vector<float>& mask,
+                  const irt::PreprocessSpec& pre,float background_keep,std::vector<float>& input) {
+    cv::Mat resized;
+    cv::resize(image(cv::Rect(v.x,v.y,v.width,v.height)),resized,
+               cv::Size(v.resized_width,v.resized_height),0,0,interpolation(pre.interpolation));
+    size_t plane=size_t(v.output_width)*v.output_height, begin=input.size();
+    input.resize(begin+3*plane,0.f); // zero after normalization = channel mean before normalization
+    for(int y=0;y<v.resized_height;++y) {
+        const auto* row=resized.ptr<cv::Vec3b>(y);
+        for(int x=0;x<v.resized_width;++x) {
+            size_t dst=size_t(y+v.top)*v.output_width+x+v.left;
+            float alpha=background_keep+(1-background_keep)*mask[dst];
+            for(int c=0;c<3;++c) {
+                int src=pre.dst_color==irt::ColorFormat::RGB?2-c:c;
+                // Blending with the model mean in raw space is alpha * normalized value.
+                input[begin+size_t(c)*plane+dst]=alpha*(float(row[x][src])*pre.scale-pre.mean[c])/pre.stddev[c];
             }
         }
-        return projected;
     }
+}
+}
 
-    /** @brief 获取 PCA 输入通道数。 */
-    int inputDim() const noexcept
-    {
-        return input_dim_;
+class RoiFeatureExtractor::Impl {
+public:
+    Impl(const RoiFeatureConfig& config,const std::filesystem::path& weights):config_(config) {
+        if(config_.mode==RoiFeatureMode::LegacyRoiAlign) {
+            legacy_=std::make_unique<LegacyRoiFeatureExtractor>(config_,weights);return;
+        }
+        embedding::require(!config_.use_pca,"Per-image PCA is not a shared semantic space; disable use_pca");
+        embedding::require(config_.norm==ImageSearchFeatureNorm::L2,"Semantic ROI features require L2 norm");
+        embedding::require(std::isfinite(config_.background_keep)&&config_.background_keep>=0&&config_.background_keep<=1,
+                           "background_keep must be in [0,1]");
+        embedding::require(std::isfinite(config_.spatial_weight)&&config_.spatial_weight>=0&&config_.spatial_weight<1,
+                           "spatial_weight must be in [0,1)");
+        embedding::require(std::isfinite(config_.detail_weight)&&config_.detail_weight>=0&&config_.detail_weight<1,
+                           "detail_weight must be in [0,1)");
+        embedding::require(config_.max_detail_views==0||config_.max_detail_views==2||config_.max_detail_views==3,
+                           "max_detail_views must be 0, 2 or 3");
+        embedding::require(config_.feature_name=="x_norm_patchtokens","Semantic mode requires DINO patch tokens only");
+        stats_.available=true;
+        ImageSearchConfig base=config_;
+        const int default_edge=config_.patch_size==14?518:512;
+        if(base.preprocess.input_width==0&&base.preprocess.input_height==0) {
+            base.preprocess.input_width=default_edge;base.preprocess.input_height=default_edge;
+        }
+        image_=std::make_unique<ImageFeatureExtractor>(config_.model_name,config_.feature_name,weights,base,true);
+        w_=image_->inputWidth();h_=image_->inputHeight();
+        auto dims=image_->featureTensorShape();
+        embedding::require(config_.patch_size>0&&w_%config_.patch_size==0&&h_%config_.patch_size==0,
+                           "Model input must be divisible by DINO patch_size");
+        gh_=h_/config_.patch_size;gw_=w_/config_.patch_size;
+        embedding::require(dims.nbDims==3&&dims.d[1]==gh_*gw_&&dims.d[2]>0,
+                           "Expected B x (H/patch * W/patch) x D; exclude CLS/register tokens");
+        d_=int(dims.d[2]);
+        const auto& pre=image_->preprocessSpec();
+        embedding::require(pre.input_channels==3&&(pre.dst_color==irt::ColorFormat::RGB||pre.dst_color==irt::ColorFormat::BGR),
+                           "Semantic crop path requires three-channel RGB or BGR model input");
     }
-
-    /** @brief 获取 PCA 输出通道数。 */
-    int outputDim() const noexcept
-    {
-        return output_dim_;
+    int featureDim() const {return legacy_?legacy_->featureDim():d_*(config_.spatial_weight>0?5:1);}
+    RoiFeatureWorkStats workStats() const noexcept {return stats_;}
+    size_t maxBatchSize() const noexcept{return legacy_?legacy_->maxBatchSize():image_->maxBatchSize();}
+    std::vector<float> extract(const RoiFeatureItem& item){return extractItems({item});}
+    std::vector<float> extractBatch(const std::vector<RoiFeatureItem>& items,size_t begin,size_t count) {
+        embedding::require(begin<=items.size()&&count<=items.size()-begin,"Invalid ROI batch range");
+        return extractItems(std::vector<RoiFeatureItem>(items.begin()+begin,items.begin()+begin+count));
     }
-
+    std::vector<float> extractItems(const std::vector<RoiFeatureItem>& items) {
+        if(legacy_)return legacy_->extractItems(items);
+        return extractAll(items,{});
+    }
+    std::vector<float> extractAll(const std::vector<RoiFeatureItem>& items,
+                                 const std::function<void(size_t,size_t,size_t,size_t)>& progress) {
+        const size_t dim=size_t(featureDim());
+        std::vector<float> result(irt::checkedSizeMul(items.size(),dim,"ROI output elements"));
+        extractTo(items,[&](const std::vector<size_t>& rows,const std::vector<float>& values) {
+            embedding::scatterRows(rows,values,dim,result.data(),items.size());
+        },progress);
+        return result;
+    }
+    void extractTo(const std::vector<RoiFeatureItem>& items,const RoiFeatureExtractor::BatchConsumer& consume,
+                   const std::function<void(size_t,size_t,size_t,size_t)>& progress) {
+        if(legacy_) {
+            auto features=legacy_->extractAll(items,progress);
+            std::vector<size_t> rows(items.size());std::iota(rows.begin(),rows.end(),0);
+            if(!items.empty())consume(rows,features);
+            return;
+        }
+        const size_t dim=size_t(featureDim());
+        std::map<std::filesystem::path,std::vector<size_t>> groups;
+        for(size_t i=0;i<items.size();++i)groups[items[i].image_path].push_back(i);
+        struct Pending {size_t roi;bool last;double area;std::vector<float> weights;};
+        struct Accum {std::vector<std::vector<float>> descriptors;std::vector<double> areas;};
+        std::vector<Pending> pending;
+        std::vector<float> input;
+        input.reserve(maxBatchSize()*size_t(3)*w_*h_);
+        std::map<size_t,Accum> accum;
+        size_t processed=0,batch_index=0;
+        auto flush=[&] {
+            if(pending.empty())return;
+            ++stats_.forward_batches;stats_.encoded_views+=pending.size();
+            auto tensor=image_->extractPreparedTensorBatch(input,pending.size());
+            input.clear();input.reserve(maxBatchSize()*size_t(3)*w_*h_);
+            embedding::require(tensor.dims.nbDims==3&&tensor.dims.d[0]==int64_t(pending.size())
+                               &&tensor.dims.d[1]==gh_*gw_&&tensor.dims.d[2]==d_,"Runtime patch tensor shape changed");
+            size_t completed=0,first=0;
+            std::vector<size_t> ready_rows;ready_rows.reserve(pending.size());
+            std::vector<float> ready_values;ready_values.reserve(pending.size()*dim);
+            for(size_t i=0;i<pending.size();++i) {
+                auto& job=pending[i];auto& a=accum[job.roi];
+                a.descriptors.push_back(embedding::pool(tensor.data.data()+i*size_t(gh_)*gw_*d_,gh_,gw_,d_,job.weights,
+                                                        config_.spatial_weight));
+                a.areas.push_back(job.area);
+                if(job.last) {
+                    auto descriptor=embedding::fuse(a.descriptors,a.areas,config_.detail_weight);
+                    ready_rows.push_back(job.roi);
+                    ready_values.insert(ready_values.end(),descriptor.begin(),descriptor.end());
+                    accum.erase(job.roi);if(completed==0)first=job.roi;++completed;
+                }
+            }
+            if(!ready_rows.empty())consume(ready_rows,ready_values);
+            processed+=completed;
+            if(progress&&completed)progress(batch_index++,first,completed,processed);
+            pending.clear();
+        };
+        for(const auto& group:groups) {
+            const cv::Mat image=decodeImage(group.first); // one decoded source at a time
+            ++stats_.decoded_images;
+            for(auto index:group.second) {
+                auto shape=shapeOf(items[index]);
+                auto views=embedding::planViews(shape,image.cols,image.rows,w_,h_,config_.patch_size,
+                                               config_.crop_margin,config_.max_detail_views);
+                struct Job {embedding::View view;std::vector<float> mask,weights;double area;};
+                std::vector<Job> jobs;
+                for(size_t vi=0;vi<views.size();++vi) {
+                    auto mask=embedding::rasterMask(shape,views[vi]);
+                    auto weights=embedding::patchWeights(mask,w_,h_,config_.patch_size);
+                    double mass=std::accumulate(weights.begin(),weights.end(),0.);
+                    if(mass<=1e-8) {
+                        embedding::require(vi!=0,"ROI has no rasterized support inside the image");continue;
+                    }
+                    double area=mass*config_.patch_size*config_.patch_size/(views[vi].sx*views[vi].sy);
+                    jobs.push_back({views[vi],std::move(mask),std::move(weights),area});
+                }
+                for(size_t j=0;j<jobs.size();++j) {
+                    auto& job=jobs[j];
+                    appendRaster(image,job.view,job.mask,image_->preprocessSpec(),config_.background_keep,input);
+                    pending.push_back({index,j+1==jobs.size(),job.area,std::move(job.weights)});
+                    if(pending.size()==maxBatchSize())flush();
+                }
+            }
+            // Pending inputs own their pixels, so the source image can be released here.
+            // Keep filling the batch from the next image instead of forcing batch=1.
+        }
+        flush();
+    }
 private:
-    /**
-     * @brief 统一加载矩阵的类型和形状。
-     */
-    void normalizeLoadedMats()
-    {
-        if (!pca_.mean.empty())
-        {
-            pca_.mean = pca_.mean.reshape(1, 1);
-            if (pca_.mean.type() != CV_32F)
-            {
-                pca_.mean.convertTo(pca_.mean, CV_32F);
-            }
-        }
-        if (!pca_.eigenvectors.empty() && pca_.eigenvectors.type() != CV_32F)
-        {
-            pca_.eigenvectors.convertTo(pca_.eigenvectors, CV_32F);
-        }
-        if (!pca_.eigenvalues.empty() && pca_.eigenvalues.type() != CV_32F)
-        {
-            pca_.eigenvalues.convertTo(pca_.eigenvalues, CV_32F);
-        }
-    }
-
-    /**
-     * @brief 校验 PCA 参数是否完整。
-     */
-    void validateReady() const
-    {
-        if (input_dim_ <= 0 || output_dim_ <= 0 || pca_.mean.total() != static_cast<size_t>(input_dim_)
-            || pca_.eigenvectors.rows != output_dim_ || pca_.eigenvectors.cols != input_dim_)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Invalid ROI PCA parameters");
-        }
-    }
-
-    cv::PCA pca_{};         ///< OpenCV PCA 参数。
-    int     input_dim_{0};  ///< PCA 输入通道数。
-    int     output_dim_{0}; ///< PCA 输出通道数。
+    RoiFeatureConfig config_;
+    RoiFeatureWorkStats stats_;
+    std::unique_ptr<LegacyRoiFeatureExtractor> legacy_;
+    std::unique_ptr<ImageFeatureExtractor> image_;
+    int w_{},h_{},gh_{},gw_{},d_{};
 };
-
-/**
- * @brief ROI 特征抽取器：模型特征图 + ROIAlign + 展平归一化。
- */
-class RoiFeatureExtractorImpl
-{
-    /**
-     * @brief ROI 特征张量布局。
-     */
-    enum class RoiFeatureLayout
-    {
-        SpatialNchw, ///< 标准 ``B x C x H x W`` 空间特征图。
-        PatchTokens, ///< DINO ``B x tokens x dim`` patch token。
-    };
-
-    /**
-     * @brief ROIAlign 可直接消费的 NCHW 特征图视图。
-     */
-    struct PreparedFeatureMap
-    {
-        std::vector<float> owned_data;    ///< patch token 转置或 PCA 投影后持有的 NCHW 数据。
-        const float       *data{nullptr}; ///< 指向 NCHW 特征图数据。
-        nvinfer1::Dims     dims{};        ///< NCHW 形状。
-
-        PreparedFeatureMap() = default;
-
-        PreparedFeatureMap(const PreparedFeatureMap &other)
-            : owned_data(other.owned_data)
-            , data(owned_data.empty() ? other.data : owned_data.data())
-            , dims(other.dims)
-        {
-        }
-
-        PreparedFeatureMap &operator=(const PreparedFeatureMap &other)
-        {
-            if (this != &other)
-            {
-                owned_data = other.owned_data;
-                data       = owned_data.empty() ? other.data : owned_data.data();
-                dims       = other.dims;
-            }
-            return *this;
-        }
-
-        PreparedFeatureMap(PreparedFeatureMap &&other) noexcept
-            : owned_data(std::move(other.owned_data))
-            , data(owned_data.empty() ? other.data : owned_data.data())
-            , dims(other.dims)
-        {
-            other.data = nullptr;
-        }
-
-        PreparedFeatureMap &operator=(PreparedFeatureMap &&other) noexcept
-        {
-            if (this != &other)
-            {
-                owned_data = std::move(other.owned_data);
-                data       = owned_data.empty() ? other.data : owned_data.data();
-                dims       = other.dims;
-                other.data = nullptr;
-            }
-            return *this;
-        }
-    };
-
-public:
-    RoiFeatureExtractorImpl(const RoiFeatureConfig &config, const std::filesystem::path &weights_file)
-        : config_(config)
-        , image_extractor_(config.model_name, config.feature_name, weights_file, featureSearchConfig(config))
-    {
-        const auto dims = image_extractor_.featureTensorShape();
-        if (dims.nbDims == 4 && dims.d[0] > 0 && dims.d[1] > 0 && dims.d[2] > 0 && dims.d[3] > 0)
-        {
-            layout_           = RoiFeatureLayout::SpatialNchw;
-            feature_channels_ = static_cast<int>(dims.d[1]);
-        }
-        else if (dims.nbDims == 3 && dims.d[0] > 0 && dims.d[1] > 0 && dims.d[2] > 0 && isPatchTokenFeature(config_))
-        {
-            layout_     = RoiFeatureLayout::PatchTokens;
-            patch_grid_ = inferPatchTokenGrid(dims.d[1], image_extractor_.inputHeight(), image_extractor_.inputWidth());
-            feature_channels_ = static_cast<int>(dims.d[2]);
-        }
-        else
-        {
-            throw irt::Exception(
-                irt::Status::ERROR_INVALID_ARGUMENT,
-                "RoiFeature tensor must be NCHW map or DINO x_norm_patchtokens with shape BxTokensxDim");
-        }
-
-        if (config_.use_pca && (config_.pca_dim <= 0 || config_.pca_dim > feature_channels_))
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "ROI PCA dim must be positive and not exceed feature channel count");
-        }
-
-        feature_dim_ = roiFeatureDim(feature_channels_);
-    }
-
-    /**
-     * @brief 获取 ROI 特征向量维度。
-     */
-    int featureDim() const
-    {
-        return config_.use_pca ? roiFeatureDim(config_.pca_dim) : feature_dim_;
-    }
-
-    /**
-     * @brief 提取单个 ROI 的归一化特征。
-     */
-    std::vector<float> extract(const RoiFeatureItem &item)
-    {
-        return extractItems(std::vector<RoiFeatureItem>{item});
-    }
-
-    /**
-     * @brief 获取模型支持的最大特征提取 batch。
-     */
-    size_t maxBatchSize() const noexcept
-    {
-        return image_extractor_.maxBatchSize();
-    }
-
-    /**
-     * @brief 批量提取 ROI 特征。
-     */
-    std::vector<float> extractBatch(const std::vector<RoiFeatureItem> &items, size_t begin, size_t count)
-    {
-        if (begin > items.size() || count > items.size() - begin)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI feature batch range is invalid");
-        }
-
-        std::vector<RoiFeatureItem> selected;
-        selected.reserve(count);
-        for (size_t i = 0; i < count; ++i)
-        {
-            selected.push_back(items[begin + i]);
-        }
-        return extractItems(selected);
-    }
-
-    /**
-     * @brief 对一组 ROI 去重图像路径后执行一次模型前向和批量 ROIAlign。
-     *
-     * 同一张图的多个标注只生成一份空间特征图；ROIAlign 可以在同一份特征图上消费任意数量
-     * 的 ROI，从而避免按 ROI 重复执行模型前向。
-     */
-    std::vector<float> extractItems(const std::vector<RoiFeatureItem> &items)
-    {
-        if (items.empty())
-        {
-            return {};
-        }
-
-        std::vector<std::filesystem::path> paths;
-        std::vector<RoiFeatureBox> rois;
-        std::vector<size_t>       image_indices;
-        std::map<std::filesystem::path, size_t> path_to_index;
-        paths.reserve(items.size());
-        rois.reserve(items.size());
-        image_indices.reserve(items.size());
-        for (const auto &item : items)
-        {
-            validateRoi(item.roi);
-            const auto [it, inserted] = path_to_index.emplace(item.image_path, paths.size());
-            if (inserted)
-            {
-                paths.push_back(item.image_path);
-            }
-            rois.push_back(item.roi);
-            image_indices.push_back(it->second);
-        }
-        if (paths.size() > maxBatchSize())
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "ROI feature batch contains more unique images than model max batch size");
-        }
-
-        const auto tensor      = image_extractor_.extractFeatureTensorBatch(paths, 0, paths.size());
-        const auto feature_map = prepareFeatureMap(tensor);
-        std::vector<float> features;
-        if (!config_.use_pca)
-        {
-            features = roiAlignAndFlatten(feature_map, tensor.original_sizes, rois, image_indices);
-        }
-        else
-        {
-            features.resize(irt::checkedSizeMul(items.size(), static_cast<size_t>(featureDim()),
-                                                "ROI feature output elements"));
-            std::vector<std::vector<size_t>> roi_indices_by_image(paths.size());
-            for (size_t roi_index = 0; roi_index < image_indices.size(); ++roi_index)
-            {
-                roi_indices_by_image[image_indices[roi_index]].push_back(roi_index);
-            }
-            for (size_t image_index = 0; image_index < paths.size(); ++image_index)
-            {
-                auto single_map = singleFeatureMap(feature_map, image_index);
-                auto reduced    = applyLocalPcaToFeatureMap(single_map);
-                std::vector<RoiFeatureBox> image_rois;
-                std::vector<size_t>       local_indices;
-                image_rois.reserve(roi_indices_by_image[image_index].size());
-                local_indices.resize(roi_indices_by_image[image_index].size(), 0);
-                for (const auto roi_index : roi_indices_by_image[image_index])
-                {
-                    image_rois.push_back(rois[roi_index]);
-                }
-                const auto image_features
-                    = roiAlignAndFlatten(reduced, {tensor.original_sizes[image_index]}, image_rois, local_indices);
-                const auto dim = static_cast<size_t>(featureDim());
-                for (size_t local_index = 0; local_index < roi_indices_by_image[image_index].size(); ++local_index)
-                {
-                    const auto output_index = roi_indices_by_image[image_index][local_index];
-                    std::copy_n(image_features.data() + local_index * dim, dim, features.data() + output_index * dim);
-                }
-            }
-        }
-
-        const auto dim = static_cast<size_t>(featureDim());
-        for (size_t i = 0; i < rois.size(); ++i)
-        {
-            normalizeFeature(features.data() + i * dim, dim, config_.norm);
-        }
-        return features;
-    }
-
-    /**
-     * @brief 按图像分组提取完整 ROI 特征矩阵。
-     *
-     * 同一图像的所有 ROI 共享一次模型特征图；不同图像按模型 batch 打包。输出始终保持
-     * 输入 ROI 顺序，适合直接送入 HDBSCAN。
-     */
-    std::vector<float> extractAll(const std::vector<RoiFeatureItem> &items,
-                                  const std::function<void(size_t, size_t, size_t, size_t)> &progress = {})
-    {
-        if (items.empty())
-        {
-            return {};
-        }
-
-        const auto dim = static_cast<size_t>(featureDim());
-        std::vector<float> all_features(irt::checkedSizeMul(items.size(), dim, "ROI feature matrix elements"));
-        struct ImageGroup
-        {
-            std::filesystem::path image_path;
-            std::vector<size_t> roi_indices;
-        };
-
-        std::vector<ImageGroup> groups;
-        std::map<std::filesystem::path, size_t> group_by_path;
-        groups.reserve(items.size());
-        for (size_t index = 0; index < items.size(); ++index)
-        {
-            const auto [it, inserted] = group_by_path.emplace(items[index].image_path, groups.size());
-            if (inserted)
-            {
-                groups.push_back(ImageGroup{items[index].image_path, {}});
-            }
-            groups[it->second].roi_indices.push_back(index);
-        }
-
-        std::vector<size_t> packed_roi_indices;
-        size_t              packed_image_count{0};
-        size_t              processed_count{0};
-        size_t              batch_index{0};
-        auto process_packed = [&]
-        {
-            if (packed_roi_indices.empty())
-            {
-                return;
-            }
-
-            std::vector<RoiFeatureItem> batch_items;
-            batch_items.reserve(packed_roi_indices.size());
-            for (const auto roi_index : packed_roi_indices)
-            {
-                batch_items.push_back(items[roi_index]);
-            }
-            const auto features = extractItems(batch_items);
-            const auto expected_elements = irt::checkedSizeMul(batch_items.size(), dim,
-                                                               "ROI feature batch elements");
-            if (features.size() != expected_elements)
-            {
-                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI feature batch size mismatch");
-            }
-            for (size_t local_index = 0; local_index < packed_roi_indices.size(); ++local_index)
-            {
-                const auto output_index = packed_roi_indices[local_index];
-                std::copy_n(features.data() + local_index * dim, dim, all_features.data() + output_index * dim);
-            }
-
-            processed_count += packed_roi_indices.size();
-            if (progress)
-            {
-                progress(batch_index++, packed_roi_indices.front(), packed_roi_indices.size(), processed_count);
-            }
-            packed_roi_indices.clear();
-            packed_image_count = 0;
-        };
-
-        for (const auto &group : groups)
-        {
-            if (!packed_roi_indices.empty() && packed_image_count >= maxBatchSize())
-            {
-                process_packed();
-            }
-            packed_roi_indices.insert(packed_roi_indices.end(), group.roi_indices.begin(), group.roi_indices.end());
-            ++packed_image_count;
-        }
-        process_packed();
-        return all_features;
-    }
-
-private:
-    /**
-     * @brief 根据通道数计算 ROIAlign 展平后的维度。
-     */
-    int roiFeatureDim(int channels) const
-    {
-        const auto pooled = irt::checkedSizeMul(static_cast<size_t>(config_.pooled_height),
-                                                static_cast<size_t>(config_.pooled_width), "ROI pooled elements");
-        return irt::checkedSizeToInt(irt::checkedSizeMul(static_cast<size_t>(channels), pooled,
-                                                         "ROI feature dimension"),
-                                                         "ROI feature dimension");
-    }
-
-    /**
-     * @brief 校验 NCHW 特征图并返回元素数量。
-     */
-    static size_t validateNchwTensor(const FeatureTensorBatch &tensor, const nvinfer1::Dims &dims)
-    {
-        if (dims.nbDims != 4 || dims.d[0] <= 0 || dims.d[1] <= 0 || dims.d[2] <= 0 || dims.d[3] <= 0)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "RoiFeature requires NCHW feature tensor");
-        }
-        const auto expected = irt::checkedSizeMul(
-            irt::checkedSizeMul(static_cast<size_t>(dims.d[0]), static_cast<size_t>(dims.d[1]),
-                                "ROI feature tensor elements"),
-            irt::checkedSizeMul(static_cast<size_t>(dims.d[2]), static_cast<size_t>(dims.d[3]),
-                                "ROI feature tensor elements"),
-            "ROI feature tensor elements");
-        if (tensor.data.size() != expected)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "RoiFeature tensor size mismatch");
-        }
-        return expected;
-    }
-
-    /**
-     * @brief 校验已准备的 NCHW 特征图并返回元素数量。
-     */
-    static size_t validatePreparedFeatureMap(const PreparedFeatureMap &feature_map)
-    {
-        const auto &dims = feature_map.dims;
-        if (dims.nbDims != 4 || dims.d[0] <= 0 || dims.d[1] <= 0 || dims.d[2] <= 0 || dims.d[3] <= 0)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "RoiFeature requires NCHW feature map");
-        }
-        if (feature_map.data == nullptr)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "RoiFeature feature map data is null");
-        }
-        return irt::checkedSizeMul(
-            irt::checkedSizeMul(static_cast<size_t>(dims.d[0]), static_cast<size_t>(dims.d[1]),
-                                "ROI feature map elements"),
-            irt::checkedSizeMul(static_cast<size_t>(dims.d[2]), static_cast<size_t>(dims.d[3]),
-                                "ROI feature map elements"),
-            "ROI feature map elements");
-    }
-
-    /**
-     * @brief 将 DINO patch token 重排为 ``B x C x patch_h x patch_w``。
-     */
-    PreparedFeatureMap preparePatchTokenMap(const FeatureTensorBatch &tensor) const
-    {
-        if (tensor.dims.nbDims != 3 || tensor.dims.d[0] <= 0 || tensor.dims.d[1] <= 0 || tensor.dims.d[2] <= 0)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "RoiFeature patch token tensor must have shape BxTokensxDim");
-        }
-
-        const int batch    = static_cast<int>(tensor.dims.d[0]);
-        const int tokens   = static_cast<int>(tensor.dims.d[1]);
-        const int channels = static_cast<int>(tensor.dims.d[2]);
-        const auto patch_tokens = irt::checkedSizeMul(static_cast<size_t>(patch_grid_.height),
-                                                       static_cast<size_t>(patch_grid_.width),
-                                                       "ROI patch token grid");
-        if (tokens != irt::checkedSizeToInt(patch_tokens, "ROI patch token grid") || channels != feature_channels_)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "RoiFeature patch token grid mismatch");
-        }
-
-        const auto expected = irt::checkedSizeMul(
-            irt::checkedSizeMul(static_cast<size_t>(batch), static_cast<size_t>(tokens),
-                                "ROI patch token elements"),
-            static_cast<size_t>(channels), "ROI patch token elements");
-        if (tensor.data.size() != expected)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "RoiFeature patch token tensor size mismatch");
-        }
-
-        PreparedFeatureMap prepared;
-        prepared.dims.nbDims = 4;
-        prepared.dims.d[0]   = batch;
-        prepared.dims.d[1]   = channels;
-        prepared.dims.d[2]   = patch_grid_.height;
-        prepared.dims.d[3]   = patch_grid_.width;
-        prepared.owned_data.resize(expected);
-
-        for (int b = 0; b < batch; ++b)
-        {
-            for (int y = 0; y < patch_grid_.height; ++y)
-            {
-                for (int x = 0; x < patch_grid_.width; ++x)
-                {
-                    const int token = y * patch_grid_.width + x;
-                    for (int c = 0; c < channels; ++c)
-                    {
-                        const auto src
-                            = (static_cast<size_t>(b) * static_cast<size_t>(tokens) + static_cast<size_t>(token))
-                                * static_cast<size_t>(channels)
-                            + static_cast<size_t>(c);
-                        const auto dst
-                            = ((static_cast<size_t>(b) * static_cast<size_t>(channels) + static_cast<size_t>(c))
-                                   * static_cast<size_t>(patch_grid_.height)
-                               + static_cast<size_t>(y))
-                                * static_cast<size_t>(patch_grid_.width)
-                            + static_cast<size_t>(x);
-                        prepared.owned_data[dst] = tensor.data[src];
-                    }
-                }
-            }
-        }
-
-        prepared.data = prepared.owned_data.data();
-        return prepared;
-    }
-
-    /**
-     * @brief 准备 ROIAlign 输入特征图。
-     */
-    PreparedFeatureMap prepareFeatureMap(const FeatureTensorBatch &tensor) const
-    {
-        if (layout_ == RoiFeatureLayout::PatchTokens)
-        {
-            return preparePatchTokenMap(tensor);
-        }
-
-        validateNchwTensor(tensor, tensor.dims);
-        PreparedFeatureMap prepared;
-        prepared.data = tensor.data.data();
-        prepared.dims = tensor.dims;
-        return prepared;
-    }
-
-    /**
-     * @brief 将 NCHW 特征图转换为 ``N*H*W x C`` 的通道向量矩阵。
-     */
-    std::vector<float> featureMapRows(const PreparedFeatureMap &feature_map) const
-    {
-        validatePreparedFeatureMap(feature_map);
-        const int batch    = static_cast<int>(feature_map.dims.d[0]);
-        const int channels = static_cast<int>(feature_map.dims.d[1]);
-        const int height   = static_cast<int>(feature_map.dims.d[2]);
-        const int width    = static_cast<int>(feature_map.dims.d[3]);
-
-        const auto row_count = irt::checkedSizeMul(
-            static_cast<size_t>(batch),
-            irt::checkedSizeMul(static_cast<size_t>(height), static_cast<size_t>(width),
-                                "ROI feature map row count"),
-            "ROI feature map row count");
-        const auto row_elements = irt::checkedSizeMul(row_count, static_cast<size_t>(channels),
-                                                      "ROI feature map rows");
-        std::vector<float> rows(row_elements);
-        for (int b = 0; b < batch; ++b)
-        {
-            for (int y = 0; y < height; ++y)
-            {
-                for (int x = 0; x < width; ++x)
-                {
-                    const auto row = (static_cast<size_t>(b) * static_cast<size_t>(height) + static_cast<size_t>(y))
-                                       * static_cast<size_t>(width)
-                                   + static_cast<size_t>(x);
-                    for (int c = 0; c < channels; ++c)
-                    {
-                        const auto src
-                            = ((static_cast<size_t>(b) * static_cast<size_t>(channels) + static_cast<size_t>(c))
-                                   * static_cast<size_t>(height)
-                               + static_cast<size_t>(y))
-                                * static_cast<size_t>(width)
-                            + static_cast<size_t>(x);
-                        rows[row * static_cast<size_t>(channels) + static_cast<size_t>(c)] = feature_map.data[src];
-                    }
-                }
-            }
-        }
-        return rows;
-    }
-
-    /**
-     * @brief 返回一个批次样本的 NCHW 视图。
-     */
-    PreparedFeatureMap singleFeatureMap(const PreparedFeatureMap &feature_map, size_t index) const
-    {
-        validatePreparedFeatureMap(feature_map);
-        if (index >= static_cast<size_t>(feature_map.dims.d[0]))
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI feature map batch index is invalid");
-        }
-
-        const auto sample_size = irt::checkedSizeMul(
-            static_cast<size_t>(feature_map.dims.d[1]),
-            irt::checkedSizeMul(static_cast<size_t>(feature_map.dims.d[2]),
-                                static_cast<size_t>(feature_map.dims.d[3]), "ROI feature sample elements"),
-            "ROI feature sample elements");
-        PreparedFeatureMap single;
-        single.data      = feature_map.data + index * sample_size;
-        single.dims      = feature_map.dims;
-        single.dims.d[0] = 1;
-        return single;
-    }
-
-    /**
-     * @brief 对当前特征图通道维训练本地 PCA，并还原为 ROIAlign 可消费的 NCHW 特征图。
-     */
-    PreparedFeatureMap applyLocalPcaToFeatureMap(const PreparedFeatureMap &feature_map) const
-    {
-        validatePreparedFeatureMap(feature_map);
-        const int  batch     = static_cast<int>(feature_map.dims.d[0]);
-        const int  channels  = static_cast<int>(feature_map.dims.d[1]);
-        const int  height    = static_cast<int>(feature_map.dims.d[2]);
-        const int  width     = static_cast<int>(feature_map.dims.d[3]);
-        const auto row_count = irt::checkedSizeMul(
-            static_cast<size_t>(batch),
-            irt::checkedSizeMul(static_cast<size_t>(height), static_cast<size_t>(width),
-                                "ROI PCA row count"),
-            "ROI PCA row count");
-        if (config_.pca_dim <= 0 || config_.pca_dim > channels || static_cast<size_t>(config_.pca_dim) > row_count)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,
-                                 "ROI PCA dim must not exceed feature channel count or local feature-map sample count");
-        }
-
-        auto            rows = featureMapRows(feature_map);
-        RoiPcaProjector projector;
-        projector.train(rows, row_count, channels, config_.pca_dim);
-        const auto projected  = projector.project(rows.data(), row_count);
-        const int  out_ch     = config_.pca_dim;
-        const auto out_stride = static_cast<size_t>(out_ch);
-
-        PreparedFeatureMap reduced;
-        reduced.dims      = feature_map.dims;
-        reduced.dims.d[1] = out_ch;
-        reduced.owned_data.resize(irt::checkedSizeMul(
-            irt::checkedSizeMul(static_cast<size_t>(batch), static_cast<size_t>(out_ch),
-                                "ROI PCA reduced elements"),
-            irt::checkedSizeMul(static_cast<size_t>(height), static_cast<size_t>(width),
-                                "ROI PCA reduced elements"),
-            "ROI PCA reduced elements"));
-        for (int b = 0; b < batch; ++b)
-        {
-            for (int y = 0; y < height; ++y)
-            {
-                for (int x = 0; x < width; ++x)
-                {
-                    const auto row = (static_cast<size_t>(b) * static_cast<size_t>(height) + static_cast<size_t>(y))
-                                       * static_cast<size_t>(width)
-                                   + static_cast<size_t>(x);
-                    for (int c = 0; c < out_ch; ++c)
-                    {
-                        const auto dst
-                            = ((static_cast<size_t>(b) * static_cast<size_t>(out_ch) + static_cast<size_t>(c))
-                                   * static_cast<size_t>(height)
-                               + static_cast<size_t>(y))
-                                * static_cast<size_t>(width)
-                            + static_cast<size_t>(x);
-                        reduced.owned_data[dst] = projected[row * out_stride + static_cast<size_t>(c)];
-                    }
-                }
-            }
-        }
-        reduced.data = reduced.owned_data.data();
-        return reduced;
-    }
-
-    /**
-     * @brief 将原图 ROI 映射到特征图坐标并批量执行 ROIAlign。
-     */
-    std::vector<float> roiAlignAndFlatten(const PreparedFeatureMap &feature_map,
-                                           const std::vector<ImageSize> &image_sizes,
-                                           const std::vector<RoiFeatureBox> &rois,
-                                           const std::vector<size_t> &image_indices = {}) const
-    {
-        validatePreparedFeatureMap(feature_map);
-        if (image_sizes.size() != static_cast<size_t>(feature_map.dims.d[0])
-            || (!image_indices.empty() && image_indices.size() != rois.size()))
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI batch shape mismatch");
-        }
-        if (rois.empty())
-        {
-            return {};
-        }
-
-        const auto feature_height = static_cast<float>(feature_map.dims.d[2]);
-        const auto feature_width  = static_cast<float>(feature_map.dims.d[3]);
-        std::vector<float> mapped_rois(irt::checkedSizeMul(rois.size(), 5U, "ROI coordinate elements"));
-        for (size_t i = 0; i < rois.size(); ++i)
-        {
-            validateRoi(rois[i]);
-            const auto offset = i * 5;
-            const auto image_index = image_indices.empty() ? i : image_indices[i];
-            if (image_index >= image_sizes.size())
-            {
-                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI image index is out of range");
-            }
-            const auto &mapped_image_size = image_sizes[image_index];
-            if (mapped_image_size.width <= 0 || mapped_image_size.height <= 0)
-            {
-                throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Invalid source image size for ROI mapping");
-            }
-            mapped_rois[offset]     = static_cast<float>(image_index);
-            mapped_rois[offset + 1] = rois[i].x1 * feature_width / static_cast<float>(mapped_image_size.width);
-            mapped_rois[offset + 2] = rois[i].y1 * feature_height / static_cast<float>(mapped_image_size.height);
-            mapped_rois[offset + 3] = rois[i].x2 * feature_width / static_cast<float>(mapped_image_size.width);
-            mapped_rois[offset + 4] = rois[i].y2 * feature_height / static_cast<float>(mapped_image_size.height);
-        }
-
-        const int64_t input_shape[4]{
-            feature_map.dims.d[0],
-            feature_map.dims.d[1],
-            feature_map.dims.d[2],
-            feature_map.dims.d[3],
-        };
-        const irt::ops::RoIAlign roi_align({config_.pooled_height, config_.pooled_width}, 1.0f, config_.sampling_ratio,
-                                           config_.aligned);
-        auto feature = roi_align.forward(feature_map.data, input_shape, mapped_rois.data(),
-                                         irt::checkedSizeToInt64(rois.size(), "ROI count"));
-        const auto expected_size = irt::checkedSizeMul(
-            rois.size(), static_cast<size_t>(roiFeatureDim(static_cast<int>(feature_map.dims.d[1]))),
-            "ROI output elements");
-        if (feature.size() != expected_size)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unexpected ROI feature size");
-        }
-        return feature;
-    }
-
-    RoiFeatureConfig       config_{};                              ///< ROI 检索配置。
-    ImageFeatureExtractor image_extractor_;                       ///< 共用图像特征图抽取器。
-    RoiFeatureLayout      layout_{RoiFeatureLayout::SpatialNchw}; ///< 特征张量布局。
-    PatchTokenGrid        patch_grid_{};                          ///< patch token 推断出的空间网格。
-    int                   feature_channels_{0};                   ///< ROIAlign 输入通道数。
-    int                   feature_dim_{0};                        ///< ROI 特征向量维度。
-};
-
-class RoiFeatureExtractor::Impl final : public RoiFeatureExtractorImpl
-{
-public:
-    using RoiFeatureExtractorImpl::RoiFeatureExtractorImpl;
-};
-
-RoiFeatureExtractor::RoiFeatureExtractor(const RoiFeatureConfig &config, const std::filesystem::path &weights_file)
-    : impl_(std::make_unique<Impl>(config, weights_file))
-{
-}
-
-RoiFeatureExtractor::~RoiFeatureExtractor() = default;
-
-RoiFeatureExtractor::RoiFeatureExtractor(RoiFeatureExtractor &&) noexcept = default;
-
-RoiFeatureExtractor &RoiFeatureExtractor::operator=(RoiFeatureExtractor &&) noexcept = default;
-
-int RoiFeatureExtractor::featureDim() const
-{
-    return impl_->featureDim();
-}
-
-size_t RoiFeatureExtractor::maxBatchSize() const noexcept
-{
-    return impl_->maxBatchSize();
-}
-
-std::vector<float> RoiFeatureExtractor::extract(const RoiFeatureItem &item)
-{
-    return impl_->extract(item);
-}
-
-std::vector<float> RoiFeatureExtractor::extractBatch(const std::vector<RoiFeatureItem> &items, size_t begin,
-                                                     size_t count)
-{
-    return impl_->extractBatch(items, begin, count);
-}
-
-std::vector<float> RoiFeatureExtractor::extractItems(const std::vector<RoiFeatureItem> &items)
-{
-    return impl_->extractItems(items);
-}
-
-std::vector<float> RoiFeatureExtractor::extractAll(
-    const std::vector<RoiFeatureItem> &items,
-    const std::function<void(size_t, size_t, size_t, size_t)> &progress)
-{
-    return impl_->extractAll(items, progress);
-}
-
-} // namespace priv
-
-
-} // namespace irt::features
+RoiFeatureExtractor::RoiFeatureExtractor(const RoiFeatureConfig& config,const std::filesystem::path& weights)
+    :impl_(std::make_unique<Impl>(config,weights)){}
+RoiFeatureExtractor::~RoiFeatureExtractor()=default;
+RoiFeatureExtractor::RoiFeatureExtractor(RoiFeatureExtractor&&) noexcept=default;
+RoiFeatureExtractor& RoiFeatureExtractor::operator=(RoiFeatureExtractor&&) noexcept=default;
+RoiFeatureWorkStats RoiFeatureExtractor::workStats()const noexcept{return impl_->workStats();}
+int RoiFeatureExtractor::featureDim()const{return impl_->featureDim();}
+size_t RoiFeatureExtractor::maxBatchSize()const noexcept{return impl_->maxBatchSize();}
+std::vector<float> RoiFeatureExtractor::extract(const RoiFeatureItem& item){return impl_->extract(item);}
+std::vector<float> RoiFeatureExtractor::extractItems(const std::vector<RoiFeatureItem>& items){return impl_->extractItems(items);}
+std::vector<float> RoiFeatureExtractor::extractBatch(const std::vector<RoiFeatureItem>& items,size_t begin,size_t count){return impl_->extractBatch(items,begin,count);}
+std::vector<float> RoiFeatureExtractor::extractAll(const std::vector<RoiFeatureItem>& items,
+    const std::function<void(size_t,size_t,size_t,size_t)>& progress){return impl_->extractAll(items,progress);}
+void RoiFeatureExtractor::extractTo(const std::vector<RoiFeatureItem>& items,const BatchConsumer& consume,
+    const std::function<void(size_t,size_t,size_t,size_t)>& progress){impl_->extractTo(items,consume,progress);}
+} // namespace irt::features::priv

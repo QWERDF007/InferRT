@@ -47,6 +47,16 @@ std::vector<RoiSearchResult> RoiSearch::search(const fs::path &query_image, cons
     return impl_->search(query_image, roi, top_k);
 }
 
+std::vector<RoiSearchResult> RoiSearch::search(const RoiSearchItem &query, int top_k)
+{
+    return impl_->search(query, top_k);
+}
+
+RoiFeatureWorkStats RoiSearch::featureWorkStats()const noexcept{return impl_->featureWorkStats();}
+RoiFeatureMatrixView RoiSearch::featureView() const {return impl_->featureView();}
+std::vector<RoiSearchResult> RoiSearch::searchByRoiId(int64_t roi_id,int top_k){return impl_->searchByRoiId(roi_id,top_k);}
+std::vector<RoiSearchResult> RoiSearch::repeatSearch(int top_k){return impl_->repeatSearch(top_k);}
+
 bool RoiSearch::isReady() const noexcept
 {
     return impl_ && impl_->isReady();

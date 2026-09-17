@@ -83,7 +83,8 @@ TEST(RoiSearchTest, DefaultConstructsNotReadySearcher)
     EXPECT_EQ(search.config().model_name, irt::features::RoiSearch::kDefaultModelName);
     EXPECT_EQ(search.config().feature_name, irt::features::RoiSearch::kDefaultFeatureName);
     EXPECT_EQ(search.config().model_runtime, irt::model::ModelRuntime{});
-    EXPECT_EQ(search.config().model_precision, irt::model::ModelPrecision::FP32);
+    EXPECT_EQ(search.config().model_precision, irt::model::ModelPrecision::FP16);
+    EXPECT_EQ(search.config().faiss_backend, irt::features::ImageSearchFaissBackend::GPU);
     EXPECT_EQ(search.config().pooled_height, irt::features::kDefaultRoiSearchPooledHeight);
     EXPECT_EQ(search.config().pooled_width, irt::features::kDefaultRoiSearchPooledWidth);
     EXPECT_EQ(search.config().sampling_ratio, -1);
@@ -99,11 +100,14 @@ TEST(RoiSearchTest, DefaultConstructsNotReadySearcher)
 TEST(RoiSearchTest, ConstructorStoresConfig)
 {
     irt::features::RoiSearchConfig config;
+    config.mode = irt::features::RoiFeatureMode::LegacyRoiAlign;
+    config.exact_search = false;
     config.model_name            = "resnet18";
     config.feature_name          = "layer3";
     config.model_runtime         = irt::model::ModelRuntime::parse("onnxruntime:2");
     config.model_precision       = irt::model::ModelPrecision::FP16;
     config.norm                  = irt::features::ImageSearchFeatureNorm::L1;
+    config.faiss_backend         = irt::features::ImageSearchFaissBackend::CPU;
     config.index_storage         = irt::features::ImageSearchIndexStorage::Disk;
     config.model_batch_size      = 2;
     config.pooled_height         = 3;
@@ -133,6 +137,8 @@ TEST(RoiSearchTest, ConstructorStoresConfig)
 TEST(RoiSearchTest, ConstructorNormalizesGpuFaissStorage)
 {
     irt::features::RoiSearchConfig config;
+    config.mode = irt::features::RoiFeatureMode::LegacyRoiAlign;
+    config.exact_search = false;
     config.model_name    = "resnet18";
     config.feature_name  = "layer4";
     config.faiss_backend = irt::features::ImageSearchFaissBackend::GPU;
@@ -157,18 +163,22 @@ TEST(RoiSearchTest, ConstructorRejectsInvalidConfig)
                            irt::Status::ERROR_INVALID_ARGUMENT);
 
     irt::features::RoiSearchConfig bad_pool;
+    bad_pool.mode = irt::features::RoiFeatureMode::LegacyRoiAlign;
     bad_pool.pooled_width = 0;
     expectIrtExceptionCode([&] { irt::features::RoiSearch search(bad_pool); }, irt::Status::ERROR_INVALID_ARGUMENT);
 
     irt::features::RoiSearchConfig bad_sampling;
+    bad_sampling.mode = irt::features::RoiFeatureMode::LegacyRoiAlign;
     bad_sampling.sampling_ratio = -2;
     expectIrtExceptionCode([&] { irt::features::RoiSearch search(bad_sampling); }, irt::Status::ERROR_INVALID_ARGUMENT);
 
     irt::features::RoiSearchConfig bad_pca_dim;
+    bad_pca_dim.mode = irt::features::RoiFeatureMode::LegacyRoiAlign;
     bad_pca_dim.pca_dim = -1;
     expectIrtExceptionCode([&] { irt::features::RoiSearch search(bad_pca_dim); }, irt::Status::ERROR_INVALID_ARGUMENT);
 
     irt::features::RoiSearchConfig missing_pca_dim;
+    missing_pca_dim.mode = irt::features::RoiFeatureMode::LegacyRoiAlign;
     missing_pca_dim.use_pca = true;
     missing_pca_dim.pca_dim = 0;
     expectIrtExceptionCode([&] { irt::features::RoiSearch search(missing_pca_dim); },
@@ -189,6 +199,8 @@ TEST(RoiSearchTest, DefaultIndexPathUsesTimestampFaissFile)
 TEST(RoiSearchTest, SearchBeforeBuildThrowsInvalidOperation)
 {
     irt::features::RoiSearchConfig config;
+    config.mode = irt::features::RoiFeatureMode::LegacyRoiAlign;
+    config.exact_search = false;
     config.model_name   = "resnet18";
     config.feature_name = "layer4";
     irt::features::RoiSearch search(config);
@@ -226,3 +238,5 @@ TEST(RoiSearchTest, BuildRejectsBadItemsBeforeLoadingModel)
     expectIrtExceptionCode([&] { search.build("weights.wts", missing_image, index_path); },
                            irt::Status::ERROR_INVALID_ARGUMENT);
 }
+
+

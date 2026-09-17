@@ -9,14 +9,15 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <vector>
 
 namespace irt::features {
 
 /// 默认 ROI 特征模型名称。
-inline constexpr const char *kDefaultRoiFeatureModelName = kDefaultImageSearchModelName;
+inline constexpr const char *kDefaultRoiFeatureModelName = "dinov3_vits16";
 
 /// 默认 ROI 特征张量名称。
-inline constexpr const char *kDefaultRoiFeatureName = kDefaultImageSearchFeatureName;
+inline constexpr const char *kDefaultRoiFeatureName = "x_norm_patchtokens";
 
 /// 默认 ROIAlign 输出高度。
 inline constexpr int kDefaultRoiFeaturePooledHeight = 7;
@@ -38,11 +39,33 @@ struct RoiFeatureBox
 /**
  * @brief ROI 特征提取输入条目。
  */
+struct RoiFeaturePoint { float x{0}, y{0}; };
+
+enum class RoiFeatureMode { CropMaskedMean, LegacyRoiAlign };
+
 struct RoiFeatureItem
 {
     int64_t               roi_id{0};  ///< 调用方提供的 ROI 唯一 ID。
     std::filesystem::path image_path; ///< ROI 所属图像路径。
     RoiFeatureBox         roi;        ///< 原图坐标系下的 ROI。
+    // Empty: rectangle roi. Nonempty: polygon is authoritative; bbox is derived.
+    std::vector<RoiFeaturePoint> polygon;
+};
+
+struct RoiFeatureWorkStats {
+    bool available{false}; // Tracked in semantic crop mode; legacy counters are not provided.
+    size_t decoded_images{0};
+    size_t encoded_views{0};
+    size_t forward_batches{0};
+};
+
+// Borrowed read-only view. Owner must outlive the call and may not rebuild concurrently.
+// Exact indexes expose contiguous host vector storage (IndexFlatIP or host flat clone); no matrix copy.
+struct RoiFeatureMatrixView {
+    const float* data{nullptr};
+    const int64_t* roi_ids{nullptr};
+    size_t rows{0};
+    int dimension{0};
 };
 
 /**
@@ -63,8 +86,16 @@ struct RoiFeatureConfig : public ImageSearchConfig
     int  pooled_width{kDefaultRoiFeaturePooledWidth};   ///< ROIAlign 输出宽度。
     int  sampling_ratio{-1};                             ///< ROIAlign 采样率，-1 表示自适应。
     bool aligned{false};                                 ///< 是否使用 aligned ROIAlign 坐标规则。
-    bool use_pca{false};                                 ///< 是否按图像特征图执行局部 PCA。
+    bool use_pca{false};                                 ///< 仅旧模式对照；新语义模式拒绝逐图 PCA。
     int  pca_dim{0};                                     ///< 局部 PCA 输出通道数。
+    RoiFeatureMode mode{RoiFeatureMode::CropMaskedMean};
+    int patch_size{16};                     // DINOv2: 14; DINOv3: 16.
+    float crop_margin{0.05f};               // Fraction per side in original coordinates.
+    float background_keep{1.0f};            // 1=natural context; .25 is an optional ablation.
+    float spatial_weight{0.0f};             // 0 => D; >0 => 5D. Same setting for all ROIs.
+    int max_detail_views{0};                // 0 default; 2 or 3 adds bounded narrow-ROI views.
+    float detail_weight{0.25f};
+
 };
 
 } // namespace irt::features

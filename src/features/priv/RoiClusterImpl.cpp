@@ -1,6 +1,6 @@
 /**
  * @file RoiClusterImpl.cpp
- * @brief ROI 聚类 PIMPL：共享图像特征图、ROIAlign 与 HDBSCAN。
+ * @brief ROI 聚类 PIMPL：借用共享区域向量执行 HDBSCAN，保留独立提取入口。
  */
 
 #include "RoiClusterImpl.hpp"
@@ -33,8 +33,10 @@ void reportProgress(const RoiClusterProgressCallback &callback, RoiClusterStage 
 
 RoiClusterItem normalizeItem(const RoiClusterItem &item)
 {
-    priv::validateRoi(item.roi);
-    return RoiClusterItem{item.roi_id, priv::normalizeImageFilePath(item.image_path, "RoiCluster"), item.roi};
+    if (item.polygon.empty()) priv::validateRoi(item.roi);
+    auto normalized = item;
+    normalized.image_path = priv::normalizeImageFilePath(item.image_path, "RoiCluster");
+    return normalized;
 }
 
 std::vector<RoiClusterItem> normalizeItems(const std::vector<RoiClusterItem> &items)
@@ -66,21 +68,24 @@ RoiCluster::Impl::Impl(RoiClusterConfig config)
     {
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "feature name must not be empty");
     }
-    if (config_.pooled_height <= 0 || config_.pooled_width <= 0)
+    if (config_.mode == RoiFeatureMode::LegacyRoiAlign)
     {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI pooled size must be positive");
-    }
-    if (config_.sampling_ratio < -1)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI sampling ratio must be -1 or non-negative");
-    }
-    if (config_.pca_dim < 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI PCA dim must be non-negative");
-    }
-    if (config_.use_pca && config_.pca_dim <= 0)
-    {
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI PCA dim must be positive when PCA is enabled");
+        if (config_.pooled_height <= 0 || config_.pooled_width <= 0)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI pooled size must be positive");
+        }
+        if (config_.sampling_ratio < -1)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI sampling ratio must be -1 or non-negative");
+        }
+        if (config_.pca_dim < 0)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI PCA dim must be non-negative");
+        }
+        if (config_.use_pca && config_.pca_dim <= 0)
+        {
+            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI PCA dim must be positive when PCA is enabled");
+        }
     }
     priv::validateFeatureSearchConfig(config_, "RoiCluster");
 }
@@ -114,22 +119,33 @@ RoiClusterResult RoiCluster::Impl::cluster(const fs::path &weights_file,
         throw irt::Exception(irt::Status::ERROR_INTERNAL, "ROI cluster feature matrix size mismatch");
     }
 
+    std::vector<int64_t> ids;ids.reserve(normalized_items.size());
+    for(const auto& item:normalized_items)ids.push_back(item.roi_id);
+    return cluster(RoiFeatureMatrixView{features.data(),ids.data(),ids.size(),feature_dim_},progress_callback);
+}
+
+RoiClusterResult RoiCluster::Impl::cluster(const RoiFeatureMatrixView& features,
+                                           RoiClusterProgressCallback progress_callback)
+{
+    if(!features.data||!features.roi_ids||features.rows==0||features.dimension<=0)
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,"ROI feature matrix view is empty");
+    feature_dim_=features.dimension;
     reportProgress(progress_callback, RoiClusterStage::Clustering, 0, 0, 0, 0, 1);
-    const auto hdbscan = irt::ops::hdbscan(features.data(), static_cast<int64_t>(normalized_items.size()),
+    const auto hdbscan = irt::ops::hdbscan(features.data, static_cast<int64_t>(features.rows),
                                            static_cast<int64_t>(feature_dim_), config_.hdbscan);
     reportProgress(progress_callback, RoiClusterStage::Clustering, 0, 0, 0, 1, 1);
 
-    if (hdbscan.labels.size() != normalized_items.size()
-        || hdbscan.probabilities.size() != normalized_items.size())
+    if (hdbscan.labels.size() != features.rows
+        || hdbscan.probabilities.size() != features.rows)
     {
         throw irt::Exception(irt::Status::ERROR_INTERNAL, "ROI cluster HDBSCAN result size mismatch");
     }
 
     RoiClusterResult result;
     result.feature_dim = feature_dim_;
-    result.assignments.reserve(normalized_items.size());
+    result.assignments.reserve(features.rows);
     std::set<int64_t> cluster_ids;
-    for (size_t i = 0; i < normalized_items.size(); ++i)
+    for (size_t i = 0; i < features.rows; ++i)
     {
         const auto label = hdbscan.labels[i];
         if (label < 0)
@@ -140,7 +156,7 @@ RoiClusterResult RoiCluster::Impl::cluster(const fs::path &weights_file,
         {
             cluster_ids.insert(label);
         }
-        result.assignments.push_back({normalized_items[i].roi_id, label, hdbscan.probabilities[i]});
+        result.assignments.push_back({features.roi_ids[i], label, hdbscan.probabilities[i]});
     }
     result.cluster_count = static_cast<int64_t>(cluster_ids.size());
     return result;

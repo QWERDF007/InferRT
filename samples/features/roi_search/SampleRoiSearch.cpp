@@ -347,6 +347,8 @@ int main(int argc, char *argv[])
         }
 
         irt::features::RoiSearchConfig config;
+        config.mode = irt::features::RoiFeatureMode::LegacyRoiAlign; // historical ROIAlign sample
+        config.exact_search = false;
         config.model_name       = args.model_name;
         config.feature_name     = args.feature_name;
         config.model_runtime    = irt::model::ModelRuntime::parse(args.runtime);

@@ -504,8 +504,31 @@ void normalizeFeature(std::vector<float> &values, ImageSearchFeatureNorm norm)
     normalizeFeature(values.data(), values.size(), norm);
 }
 
+FaissIndexBundle cloneCpuIndexToGpu(const faiss::Index *cpu_index, int device_id,
+                                    irt::model::ModelPrecision precision)
+{
+    if (!cpu_index)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Cannot clone empty Faiss index to GPU");
+    }
+
+    irt::model::setCudaDevice(device_id);
+    FaissIndexBundle bundle;
+    bundle.gpu_resources = std::make_unique<faiss::gpu::StandardGpuResources>();
+    faiss::gpu::GpuClonerOptions options;
+    options.useFloat16 = (precision == irt::model::ModelPrecision::FP16);
+    bundle.index.reset(
+        faiss::gpu::index_cpu_to_gpu(bundle.gpu_resources.get(), device_id, cpu_index, &options));
+    if (!bundle.index)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to clone Faiss index to GPU");
+    }
+    return bundle;
+}
+
 FaissIndexBundle moveCpuIndexToConfiguredBackend(std::unique_ptr<faiss::Index> cpu_index,
-                                                 ImageSearchFaissBackend       backend, int device_id)
+                                                 ImageSearchFaissBackend       backend, int device_id,
+                                                 irt::model::ModelPrecision    precision)
 {
     if (!cpu_index)
     {
@@ -519,19 +542,8 @@ FaissIndexBundle moveCpuIndexToConfiguredBackend(std::unique_ptr<faiss::Index> c
         bundle.index = std::move(cpu_index);
         break;
     case ImageSearchFaissBackend::GPU:
-    {
-        irt::model::setCudaDevice(device_id);
-        bundle.gpu_resources = std::make_unique<faiss::gpu::StandardGpuResources>();
-        faiss::gpu::GpuClonerOptions options;
-        options.useFloat16 = true;
-        bundle.index.reset(
-            faiss::gpu::index_cpu_to_gpu(bundle.gpu_resources.get(), device_id, cpu_index.get(), &options));
-        if (!bundle.index)
-        {
-            throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Failed to clone Faiss index to GPU");
-        }
+        bundle = cloneCpuIndexToGpu(cpu_index.get(), device_id, precision);
         break;
-    }
     default:
         throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "Unsupported Faiss backend");
     }
@@ -568,7 +580,8 @@ FaissIndexBundle buildConfiguredFaissIndex(size_t vector_count, int feature_dim,
                                    config.faiss_backend == ImageSearchFaissBackend::GPU);
 
     faiss::write_index(cpu_index.get(), index_path.string().c_str());
-    return moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend, config.model_runtime.deviceId());
+    return moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend,
+                                           config.model_runtime.deviceId(), config.model_precision);
 }
 
 FaissIndexBundle loadConfiguredFaissIndex(const std::filesystem::path &index_path, const ImageSearchConfig &config)
@@ -590,7 +603,7 @@ FaissIndexBundle loadConfiguredFaissIndex(const std::filesystem::path &index_pat
     }
 
     return moveCpuIndexToConfiguredBackend(std::move(cpu_index), config.faiss_backend,
-                                           config.model_runtime.deviceId());
+                                           config.model_runtime.deviceId(), config.model_precision);
 }
 
 } // namespace irt::features::priv

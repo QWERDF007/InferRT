@@ -23,6 +23,7 @@ TEST(RoiClusterTest, DefaultConstructsWithRoiFeatureDefaults)
 TEST(RoiClusterTest, ConstructorRejectsInvalidRoiFeatureConfig)
 {
     irt::features::RoiClusterConfig config;
+    config.mode = irt::features::RoiFeatureMode::LegacyRoiAlign;
     config.pooled_width = 0;
 
     EXPECT_THROW(irt::features::RoiCluster cluster(config), irt::Exception);

@@ -84,6 +84,8 @@ struct RoiClusterConfig : public RoiFeatureConfig
     {
         model_name   = kDefaultRoiClusterModelName;
         feature_name = kDefaultRoiClusterFeatureName;
+        hdbscan.metric = irt::ops::ClusteringMetric::Euclidean;
+        hdbscan.algorithm = irt::ops::ClusteringAlgorithm::Brute; // existing matrix-free Euclidean path
     }
 
     irt::ops::HDBSCANConfig hdbscan{}; ///< HDBSCAN 参数。
@@ -99,10 +101,10 @@ struct RoiClusterResult
 };
 
 /**
- * @brief 使用模型特征图、ROIAlign 和 HDBSCAN 对 ROI 进行聚类。
+ * @brief 使用共享 ROI 语义特征和 HDBSCAN 聚类。
  *
- * 构建特征时会按图像路径分组，同一张图像只执行一次模型前向；该图像的多个 ROI
- * 在共享特征图上批量执行 ROIAlign。
+ * 默认逐 ROI 裁剪并重新编码，同图只解码一次，多个 crop 按模型 batch 推理。
+ * LegacyRoiAlign 模式仅用于旧行为对照。
  */
 class INFERRT_FEATURES_API RoiCluster
 {
@@ -126,6 +128,9 @@ public:
 
     const RoiClusterConfig &config() const noexcept;
     int                     featureDim() const noexcept;
+
+    RoiClusterResult cluster(const RoiFeatureMatrixView& features,
+                             RoiClusterProgressCallback progress_callback = {});
 
 private:
     class Impl;

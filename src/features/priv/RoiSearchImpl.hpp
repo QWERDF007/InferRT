@@ -13,6 +13,7 @@
 
 namespace faiss {
 struct Index;
+struct IndexFlat;
 
 namespace gpu {
 class StandardGpuResources;
@@ -49,19 +50,30 @@ public:
 
     std::vector<RoiSearchResult> search(const std::filesystem::path &query_image, const RoiSearchBox &roi, int top_k);
 
+    std::vector<RoiSearchResult> search(const RoiSearchItem &query, int top_k);
+
     bool                         isReady() const noexcept;
     const RoiSearchConfig       &config() const noexcept;
     const std::filesystem::path &indexPath() const noexcept;
     std::vector<int64_t>         galleryIds() const;
     int                          featureDim() const noexcept;
 
+    RoiFeatureMatrixView featureView() const;
+    RoiFeatureWorkStats featureWorkStats() const noexcept;
+    std::vector<RoiSearchResult> searchByRoiId(int64_t roi_id, int top_k);
+    std::vector<RoiSearchResult> repeatSearch(int top_k);
+
 private:
+    void releaseState();
+    std::vector<RoiSearchResult> searchVector(const float* query, int top_k);
+    std::vector<float> last_query_feature_;
     void buildWithItems(const std::filesystem::path &weights_file, std::vector<RoiSearchItem> gallery_items,
                         const std::filesystem::path &index_file, RoiSearchBuildProgressCallback progress_callback);
     void installIndex(const std::filesystem::path &weights_file, const std::filesystem::path &index_file,
                       priv::FaissIndexBundle bundle, std::vector<int64_t> gallery_ids, int feature_dim,
                       std::unique_ptr<priv::RoiFeatureExtractor> extractor);
     void ensureExtractor();
+    const faiss::IndexFlat *getHostFlatIndex() const noexcept;
 
     RoiSearchConfig config_{}; ///< ROI 检索配置。
 
@@ -70,6 +82,7 @@ private:
 
     std::vector<int64_t> gallery_ids_; ///< 与 Faiss 向量 ID 对应的 ROI ID。
 
+    std::unique_ptr<faiss::IndexFlat>                 host_flat_index_;     ///< CPU 宿主端精确向量索引（供 featureView 及 CPU 零拷贝聚类）。
     std::unique_ptr<faiss::gpu::StandardGpuResources> faiss_gpu_resources_; ///< GPU Faiss 资源。
     std::unique_ptr<faiss::Index>                     index_;               ///< Faiss 索引。
     std::unique_ptr<priv::RoiFeatureExtractor>        extractor_;           ///< ROI 特征抽取器。
