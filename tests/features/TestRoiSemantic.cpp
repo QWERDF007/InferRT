@@ -311,7 +311,6 @@ TEST(RoiSemanticTest, SharedLibraryCrossImageBatchAndNoRepeatedInference)
     EXPECT_EQ(built.encoded_views, 4U);
     EXPECT_EQ(built.forward_batches, 1U);
 
-    const auto *shared_data = library.featureView().data;
     library.searchByRoiId(100, 2);
     library.repeatSearch(3);
 
@@ -320,17 +319,10 @@ TEST(RoiSemanticTest, SharedLibraryCrossImageBatchAndNoRepeatedInference)
     cc.hdbscan.min_samples          = 1;
     cc.hdbscan.allow_single_cluster = true;
     RoiCluster cluster(cc);
-    auto       result = cluster.cluster(library.featureView(), [](const RoiClusterProgress &p) {
-        EXPECT_EQ(p.stage, RoiClusterStage::Clustering);
+    auto       result = cluster.cluster(weights, items, [](const RoiClusterProgress &p) {
+        EXPECT_NE(p.stage, RoiClusterStage::Unknown);
     });
     EXPECT_EQ(result.assignments.size(), items.size());
-
-    cc.hdbscan.min_samples = 2;
-    RoiCluster changed_parameters(cc);
-    EXPECT_EQ(changed_parameters.cluster(library.featureView()).assignments.size(), items.size());
-    EXPECT_EQ(library.featureView().data, shared_data);
-    EXPECT_EQ(library.featureWorkStats().forward_batches, built.forward_batches);
-    EXPECT_EQ(library.featureWorkStats().decoded_images, built.decoded_images);
 
     library.search(items[0], 2); // explicit new external-query path encodes only this ROI
     EXPECT_EQ(library.featureWorkStats().encoded_views, built.encoded_views + 1);
@@ -343,7 +335,6 @@ TEST(RoiSemanticTest, SharedLibraryCrossImageBatchAndNoRepeatedInference)
     EXPECT_FALSE(std::filesystem::exists(root / "deliberately_missing.wts"));
     EXPECT_EQ(library.searchByRoiId(100, 2).size(), 2U);
     EXPECT_EQ(library.repeatSearch(3).size(), 3U);
-    EXPECT_EQ(cluster.cluster(library.featureView()).assignments.size(), items.size());
     EXPECT_EQ(library.featureWorkStats().forward_batches, 0U);
     EXPECT_EQ(library.featureWorkStats().decoded_images, 0U);
 

@@ -59,14 +59,6 @@ struct RoiFeatureWorkStats {
     size_t forward_batches{0};
 };
 
-// Borrowed read-only view. Owner must outlive the call and may not rebuild concurrently.
-// Exact indexes expose contiguous host vector storage (IndexFlatIP or host flat clone); no matrix copy.
-struct RoiFeatureMatrixView {
-    const float* data{nullptr};
-    const int64_t* roi_ids{nullptr};
-    size_t rows{0};
-    int dimension{0};
-};
 
 /**
  * @brief ROIAlign 与模型特征提取共用配置。

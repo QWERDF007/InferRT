@@ -15,6 +15,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include <faiss/IndexFlat.h>
+#include <faiss/index_io.h>
 #include <faiss/gpu/GpuCloner.h>
 #include <faiss/gpu/GpuIndexFlat.h>
 #include <faiss/gpu/StandardGpuResources.h>
@@ -399,15 +400,18 @@ int main(int argc, char *argv[])
         std::cout << "  - Backbone Batches:      " << stats.forward_batches << " (batch size=" << batch_size << ")" << std::endl;
         std::cout << "  - Feature Dimension:     " << searcher.featureDim() << std::endl;
 
-        const auto view = searcher.featureView();
-        const int dim = view.dimension;
-        const size_t N_real = view.rows;
+        std::unique_ptr<faiss::IndexFlat> cpu_index(
+            dynamic_cast<faiss::IndexFlat *>(faiss::read_index(index_path.string().c_str())));
+        if (!cpu_index)
+        {
+            throw std::runtime_error("Failed to reload exact Faiss index from: " + index_path.string());
+        }
+        const int dim = static_cast<int>(cpu_index->d);
+        const size_t N_real = static_cast<size_t>(cpu_index->ntotal);
+        const float *vectors_data = cpu_index->get_xb();
 
         // 3. Prepare Faiss Indices for Search Benchmark
         std::cout << "\n[Stage 3] Preparing Exact Search Indices on " << N_real << " Real Vectors..." << std::endl;
-
-        auto cpu_index = std::make_unique<faiss::IndexFlatIP>(dim);
-        cpu_index->add(static_cast<faiss::idx_t>(N_real), view.data);
 
         faiss::gpu::StandardGpuResources res;
         auto gpu_fp32 = cloneToGpu(cpu_index.get(), &res, device_id, false);
@@ -416,7 +420,7 @@ int main(int argc, char *argv[])
         // 4. Measure Single-Query Latency across Backends on Real Dataset (N = 3315)
         std::cout << "\n[Stage 4] Single-Query Exact Search Benchmark (N=" << N_real << ", D=" << dim << ", Top-K=10):" << std::endl;
 
-        const float *query_vec = view.data; // First vector as query
+        const float *query_vec = vectors_data; // First vector as query
         const int top_k = 10;
 
         auto benchQuery = [&](faiss::Index *idx, const char *name, bool is_gpu) -> LatencyStats {
@@ -487,7 +491,7 @@ int main(int argc, char *argv[])
 
         for (size_t q = 0; q < test_queries; ++q)
         {
-            const float *q_ptr = view.data + q * dim;
+            const float *q_ptr = vectors_data + q * dim;
             std::vector<faiss::idx_t> cpu_ids(top_k), g32_ids(top_k), g16_ids(top_k);
             std::vector<float> cpu_scores(top_k), g32_scores(top_k), g16_scores(top_k);
 
@@ -560,14 +564,14 @@ int main(int argc, char *argv[])
 
             auto timeBatch = [&](faiss::Index *idx, bool is_gpu) -> double {
                 for (int w = 0; w < 5; ++w)
-                    idx->search(Q, view.data, top_k, out_scores.data(), out_ids.data());
+                    idx->search(Q, vectors_data, top_k, out_scores.data(), out_ids.data());
                 if (is_gpu)
                     cudaStreamSynchronize(nullptr);
                 const auto t0 = Clock::now();
                 const int iters = 50;
                 for (int i = 0; i < iters; ++i)
                 {
-                    idx->search(Q, view.data, top_k, out_scores.data(), out_ids.data());
+                    idx->search(Q, vectors_data, top_k, out_scores.data(), out_ids.data());
                 }
                 if (is_gpu)
                     cudaStreamSynchronize(nullptr);
@@ -611,7 +615,7 @@ int main(int argc, char *argv[])
         std::normal_distribution<float> dist(0.0f, 0.01f);
         for (size_t i = 0; i < max_scale_N; ++i)
         {
-            const float *src = view.data + (i % N_real) * dim;
+            const float *src = vectors_data + (i % N_real) * dim;
             float *dst = synthetic_pool.data() + i * dim;
             for (int d = 0; d < dim; ++d)
                 dst[d] = src[d] + dist(rng);
@@ -700,15 +704,15 @@ int main(int argc, char *argv[])
         cudaFree(d_query);
         cudaStreamDestroy(stream);
 
-        // 9. Zero-Copy HDBSCAN Clustering Benchmark
-        std::cout << "\n[Stage 9] Zero-Copy HDBSCAN Clustering Benchmark (N=" << N_real << ", D=" << dim << "):" << std::endl;
+        // 9. HDBSCAN Clustering Benchmark
+        std::cout << "\n[Stage 9] HDBSCAN Clustering Benchmark (N=" << N_real << ", D=" << dim << "):" << std::endl;
         irt::features::RoiClusterConfig cluster_config;
         cluster_config.hdbscan.min_cluster_size = 5;
         cluster_config.hdbscan.min_samples = 3;
         irt::features::RoiCluster clusterer(cluster_config);
 
         const auto t_clust_0 = Clock::now();
-        const auto cluster_results = clusterer.cluster(searcher.featureView());
+        const auto cluster_results = clusterer.cluster(weights_path, gallery_items);
         const auto t_clust_1 = Clock::now();
         const double clust_ms = std::chrono::duration<double, std::milli>(t_clust_1 - t_clust_0).count();
 

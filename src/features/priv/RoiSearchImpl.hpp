@@ -58,7 +58,6 @@ public:
     std::vector<int64_t>         galleryIds() const;
     int                          featureDim() const noexcept;
 
-    RoiFeatureMatrixView featureView() const;
     RoiFeatureWorkStats featureWorkStats() const noexcept;
     std::vector<RoiSearchResult> searchByRoiId(int64_t roi_id, int top_k);
     std::vector<RoiSearchResult> repeatSearch(int top_k);

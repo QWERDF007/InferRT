@@ -27,11 +27,6 @@ RoiClusterResult RoiCluster::cluster(const std::filesystem::path &weights_file,
     return impl_->cluster(weights_file, items, std::move(progress_callback));
 }
 
-RoiClusterResult RoiCluster::cluster(const RoiFeatureMatrixView& features,RoiClusterProgressCallback progress)
-{
-    return impl_->cluster(features,std::move(progress));
-}
-
 const RoiClusterConfig &RoiCluster::config() const noexcept
 {
     return impl_->config();

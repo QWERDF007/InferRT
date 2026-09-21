@@ -53,7 +53,6 @@ std::vector<RoiSearchResult> RoiSearch::search(const RoiSearchItem &query, int t
 }
 
 RoiFeatureWorkStats RoiSearch::featureWorkStats()const noexcept{return impl_->featureWorkStats();}
-RoiFeatureMatrixView RoiSearch::featureView() const {return impl_->featureView();}
 std::vector<RoiSearchResult> RoiSearch::searchByRoiId(int64_t roi_id,int top_k){return impl_->searchByRoiId(roi_id,top_k);}
 std::vector<RoiSearchResult> RoiSearch::repeatSearch(int top_k){return impl_->repeatSearch(top_k);}
 

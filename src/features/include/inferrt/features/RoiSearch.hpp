@@ -175,7 +175,6 @@ public:
     static std::filesystem::path defaultIndexPath(const std::filesystem::path &output_dir,
                                                   const std::string &model_name, const std::string &feature_name);
 
-    RoiFeatureMatrixView featureView() const;
     RoiFeatureWorkStats featureWorkStats() const noexcept;
     std::vector<RoiSearchResult> searchByRoiId(int64_t roi_id, int top_k = kDefaultTopK);
     std::vector<RoiSearchResult> repeatSearch(int top_k = kDefaultTopK);

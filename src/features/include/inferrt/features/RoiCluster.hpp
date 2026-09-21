@@ -129,9 +129,6 @@ public:
     const RoiClusterConfig &config() const noexcept;
     int                     featureDim() const noexcept;
 
-    RoiClusterResult cluster(const RoiFeatureMatrixView& features,
-                             RoiClusterProgressCallback progress_callback = {});
-
 private:
     class Impl;
     std::unique_ptr<Impl> impl_;

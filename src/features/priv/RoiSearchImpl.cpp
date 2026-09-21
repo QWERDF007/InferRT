@@ -700,24 +700,22 @@ const faiss::IndexFlat *RoiSearch::Impl::getHostFlatIndex() const noexcept
     return dynamic_cast<const faiss::IndexFlat *>(index_.get());
 }
 
-RoiFeatureMatrixView RoiSearch::Impl::featureView() const
+std::vector<RoiSearchResult> RoiSearch::Impl::searchByRoiId(int64_t roi_id, int top_k)
 {
     const auto *flat = getHostFlatIndex();
     if (!flat)
     {
-        throw irt::Exception(irt::Status::INVALID_OPERATION, "Shared features require an exact ROI index");
+        throw irt::Exception(irt::Status::INVALID_OPERATION, "searchByRoiId requires an exact ROI index");
     }
-    return {flat->get_xb(), gallery_ids_.data(), gallery_ids_.size(), static_cast<int>(flat->d)};
-}
-
-std::vector<RoiSearchResult> RoiSearch::Impl::searchByRoiId(int64_t roi_id,int top_k)
-{
-    const auto view=featureView();
-    const auto it=std::find(gallery_ids_.begin(),gallery_ids_.end(),roi_id);
-    if(it==gallery_ids_.end())throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,"ROI ID is not in this feature library");
-    const size_t row=static_cast<size_t>(it-gallery_ids_.begin());
-    last_query_feature_.assign(view.data+row*view.dimension,view.data+(row+1)*view.dimension);
-    return searchVector(last_query_feature_.data(),top_k);
+    const auto it = std::find(gallery_ids_.begin(), gallery_ids_.end(), roi_id);
+    if (it == gallery_ids_.end())
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI ID is not in this feature library");
+    }
+    const size_t row = static_cast<size_t>(it - gallery_ids_.begin());
+    const float *vec = flat->get_xb() + row * flat->d;
+    last_query_feature_.assign(vec, vec + flat->d);
+    return searchVector(last_query_feature_.data(), top_k);
 }
 
 std::vector<RoiSearchResult> RoiSearch::Impl::repeatSearch(int top_k)

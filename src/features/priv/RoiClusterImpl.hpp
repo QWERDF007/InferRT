@@ -27,10 +27,10 @@ public:
     const RoiClusterConfig &config() const noexcept;
     int                     featureDim() const noexcept;
 
-    RoiClusterResult cluster(const RoiFeatureMatrixView& features,
-                             RoiClusterProgressCallback progress_callback);
-
 private:
+    RoiClusterResult clusterFeatures(const float *features, const int64_t *roi_ids, size_t count, int feature_dim,
+                                     RoiClusterProgressCallback progress_callback);
+
     RoiClusterConfig config_{};
     int              feature_dim_{0};
 };

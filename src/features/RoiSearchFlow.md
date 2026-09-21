@@ -1,14 +1,14 @@
 # RoiSearch ROI 搜索匹配完整流程
 
 本文档说明 `src/features` 中 ROI 搜索匹配模块的端到端流程。核心入口是
-[`irt::features::RoiSearch`](include/inferrt/features/RoiSearch.hpp)，默认采用 DINO 图像原图裁剪与掩膜加权平均汇聚（`CropMaskedMean`），生成统一 D 维语义特征向量，并通过精确内积索引（默认 GPU FP16 `GpuIndexFlatIP`，支持通过配置自由选择 CPU/GPU 与 FP16/FP32）完成 Top-K 检索。同时支持通过 [`featureView()`](include/inferrt/features/RoiSearch.hpp) 借用特征向量供聚类使用，无需重复提取。
+[`irt::features::RoiSearch`](include/inferrt/features/RoiSearch.hpp)，默认采用 DINO 图像原图裁剪与掩膜加权平均汇聚（`CropMaskedMean`），生成统一 D 维语义特征向量，并通过精确内积索引（默认 GPU FP16 `GpuIndexFlatIP`，支持通过配置自由选择 CPU/GPU 与 FP16/FP32）完成 Top-K 检索。
 
 ## 1. 主要文件与职责索引
 
-- [`include/inferrt/features/RoiFeature.hpp`](include/inferrt/features/RoiFeature.hpp)：ROI 特征提取共用数据结构（`RoiFeatureItem` 支持矩形与多边形 `polygon`）、配置（`RoiFeatureConfig`）、矩阵视图（`RoiFeatureMatrixView`）与工作量统计（`RoiFeatureWorkStats`）。
+- [`include/inferrt/features/RoiFeature.hpp`](include/inferrt/features/RoiFeature.hpp)：ROI 特征提取共用数据结构（`RoiFeatureItem` 支持矩形与多边形 `polygon`）、配置（`RoiFeatureConfig`）与工作量统计（`RoiFeatureWorkStats`）。
 - [`include/inferrt/features/RoiSearch.hpp`](include/inferrt/features/RoiSearch.hpp)：公共搜索 API、配置结构（`RoiSearchConfig`，默认 `exact_search = true`）与 `RoiSearch` 类声明。
 - [`RoiSearch.cpp`](RoiSearch.cpp)：公共 API 的 PIMPL 转发与默认 ROI 索引路径生成。
-- [`priv/RoiSearchImpl.hpp`](priv/RoiSearchImpl.hpp) / [`priv/RoiSearchImpl.cpp`](priv/RoiSearchImpl.cpp)：ROI 条目校验、流式索引构建、矩阵借用与多边形/库内/调参查询实现。
+- [`priv/RoiSearchImpl.hpp`](priv/RoiSearchImpl.hpp) / [`priv/RoiSearchImpl.cpp`](priv/RoiSearchImpl.cpp)：ROI 条目校验、流式索引构建、多边形/库内/调参查询实现。
 - [`priv/RoiEmbeddingCore.hpp`](priv/RoiEmbeddingCore.hpp)：几何变换、光栅化掩膜、patch 覆盖权重计算、L2 汇聚与多视图融合纯算法核。
 - [`priv/RoiFeatureExtractor.hpp`](priv/RoiFeatureExtractor.hpp) / [`priv/RoiFeatureExtractor.cpp`](priv/RoiFeatureExtractor.cpp)：跨图像合批、单图按需解码、模型推导与流式提取（`extractTo`）。
 - [`priv/LegacyRoiFeatureExtractor.hpp`](priv/LegacyRoiFeatureExtractor.hpp) / [`priv/LegacyRoiFeatureExtractor.cpp`](priv/LegacyRoiFeatureExtractor.cpp)：用于历史对照的旧版本 RoIAlign + 局部 PCA 提取路径。
@@ -52,7 +52,6 @@ struct RoiFeatureItem
    - 矩形使用精确水平与垂直相交覆盖率；多边形使用扫描线多采样点精确积分覆盖率。
    - patch 权重为掩膜在每个 patch 网格内的平均覆盖面积。
    - foreground token 归一化后按权重加权平均，再进行整向量 L2 归一化。
-3. **共享库与免重复推理**：
-   - `featureView()`：返回底层 `IndexFlatIP` 的只读 `RoiFeatureMatrixView`，供 `RoiCluster` 直接借用聚类，无需重复推导。
+3. **库内检索与调参重查**：
    - `searchByRoiId(roi_id, k)`：直接查找库内已有向量检索，无需图像解码与模型推理。
    - `repeatSearch(k)`：复用上一条查询向量（用于调整 Top-K），无需重新推理。

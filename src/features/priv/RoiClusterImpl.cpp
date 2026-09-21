@@ -119,33 +119,39 @@ RoiClusterResult RoiCluster::Impl::cluster(const fs::path &weights_file,
         throw irt::Exception(irt::Status::ERROR_INTERNAL, "ROI cluster feature matrix size mismatch");
     }
 
-    std::vector<int64_t> ids;ids.reserve(normalized_items.size());
-    for(const auto& item:normalized_items)ids.push_back(item.roi_id);
-    return cluster(RoiFeatureMatrixView{features.data(),ids.data(),ids.size(),feature_dim_},progress_callback);
+    std::vector<int64_t> ids;
+    ids.reserve(normalized_items.size());
+    for (const auto &item : normalized_items)
+    {
+        ids.push_back(item.roi_id);
+    }
+    return clusterFeatures(features.data(), ids.data(), ids.size(), feature_dim_, std::move(progress_callback));
 }
 
-RoiClusterResult RoiCluster::Impl::cluster(const RoiFeatureMatrixView& features,
-                                           RoiClusterProgressCallback progress_callback)
+RoiClusterResult RoiCluster::Impl::clusterFeatures(const float *features, const int64_t *roi_ids, size_t count,
+                                                   int feature_dim, RoiClusterProgressCallback progress_callback)
 {
-    if(!features.data||!features.roi_ids||features.rows==0||features.dimension<=0)
-        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT,"ROI feature matrix view is empty");
-    feature_dim_=features.dimension;
+    if (!features || !roi_ids || count == 0 || feature_dim <= 0)
+    {
+        throw irt::Exception(irt::Status::ERROR_INVALID_ARGUMENT, "ROI features are empty or invalid");
+    }
+    feature_dim_ = feature_dim;
     reportProgress(progress_callback, RoiClusterStage::Clustering, 0, 0, 0, 0, 1);
-    const auto hdbscan = irt::ops::hdbscan(features.data, static_cast<int64_t>(features.rows),
+    const auto hdbscan = irt::ops::hdbscan(features, static_cast<int64_t>(count),
                                            static_cast<int64_t>(feature_dim_), config_.hdbscan);
     reportProgress(progress_callback, RoiClusterStage::Clustering, 0, 0, 0, 1, 1);
 
-    if (hdbscan.labels.size() != features.rows
-        || hdbscan.probabilities.size() != features.rows)
+    if (hdbscan.labels.size() != count
+        || hdbscan.probabilities.size() != count)
     {
         throw irt::Exception(irt::Status::ERROR_INTERNAL, "ROI cluster HDBSCAN result size mismatch");
     }
 
     RoiClusterResult result;
     result.feature_dim = feature_dim_;
-    result.assignments.reserve(features.rows);
+    result.assignments.reserve(count);
     std::set<int64_t> cluster_ids;
-    for (size_t i = 0; i < features.rows; ++i)
+    for (size_t i = 0; i < count; ++i)
     {
         const auto label = hdbscan.labels[i];
         if (label < 0)
@@ -156,7 +162,7 @@ RoiClusterResult RoiCluster::Impl::cluster(const RoiFeatureMatrixView& features,
         {
             cluster_ids.insert(label);
         }
-        result.assignments.push_back({features.roi_ids[i], label, hdbscan.probabilities[i]});
+        result.assignments.push_back({roi_ids[i], label, hdbscan.probabilities[i]});
     }
     result.cluster_count = static_cast<int64_t>(cluster_ids.size());
     return result;
